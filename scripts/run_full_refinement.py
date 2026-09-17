@@ -5111,32 +5111,20 @@ def main():
     ):
         if result.get(key) is not None:
             save_dict[key] = np.asarray(result[key], dtype=dtype)
-    if "ave_Pmax_trajectory" in result:
-        save_dict["ave_Pmax_trajectory"] = np.asarray(
-            result["ave_Pmax_trajectory"],
-            dtype=np.float64,
-        )
-    for trajectory_key in (
-        "frac_changed_trajectory",
-        "acc_rot_trajectory",
-        "acc_trans_trajectory",
-        "smallest_change_angles_trajectory",
-        "smallest_change_offsets_trajectory",
-    ):
-        if trajectory_key in result:
-            save_dict[trajectory_key] = np.asarray(result[trajectory_key], dtype=np.float64)
-    for trajectory_key, trajectory_dtype in (
+    for key, dtype in (
+        ("ave_Pmax_trajectory", np.float64),
+        ("frac_changed_trajectory", np.float64),
+        ("acc_rot_trajectory", np.float64),
+        ("acc_trans_trajectory", np.float64),
+        ("smallest_change_angles_trajectory", np.float64),
+        ("smallest_change_offsets_trajectory", np.float64),
         ("acc_rot_per_class_trajectory", np.float64),
         ("acc_trans_per_class_trajectory", np.float64),
         ("expected_accuracy_class_counts_trajectory", np.int64),
+        ("expected_accuracy_status_trajectory", np.str_),
     ):
-        if trajectory_key in result:
-            save_dict[trajectory_key] = np.asarray(result[trajectory_key], dtype=trajectory_dtype)
-    if "expected_accuracy_status_trajectory" in result:
-        save_dict["expected_accuracy_status_trajectory"] = np.asarray(
-            result["expected_accuracy_status_trajectory"],
-            dtype=np.str_,
-        )
+        if key in result:
+            save_dict[key] = np.asarray(result[key], dtype=dtype)
     for indices_key in (
         "expected_accuracy_trial_local_indices",
         "expected_accuracy_trial_particle_ids",
@@ -5160,26 +5148,14 @@ def main():
             result["final_all_data_expected_accuracy_status"],
             dtype=np.str_,
         )
-    if "sigma_offset_trajectory" in result:
-        save_dict["sigma_offset_trajectory"] = np.asarray(
-            result["sigma_offset_trajectory"],
-            dtype=np.float64,
-        )
-    if "sigma_offset_per_half_trajectory" in result:
-        save_dict["sigma_offset_per_half_trajectory"] = np.asarray(
-            result["sigma_offset_per_half_trajectory"],
-            dtype=object,
-        )
-    if "sigma_offset_used_trajectory" in result:
-        save_dict["sigma_offset_used_trajectory"] = np.asarray(
-            result["sigma_offset_used_trajectory"],
-            dtype=np.float64,
-        )
-    if "sigma_offset_used_per_half_trajectory" in result:
-        save_dict["sigma_offset_used_per_half_trajectory"] = np.asarray(
-            result["sigma_offset_used_per_half_trajectory"],
-            dtype=object,
-        )
+    for key, dtype in (
+        ("sigma_offset_trajectory", np.float64),
+        ("sigma_offset_per_half_trajectory", object),
+        ("sigma_offset_used_trajectory", np.float64),
+        ("sigma_offset_used_per_half_trajectory", object),
+    ):
+        if key in result:
+            save_dict[key] = np.asarray(result[key], dtype=dtype)
     if result.get("direction_prior_trajectory_per_half") is not None:
         save_dict["direction_prior_trajectory_per_half"] = np.asarray(
             result["direction_prior_trajectory_per_half"], dtype=object
@@ -5224,18 +5200,14 @@ def main():
         )
 
     # Save K-class metadata when available (n_classes>1).
-    if result.get("class_weights") is not None:
-        save_dict["class_weights"] = np.asarray(result["class_weights"], dtype=np.float64)
-    if result.get("class_weight_trajectory") is not None:
-        save_dict["class_weight_trajectory"] = np.asarray(result["class_weight_trajectory"], dtype=np.float64)
-    if result.get("class_mstep_weight_trajectory") is not None:
-        save_dict["class_mstep_weight_trajectory"] = np.asarray(
-            result["class_mstep_weight_trajectory"], dtype=np.float64
-        )
-    if result.get("class_full_posterior_weight_trajectory") is not None:
-        save_dict["class_full_posterior_weight_trajectory"] = np.asarray(
-            result["class_full_posterior_weight_trajectory"], dtype=np.float64
-        )
+    for key in (
+        "class_weights",
+        "class_weight_trajectory",
+        "class_mstep_weight_trajectory",
+        "class_full_posterior_weight_trajectory",
+    ):
+        if result.get(key) is not None:
+            save_dict[key] = np.asarray(result[key], dtype=np.float64)
     if result.get("class_assignments") is not None and any(c is not None for c in result["class_assignments"]):
         for k, ca in enumerate(result["class_assignments"]):
             if ca is not None:
@@ -5382,84 +5354,47 @@ def main():
         np.asarray(half1_idx, dtype=np.int64),
         np.asarray(half2_idx, dtype=np.int64),
     ]
-    for i, iter_eulers in enumerate(result.get("best_rotation_eulers_history", [])):
-        half_arrays = _pose_history_half_arrays(iter_eulers, dtype=np.float32)
+    for prefix, trailing_shape in (
+        ("best_rotation_eulers", (3,)),
+        ("best_translations", (2,)),
+    ):
+        for i, iter_poses in enumerate(result.get(f"{prefix}_history", [])):
+            half_arrays = _pose_history_half_arrays(iter_poses, dtype=np.float32)
+            if half_arrays is None or all(arr is None for arr in half_arrays):
+                continue
+            compact = []
+            for k, arr in enumerate(half_arrays):
+                if arr is None:
+                    continue
+                save_dict[f"{prefix}_iter_{i:03d}_half{k}"] = arr
+                compact.append(arr)
+            if compact:
+                save_dict[f"{prefix}_iter_{i:03d}"] = np.concatenate(compact, axis=0)
+            by_image = _pose_history_by_image(iter_poses, half_indices, n_images, trailing_shape, dtype=np.float32)
+            if by_image is not None:
+                save_dict[f"{prefix}_by_image_iter_{i:03d}"] = by_image
+                save_dict[f"{prefix}_final_by_image"] = by_image
+
+    for result_key, prefix, trailing_shape in (
+        ("final_all_data_best_rotation_eulers", "best_rotation_eulers", (3,)),
+        ("final_all_data_best_translations", "best_translations", (2,)),
+        ("final_all_data_max_posterior", "pmax", ()),
+    ):
+        final_values = result.get(result_key)
+        half_arrays = _pose_history_half_arrays(final_values, dtype=np.float32)
         if half_arrays is None or all(arr is None for arr in half_arrays):
             continue
         compact = []
         for k, arr in enumerate(half_arrays):
             if arr is None:
                 continue
-            save_dict[f"best_rotation_eulers_iter_{i:03d}_half{k}"] = arr
+            save_dict[f"{prefix}_final_all_data_half{k}"] = arr
             compact.append(arr)
         if compact:
-            save_dict[f"best_rotation_eulers_iter_{i:03d}"] = np.concatenate(compact, axis=0)
-        by_image = _pose_history_by_image(iter_eulers, half_indices, n_images, (3,), dtype=np.float32)
+            save_dict[f"{prefix}_final_all_data"] = np.concatenate(compact, axis=0)
+        by_image = _pose_history_by_image(final_values, half_indices, n_images, trailing_shape, dtype=np.float32)
         if by_image is not None:
-            save_dict[f"best_rotation_eulers_by_image_iter_{i:03d}"] = by_image
-            save_dict["best_rotation_eulers_final_by_image"] = by_image
-
-    for i, iter_trans in enumerate(result.get("best_translations_history", [])):
-        half_arrays = _pose_history_half_arrays(iter_trans, dtype=np.float32)
-        if half_arrays is None or all(arr is None for arr in half_arrays):
-            continue
-        compact = []
-        for k, arr in enumerate(half_arrays):
-            if arr is None:
-                continue
-            save_dict[f"best_translations_iter_{i:03d}_half{k}"] = arr
-            compact.append(arr)
-        if compact:
-            save_dict[f"best_translations_iter_{i:03d}"] = np.concatenate(compact, axis=0)
-        by_image = _pose_history_by_image(iter_trans, half_indices, n_images, (2,), dtype=np.float32)
-        if by_image is not None:
-            save_dict[f"best_translations_by_image_iter_{i:03d}"] = by_image
-            save_dict["best_translations_final_by_image"] = by_image
-
-    final_all_data_eulers = result.get("final_all_data_best_rotation_eulers")
-    final_all_data_euler_halves = _pose_history_half_arrays(final_all_data_eulers, dtype=np.float32)
-    if final_all_data_euler_halves is not None and not all(arr is None for arr in final_all_data_euler_halves):
-        compact = []
-        for k, arr in enumerate(final_all_data_euler_halves):
-            if arr is None:
-                continue
-            save_dict[f"best_rotation_eulers_final_all_data_half{k}"] = arr
-            compact.append(arr)
-        if compact:
-            save_dict["best_rotation_eulers_final_all_data"] = np.concatenate(compact, axis=0)
-        by_image = _pose_history_by_image(final_all_data_eulers, half_indices, n_images, (3,), dtype=np.float32)
-        if by_image is not None:
-            save_dict["best_rotation_eulers_final_all_data_by_image"] = by_image
-
-    final_all_data_trans = result.get("final_all_data_best_translations")
-    final_all_data_trans_halves = _pose_history_half_arrays(final_all_data_trans, dtype=np.float32)
-    if final_all_data_trans_halves is not None and not all(arr is None for arr in final_all_data_trans_halves):
-        compact = []
-        for k, arr in enumerate(final_all_data_trans_halves):
-            if arr is None:
-                continue
-            save_dict[f"best_translations_final_all_data_half{k}"] = arr
-            compact.append(arr)
-        if compact:
-            save_dict["best_translations_final_all_data"] = np.concatenate(compact, axis=0)
-        by_image = _pose_history_by_image(final_all_data_trans, half_indices, n_images, (2,), dtype=np.float32)
-        if by_image is not None:
-            save_dict["best_translations_final_all_data_by_image"] = by_image
-
-    final_all_data_pmax = result.get("final_all_data_max_posterior")
-    final_all_data_pmax_halves = _pose_history_half_arrays(final_all_data_pmax, dtype=np.float32)
-    if final_all_data_pmax_halves is not None and not all(arr is None for arr in final_all_data_pmax_halves):
-        compact = []
-        for k, arr in enumerate(final_all_data_pmax_halves):
-            if arr is None:
-                continue
-            save_dict[f"pmax_final_all_data_half{k}"] = arr
-            compact.append(arr)
-        if compact:
-            save_dict["pmax_final_all_data"] = np.concatenate(compact, axis=0)
-        by_image = _pose_history_by_image(final_all_data_pmax, half_indices, n_images, (), dtype=np.float32)
-        if by_image is not None:
-            save_dict["pmax_final_all_data_by_image"] = by_image
+            save_dict[f"{prefix}_final_all_data_by_image"] = by_image
 
     git_provenance = git_worktree_provenance()
     save_dict["git_commit"] = np.asarray(git_provenance["head"])

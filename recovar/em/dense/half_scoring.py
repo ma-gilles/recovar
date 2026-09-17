@@ -1422,13 +1422,9 @@ def _score_half_local(
                 **local_profile_k,
             )
     if k_class_enabled:
-        class_assignments_k = local_outputs.class_assignments
-        class_posterior_sums_k = local_outputs.class_posterior_sums
-        class_full_posterior_sums_k = local_outputs.class_full_posterior_sums
-        outputs.class_assignments[k] = np.asarray(class_assignments_k, dtype=np.int32)
-        outputs.class_posterior[k] = np.asarray(class_posterior_sums_k, dtype=np.float64)
-        if outputs.class_full_posterior is not None:
-            outputs.class_full_posterior[k] = np.asarray(class_full_posterior_sums_k, dtype=np.float64)
+        outputs.class_assignments[k] = np.asarray(local_outputs.class_assignments, dtype=np.int32)
+        outputs.class_posterior[k] = np.asarray(local_outputs.class_posterior_sums, dtype=np.float64)
+        outputs.class_full_posterior[k] = np.asarray(local_outputs.class_full_posterior_sums, dtype=np.float64)
     pose_dtype = _dense_global_scoring_dtype()
     outputs.best_pose_rotations[k] = np.asarray(best_rots_k, dtype=pose_dtype)
     outputs.best_pose_rotation_eulers[k] = (
