@@ -287,7 +287,6 @@ def _score_gamma_and_moments_local_bucket(
     top_scores, top_flat = jax.lax.top_k(score_flat, k)
     top_rot = (top_flat % R).astype(jnp.int32)
     top_trans = (top_flat // R).astype(jnp.int32)
-    top_prob = jnp.exp(top_scores - logZ[:, None]).astype(jnp.float32)
     diagnostics = PosteriorDiagnostics(
         logZ=logZ,
         pmax=pmax,
@@ -299,7 +298,6 @@ def _score_gamma_and_moments_local_bucket(
         top_rotation_idx=top_rot,
         top_translation_idx=top_trans,
         top_log_score_per_image=top_scores.astype(jnp.float32),
-        top_posterior_per_image=top_prob,
     )
     return gamma, alpha, G_tri, diagnostics
 
@@ -353,7 +351,6 @@ def score_local_pose_ppca_bucket(
         top_rotation_idx=(top_flat % R).astype(jnp.int32),
         top_translation_idx=(top_flat // R).astype(jnp.int32),
         top_log_score_per_image=top_scores.astype(jnp.float32),
-        top_posterior_per_image=jnp.exp(top_scores - logZ[:, None]).astype(jnp.float32),
     )
 
 
@@ -490,8 +487,6 @@ def _score_local_pose_ppca_bucket_rotation_chunked(
     final_top_scores, final_top_indices = jax.lax.top_k(combined_scores, K)
     final_top_rot = jnp.take_along_axis(combined_rot, final_top_indices, axis=1)
     final_top_trans = jnp.take_along_axis(combined_trans, final_top_indices, axis=1)
-    final_top_posterior = jnp.exp(final_top_scores - global_logZ[:, None]).astype(jnp.float32)
-
     pmax = jnp.exp(global_best_score - global_logZ).astype(jnp.float32)
     n_sig_total = jnp.sum(jnp.stack(chunk_n_significant, axis=-1), axis=-1).astype(jnp.int32)
 
@@ -506,7 +501,6 @@ def _score_local_pose_ppca_bucket_rotation_chunked(
         top_rotation_idx=final_top_rot,
         top_translation_idx=final_top_trans,
         top_log_score_per_image=final_top_scores.astype(jnp.float32),
-        top_posterior_per_image=final_top_posterior,
     )
 
 
@@ -559,7 +553,6 @@ def score_local_pose_ppca_bucket_with_moments(
         top_rotation_idx=(top_flat % R).astype(jnp.int32),
         top_translation_idx=(top_flat // R).astype(jnp.int32),
         top_log_score_per_image=top_scores.astype(jnp.float32),
-        top_posterior_per_image=jnp.exp(top_scores - logZ[:, None]).astype(jnp.float32),
     )
     return LocalScoreAndMomentsStats(score=score, alpha=alpha, G_tri=G_tri, diagnostics=diagnostics)
 

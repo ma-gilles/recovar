@@ -70,7 +70,6 @@ class PosteriorDiagnostics(NamedTuple):
     top_rotation_idx: jax.Array
     top_translation_idx: jax.Array
     top_log_score_per_image: jax.Array
-    top_posterior_per_image: jax.Array
 
 
 class DenseScoreStats(NamedTuple):
@@ -92,15 +91,14 @@ class DenseScoreTensorStats(NamedTuple):
     best_translation_idx: jax.Array
 
 
-def _top_pose_diagnostics_from_score_flat(score_flat, logZ, n_rot: int, top_pose_count: int):
+def _top_pose_diagnostics_from_score_flat(score_flat, n_rot: int, top_pose_count: int):
     """Return top-k pose diagnostics for a flattened ``(translation, rotation)`` score axis."""
 
     k = max(1, min(int(top_pose_count), int(score_flat.shape[-1])))
     top_scores, top_flat = jax.lax.top_k(score_flat, k)
     top_rot = (top_flat % int(n_rot)).astype(jnp.int32)
     top_trans = (top_flat // int(n_rot)).astype(jnp.int32)
-    top_prob = jnp.exp(top_scores - jnp.asarray(logZ)[:, None]).astype(jnp.float32)
-    return top_rot, top_trans, top_scores.astype(jnp.float32), top_prob
+    return top_rot, top_trans, top_scores.astype(jnp.float32)
 
 
 def _per_pose_stats_block(Y1, proj_aug, ctf2_over_noise, y_norm):
@@ -379,9 +377,8 @@ def _score_gamma_and_moments(
     gamma = jnp.exp(score - logZ[:, None, None])
     best_flat = jnp.argmax(score_flat, axis=-1)
     pmax = jnp.max(gamma.reshape(B, T * R), axis=-1)
-    top_rot, top_trans, top_scores, top_prob = _top_pose_diagnostics_from_score_flat(
+    top_rot, top_trans, top_scores = _top_pose_diagnostics_from_score_flat(
         score_flat,
-        logZ,
         R,
         top_pose_count,
     )
@@ -396,7 +393,6 @@ def _score_gamma_and_moments(
         top_rotation_idx=top_rot,
         top_translation_idx=top_trans,
         top_log_score_per_image=top_scores,
-        top_posterior_per_image=top_prob,
     )
     return gamma, alpha, G_tri, diagnostics
 

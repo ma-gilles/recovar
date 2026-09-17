@@ -103,11 +103,6 @@ def test_chunked_matches_unchunked(B, T, R, P, F, chunk, top_k):
     np.testing.assert_array_equal(
         np.asarray(chunked.top_translation_idx), np.asarray(ref.top_translation_idx),
     )
-    np.testing.assert_allclose(
-        np.asarray(chunked.top_posterior_per_image),
-        np.asarray(ref.top_posterior_per_image),
-        rtol=1e-4, atol=1e-4,
-    )
 
 
 def test_chunked_skips_when_chunk_size_exceeds_R():
