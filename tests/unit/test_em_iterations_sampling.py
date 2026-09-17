@@ -9,6 +9,7 @@ pytest.importorskip("healpy")
 
 import recovar.em.reference.iterations as em_iterations
 import recovar.em.sampling as em_sampling
+from recovar.em.relion import relion_metadata
 
 pytestmark = pytest.mark.unit
 
@@ -29,7 +30,7 @@ def test_read_relion_sampling_metadata_includes_psi_step(tmp_path):
         )
     )
 
-    meta = em_sampling.read_relion_sampling_metadata(sampling_star)
+    meta = relion_metadata.read_relion_sampling_metadata(sampling_star)
 
     assert meta["random_perturbation"] == pytest.approx(0.47674)
     assert meta["perturbation_factor"] == pytest.approx(0.5)
@@ -55,7 +56,7 @@ def test_read_relion_model_metadata_includes_local_prior_sigmas(tmp_path):
         )
     )
 
-    meta = em_sampling.read_relion_model_metadata(model_star)
+    meta = relion_metadata.read_relion_model_metadata(model_star)
 
     assert meta["current_image_size"] == 128
     assert meta["current_resolution"] == pytest.approx(4.25)
@@ -84,7 +85,7 @@ def test_read_relion_optimiser_metadata_reads_replay_accuracies(tmp_path):
         )
     )
 
-    meta = em_sampling.read_relion_optimiser_metadata(optimiser_star)
+    meta = relion_metadata.read_relion_optimiser_metadata(optimiser_star)
 
     assert meta["overall_accuracy_rotations"] == pytest.approx(1.030)
     assert meta["overall_accuracy_translations_angst"] == pytest.approx(1.649)

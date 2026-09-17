@@ -1192,9 +1192,11 @@ def main() -> None:
         apply_relion_translation_perturbation,
         get_relion_rotation_grid_eulers,
         get_translation_grid,
+        relion_angular_sampling_deg,
+    )
+    from recovar.em.relion.relion_metadata import (
         read_relion_optimiser_metadata,
         read_relion_sampling_metadata,
-        relion_angular_sampling_deg,
     )
     from recovar.em.scoring.significance import _compute_k_class_significance_batched
     from recovar.reconstruction import noise as recon_noise

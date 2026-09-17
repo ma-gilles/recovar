@@ -238,7 +238,7 @@ def _read_dumped_perturbation(estep_dump_dir: Path, fallback_sampling_star: Path
                 str(path),
             )
 
-    from recovar.em.sampling import read_relion_perturbation_from_sampling_star
+    from recovar.em.relion.relion_metadata import read_relion_perturbation_from_sampling_star
 
     random_perturbation, perturbation_factor = read_relion_perturbation_from_sampling_star(str(fallback_sampling_star))
     return float(random_perturbation), float(perturbation_factor), str(fallback_sampling_star)
