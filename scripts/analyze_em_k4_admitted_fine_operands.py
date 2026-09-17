@@ -9,10 +9,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-if __package__:
-    from .compare_k4_relion_recovar_fine_operands import compare
-else:
-    from compare_k4_relion_recovar_fine_operands import compare  # type: ignore[no-redef]
+from scripts.compare_k4_relion_recovar_fine_operands import compare
+from scripts.file_hash import sha256_file as _sha256
 
 SCHEMA = "recovar.em_k4_admitted_fine_operand_comparison.v3"
 NATIVE_SCHEMA = "recovar.em_k4_native_class1_fine_operand_admission.v1"
@@ -29,13 +27,6 @@ EXPECTED_CANDIDATES = 96
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise ValueError(message)
-
-
-# Support direct execution, sibling imports, and the scripts package.
-if not __package__:
-    from file_hash import sha256_file as _sha256
-else:
-    from scripts.file_hash import sha256_file as _sha256
 
 
 def _load_json(path: Path) -> dict[str, Any]:

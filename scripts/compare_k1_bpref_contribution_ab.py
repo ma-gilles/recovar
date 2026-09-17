@@ -10,6 +10,8 @@ from typing import Any
 
 import numpy as np
 
+from scripts.file_hash import sha256_file as _sha256
+
 from .analyze_k1_bpref_factor_boundary import _metric, _pixel_coordinates, _rotation_map
 from .validate_relion_bpref_factor_capture import load_factor_capture
 
@@ -19,13 +21,6 @@ SCHEMA = "recovar.em.k1_bpref_contribution_ab.v1"
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise ValueError(message)
-
-
-# Support direct execution, sibling imports, and the scripts package.
-if not __package__:
-    from file_hash import sha256_file as _sha256
-else:
-    from scripts.file_hash import sha256_file as _sha256
 
 
 def _load_contribution(directory: Path, original: int) -> tuple[Path, dict[str, np.ndarray], int]:

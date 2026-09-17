@@ -12,13 +12,8 @@ from typing import Any
 import numpy as np
 import starfile
 
-if __package__:
-    from .validate_relion_preprocess_capture import load_artifact as load_preprocess_capture
-else:
-    from validate_relion_preprocess_capture import (  # type: ignore[no-redef]
-        load_artifact as load_preprocess_capture,
-    )
-
+from scripts.file_hash import sha256_file as _sha256
+from scripts.validate_relion_preprocess_capture import load_artifact as load_preprocess_capture
 
 _NATIVE_EXPECTATION_PATTERN = re.compile(
     r"RELION_P1_NORMALIZATION_OPERANDS_V1 part_id=(?P<part_id>\d+) "
@@ -37,13 +32,6 @@ _NATIVE_UPDATE_PATTERN = re.compile(
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise ValueError(message)
-
-
-# Support direct execution, sibling imports, and the scripts package.
-if not __package__:
-    from file_hash import sha256_file as _sha256
-else:
-    from scripts.file_hash import sha256_file as _sha256
 
 
 def _positive_float32_ulp_distance(left: float, right: float) -> int:

@@ -6,16 +6,10 @@ from __future__ import annotations
 import argparse
 import json
 import math
-import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
-
-from scripts.compare_k4_relion_recovar_fine_operands import (  # noqa: E402
-    _select_component_classification,
-)
+from scripts.compare_k4_relion_recovar_fine_operands import _select_component_classification
+from scripts.file_hash import sha256_file as _sha256
 
 SCHEMA = "k4_relion_recovar_fine_operand_classification_v2"
 INPUT_SCHEMA = "k4_relion_recovar_fine_operand_comparison_v8"
@@ -25,13 +19,6 @@ COMPONENTS = ("reference", "shifted_image", "corr")
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise ValueError(message)
-
-
-# Support direct execution, sibling imports, and the scripts package.
-if not __package__:
-    from file_hash import sha256_file as _sha256
-else:
-    from scripts.file_hash import sha256_file as _sha256
 
 
 def _validated_counterfactual(

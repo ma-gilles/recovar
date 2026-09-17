@@ -20,6 +20,7 @@ import numpy as np
 
 from scripts import validate_relion_coarse_lane_capture as lane_validator
 from scripts import validate_relion_coarse_operand_capture as operand_validator
+from scripts.file_hash import sha256_file as _sha256
 
 HEADER_MAGIC = b"RLNP1PXV1HEADER\0"
 FOOTER_MAGIC = b"RLNP1PXV1FOOTER\0"
@@ -43,13 +44,6 @@ FIELD_NAMES = (
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise ValueError(message)
-
-
-# Support direct execution, sibling imports, and the scripts package.
-if not __package__:
-    from file_hash import sha256_file as _sha256
-else:
-    from scripts.file_hash import sha256_file as _sha256
 
 
 def _bits(values: np.ndarray) -> np.ndarray:

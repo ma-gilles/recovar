@@ -14,6 +14,7 @@ from scripts.analyze_em_k1_coarse_pass1_boundary import (
     _map_relion_table,
     _translation_permutation,
 )
+from scripts.file_hash import sha256_file as _sha256
 from scripts.validate_relion_coarse_operand_capture import (
     load_artifact as load_operand_artifact,
 )
@@ -29,13 +30,6 @@ from scripts.validate_relion_coarse_pass1_components import (
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise ValueError(message)
-
-
-# Support direct execution, sibling imports, and the scripts package.
-if not __package__:
-    from file_hash import sha256_file as _sha256
-else:
-    from scripts.file_hash import sha256_file as _sha256
 
 
 def _center(values: np.ndarray) -> np.ndarray:

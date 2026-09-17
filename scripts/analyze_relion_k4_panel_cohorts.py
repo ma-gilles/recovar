@@ -10,6 +10,9 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
 
+from scripts.analyzer_provenance import clean_repo_head
+from scripts.file_hash import sha256_file as _sha256
+
 THREEWAY_SCHEMA = "recovar.k4_iter10_panel12_threeway_fine_score.v2"
 REPEATABILITY_SCHEMA = "relion.k4_iter10_panel12_capture_repeatability.v1"
 REPORT_SCHEMA = "recovar.k4_iter10_panel12_cohort_calibration.v1"
@@ -32,15 +35,6 @@ BEYOND_FLOOR = "relion_cuda_preprocessing_reduces_residual_beyond_capture_repeat
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise ValueError(message)
-
-
-# Support direct execution, sibling imports, and the scripts package.
-if not __package__:
-    from analyzer_provenance import clean_repo_head
-    from file_hash import sha256_file as _sha256
-else:
-    from scripts.analyzer_provenance import clean_repo_head
-    from scripts.file_hash import sha256_file as _sha256
 
 
 def _unique_by_identity(rows: list[dict[str, Any]], label: str) -> dict[int, dict[str, Any]]:

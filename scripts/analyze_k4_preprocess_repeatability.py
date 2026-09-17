@@ -12,20 +12,14 @@ from typing import Any
 
 import numpy as np
 
+from scripts.analyzer_provenance import clean_repo_head
+from scripts.file_hash import sha256_file as _sha256
+
 REPORT_SCHEMA = "recovar.k4_preprocess_repeatability.v1"
 PROBABILITY_FIELDS = frozenset({"probs", "reconstruction_probs"})
 FILENAME_PATTERN = re.compile(
     r"pass2_orig(?P<target>[0-9]{6})_class(?P<class>[0-9]{3})_cs(?P<size>[0-9]{3})[.]npz"
 )
-
-
-# Support direct execution, sibling imports, and the scripts package.
-if not __package__:
-    from analyzer_provenance import clean_repo_head
-    from file_hash import sha256_file as _sha256
-else:
-    from scripts.analyzer_provenance import clean_repo_head
-    from scripts.file_hash import sha256_file as _sha256
 
 
 def _require(condition: bool, message: str) -> None:

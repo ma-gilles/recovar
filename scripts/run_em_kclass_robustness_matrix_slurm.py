@@ -22,10 +22,7 @@ import time
 from dataclasses import dataclass, replace
 from pathlib import Path
 
-if not __package__:
-    from file_hash import sha256_file as _sha256_file
-else:
-    from scripts.file_hash import sha256_file as _sha256_file
+from scripts.file_hash import sha256_file as _sha256_file
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_RIBO_PDB_DIR = Path("/home/mg6942/mytigress/cryobench2/Ribosembly/pdbs")

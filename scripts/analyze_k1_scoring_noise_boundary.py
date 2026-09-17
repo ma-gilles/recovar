@@ -10,6 +10,8 @@ from pathlib import Path
 import numpy as np
 import starfile
 
+from scripts.file_hash import sha256_file as _sha256
+
 MAGIC = b"RLNSIGMAV1"
 HEADER_WORDS = 16
 
@@ -17,13 +19,6 @@ HEADER_WORDS = 16
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise ValueError(message)
-
-
-# Support direct execution, sibling imports, and the scripts package.
-if not __package__:
-    from file_hash import sha256_file as _sha256
-else:
-    from scripts.file_hash import sha256_file as _sha256
 
 
 def _load_capture(path: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray]:

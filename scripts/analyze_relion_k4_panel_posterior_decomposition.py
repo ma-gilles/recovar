@@ -12,27 +12,15 @@ from typing import Any
 
 import numpy as np
 
-if __package__:
-    from .analyze_relion_k4_panel_threeway import (
-        _float32_from_bits,
-        _rotation_map,
-        _translation_map,
-    )
-    from .validate_relion_bpref_factor_capture import load_factor_capture
-    from .validate_relion_fine_score_capture import ACTIVE, load_fine_score_capture
-else:
-    from analyze_relion_k4_panel_threeway import (  # type: ignore[no-redef]
-        _float32_from_bits,
-        _rotation_map,
-        _translation_map,
-    )
-    from validate_relion_bpref_factor_capture import (  # type: ignore[no-redef]
-        load_factor_capture,
-    )
-    from validate_relion_fine_score_capture import (  # type: ignore[no-redef]
-        ACTIVE,
-        load_fine_score_capture,
-    )
+from scripts.analyze_relion_k4_panel_threeway import (
+    _float32_from_bits,
+    _rotation_map,
+    _translation_map,
+)
+from scripts.analyzer_provenance import clean_repo_head
+from scripts.file_hash import sha256_file as _sha256
+from scripts.validate_relion_bpref_factor_capture import load_factor_capture
+from scripts.validate_relion_fine_score_capture import ACTIVE, load_fine_score_capture
 
 PANEL_SCHEMA = "recovar.k4_iter10_class2_residual_target_panel.v1"
 THREEWAY_SCHEMA = "recovar.k4_iter10_panel12_threeway_fine_score.v2"
@@ -54,15 +42,6 @@ EXP50_F32 = float(np.exp(np.float32(50.0), dtype=np.float32))
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise ValueError(message)
-
-
-# Support direct execution, sibling imports, and the scripts package.
-if not __package__:
-    from analyzer_provenance import clean_repo_head
-    from file_hash import sha256_file as _sha256
-else:
-    from scripts.analyzer_provenance import clean_repo_head
-    from scripts.file_hash import sha256_file as _sha256
 
 
 def _load_npz(path: Path) -> dict[str, np.ndarray]:

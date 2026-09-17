@@ -20,10 +20,7 @@ from typing import Any, Sequence
 
 import numpy as np
 
-if not __package__:
-    from file_hash import sha256_file as _sha256
-else:
-    from scripts.file_hash import sha256_file as _sha256
+from scripts.file_hash import sha256_file as _sha256
 
 OUTPUT_SCHEMA = "recovar.em_k1_map_amplitude_trajectory.v1"
 

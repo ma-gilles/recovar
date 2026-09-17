@@ -20,10 +20,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-if not __package__:
-    from file_hash import sha256_file as _sha256
-else:
-    from scripts.file_hash import sha256_file as _sha256
+from scripts.file_hash import sha256_file as _sha256
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 RUNNER = REPO_ROOT / "scripts" / "run_multi_iter_parity.py"

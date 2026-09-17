@@ -12,21 +12,15 @@ from typing import Any, Mapping
 import numpy as np
 import starfile
 
+from scripts.file_hash import sha256_file as _sha256
+from scripts.relion_reference import relion_score_replay as _relion_score_replay
+
 SCHEMA = "recovar-k4-joint-direction-prior-audit-v1"
 
 
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise ValueError(message)
-
-
-# Support direct execution, sibling imports, and the scripts package.
-if not __package__:
-    from file_hash import sha256_file as _sha256
-    from relion_reference import relion_score_replay as _relion_score_replay
-else:
-    from scripts.file_hash import sha256_file as _sha256
-    from scripts.relion_reference import relion_score_replay as _relion_score_replay
 
 
 def _metric(left: np.ndarray, right: np.ndarray) -> dict[str, Any]:

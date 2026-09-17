@@ -16,6 +16,8 @@ import math
 from pathlib import Path
 from typing import Any
 
+from scripts.file_hash import sha256_file as _sha256
+
 _INERTNESS_SCHEMA = "em_relion_iteration1_particle_state_inertness_v1"
 _REQUIRED_INERTNESS_FIELDS = (
     "rlnAngleRot",
@@ -27,13 +29,6 @@ _REQUIRED_INERTNESS_FIELDS = (
     "rlnMaxValueProbDistribution",
     "rlnNrOfSignificantSamples",
 )
-
-
-# Support direct execution, sibling imports, and the scripts package.
-if not __package__:
-    from file_hash import sha256_file as _sha256
-else:
-    from scripts.file_hash import sha256_file as _sha256
 
 
 def _candidate_key(value: Any, *, field: str) -> tuple[int, int]:

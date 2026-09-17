@@ -10,11 +10,7 @@ from pathlib import Path
 
 import numpy as np
 
-# Support direct execution, sibling imports, and the scripts package.
-if not __package__:
-    from file_hash import sha256_file as _sha256
-else:
-    from scripts.file_hash import sha256_file as _sha256
+from scripts.file_hash import sha256_file as _sha256
 
 
 def _f32(value: float) -> dict[str, object]:

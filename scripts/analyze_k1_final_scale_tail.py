@@ -10,15 +10,9 @@ from pathlib import Path
 import numpy as np
 import starfile
 
+from scripts.file_hash import sha256_file as _sha256
 
 EXPOSURE_QUANTILES = (0.90, 0.95, 0.99, 0.999)
-
-
-# Support direct execution, sibling imports, and the scripts package.
-if not __package__:
-    from file_hash import sha256_file as _sha256
-else:
-    from scripts.file_hash import sha256_file as _sha256
 
 
 def _stack_indices(image_names) -> np.ndarray:

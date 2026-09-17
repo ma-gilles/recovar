@@ -27,6 +27,7 @@ from scripts.analyze_em_k4_authoritative_native_scores import (
     _validate_completion,
     float32_metric,
 )
+from scripts.file_hash import sha256_file as _sha256
 from scripts.relion_reference import relion_score_replay as _relion_score_replay
 from scripts.validate_relion_bpref_factor_capture import load_factor_capture
 from scripts.validate_relion_fine_score_capture import (
@@ -47,13 +48,6 @@ NATIVE_SCIENCE_JOB_ID = 11_787_017
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise ValueError(message)
-
-
-# Support direct execution, sibling imports, and the scripts package.
-if not __package__:
-    from file_hash import sha256_file as _sha256
-else:
-    from scripts.file_hash import sha256_file as _sha256
 
 
 def _float32_from_bits(value: int) -> np.float32:

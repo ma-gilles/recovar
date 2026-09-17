@@ -13,6 +13,10 @@ from pathlib import Path
 
 import numpy as np
 
+from scripts.analyzer_provenance import clean_repo_head
+from scripts.file_hash import fnv1a64 as _fnv1a64
+from scripts.file_hash import sha256_file as _sha256
+
 PHYSICAL_IMAGE_SIZE = 256
 ACTIVE = np.uint32(8)
 PANEL_SCHEMA = "recovar.k4_iter10_class2_residual_target_panel.v1"
@@ -39,15 +43,6 @@ ALL_PARTICLE_FIELDS = SCIENCE_PARTICLE_FIELDS + (
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise ValueError(message)
-
-
-# Support direct execution, sibling imports, and the scripts package.
-if not __package__:
-    from analyzer_provenance import clean_repo_head
-    from file_hash import fnv1a64 as _fnv1a64, sha256_file as _sha256
-else:
-    from scripts.analyzer_provenance import clean_repo_head
-    from scripts.file_hash import fnv1a64 as _fnv1a64, sha256_file as _sha256
 
 
 def _float32_from_bits(value: int) -> np.float32:

@@ -6,17 +6,13 @@ from __future__ import annotations
 import argparse
 import json
 import struct
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
-
-from scripts.analyze_em_k1_coarse_pass1_boundary import _map_relion_table  # noqa: E402
+from scripts.analyze_em_k1_coarse_pass1_boundary import _map_relion_table
+from scripts.file_hash import sha256_file as _sha256
 
 
 @dataclass(frozen=True)
@@ -50,13 +46,6 @@ def _float32_ulp_distance(left: float, right: float) -> int | None:
         np.int64(0x80000000) + bits,
     )
     return int(abs(ordered[0] - ordered[1]))
-
-
-# Support direct execution, sibling imports, and the scripts package.
-if not __package__:
-    from file_hash import sha256_file as _sha256
-else:
-    from scripts.file_hash import sha256_file as _sha256
 
 
 def _residual_metrics(values: np.ndarray) -> dict[str, float]:

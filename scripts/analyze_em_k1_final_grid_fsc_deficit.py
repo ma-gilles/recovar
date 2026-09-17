@@ -17,10 +17,7 @@ from typing import Any
 
 import numpy as np
 
-if not __package__:
-    from file_hash import sha256_file as _sha256
-else:
-    from scripts.file_hash import sha256_file as _sha256
+from scripts.file_hash import sha256_file as _sha256
 
 SCHEMA = "em-k1-final-grid-fsc-deficit-v2"
 TRAJECTORY_SCHEMAS = {

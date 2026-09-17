@@ -11,6 +11,8 @@ from typing import Any
 
 import numpy as np
 
+from scripts.file_hash import sha256_file as _sha256
+
 SCHEMA = "recovar.em_k4_allclass_recovar_repeatability.v1"
 EXPECTED_CLASSES = 4
 EXPECTED_ORIGINAL_INDEX = 53_722
@@ -56,13 +58,6 @@ GROUP_FIELDS = {
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise ValueError(message)
-
-
-# Support direct execution, sibling imports, and the scripts package.
-if not __package__:
-    from file_hash import sha256_file as _sha256
-else:
-    from scripts.file_hash import sha256_file as _sha256
 
 
 def array_metric(left: np.ndarray, right: np.ndarray) -> dict[str, Any]:

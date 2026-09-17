@@ -18,32 +18,16 @@ from typing import Any
 
 import numpy as np
 
-if __package__:
-    from .analyze_k1_fine_score_boundary import (
-        _first_mismatch_record,
-        _geometry_only_significant_count,
-        _metric,
-        _rotation_map,
-        _translation_map,
-    )
-    from .validate_relion_bpref_factor_capture import load_factor_capture
-    from .validate_relion_fine_score_capture import ACTIVE, load_fine_score_capture
-else:
-    from analyze_k1_fine_score_boundary import (  # type: ignore[no-redef]
-        _first_mismatch_record,
-        _geometry_only_significant_count,
-        _metric,
-        _rotation_map,
-        _translation_map,
-    )
-    from validate_relion_bpref_factor_capture import (  # type: ignore[no-redef]
-        load_factor_capture,
-    )
-    from validate_relion_fine_score_capture import (  # type: ignore[no-redef]
-        ACTIVE,
-        load_fine_score_capture,
-    )
-
+from scripts.analyze_k1_fine_score_boundary import (
+    _first_mismatch_record,
+    _geometry_only_significant_count,
+    _metric,
+    _rotation_map,
+    _translation_map,
+)
+from scripts.file_hash import sha256_file as _sha256
+from scripts.validate_relion_bpref_factor_capture import load_factor_capture
+from scripts.validate_relion_fine_score_capture import ACTIVE, load_fine_score_capture
 
 REPORT_SCHEMA = "recovar.em.k1_fine_score_stages.v1"
 STAGES = (
@@ -62,13 +46,6 @@ STAGES = (
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise ValueError(message)
-
-
-# Support direct execution, sibling imports, and the scripts package.
-if not __package__:
-    from file_hash import sha256_file as _sha256
-else:
-    from scripts.file_hash import sha256_file as _sha256
 
 
 def _center(values: np.ndarray) -> np.ndarray:

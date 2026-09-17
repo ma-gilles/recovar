@@ -13,17 +13,14 @@ import argparse
 import json
 import math
 import subprocess
-import sys
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
-
-from scripts.parse_relion_dump_dir import parse_dump_dir  # noqa: E402
+from scripts.analyzer_provenance import clean_repo_head
+from scripts.file_hash import sha256_file as _sha256
+from scripts.parse_relion_dump_dir import parse_dump_dir
 
 INERTNESS_SCHEMA = "em_relion_iteration1_particle_state_inertness_v3"
 REPORT_SCHEMA = "em_relion_capture_target_tie_classification_v1"
@@ -38,15 +35,6 @@ EXPECTED_EXACT_FIELDS = (
     "rlnMaxValueProbDistribution",
     "rlnNrOfSignificantSamples",
 )
-
-
-# Support direct execution, sibling imports, and the scripts package.
-if not __package__:
-    from analyzer_provenance import clean_repo_head
-    from file_hash import sha256_file as _sha256
-else:
-    from scripts.analyzer_provenance import clean_repo_head
-    from scripts.file_hash import sha256_file as _sha256
 
 
 def _require(condition: bool, message: str) -> None:

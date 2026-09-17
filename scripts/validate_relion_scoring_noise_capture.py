@@ -10,6 +10,8 @@ from pathlib import Path
 
 import numpy as np
 
+from scripts.file_hash import sha256_file as _sha256
+
 MAGIC = b"RLNSIGMAV1"
 MAGIC_SIZE = 16
 HEADER_WORDS = 16
@@ -21,11 +23,6 @@ def _require(condition: bool, message: str) -> None:
         raise ValueError(message)
 
 
-# Support direct execution, sibling imports, and the scripts package.
-if not __package__:
-    from file_hash import sha256_file as _sha256
-else:
-    from scripts.file_hash import sha256_file as _sha256
 
 
 @dataclass(frozen=True)

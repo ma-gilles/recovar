@@ -16,6 +16,7 @@ from scripts.analyze_em_k4_authoritative_native_scores import (
     _rotation_permutation,
 )
 from scripts.analyze_em_k4_raw_diff2_parity import SCHEMA as RAW_REPORT_SCHEMA
+from scripts.file_hash import sha256_file as _sha256
 from scripts.validate_relion_bpref_factor_capture import load_factor_capture
 from scripts.validate_relion_fine_score_capture import (
     ACTIVE,
@@ -32,13 +33,6 @@ MISMATCH_CLASSIFICATION = (
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise ValueError(message)
-
-
-# Support direct execution, sibling imports, and the scripts package.
-if not __package__:
-    from file_hash import sha256_file as _sha256
-else:
-    from scripts.file_hash import sha256_file as _sha256
 
 
 def _quantiles(values: np.ndarray) -> dict[str, float]:

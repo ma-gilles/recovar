@@ -20,6 +20,8 @@ from typing import Any
 
 import numpy as np
 
+from scripts.file_hash import sha256_file as _sha256
+
 os.environ.setdefault("JAX_PLATFORMS", "cuda,cpu")
 
 from scripts.analyze_em_k1_tau2_substitution import map_metrics
@@ -31,13 +33,6 @@ from scripts.analyze_k1_single_translation_map_counterfactual import (
 )
 
 SCHEMA = "recovar.em.k1_pose_winner_map_counterfactual.v1"
-
-
-# Support direct execution, sibling imports, and the scripts package.
-if not __package__:
-    from file_hash import sha256_file as _sha256
-else:
-    from scripts.file_hash import sha256_file as _sha256
 
 
 def _rotation_distances_deg(matrices: np.ndarray, target: np.ndarray) -> np.ndarray:

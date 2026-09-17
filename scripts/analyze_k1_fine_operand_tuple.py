@@ -16,11 +16,12 @@ from scripts.compare_k4_relion_recovar_fine_operands import (
     _translation_alignment,
     _zero_dc_compact_score_weight,
 )
+from scripts.file_hash import sha256_file as _sha256
 from scripts.validate_relion_fine_operand_capture import (
     _cuda_fine_contribution,
     _cuda_fine_production_lanes,
-    _replay_lanes,
     _reduce_lanes,
+    _replay_lanes,
     load_fine_operand_capture,
     validate_capture,
 )
@@ -29,13 +30,6 @@ from scripts.validate_relion_fine_operand_capture import (
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise ValueError(message)
-
-
-# Support direct execution, sibling imports, and the scripts package.
-if not __package__:
-    from file_hash import sha256_file as _sha256
-else:
-    from scripts.file_hash import sha256_file as _sha256
 
 
 def _sass_tree_raw_diff2(

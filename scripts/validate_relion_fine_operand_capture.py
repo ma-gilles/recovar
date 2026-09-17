@@ -11,6 +11,8 @@ from pathlib import Path
 
 import numpy as np
 
+from scripts.file_hash import sha256_file as _sha256
+
 HEADER_SIZE = 528
 CANDIDATE_SIZE = 1120
 PIXEL_SIZE = 64
@@ -89,13 +91,6 @@ class FineOperandCapture:
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise ValueError(message)
-
-
-# Support direct execution, sibling imports, and the scripts package.
-if not __package__:
-    from file_hash import sha256_file as _sha256
-else:
-    from scripts.file_hash import sha256_file as _sha256
 
 
 def _decode_magic(value: bytes) -> str:
