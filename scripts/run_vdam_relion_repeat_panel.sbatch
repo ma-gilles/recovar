@@ -44,7 +44,7 @@ done
 
 export OUTPUT_ROOT="${PANEL_ROOT}"
 PIXI_PY="${REPO_ROOT}/.pixi/envs/default/bin/python"
-"${PIXI_PY}" "${REPO_ROOT}/scripts/audit_vdam_repeat_panel.py" \
+env PYTHONPATH="${REPO_ROOT}" "${PIXI_PY}" -m scripts.audit_vdam_repeat_panel \
   --scorecard "${VDAM_SCORECARD}" --case-id "${CASE_ID}" \
   --panel-root "${OUTPUT_ROOT}" --repeat-count "${VDAM_REPEAT_COUNT}" \
   --output-json "${OUTPUT_ROOT}/repeat_panel_audit.json" \

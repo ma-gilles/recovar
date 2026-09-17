@@ -12,14 +12,8 @@ import numpy as np
 
 from recovar.em.sparse_pass2.sparse_pass2_scoring import _relion_cuda_fine_full_to_compact_lookup
 from recovar.utils.file_hash import sha256_file
-
-if __package__:
-    from scripts.validate_relion_fine_operand_capture import load_fine_operand_capture
-    from scripts.validate_relion_preprocess_capture import load_artifact
-else:
-    from validate_relion_fine_operand_capture import load_fine_operand_capture
-    from validate_relion_preprocess_capture import load_artifact
-
+from scripts.validate_relion_fine_operand_capture import load_fine_operand_capture
+from scripts.validate_relion_preprocess_capture import load_artifact
 
 HEADER_MAGIC = b"RLNFIMGV1HEADER\0"
 FOOTER_MAGIC = b"RLNFIMGV1FOOTER\0"

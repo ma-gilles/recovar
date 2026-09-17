@@ -18,19 +18,11 @@ from recovar.data_io.image_backends import _centered_rfft2_jax, _centered_rfft2_
 from recovar.em.helpers.image_shifts import apply_relion_integer_pre_shifts
 from recovar.em.sparse_pass2.sparse_pass2_bucket_io import _half_translation_phase_table_for_indices
 from recovar.utils.file_hash import sha256_file
-
-if __package__:
-    from .validate_relion_bpref_factor_capture import (
-        FactorCapture,
-        load_factor_capture,
-        validate_directory,
-    )
-else:
-    from validate_relion_bpref_factor_capture import (  # type: ignore[no-redef]
-        FactorCapture,
-        load_factor_capture,
-        validate_directory,
-    )
+from scripts.validate_relion_bpref_factor_capture import (
+    FactorCapture,
+    load_factor_capture,
+    validate_directory,
+)
 
 PHYSICAL_IMAGE_SIZE = 256
 

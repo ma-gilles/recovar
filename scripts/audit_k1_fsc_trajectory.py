@@ -21,20 +21,12 @@ from typing import Any
 
 import numpy as np
 
-if __package__:
-    from scripts.summarize_em_completion_bench import (
-        _load_recovar_volume,
-        _load_relion_volume,
-        normalized_fsc_auc,
-        shell_fsc,
-    )
-else:
-    from summarize_em_completion_bench import (
-        _load_recovar_volume,
-        _load_relion_volume,
-        normalized_fsc_auc,
-        shell_fsc,
-    )
+from scripts.summarize_em_completion_bench import (
+    _load_recovar_volume,
+    _load_relion_volume,
+    normalized_fsc_auc,
+    shell_fsc,
+)
 
 SCHEMA = "em_k1_fsc_trajectory_audit_v3"
 RECOVAR_MAP_RE = re.compile(r"^it(\d{3})_half([12])_reg\.mrc$")

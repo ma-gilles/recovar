@@ -12,6 +12,8 @@ from pathlib import Path
 
 import numpy as np
 
+from scripts.file_hash import sha256_file as _sha256
+
 HEADER_MAGIC = b"RLNBPMV1HEADER\0\0"
 FOOTER_MAGIC = b"RLNBPMV1FOOTER\0\0"
 HEADER_STRUCT = struct.Struct("<16s40Q")
@@ -43,11 +45,6 @@ def _require(condition: bool, message: str) -> None:
         raise ValueError(message)
 
 
-# Support both direct execution and package imports.
-if __package__:
-    from .file_hash import sha256_file as _sha256
-else:
-    from file_hash import sha256_file as _sha256
 
 
 def _float32_from_bits(value: int) -> float:

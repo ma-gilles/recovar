@@ -10,24 +10,14 @@ from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 
-if __package__:
-    from scripts.file_hash import sha256_file
-    from scripts.summarize_vdam_relion_parity_scorecard import (
-        DEFAULT_OUTPUT,
-        DEFAULT_SCORECARD,
-        REQUIRED_CHECKPOINTS,
-        load_and_validate,
-        render_markdown,
-    )
-else:
-    from file_hash import sha256_file
-    from summarize_vdam_relion_parity_scorecard import (
-        DEFAULT_OUTPUT,
-        DEFAULT_SCORECARD,
-        REQUIRED_CHECKPOINTS,
-        load_and_validate,
-        render_markdown,
-    )
+from scripts.file_hash import sha256_file
+from scripts.summarize_vdam_relion_parity_scorecard import (
+    DEFAULT_OUTPUT,
+    DEFAULT_SCORECARD,
+    REQUIRED_CHECKPOINTS,
+    load_and_validate,
+    render_markdown,
+)
 
 AUDIT_SCHEMA = "recovar.vdam_relion_fsc_trajectory_audit.v1"
 LEDGER_SCHEMA = "recovar.vdam_relion_parity_evidence_ledger.v1"

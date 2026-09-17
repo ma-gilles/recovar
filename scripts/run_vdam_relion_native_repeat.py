@@ -11,43 +11,23 @@ from typing import Any
 
 import numpy as np
 
-if __package__:
-    from scripts.audit_vdam_fsc_trajectory import audit
-    from scripts.materialize_em_k1_fixture import sha256_file
-    from scripts.run_vdam_relion_parity_case import (
-        DEFAULT_RELION_REFINE,
-        RunError,
-        _assert_git_source_unchanged,
-        _definition_with_iteration_override,
-        _git_source_state,
-        _load_json,
-        _physical_gpu_uuid,
-        _qualification_cuda_environment,
-        _relion_reference_provenance,
-        _run_logged,
-        _scorecard_case,
-        _write_particle_state_audit,
-        build_relion_command,
-    )
-else:
-    from audit_vdam_fsc_trajectory import audit
-    from materialize_em_k1_fixture import sha256_file
-    from run_vdam_relion_parity_case import (
-        DEFAULT_RELION_REFINE,
-        RunError,
-        _assert_git_source_unchanged,
-        _definition_with_iteration_override,
-        _git_source_state,
-        _load_json,
-        _physical_gpu_uuid,
-        _qualification_cuda_environment,
-        _relion_reference_provenance,
-        _run_logged,
-        _scorecard_case,
-        _write_particle_state_audit,
-        build_relion_command,
-    )
-
+from scripts.audit_vdam_fsc_trajectory import audit
+from scripts.materialize_em_k1_fixture import sha256_file
+from scripts.run_vdam_relion_parity_case import (
+    DEFAULT_RELION_REFINE,
+    RunError,
+    _assert_git_source_unchanged,
+    _definition_with_iteration_override,
+    _git_source_state,
+    _load_json,
+    _physical_gpu_uuid,
+    _qualification_cuda_environment,
+    _relion_reference_provenance,
+    _run_logged,
+    _scorecard_case,
+    _write_particle_state_audit,
+    build_relion_command,
+)
 
 SCHEMA = "recovar.vdam_native_only_repeat.v1"
 

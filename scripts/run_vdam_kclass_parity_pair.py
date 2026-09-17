@@ -15,13 +15,8 @@ from typing import Any
 
 import numpy as np
 
-if __package__:
-    from scripts.audit_vdam_kclass_trajectory import audit_trajectory
-    from scripts.run_k1_parity_smoke import referenced_particle_stacks
-else:
-    from audit_vdam_kclass_trajectory import audit_trajectory
-    from run_k1_parity_smoke import referenced_particle_stacks
-
+from scripts.audit_vdam_kclass_trajectory import audit_trajectory
+from scripts.run_k1_parity_smoke import referenced_particle_stacks
 
 DEFAULT_RELION = Path("/scratch/gpfs/GILLES/mg6942/relion_clean_f2c1a384/build_clean_pinned/bin/relion_refine")
 

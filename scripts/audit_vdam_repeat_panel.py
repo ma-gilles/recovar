@@ -12,11 +12,7 @@ from typing import Any
 
 import numpy as np
 
-if __package__:
-    from scripts.summarize_em_completion_bench import _load_relion_volume, normalized_fsc_auc, shell_fsc
-else:
-    from summarize_em_completion_bench import _load_relion_volume, normalized_fsc_auc, shell_fsc
-
+from scripts.summarize_em_completion_bench import _load_relion_volume, normalized_fsc_auc, shell_fsc
 
 SCHEMA = "recovar.vdam_relion_repeat_panel.v2"
 TRAJECTORY_SCHEMA = "recovar.vdam_relion_fsc_trajectory_audit.v1"

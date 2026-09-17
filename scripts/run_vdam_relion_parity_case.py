@@ -14,14 +14,9 @@ from typing import Any
 
 import numpy as np
 
-if __package__:
-    from scripts.audit_vdam_fsc_trajectory import audit
-    from scripts.audit_vdam_particle_state_trajectory import audit_trajectory as audit_particle_states
-    from scripts.materialize_em_k1_fixture import load_case, materialize, sha256_file
-else:
-    from audit_vdam_fsc_trajectory import audit
-    from audit_vdam_particle_state_trajectory import audit_trajectory as audit_particle_states
-    from materialize_em_k1_fixture import load_case, materialize, sha256_file
+from scripts.audit_vdam_fsc_trajectory import audit
+from scripts.audit_vdam_particle_state_trajectory import audit_trajectory as audit_particle_states
+from scripts.materialize_em_k1_fixture import load_case, materialize, sha256_file
 
 DEFAULT_FIXTURE_ROOT = Path("/scratch/gpfs/CRYOEM/gilleslab/em_work/codex")
 DEFAULT_RELION_REFINE = Path("/scratch/gpfs/GILLES/mg6942/relion/build_patched/bin/relion_refine")

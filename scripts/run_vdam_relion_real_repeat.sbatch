@@ -113,7 +113,7 @@ GPU_UUID_AFTER="$(nvidia-smi --query-gpu=uuid --format=csv,noheader | tr -d '[:s
 test "${GPU_UUID_BEFORE}" = "${GPU_UUID_AFTER}"
 
 read -r -a ITERATION_ARRAY <<<"${ITERATIONS}"
-"${PIXI_PY}" scripts/audit_vdam_particle_state_trajectory.py \
+"${PIXI_PY}" -m scripts.audit_vdam_particle_state_trajectory \
   --recovar-dir "${REFERENCE_ROOT}/relion" \
   --relion-dir "${OUTPUT_ROOT}/relion" \
   --iterations "${ITERATION_ARRAY[@]}" \

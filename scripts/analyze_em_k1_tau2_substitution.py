@@ -18,18 +18,11 @@ from typing import Any
 import numpy as np
 import starfile
 
-if __package__:
-    from scripts.analyze_em_k1_map_amplitude_trajectory import (
-        centered_fourier,
-        summarize_fourier_pair,
-    )
-    from scripts.fsc_metrics import normalized_fsc_auc, shell_fsc
-else:
-    from analyze_em_k1_map_amplitude_trajectory import (
-        centered_fourier,
-        summarize_fourier_pair,
-    )
-    from fsc_metrics import normalized_fsc_auc, shell_fsc
+from scripts.analyze_em_k1_map_amplitude_trajectory import (
+    centered_fourier,
+    summarize_fourier_pair,
+)
+from scripts.fsc_metrics import normalized_fsc_auc, shell_fsc
 
 OUTPUT_SCHEMA = "recovar.em_k1_tau2_substitution.v1"
 

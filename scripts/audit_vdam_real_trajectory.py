@@ -12,30 +12,16 @@ from typing import Any
 import numpy as np
 
 from recovar.data_io.starfile import read_star
-
-if __package__:
-    from scripts.audit_vdam_fsc_trajectory import (
-        _artifact_paths,
-        _load_json,
-        _map_metric,
-        _required_checkpoints,
-        _validate_iteration_one_particle_subset,
-        _validate_run_contract,
-    )
-    from scripts.audit_vdam_particle_state_trajectory import compare_particle_tables
-    from scripts.summarize_em_completion_bench import _load_relion_volume
-else:
-    from audit_vdam_fsc_trajectory import (
-        _artifact_paths,
-        _load_json,
-        _map_metric,
-        _required_checkpoints,
-        _validate_iteration_one_particle_subset,
-        _validate_run_contract,
-    )
-    from audit_vdam_particle_state_trajectory import compare_particle_tables
-    from summarize_em_completion_bench import _load_relion_volume
-
+from scripts.audit_vdam_fsc_trajectory import (
+    _artifact_paths,
+    _load_json,
+    _map_metric,
+    _required_checkpoints,
+    _validate_iteration_one_particle_subset,
+    _validate_run_contract,
+)
+from scripts.audit_vdam_particle_state_trajectory import compare_particle_tables
+from scripts.summarize_em_completion_bench import _load_relion_volume
 
 SCHEMA = "recovar.vdam_relion_real_data_trajectory_audit.v2"
 SUITE_SCHEMA = "recovar.vdam_relion_real_data_suite.v1"

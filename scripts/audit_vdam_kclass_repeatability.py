@@ -10,11 +10,7 @@ from typing import Any
 
 import numpy as np
 
-if __package__:
-    from scripts.audit_vdam_kclass_trajectory import audit_trajectory
-else:
-    from audit_vdam_kclass_trajectory import audit_trajectory
-
+from scripts.audit_vdam_kclass_trajectory import audit_trajectory
 
 SCHEMA = "recovar.vdam_kclass_repeatability.v1"
 

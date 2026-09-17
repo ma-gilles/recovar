@@ -9,18 +9,11 @@ from pathlib import Path
 
 import numpy as np
 
-if __package__:
-    from .validate_relion_bpref_prescatter import (
-        CaptureArtifact,
-        load_recovar_stack_indices,
-        validate_directory,
-    )
-else:
-    from validate_relion_bpref_prescatter import (  # type: ignore[no-redef]
-        CaptureArtifact,
-        load_recovar_stack_indices,
-        validate_directory,
-    )
+from scripts.validate_relion_bpref_prescatter import (
+    CaptureArtifact,
+    load_recovar_stack_indices,
+    validate_directory,
+)
 
 
 def _require(condition: bool, message: str) -> None:

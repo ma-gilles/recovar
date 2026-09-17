@@ -16,19 +16,13 @@ from typing import Any
 import numpy as np
 
 from recovar.data_io.starfile import read_star
-
-if __package__:
-    from scripts.audit_em_particle_state_distribution import (
-        AuditError as ParticleStateAuditError,
-        _angular_error_deg,
-        _identity_array,
-    )
-else:
-    from audit_em_particle_state_distribution import (
-        AuditError as ParticleStateAuditError,
-        _angular_error_deg,
-        _identity_array,
-    )
+from scripts.audit_em_particle_state_distribution import (
+    AuditError as ParticleStateAuditError,
+)
+from scripts.audit_em_particle_state_distribution import (
+    _angular_error_deg,
+    _identity_array,
+)
 
 SCHEMA = "recovar.vdam_particle_state_trajectory_audit.v1"
 DEFAULT_ITERATIONS = (1, 2, 3, 4, 8)

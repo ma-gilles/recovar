@@ -12,51 +12,25 @@ from typing import Any
 
 import numpy as np
 
-if __package__:
-    from .analyze_relion_k4_panel_posterior_decomposition import (
-        BACKENDS,
-        EXP50_F32,
-        EXPECTED_COHORT_COUNTS,
-        _energy,
-        _float32_from_bits,
-        _load_npz,
-        _require,
-        _residual,
-        _rotation_map,
-        _sha256,
-        _translation_map,
-    )
-    from .analyze_relion_k4_panel_posterior_decomposition import (
-        REPORT_SCHEMA as POSTERIOR_SCHEMA,
-    )
-    from .analyzer_provenance import clean_repo_head
-    from .validate_relion_bpref_factor_capture import load_factor_capture
-    from .validate_relion_fine_score_capture import ACTIVE, load_fine_score_capture
-else:
-    from analyze_relion_k4_panel_posterior_decomposition import (  # type: ignore[no-redef]
-        BACKENDS,
-        EXP50_F32,
-        EXPECTED_COHORT_COUNTS,
-        _energy,
-        _float32_from_bits,
-        _load_npz,
-        _require,
-        _residual,
-        _rotation_map,
-        _sha256,
-        _translation_map,
-    )
-    from analyze_relion_k4_panel_posterior_decomposition import (
-        REPORT_SCHEMA as POSTERIOR_SCHEMA,
-    )
-    from analyzer_provenance import clean_repo_head
-    from validate_relion_bpref_factor_capture import (  # type: ignore[no-redef]
-        load_factor_capture,
-    )
-    from validate_relion_fine_score_capture import (  # type: ignore[no-redef]
-        ACTIVE,
-        load_fine_score_capture,
-    )
+from scripts.analyze_relion_k4_panel_posterior_decomposition import (
+    BACKENDS,
+    EXP50_F32,
+    EXPECTED_COHORT_COUNTS,
+    _energy,
+    _float32_from_bits,
+    _load_npz,
+    _require,
+    _residual,
+    _rotation_map,
+    _sha256,
+    _translation_map,
+)
+from scripts.analyze_relion_k4_panel_posterior_decomposition import (
+    REPORT_SCHEMA as POSTERIOR_SCHEMA,
+)
+from scripts.analyzer_provenance import clean_repo_head
+from scripts.validate_relion_bpref_factor_capture import load_factor_capture
+from scripts.validate_relion_fine_score_capture import ACTIVE, load_fine_score_capture
 
 REPORT_SCHEMA = "recovar.k4_iter10_panel12_numerator_boundary.v1"
 SCORE_SUBSTITUTION_MIN_REMOVED_FRACTION = 0.99

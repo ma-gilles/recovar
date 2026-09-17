@@ -23,12 +23,7 @@ from recovar.core import mask
 from recovar.relion_bind import _relion_bind_core as relion_bind
 from recovar.utils import helpers
 from recovar.utils.file_hash import sha256_file as _sha256
-
-if __package__:
-    from scripts.fsc_metrics import normalized_fsc_auc, shell_fsc
-else:
-    from fsc_metrics import normalized_fsc_auc, shell_fsc
-
+from scripts.fsc_metrics import normalized_fsc_auc, shell_fsc
 
 SCHEMA = "em_k4_native_bpref_reconstruct_audit_v1"
 

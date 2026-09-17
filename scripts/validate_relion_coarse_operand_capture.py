@@ -13,6 +13,7 @@ from pathlib import Path
 import numpy as np
 
 from scripts import validate_relion_coarse_pass1_components as component_validator
+from scripts.file_hash import sha256_file as _sha256
 
 HEADER_MAGIC = b"RLNP1OPV2HEADER\0"
 FOOTER_MAGIC = b"RLNP1OPV2FOOTER\0"
@@ -34,11 +35,6 @@ def _require(condition: bool, message: str) -> None:
         raise ValueError(message)
 
 
-# Support both direct execution and package imports.
-if __package__:
-    from .file_hash import sha256_file as _sha256
-else:
-    from file_hash import sha256_file as _sha256
 
 
 @dataclass(frozen=True)

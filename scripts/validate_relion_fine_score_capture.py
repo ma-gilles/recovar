@@ -12,6 +12,10 @@ from pathlib import Path
 
 import numpy as np
 
+from scripts.file_hash import fnv1a64
+from scripts.file_hash import sha256_file as _sha256
+from scripts.validate_relion_bpref_factor_capture import _selection_records
+
 HEADER_MAGIC = b"RLNFNSC1HEADER".ljust(16, b"\0")
 FOOTER_MAGIC = b"RLNFNSC1FOOTER".ljust(16, b"\0")
 HEADER_STRUCT = struct.Struct("<16s48Q")
@@ -69,13 +73,6 @@ def _require(condition: bool, message: str) -> None:
         raise ValueError(message)
 
 
-# Support both direct execution and package imports.
-if __package__:
-    from .file_hash import fnv1a64, sha256_file as _sha256
-    from .validate_relion_bpref_factor_capture import _selection_records
-else:
-    from file_hash import fnv1a64, sha256_file as _sha256
-    from validate_relion_bpref_factor_capture import _selection_records
 
 
 def _float32_from_bits(value: int) -> np.float32:

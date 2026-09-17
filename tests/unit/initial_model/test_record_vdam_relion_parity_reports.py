@@ -11,9 +11,14 @@ from scripts.record_vdam_relion_parity_reports import discover_reports, record_r
 from scripts.summarize_vdam_relion_parity_scorecard import DEFAULT_SCORECARD, load_and_validate
 
 
-def test_record_reports_script_help_is_directly_executable():
-    script = Path(__file__).resolve().parents[3] / "scripts/record_vdam_relion_parity_reports.py"
-    proc = subprocess.run([sys.executable, str(script), "--help"], text=True, capture_output=True)
+def test_record_reports_module_help_resolves_package_imports():
+    repo_root = Path(__file__).resolve().parents[3]
+    proc = subprocess.run(
+        [sys.executable, "-m", "scripts.record_vdam_relion_parity_reports", "--help"],
+        cwd=repo_root,
+        text=True,
+        capture_output=True,
+    )
 
     assert proc.returncode == 0, proc.stderr
     assert "--report-root" in proc.stdout
