@@ -4,13 +4,17 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
+
+if not __package__:
+    from file_hash import sha256_file as _sha256
+else:
+    from scripts.file_hash import sha256_file as _sha256
 
 _CASES = (
     (8, 1, 128, 21),
@@ -19,14 +23,6 @@ _CASES = (
     (18, 7, 130, 25),
     (10, 3, 130, 97),
 )
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def _random_rotations(rng, count):
