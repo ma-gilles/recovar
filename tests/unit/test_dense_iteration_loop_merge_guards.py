@@ -24,7 +24,7 @@ from recovar.em.helpers import orientation_priors
 from recovar.em.helpers.convergence import _native_final_perturbation_healpix_order
 from recovar.em.local.local_search_iteration import _LocalSearchIterationResult
 from recovar.em.ppca_refinement import ppca_bridge
-from recovar.em.refinement import finalization_policy, mean_helpers, noise_updates
+from recovar.em.refinement import mean_helpers, noise_updates
 from recovar.em.relion import relion_worker_scale
 from recovar.em.vdam.iteration_loop import run_vdam_iterations
 
@@ -843,17 +843,7 @@ def test_kclass_final_all_data_recomputes_tau2_from_iref_and_returns_final_means
     assert 'final_tau2_update_details.get("fsc_shells") is None' in source
 
 
-def test_final_all_data_grid_correction_defaults_to_gui_quality(monkeypatch):
-    monkeypatch.delenv(finalization_policy._FINAL_ALL_DATA_GRID_CORRECT_ENV, raising=False)
-
-    assert finalization_policy._final_all_data_grid_correct_enabled(logger=iteration_loop.logger) is False
-
-    monkeypatch.setenv(finalization_policy._FINAL_ALL_DATA_GRID_CORRECT_ENV, "0")
-    assert finalization_policy._final_all_data_grid_correct_enabled(logger=iteration_loop.logger) is False
-
-    monkeypatch.setenv(finalization_policy._FINAL_ALL_DATA_GRID_CORRECT_ENV, "unexpected")
-    assert finalization_policy._final_all_data_grid_correct_enabled(logger=iteration_loop.logger) is False
-
+def test_final_all_data_grid_correction_is_forwarded():
     source = inspect.getsource(iteration_loop.refine_single_volume)
     assert "RELION final all-data reconstruction gridding correction enabled" in source
     assert "RELION final all-data reconstruction gridding correction disabled" in source

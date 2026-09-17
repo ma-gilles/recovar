@@ -34,7 +34,8 @@
     "evidence": {
       "ledger_path": "/scratch/gpfs/GILLES/mg6942/recovar_dev/recovar_vdam_relion_parity_20260820/docs/math/vdam_relion_parity_evidence_ledger_20260824_exactfine.json",
       "ledger_sha256": "1b43a9a7a4623fd5bca415beabbfbe096d2aacc73cb8f0e07bd7c74296061309",
-      "source_head": "27da5efb1920ce5d26f73ac281ebb16564abd9e0"
+      "source_head": "27da5efb1920ce5d26f73ac281ebb16564abd9e0",
+      "ledger_archive_url": "https://github.com/ma-gilles/recovar-experiments/blob/25d7693bf00be0e3cf63600400cd4d4c2bb1ea55/docs/math/vdam_relion_parity_evidence_ledger_20260824_exactfine.json"
     }
   },
   "history": [
@@ -60,7 +61,8 @@
       "evidence": {
         "ledger_path": "/scratch/gpfs/GILLES/mg6942/recovar_dev/recovar_vdam_relion_parity_20260820/docs/math/vdam_relion_parity_evidence_ledger_20260820_layoutfix.json",
         "ledger_sha256": "398e4c34e634312c829a4d7aa3614dec76ba04081cf1be3c19551834b3084d23",
-        "source_head": "5fc3058e8c37f20e14a6922b20dc97fcfeca7f50"
+        "source_head": "5fc3058e8c37f20e14a6922b20dc97fcfeca7f50",
+        "ledger_archive_url": "https://github.com/ma-gilles/recovar-experiments/blob/25d7693bf00be0e3cf63600400cd4d4c2bb1ea55/docs/math/vdam_relion_parity_evidence_ledger_20260820_layoutfix.json"
       },
       "status_note": "Recorded frozen same-GPU VDAM trajectory audits without changing suite gates."
     },
@@ -75,7 +77,8 @@
       "evidence": {
         "ledger_path": "/scratch/gpfs/GILLES/mg6942/recovar_dev/recovar_vdam_relion_parity_20260820/docs/math/vdam_relion_parity_evidence_ledger_20260824_exactfine.json",
         "ledger_sha256": "1b43a9a7a4623fd5bca415beabbfbe096d2aacc73cb8f0e07bd7c74296061309",
-        "source_head": "27da5efb1920ce5d26f73ac281ebb16564abd9e0"
+        "source_head": "27da5efb1920ce5d26f73ac281ebb16564abd9e0",
+        "ledger_archive_url": "https://github.com/ma-gilles/recovar-experiments/blob/25d7693bf00be0e3cf63600400cd4d4c2bb1ea55/docs/math/vdam_relion_parity_evidence_ledger_20260824_exactfine.json"
       },
       "status_note": "Recorded frozen same-GPU VDAM trajectory audits without changing suite gates."
     }
