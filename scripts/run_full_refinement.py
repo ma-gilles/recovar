@@ -4711,7 +4711,6 @@ def main():
                 init_relion_incr_size=(
                     10 if frozen_boundary is None else frozen_boundary.relion_incr_size
                 ),
-                fsc_threshold=1.0 / 7.0,
                 init_healpix_order=sampling_kwargs["init_healpix_order"],
                 max_healpix_order=effective_max_healpix_order,
                 init_translation_range=sampling_kwargs["init_translation_range"],

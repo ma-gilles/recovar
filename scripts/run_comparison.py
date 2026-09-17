@@ -221,7 +221,6 @@ def run_refinement(
             schedule=RefinementSchedule(
                 max_iter=max_iter,
                 init_current_size=init_current_size,
-                fsc_threshold=1.0 / 7.0,
                 init_translation_sigma_angstrom=offset_sigma_angstrom,
             ),
             batching=RefinementBatching(image_batch_size=image_batch_size, rotation_block_size=rotation_block_size),
