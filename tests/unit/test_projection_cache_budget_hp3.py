@@ -122,3 +122,39 @@ def test_per_particle_launches_pad_to_rungs_with_zeroed_spare_rows(monkeypatch):
     np.testing.assert_array_equal(calls[1][0][:3], np.asarray(ctf_values[0, :3])); assert np.all(calls[1][0][3:] == 0)
     np.testing.assert_array_equal(calls[2][0][:5], np.asarray(values[1, :5])); assert np.all(calls[2][0][5:] == 0)
     np.testing.assert_array_equal(calls[0][1], np.asarray(rotations[0, :4]))
+
+
+def test_soft_particle_pooling_is_opt_in_and_pads_pool_to_a_rung(monkeypatch):
+    import jax.numpy as jnp
+    from recovar.em.sparse_pass2 import sparse_pass2_adjoint as adjoint_mod
+
+    values = (1.0 + jnp.arange(3 * 6 * 2, dtype=jnp.float32)).reshape(3, 6, 2).astype(jnp.complex64)
+    ctf_values = (100.0 + jnp.arange(3 * 6 * 2, dtype=jnp.float32)).reshape(3, 6, 2)
+    rotations = jnp.arange(3 * 6 * 9, dtype=jnp.float32).reshape(3, 6, 3, 3)
+    actual_counts = np.asarray([3, 5, 2], dtype=np.int32)  # rungs 4, 6 (capped), 2
+    calls = []
+
+    def fake_adjoint(block, window_indices, rotations_block, volume, image_shape, volume_shape, disc_type, half_image, half_volume, max_r, relion_x_half):
+        calls.append((np.asarray(block).copy(), np.asarray(rotations_block).copy()))
+        return volume
+
+    monkeypatch.setattr(adjoint_mod, "_adjoint_slice_volume_windowed", fake_adjoint)
+    monkeypatch.delenv("RECOVAR_K1_RELION_X_HALF_BP_PARTICLE_POOL_SIZE", raising=False)
+    common = dict(window_indices=jnp.arange(2), image_shape=(8, 8), volume_shape=(8, 8, 8), disc_type="linear_interp", half_volume=True, max_r=4.0, log_label_prefix="test")
+    # default: one launch per particle (unchanged)
+    monkeypatch.delenv("RECOVAR_K1_RELION_X_HALF_BP_SOFT_PARTICLE_POOL_SIZE", raising=False)
+    adjoint_mod._accumulate_relion_x_half_per_particle_launches(values, ctf_values, rotations, actual_counts, jnp.zeros((4,), jnp.complex64), jnp.zeros((4,), jnp.float32), **common)
+    assert [c[0].shape[0] for c in calls] == [4, 4, 6, 6, 2, 2]
+    calls.clear()
+    # opt-in pool of 2: particles (0,1) in one launch of 4+6=10 rows padded to 16; particle 2 alone (2 rows)
+    monkeypatch.setenv("RECOVAR_K1_RELION_X_HALF_BP_SOFT_PARTICLE_POOL_SIZE", "2")
+    adjoint_mod._accumulate_relion_x_half_per_particle_launches(values, ctf_values, rotations, actual_counts, jnp.zeros((4,), jnp.complex64), jnp.zeros((4,), jnp.float32), **common)
+    assert [c[0].shape[0] for c in calls] == [16, 16, 2, 2]
+    pooled = calls[0][0]
+    np.testing.assert_array_equal(pooled[:3], np.asarray(values[0, :3])); assert np.all(pooled[3:4] == 0)
+    np.testing.assert_array_equal(pooled[4:9], np.asarray(values[1, :5])); assert np.all(pooled[9:] == 0)
+    np.testing.assert_array_equal(calls[0][1][:4], np.asarray(rotations[0, :4]))
+    # winner-take-all iterations ignore the soft pool knob
+    calls.clear()
+    adjoint_mod._accumulate_relion_x_half_per_particle_launches(values, ctf_values, rotations, actual_counts, jnp.zeros((4,), jnp.complex64), jnp.zeros((4,), jnp.float32), winner_take_all=True, **common)
+    assert [c[0].shape[0] for c in calls] == [4, 4, 6, 6, 2, 2]
