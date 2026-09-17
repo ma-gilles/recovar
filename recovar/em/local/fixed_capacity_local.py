@@ -42,7 +42,6 @@ class _FixedCapacityLocalHypothesisProgram:
     translation_log_prior: np.ndarray
     local_rotation_posterior_ids: np.ndarray | None
     local_sample_mask: np.ndarray | None
-    mstep_rotations_fall_back_to_score: bool
     plan_fingerprint: str
     plan_generation_token: _FixedCapacityLocalGenerationToken
 
@@ -541,7 +540,6 @@ def _pack_fixed_capacity_local_hypothesis_program(
         translation_log_prior=translation_log_prior,
         local_rotation_posterior_ids=local_rotation_posterior_ids,
         local_sample_mask=local_sample_mask,
-        mstep_rotations_fall_back_to_score=not has_mstep_rotations,
         plan_fingerprint=plan.descriptor_fingerprint,
         plan_generation_token=plan.generation_token,
     )
