@@ -63,7 +63,7 @@ switch from single-set to halfset).
 | # | File | What you get | Time |
 |---|---|---|---|
 | 1 | `README.md` (this) | Math sketch + map | 5 min |
-| 2 | `config.py` | Every tunable knob lives here. Read once. | 3 min |
+| 2 | `config.py` | Geometry, batching, scoring and pose-selection options. | 3 min |
 | 3 | `state.py` | `PoseMarginalPPCAEMState` — what the loop carries between iterations. | 2 min |
 | 4 | `engine.py` | The JIT-compiled E+M kernel. The hard math is in `fused_dense_pose_ppca_block` and (in `recovar/ppca/pose_marginal.py`) `compute_ppca_pose_scores_and_moments_no_contrast`. | 10 min |
 | 5 | `dense_dataset.py` (or `local_dataset.py`) | Turns a `CryoEMDataset` into the blocks `engine.py` consumes, then loops over them and assembles the M-step input. | 5 min |
@@ -76,7 +76,7 @@ switch from single-set to halfset).
 | File | What lives there |
 |---|---|
 | `__init__.py` | Package docstring only; it re-exports nothing, so imports name their owner. |
-| `config.py` | `GeometryConfig`, `ScheduleConfig`, `ScoringConfig`, `SparsePass2Config` plus re-exported `MeanRegularizationConfig` and `PostprocessConfig`. **Every tunable parameter lives here.** |
+| `config.py` | `GeometryConfig`, `ScheduleConfig`, `ScoringConfig`, `PoseSelectionConfig` and `SparsePass2Config`. Regularization and postprocessing configs live in their respective modules. |
 | `state.py` | `PoseMarginalPPCAEMState` — pytree carried between iterations (μ, W, priors, schedule state). |
 | `schedule.py` | `PPCARefinementScheduleState` and the halfset-resolution gating decision. |
 | `mean_regularization.py` | `MeanRegularizationConfig`, `resolve_mean_precision`, RELION/K-class tau filter helpers. The mean row of the augmented system gets RELION-style tau regularization; the W rows keep the variance-style prior. |

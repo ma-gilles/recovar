@@ -83,10 +83,10 @@ def main() -> None:
     import numpy as np
     from recovar.em.ppca_refinement.config import (
         GeometryConfig,
-        PostprocessConfig,
         ScheduleConfig,
         ScoringConfig,
     )
+    from recovar.em.ppca_refinement.postprocess import PostprocessConfig
     from recovar.em.ppca_refinement.dense_dataset import run_dense_ppca_fused_em_iteration
     from recovar.em.ppca_refinement.initialization import (
         initialize_ppca_from_gt_volumes,
