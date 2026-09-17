@@ -1795,6 +1795,22 @@ class LocalBucketPlan:
     actual_rotation_counts: np.ndarray
 
 
+class LocalBucketSequence(Sequence):
+    """Indexable bucket plans that retain no materialized candidate arrays."""
+
+    def __init__(self, layout: LocalHypothesisLayout, plans: Sequence[LocalBucketPlan]):
+        self.layout = layout
+        self.plans = plans
+
+    def __len__(self):
+        return len(self.plans)
+
+    def __getitem__(self, index):
+        if isinstance(index, slice):
+            return LocalBucketSequence(self.layout, self.plans[index])
+        return materialize_local_bucket(self.layout, self.plans[index])
+
+
 def plan_local_hypothesis_buckets(
     layout: LocalHypothesisLayout,
     image_batch_size: int,
