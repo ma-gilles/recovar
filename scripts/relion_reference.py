@@ -62,3 +62,23 @@ def read_bpref_dump(p: Path) -> np.ndarray:
         dt = np.complex128 if bp == 16 else np.float64
         return np.fromfile(f, dtype=dt, count=nz * ny * nx).reshape(nz, ny, nx)
 
+
+
+def euler_matrices(eulers_deg: np.ndarray) -> np.ndarray:
+    """Vectorized RELION ``Euler_angles2matrix`` for a dependency-light CLI."""
+    eulers = np.asarray(eulers_deg, dtype=np.float64).reshape(-1, 3)
+    alpha, beta, gamma = np.deg2rad(eulers).T
+    ca, cb, cg = np.cos(alpha), np.cos(beta), np.cos(gamma)
+    sa, sb, sg = np.sin(alpha), np.sin(beta), np.sin(gamma)
+    cc, cs, sc, ss = cb * ca, cb * sa, sb * ca, sb * sa
+    matrices = np.empty((eulers.shape[0], 3, 3), dtype=np.float64)
+    matrices[:, 0, 0] = cg * cc - sg * sa
+    matrices[:, 0, 1] = cg * cs + sg * ca
+    matrices[:, 0, 2] = -cg * sb
+    matrices[:, 1, 0] = -sg * cc - cg * sa
+    matrices[:, 1, 1] = -sg * cs + cg * ca
+    matrices[:, 1, 2] = sg * sb
+    matrices[:, 2, 0] = sc
+    matrices[:, 2, 1] = ss
+    matrices[:, 2, 2] = cb
+    return matrices

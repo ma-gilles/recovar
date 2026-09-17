@@ -18,6 +18,7 @@ from typing import Any
 import numpy as np
 
 from scripts import audit_em_particle_state_distribution as particle_audit
+from scripts.relion_reference import euler_matrices
 
 
 SCHEMA = "em_hidden_change_distribution_v1"
@@ -36,8 +37,8 @@ def _sha256(path: Path) -> str:
 
 def _relion_change_per_particle(previous_eulers: np.ndarray, current_eulers: np.ndarray) -> np.ndarray:
     """Return ``HealpixSampling::calculateAngularDistance`` for C1 particles."""
-    previous = particle_audit._relion_euler_matrices(previous_eulers)
-    current = particle_audit._relion_euler_matrices(current_eulers)
+    previous = euler_matrices(previous_eulers)
+    current = euler_matrices(current_eulers)
     row_cosines = np.clip(np.einsum("nij,nij->ni", previous, current), -1.0, 1.0)
     result = np.degrees(np.arccos(row_cosines)).mean(axis=1)
     exact = np.all(np.asarray(previous_eulers) == np.asarray(current_eulers), axis=1)

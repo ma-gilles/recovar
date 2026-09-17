@@ -12,9 +12,9 @@ import hashlib
 from pathlib import Path
 
 
-def sha256_file(path: Path) -> str:
+def sha256_file(path: str | Path) -> str:
     digest = hashlib.sha256()
-    with path.open("rb") as stream:
+    with Path(path).open("rb") as stream:
         for block in iter(lambda: stream.read(8 << 20), b""):
             digest.update(block)
     return digest.hexdigest()
