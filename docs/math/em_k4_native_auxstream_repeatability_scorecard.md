@@ -40,7 +40,6 @@ Immutable evidence:
 Code references:
 
 - `scripts/summarize_em_k4_native_auxstream_repeatability_scorecard.py`
-- `scripts/report_em_parity_progress.py`
 
 To validate:
 

@@ -181,7 +181,6 @@ def render_markdown(scorecard: dict) -> str:
             "Code references:",
             "",
             "- `scripts/summarize_em_k4_allclass_boundary_capture_scorecard.py`",
-            "- `scripts/report_em_parity_progress.py`",
             "",
             "To validate:",
             "",
