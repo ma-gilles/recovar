@@ -18,7 +18,6 @@ import logging
 import os
 from importlib.resources import files
 
-import mrcfile
 import numpy as np
 
 import recovar

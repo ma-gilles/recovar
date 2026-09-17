@@ -269,7 +269,6 @@ def _run_with_halfset_fsc_schedule(
         q=int(q),
         volume_domain=init_volume_domain,
     )
-    half_size = _half_size(dataset.volume_shape)
     if int(q_check) != int(q):
         raise ValueError(f"q mismatch: init says {q_check}, requested {q}")
     # mu_half_flat has shape (q+1, half_size); component 0 is mu, 1..q are W columns.
@@ -931,7 +930,6 @@ def main() -> None:
     final_result = None
     t_all = time.time()
     prev_iter_hp_order: int | None = None
-    prev_iter_current_size: int | None = None
     for iter_idx in range(1, int(args.n_iters) + 1):
         iter_hp_order = int(_schedule_value(healpix_order_schedule, target_hp_order, iter_idx - 1))
         iter_current_size = int(_schedule_value(current_size_schedule, int(args.current_size), iter_idx - 1))
@@ -1139,7 +1137,6 @@ def main() -> None:
         current_W = np.asarray(result.W_half)
         volume_domain = "fourier_half"
         prev_iter_hp_order = int(iter_hp_order)
-        prev_iter_current_size = int(iter_current_size)
         final_result = result
 
     if final_result is None:
