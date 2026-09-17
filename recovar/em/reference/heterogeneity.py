@@ -8,11 +8,9 @@ import jax.numpy as jnp
 import numpy as np
 
 import recovar.core.fourier_transform_utils as fourier_transform_utils
-from recovar import core, jax_config, utils
+from recovar import core, utils
 from recovar.core.configs import ForwardModelConfig
 from recovar.heterogeneity import covariance_estimation
-from recovar.heterogeneity.covariance_estimation import compute_both_H_B, compute_covariance_regularization_relion_style
-from recovar.reconstruction import noise
 
 from .core import batch_vol_slice_volume
 
@@ -479,38 +477,6 @@ def sum_up_images_fixed_rots_covariance_with_precompute(
     return H, B
 
 
-def compute_projected_covariance(
-    experiment_datasets,
-    mean,
-    basis,
-    rotations,
-    translations,
-    probabilities,
-    volume_mask,
-    noise_variance,
-    batch_size,
-    disc_type_mean,
-    disc_type_u,
-    image_indices=None,
-):
-
-    lhs, rhs = compute_projected_covariance_rhs_lhs(
-        experiment_datasets,
-        mean,
-        basis,
-        rotations,
-        translations,
-        probabilities,
-        volume_mask,
-        noise_variance,
-        disc_type_mean,
-        disc_type_u,
-        image_indices=None,
-    )
-    covar = solve_covariance(lhs, rhs)
-    return covar
-
-
 def compute_projected_covariance_rhs_lhs(
     experiment_dataset,
     mean,
@@ -648,48 +614,3 @@ def solve_covariance(lhs, rhs):
     logger.info("end of solve")
 
     return covar
-
-
-def compute_regularized_covariance_columns(
-    cryos,
-    means,
-    mean_signal_variance,
-    cov_noise,
-    volume_mask,
-    dilated_volume_mask,
-    gpu_memory,
-    noise_model,
-    options,
-    picked_frequencies,
-):
-
-    volume_shape = cryos[0].volume_shape
-    mask_final = volume_mask
-
-    utils.report_memory_device(logger=logger)
-    Hs, Bs = compute_both_H_B(cryos, means, dilated_volume_mask, picked_frequencies, gpu_memory, options=options)
-    volume_noise_var = np.asarray(noise.make_radial_noise(cov_noise, cryos[0].volume_shape))
-    covariance_cols = {}
-
-    logger.info("using new covariance reg fn")
-    utils.report_memory_device(logger=logger)
-
-    covariance_cols["est_mask"], prior, fscs = compute_covariance_regularization_relion_style(
-        Hs,
-        Bs,
-        1 / mean_signal_variance,
-        picked_frequencies,
-        volume_noise_var,
-        mask_final,
-        volume_shape,
-        gpu_memory,
-        reg_init_multiplier=jax_config.REG_INIT_MULTIPLIER,
-        options=options,
-    )
-    covariance_cols["est_mask"] = covariance_cols["est_mask"].T
-    del Hs, Bs
-    logger.info("after reg fn")
-
-    utils.report_memory_device(logger=logger)
-
-    return covariance_cols, picked_frequencies, np.asarray(fscs)
