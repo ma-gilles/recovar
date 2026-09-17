@@ -24,7 +24,7 @@ from .heterogeneity import compute_bHb_terms
 logger = logging.getLogger(__name__)
 
 
-def E_with_precompute(
+def compute_pose_probabilities(
     experiment_dataset, volume, rotations, translations, noise_variance, disc_type, image_indices=None, u=None, s=None
 ):
     logger.info(
@@ -38,9 +38,9 @@ def E_with_precompute(
     n_rotations = rotations.shape[0]
     n_translations = translations.shape[0]
     if n_rotations <= 0:
-        raise ValueError("E_with_precompute requires at least one rotation")
+        raise ValueError("compute_pose_probabilities requires at least one rotation")
     if n_translations <= 0:
-        raise ValueError("E_with_precompute requires at least one translation")
+        raise ValueError("compute_pose_probabilities requires at least one translation")
     n_images = experiment_dataset.n_images if image_indices is None else len(image_indices)
     use_heterogeneous = u is not None
     n_principal_components = u.shape[0] if use_heterogeneous else 0

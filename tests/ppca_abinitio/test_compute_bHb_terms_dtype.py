@@ -7,7 +7,7 @@ production E-step path runs at complex64 / float32, even though
 jax_enable_x64 is True globally. This is because:
 
   - CryoEMDataset.__init__ defaults to dtype=np.complex64
-  - E_with_precompute creates `projections` and `u_projections`
+  - compute_pose_probabilities creates `projections` and `u_projections`
     explicitly as np.complex64
   - compute_UPLambdainvPU uses `.real` of those complex64 outer
     products, producing float32
