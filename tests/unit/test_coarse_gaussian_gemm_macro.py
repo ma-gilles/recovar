@@ -1183,34 +1183,10 @@ class _MacroIntegrationDataset:
         )
 
 
-def test_coarse_gaussian_gemm_live_k1_cache_builds_once_outside_image_loop(
-    monkeypatch,
-):
-    """The opt-in cache owns projections once and only serves later blocks."""
-
-    from recovar import cuda_backproject
-    from recovar.em.helpers import projection as projection_helpers
+def _mock_unit_ctf_and_zero_highres_power(monkeypatch):
+    """Use unit CTFs and no high-resolution image power in live-path CPU tests."""
     from recovar.em.sparse_pass2 import sparse_pass2_scoring
-    for name, value in {
-        "RECOVAR_COARSE_GAUSSIAN_GEMM_MACRO": "1",
-        "RECOVAR_COARSE_GAUSSIAN_GEMM_PROJECTION_CACHE": "0",
-        "RECOVAR_COARSE_GAUSSIAN_GEMM_PROJECTION_CACHE_MAX_GB": "0.001",
-        "RECOVAR_COARSE_GAUSSIAN_GEMM_MAX_PROJECTED_TRANSIENT_GB": "0.01",
-        "RECOVAR_K1_COARSE_GAUSSIAN_FFI": "1",
-        "RECOVAR_K1_COARSE_GAUSSIAN_SINCOSF": "1",
-        "RECOVAR_K1_COARSE_FUSED_PROJECTOR": "0",
-        "RECOVAR_RELION_COARSE_CANONICAL_REDUCTION": "0",
-        "RECOVAR_K1_COARSE_NATIVE_ATOMIC_REDUCTION": "0",
-        "RECOVAR_K1_COARSE_SINGLE_LANE_CANONICAL": "0",
-        "RECOVAR_K1_COARSE_MULTISTREAM_WORKERS": "0",
-        "RECOVAR_K1_COARSE_GAUSSIAN_NATIVE_TEXTURE": "0",
-        "RECOVAR_K1_RELION_EXACT_COARSE_OPERANDS": "1",
-        "RECOVAR_K1_RELION_F32_COARSE_SUPPORT": "0",
-    }.items():
-        monkeypatch.setenv(name, value)
 
-    monkeypatch.setattr(significance.jax, "default_backend", lambda: "gpu")
-    monkeypatch.setattr(cuda_backproject, "cuda_available", lambda: True)
     monkeypatch.setattr(
         relion_ctf,
         "_relion_exact_ctf_half_from_source_star",
@@ -1241,6 +1217,36 @@ def test_coarse_gaussian_gemm_live_k1_cache_builds_once_outside_image_loop(
             dtype=jnp.float32,
         ),
     )
+
+
+def test_coarse_gaussian_gemm_live_k1_cache_builds_once_outside_image_loop(
+    monkeypatch,
+):
+    """The opt-in cache owns projections once and only serves later blocks."""
+
+    from recovar import cuda_backproject
+    from recovar.em.helpers import projection as projection_helpers
+    for name, value in {
+        "RECOVAR_COARSE_GAUSSIAN_GEMM_MACRO": "1",
+        "RECOVAR_COARSE_GAUSSIAN_GEMM_PROJECTION_CACHE": "0",
+        "RECOVAR_COARSE_GAUSSIAN_GEMM_PROJECTION_CACHE_MAX_GB": "0.001",
+        "RECOVAR_COARSE_GAUSSIAN_GEMM_MAX_PROJECTED_TRANSIENT_GB": "0.01",
+        "RECOVAR_K1_COARSE_GAUSSIAN_FFI": "1",
+        "RECOVAR_K1_COARSE_GAUSSIAN_SINCOSF": "1",
+        "RECOVAR_K1_COARSE_FUSED_PROJECTOR": "0",
+        "RECOVAR_RELION_COARSE_CANONICAL_REDUCTION": "0",
+        "RECOVAR_K1_COARSE_NATIVE_ATOMIC_REDUCTION": "0",
+        "RECOVAR_K1_COARSE_SINGLE_LANE_CANONICAL": "0",
+        "RECOVAR_K1_COARSE_MULTISTREAM_WORKERS": "0",
+        "RECOVAR_K1_COARSE_GAUSSIAN_NATIVE_TEXTURE": "0",
+        "RECOVAR_K1_RELION_EXACT_COARSE_OPERANDS": "1",
+        "RECOVAR_K1_RELION_F32_COARSE_SUPPORT": "0",
+    }.items():
+        monkeypatch.setenv(name, value)
+
+    monkeypatch.setattr(significance.jax, "default_backend", lambda: "gpu")
+    monkeypatch.setattr(cuda_backproject, "cuda_available", lambda: True)
+    _mock_unit_ctf_and_zero_highres_power(monkeypatch)
     monkeypatch.setattr(
         cuda_backproject,
         "relion_translate_score_f32",
@@ -1396,7 +1402,6 @@ def test_live_k1_hybrid_reuses_exact_scores_in_both_significance_passes(
     from recovar.em.helpers import oversampling, preprocessing
     from recovar.em.helpers import projection as projection_helpers
     from recovar.em.scoring.coarse_gemm_hybrid import CoarseGemmHybridBlockSelection, CoarseGemmHybridCompactScores
-    from recovar.em.sparse_pass2 import sparse_pass2_scoring
 
     for name, value in {
         "RECOVAR_COARSE_GAUSSIAN_GEMM_MACRO": "1",
@@ -1476,36 +1481,7 @@ def test_live_k1_hybrid_reuses_exact_scores_in_both_significance_passes(
         "relion_coarse_diff2_projector_f32",
         fake_fused_projector,
     )
-    monkeypatch.setattr(
-        relion_ctf,
-        "_relion_exact_ctf_half_from_source_star",
-        lambda _dataset, indices, image_shape: jnp.ones(
-            (
-                len(indices),
-                int(image_shape[0]) * (int(image_shape[1]) // 2 + 1),
-            ),
-            dtype=jnp.float64,
-        ),
-    )
-    monkeypatch.setattr(
-        relion_ctf,
-        "_relion_exact_ctf_half_from_source_star_host",
-        lambda _dataset, indices, image_shape, *, pixel_indices=None: np.ones(
-            (
-                len(indices),
-                (int(image_shape[0]) * (int(image_shape[1]) // 2 + 1) if pixel_indices is None else len(pixel_indices)),
-            ),
-            dtype=np.float64,
-        ),
-    )
-    monkeypatch.setattr(
-        sparse_pass2_scoring,
-        "_relion_cuda_powerclass_highres_xi2_half",
-        lambda processed, **_kwargs: jnp.zeros(
-            processed.shape[0],
-            dtype=jnp.float32,
-        ),
-    )
+    _mock_unit_ctf_and_zero_highres_power(monkeypatch)
     original_process_half_image = preprocessing.process_half_image
     process_calls = []
 

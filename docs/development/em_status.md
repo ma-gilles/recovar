@@ -93,3 +93,15 @@ Keep completed experiment scripts, reports and results in
 [recovar-experiments](https://github.com/ma-gilles/recovar-experiments), with source
 identity and reproduction records. Main should retain implementation guides,
 maintained workflow tools and unique numerical tests, rather than status histories.
+
+The [original PR158 VDAM reuse plan](https://github.com/ma-gilles/recovar-experiments/blob/342c5c2164bd3595fe7748b66a6453439afc9af5/docs/math/vdam_relion_parity_reuse_plan.md)
+preserves the historical ownership map and suite contract. Its retired package paths
+and proposed work are historical; use the current codebase map and task queue above.
+
+The fixed July case-11 six-arm report sealer is preserved in the
+[experiment archive](https://github.com/ma-gilles/recovar-experiments/blob/7e8c1543c057a8590f119448fd658f92daf10c64/scripts/seal_six_arm_global_membership_repeat_join.py).
+Reusable global-winner analysis and its numerical coverage remain in this repository.
+
+The rejected August case-4/5/10 treatment-prefix report, inputs, generator and
+exclusive report tests are in the [experiment archive](https://github.com/ma-gilles/recovar-experiments/tree/a9cd2fb51fc1b1637a830cc7dcf1e60e4632e681/experiments/k1_selected_treatment_prefix_20260822).
+Its original **0/3** outcome is preserved; current qualification gates are unchanged.
