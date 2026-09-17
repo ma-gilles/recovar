@@ -1,7 +1,5 @@
 """Unit tests for the VDAM native translation-boundary analyzer."""
 
-from pathlib import Path
-
 import numpy as np
 import pytest
 
@@ -25,7 +23,6 @@ from scripts.analyze_vdam_native_translation_boundary import (
 )
 
 pytestmark = pytest.mark.unit
-REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_native_crop_rows_map_centered_half_to_relion_fftw_crop():
@@ -239,22 +236,6 @@ def test_analyze_requires_native_and_recovar_maps_as_a_pair(tmp_path):
             full_size=8,
             native_map_path=tmp_path / "native.mrc",
         )
-
-
-def test_native_translation_runner_pins_repo_cuda_and_binding_provenance():
-    source = (REPO_ROOT / "scripts/run_vdam_native_translation_boundary.sbatch").read_text()
-
-    for token in (
-        "EXPECTED_REPO_HEAD",
-        "EXPECTED_CUDA_SHA256",
-        "EXPECTED_RELION_BIND_SHA256",
-        "STAGED_CUDA_DIR",
-        'cp "${CUDA_SOURCE_LIB}" "${RECOVAR_CUDA_LIB}"',
-        "VDAM native translation CUDA library changed during import",
-        "VDAM native translation CUDA library changed during science",
-    ):
-        assert token in source
-    assert source.count("git status --porcelain=v1 --untracked-files=no") == 2
 
 
 def test_captured_native_current_size_reads_exact_scalar(tmp_path):

@@ -338,7 +338,7 @@ Class evidence and posterior mass
 must be handled at the K-class level, not inferred from independently normalized
 single-class probabilities.
 
-Fixed-capacity call selection and validation belong to
+Fixed-capacity hypothesis packing, call selection and validation belong to
 [`fixed_capacity_local.py`](../../recovar/em/local/fixed_capacity_local.py),
 with the sealed plan/operand/hypothesis binding types. The engine delegates those
 checks at the same pre-JIT boundaries. Callers use the general call-index API;

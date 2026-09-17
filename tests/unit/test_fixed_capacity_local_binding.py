@@ -14,14 +14,14 @@ from recovar.em.helpers.batch_planning import _plan_fixed_capacity_whole_local, 
 from recovar.em.local import fixed_capacity_local, local_big_jit, local_bucket_stages, local_em_engine
 from recovar.em.local.fixed_capacity_local import (
     _bind_fixed_capacity_local_execution,
+    _fixed_capacity_calls_from_local_buckets,
     _materialize_fixed_capacity_active_local_rows,
     _materialize_fixed_capacity_local_call_view,
+    _pack_fixed_capacity_local_hypothesis_program,
 )
 from recovar.em.local.local_caches import _assemble_fixed_capacity_local_operands_once
 from recovar.em.local.local_layout import (
     LocalBucketSpec,
-    _fixed_capacity_calls_from_local_buckets,
-    _pack_fixed_capacity_local_hypothesis_program,
 )
 
 pytestmark = pytest.mark.unit

@@ -80,6 +80,7 @@ for detailed module contracts. Start with the boundary being changed:
 | Iteration scheduling and state mutation | [`iteration_loop.py`](../../recovar/em/refinement/iteration_loop.py) |
 | Dense E/M execution | [`em_engine.py`](../../recovar/em/dense/em_engine.py) |
 | Local search orchestration and kernels | [`local_search_iteration.py`](../../recovar/em/local/local_search_iteration.py), [`local_em_engine.py`](../../recovar/em/local/local_em_engine.py) |
+| Fixed-capacity hypothesis packing and execution binding | [`fixed_capacity_local.py`](../../recovar/em/local/fixed_capacity_local.py) |
 | Class routing and joint result assembly | [`k_class.py`](../../recovar/em/classification/k_class.py), [`k_class_results.py`](../../recovar/em/classification/k_class_results.py) |
 | Replay selection and final-pass admission | [`relion_replay.py`](../../recovar/em/diagnostics/relion_replay.py), [`finalization_policy.py`](../../recovar/em/refinement/finalization_policy.py) |
 | Coarse/sparse scoring | [`helpers/significance.py`](../../recovar/em/scoring/significance.py), [`helpers/sparse_pass2_bucketed.py`](../../recovar/em/sparse_pass2/sparse_pass2_bucketed.py) |
