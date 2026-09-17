@@ -1518,9 +1518,9 @@ def test_build_pass2_hypothesis_layout_preserves_sparse_rotation_translation_mas
     np.testing.assert_array_equal(layout.rotation_counts, np.array([2, 1], dtype=np.int32))
     np.testing.assert_array_equal(layout.rotation_offsets, np.array([0, 2, 3], dtype=np.int64))
     np.testing.assert_array_equal(layout.rotation_posterior_ids_flat, np.array([0, 1, 1], dtype=np.int32))
-    assert layout.sample_mask_flat.shape == (3, 2)
+    assert layout.sample_mask_rows().shape == (3, 2)
     np.testing.assert_array_equal(
-        layout.sample_mask_flat,
+        layout.sample_mask_rows(),
         np.array(
             [
                 [True, False],
@@ -1543,7 +1543,7 @@ def test_build_pass2_hypothesis_layout_preserves_sparse_rotation_translation_mas
         buckets[0].local_rotation_posterior_ids[row_for_image0, :2],
         np.array([0, 1], dtype=np.int32),
     )
-    np.testing.assert_array_equal(buckets[0].local_sample_mask[row_for_image0, :2], layout.sample_mask_flat[:2])
+    np.testing.assert_array_equal(buckets[0].local_sample_mask[row_for_image0, :2], layout.sample_mask_rows()[:2])
     assert not np.any(buckets[0].local_sample_mask[row_for_image0, 2:])
 
 
@@ -1660,8 +1660,8 @@ def test_build_pass2_hypothesis_layout_can_keep_empty_class_support():
 
     assert layout.n_images == 1
     np.testing.assert_array_equal(layout.rotation_counts, np.array([1], dtype=np.int32))
-    assert layout.sample_mask_flat.shape == (1, 2)
-    assert not np.any(layout.sample_mask_flat)
+    assert layout.sample_mask_rows().shape == (1, 2)
+    assert not np.any(layout.sample_mask_rows())
 
 
 def test_local_id_lookup_matches_dense_table_duplicate_semantics():
@@ -1734,7 +1734,7 @@ def test_build_local_adaptive_pass2_hypothesis_layout_masks_parent_pairs():
     expected0 = np.zeros((16, fine_translation_parent.size), dtype=bool)
     expected0[parent_map0 == 0] = fine_translation_parent == 0
     expected0[parent_map0 == 1] = fine_translation_parent == 1
-    np.testing.assert_array_equal(layout.sample_mask_flat[:16], expected0)
+    np.testing.assert_array_equal(layout.sample_mask_rows()[:16], expected0)
 
     _, parent_map1, child_ids1 = get_oversampled_rotation_grid_from_samples(
         np.array([1], dtype=np.int32),
@@ -1747,8 +1747,8 @@ def test_build_local_adaptive_pass2_hypothesis_layout_masks_parent_pairs():
     np.testing.assert_array_equal(layout.rotation_posterior_ids_flat[16:], np.full(parent_map1.shape, 1, dtype=np.int32))
     np.testing.assert_allclose(layout.rotation_log_priors_flat[16:], np.full(parent_map1.shape, -3.0))
     np.testing.assert_array_equal(
-        layout.sample_mask_flat[16:],
-        np.broadcast_to(fine_translation_parent[None, :] == 0, layout.sample_mask_flat[16:].shape),
+        layout.sample_mask_rows()[16:],
+        np.broadcast_to(fine_translation_parent[None, :] == 0, layout.sample_mask_rows()[16:].shape),
     )
 
 
@@ -1800,7 +1800,7 @@ def test_build_local_adaptive_pass2_hypothesis_layout_empty_significant_samples_
     np.testing.assert_array_equal(layout.rotation_ids_flat, child_ids.astype(np.int32))
     np.testing.assert_array_equal(layout.rotation_posterior_ids_flat, np.array([0, 1], dtype=np.int32)[parent_map])
     np.testing.assert_allclose(layout.rotations_flat, child_rots, rtol=1e-6, atol=1e-6)
-    assert layout.sample_mask_flat is None
+    assert layout.sample_mask_rows() is None
     buckets = bucket_local_hypothesis_layout(
         layout,
         image_batch_size=1,
@@ -1846,8 +1846,8 @@ def test_build_local_adaptive_pass2_hypothesis_layout_none_uses_full_parent_supp
     np.testing.assert_array_equal(layout_none.rotation_counts, layout_empty.rotation_counts)
     np.testing.assert_array_equal(layout_none.rotation_ids_flat, layout_empty.rotation_ids_flat)
     np.testing.assert_array_equal(layout_none.rotation_posterior_ids_flat, layout_empty.rotation_posterior_ids_flat)
-    assert layout_none.sample_mask_flat is None
-    assert layout_empty.sample_mask_flat is None
+    assert layout_none.sample_mask_rows() is None
+    assert layout_empty.sample_mask_rows() is None
 
 
 def test_expand_significant_samples_to_full_parent_translations_preserves_rotation_support():
@@ -1932,9 +1932,9 @@ def test_build_local_adaptive_pass2_hypothesis_layout_accepts_int64_packed_sampl
     np.testing.assert_allclose(layout.rotation_log_priors_flat, np.full(parent_map.shape, -2.5, dtype=np.float32))
     expected_mask = np.broadcast_to(
         fine_translation_parent[None, :] == int(coarse_trans),
-        layout.sample_mask_flat.shape,
+        layout.sample_mask_rows().shape,
     )
-    np.testing.assert_array_equal(layout.sample_mask_flat, expected_mask)
+    np.testing.assert_array_equal(layout.sample_mask_rows(), expected_mask)
 
 
 def test_build_pass2_hypothesis_layout_accepts_int64_packed_samples():
@@ -1975,9 +1975,9 @@ def test_build_pass2_hypothesis_layout_accepts_int64_packed_samples():
     np.testing.assert_array_equal(layout.rotation_posterior_ids_flat, np.full(parent_map.shape, parent_id, dtype=np.int32))
     expected_mask = np.broadcast_to(
         fine_translation_parent[None, :] == int(coarse_trans),
-        layout.sample_mask_flat.shape,
+        layout.sample_mask_rows().shape,
     )
-    np.testing.assert_array_equal(layout.sample_mask_flat, expected_mask)
+    np.testing.assert_array_equal(layout.sample_mask_rows(), expected_mask)
 
 
 def test_pass2_layout_builders_do_not_allocate_global_rotation_lookup_tables(monkeypatch):
@@ -2023,7 +2023,7 @@ def test_pass2_layout_builders_do_not_allocate_global_rotation_lookup_tables(mon
         adaptive_layout.rotation_log_priors_flat,
         np.array([0.0, -2.0], dtype=np.float32)[parent_map],
     )
-    assert adaptive_layout.sample_mask_flat.shape == (16, 8)
+    assert adaptive_layout.sample_mask_rows().shape == (16, 8)
 
     pass2_layout = build_pass2_hypothesis_layout(
         [np.array([0, 3], dtype=np.int32)],
@@ -2036,7 +2036,7 @@ def test_pass2_layout_builders_do_not_allocate_global_rotation_lookup_tables(mon
         rotation_log_prior=np.arange(rotation_grid_size(parent_order), dtype=np.float32),
     )
     np.testing.assert_array_equal(pass2_layout.rotation_posterior_ids_flat, np.array([0, 1], dtype=np.int32)[parent_map])
-    np.testing.assert_array_equal(pass2_layout.sample_mask_flat, adaptive_layout.sample_mask_flat)
+    np.testing.assert_array_equal(pass2_layout.sample_mask_rows(), adaptive_layout.sample_mask_rows())
 
 
 def test_normalize_local_scores_zeroes_all_invalid_rows():

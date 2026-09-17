@@ -32,6 +32,7 @@ from recovar.em.classification.k_class_results import (
     _zero_subset_noise_stats,
 )
 from recovar.em.dense.em_engine import run_em
+from recovar.em.diagnostics import initial_model_capture
 from recovar.em.diagnostics.coarse_score_diagnostics import (
     _coarse_selector_audit_from_full_stats,
     _with_coarse_significance_diagnostics,
@@ -2054,6 +2055,122 @@ def run_dense_k_class_em(
     )
 
 
+def _run_local_k_class_em_segmented(
+    experiment_dataset,
+    means_array,
+    noise_variance,
+    class_layouts,
+    disc_type,
+    *,
+    log_priors,
+    accumulate_noise: bool,
+    return_best_pose_details: bool,
+    stats_use_reconstruction_probs: bool,
+    return_profile: bool,
+    engine_kwargs,
+) -> KClassEMResult:
+    """Run every class in one exact-local pass over class-segmented rows.
+
+    The per-class route calls the single-class engine 2K times, a probe pass per
+    class for the joint evidence and an M-step pass per class. With the classes laid
+    out as segments of one bucket's row axis the engine scores the joint
+    class-by-pose posterior once and returns the same per-class quantities, so this
+    adapter only reshapes them into the K-class result.
+    """
+
+    n_classes = int(means_array.shape[0])
+    output = run_local_em_exact(
+        experiment_dataset,
+        means_array,
+        noise_variance,
+        tuple(class_layouts),
+        disc_type,
+        class_log_priors=np.asarray(log_priors, dtype=np.float64),
+        accumulate_noise=accumulate_noise,
+        return_best_pose_details=return_best_pose_details,
+        return_profile=return_profile,
+        stats_use_reconstruction_probs=stats_use_reconstruction_probs,
+        **engine_kwargs,
+    )
+    if output.class_log_evidence_per_image is None:
+        raise RuntimeError("class-segmented execution returned no per-class statistics")
+
+    # Follow the existing K-class convention: the class log evidence is float64 for
+    # the responsibility algebra, while every published per-image statistic keeps the
+    # engine's scoring precision, which is what the per-class route returns and what
+    # downstream consumers read.
+    class_log_evidence = np.asarray(output.class_log_evidence_per_image, dtype=np.float64)
+    class_best_log_score = np.asarray(output.class_best_log_score_per_image)
+    joint_log_evidence = np.asarray(output.stats.log_evidence_per_image)
+    # Every class's Pmax is measured against the joint normalizer, which is what the
+    # per-class M-step calls do when they are given the joint log evidence.
+    #
+    # The normalizer is now published at the normalization dtype, which is wider than
+    # the scoring dtype by default. Pmax is a scoring quantity, so the operand is cast
+    # to the winning score's dtype before the subtraction, reproducing the precision
+    # this subtraction and exponential had when the normalizer was itself narrowed.
+    # Casting only the final result would leave the subtraction and the exponential at
+    # the wider precision and silently change them.
+    joint_log_evidence_for_posterior = joint_log_evidence.astype(
+        class_best_log_score.dtype, copy=False,
+    )
+    with np.errstate(over="ignore"):
+        class_max_posterior = np.exp(
+            class_best_log_score - joint_log_evidence_for_posterior[None, :]
+        )
+    class_rotation_posterior_sums = np.asarray(output.class_rotation_posterior_sums, dtype=np.float64)
+    # Every per-class M-step call in the per-class route is given the joint log
+    # evidence as its normalizer, so each class's RelionStats reports that joint
+    # value; the class's own evidence travels separately as class_log_evidence.
+    # Keep both conventions rather than moving a per-class value into the field
+    # that names the normalizer actually used.
+    per_class_stats = tuple(
+        make_relion_stats(
+            log_evidence_per_image=joint_log_evidence,
+            best_log_score_per_image=class_best_log_score[class_index],
+            max_posterior_per_image=class_max_posterior[class_index],
+            rotation_posterior_sums=class_rotation_posterior_sums[class_index],
+        )
+        for class_index in range(n_classes)
+    )
+    return _assemble_result(
+        class_log_evidence=class_log_evidence,
+        # One engine call scored every class jointly, so its joint max posterior is
+        # authoritative; see _assemble_result for why it is not rebuilt downstream.
+        joint_max_posterior_per_image=np.asarray(output.stats.max_posterior_per_image),
+        new_means=None,
+        Ft_y=[output.Ft_y[class_index] for class_index in range(n_classes)],
+        Ft_ctf=[output.Ft_ctf[class_index] for class_index in range(n_classes)],
+        per_class_hard_assignments=np.asarray(output.per_class_hard_assignments, dtype=np.int64),
+        per_class_stats=per_class_stats,
+        noise_stats=None,
+        aggregate_noise_stats_override=output.noise_stats,
+        per_class_best_pose_rotations=(
+            None if output.per_class_best_pose_rotations is None else list(output.per_class_best_pose_rotations)
+        ),
+        per_class_best_pose_translations=(
+            None
+            if output.per_class_best_pose_translations is None
+            else list(output.per_class_best_pose_translations)
+        ),
+        per_class_best_pose_rotation_ids=(
+            None
+            if output.per_class_best_pose_rotation_ids is None
+            else list(output.per_class_best_pose_rotation_ids)
+        ),
+        # Canonical source Eulers are published to STAR metadata and read back by
+        # local search, so they are carried from the winning row, never rebuilt from
+        # its rotation matrix.
+        per_class_best_pose_eulers_deg=(
+            None
+            if output.per_class_best_pose_eulers_deg is None
+            else list(output.per_class_best_pose_eulers_deg)
+        ),
+        profile_summary=output.profile if return_profile else None,
+        uncast_log_evidence_per_image=output.uncast_log_evidence_per_image,
+    )
+
+
 def run_local_k_class_em(
     experiment_dataset,
     means,
@@ -2069,9 +2186,15 @@ def run_local_k_class_em(
     normalization_max_posterior=None,
     stats_use_reconstruction_probs: bool = False,
     class_posterior_sums_from_noise: bool = False,
+    segmented_class_rows: bool = False,
     **engine_kwargs,
 ) -> KClassEMResult:
-    """Run exact-local K-class EM using ``run_local_em_exact`` for all kernels."""
+    """Run exact-local K-class EM using ``run_local_em_exact`` for all kernels.
+
+    ``segmented_class_rows`` runs every class in one pass over class-segmented rows
+    instead of a probe pass and an M-step pass per class. It is opt-in until its
+    numerical and performance validation is complete.
+    """
 
     _reject_kwargs(
         engine_kwargs,
@@ -2132,6 +2255,34 @@ def run_local_k_class_em(
             normalization_log_evidence_np = _logsumexp_np(class_log_evidence_np, axis=0)
 
     class_layouts = _class_local_layouts(local_layout, n_classes)
+
+    if segmented_class_rows:
+        if n_classes == 1:
+            raise ValueError("class-segmented rows need more than one class")
+        for name, value in (
+            ("class_log_evidence", class_log_evidence),
+            ("normalization_log_evidence", normalization_log_evidence),
+            ("normalization_max_posterior", normalization_max_posterior),
+        ):
+            if value is not None:
+                raise NotImplementedError(f"class-segmented rows do not take an external {name}")
+        if class_posterior_sums_from_noise:
+            raise NotImplementedError(
+                "class-segmented rows produce one joint noise statistic, not per-class masses"
+            )
+        return _run_local_k_class_em_segmented(
+            experiment_dataset,
+            means_array,
+            noise_variance,
+            class_layouts,
+            disc_type,
+            log_priors=log_priors,
+            accumulate_noise=accumulate_noise,
+            return_best_pose_details=return_best_pose_details,
+            stats_use_reconstruction_probs=stats_use_reconstruction_probs,
+            return_profile=return_profile,
+            engine_kwargs=base_engine_kwargs,
+        )
 
     if class_log_evidence_np is None:
         if n_classes == 1 and normalization_log_evidence_np is None and normalization_max_posterior_np is None:
@@ -2224,6 +2375,14 @@ def run_local_k_class_em(
     global_log_evidence = _logsumexp_np(class_log_evidence_np, axis=0)
     if normalization_log_evidence_np is not None:
         global_log_evidence = normalization_log_evidence_np
+    # The same diagnostic quantity for this route: the normalizer before the engine
+    # casts it to the scoring dtype. No production consumer, so it is only
+    # materialized when the K-class statistics capture is switched on.
+    uncast_global_log_evidence = (
+        np.asarray(global_log_evidence, dtype=np.float64).copy()
+        if initial_model_capture.k_class_statistics_capture_enabled()
+        else None
+    )
 
     results = _PerClassResults(
         accumulate_noise=accumulate_noise,
@@ -2278,6 +2437,7 @@ def run_local_k_class_em(
         }
 
     return _assemble_result(
+        uncast_log_evidence_per_image=uncast_global_log_evidence,
         class_log_evidence=class_log_evidence_np,
         new_means=None,
         Ft_y=results.Ft_y,

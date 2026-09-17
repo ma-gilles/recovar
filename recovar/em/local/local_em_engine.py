@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import gc
 import logging
+import dataclasses
 import os
 import time
 
@@ -14,12 +15,13 @@ import numpy as np
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar.core.configs import ForwardModelConfig
 from recovar.em.dense.deferred_noise_pack import pack_noise_pixel_capacity
-from recovar.em.diagnostics import bpref_diagnostics, vdam_replay
+from recovar.em.diagnostics import bpref_diagnostics, initial_model_capture, vdam_replay
 from recovar.em.diagnostics.local_bpref_capture import (
     _bpref_capture_priors,
     _bucket_contains_debug_target,
     _exact_local_bpref_capture_static_kwargs,
     _exact_local_bpref_contribution_capture_for_call,
+    _exact_local_bpref_operand_bundle,
     _exact_local_bpref_reconstruction_probs_for_capture,
     _filter_buckets_to_debug_targets,
     _maybe_dump_exact_local_bpref_contribution_rows,
@@ -151,6 +153,8 @@ from recovar.em.local.local_bucket_stages import (
     _reorder_bucket_to_indices,
     _return_local_big_jit_mstep_tensors,
     _unpadded_bucket_rows,
+    build_class_segment_reconstruction_packs,
+    encode_hard_assignment,
     validate_local_relion_projector_window,
 )
 from recovar.em.local.local_caches import (
@@ -165,8 +169,10 @@ from recovar.em.local.local_caches import (
 from recovar.em.local.local_layout import (
     LocalBucketSequence,
     LocalHypothesisLayout,
+    _exact_bucket_rotation_size,
     _local_mstep_rotations,
     _resolve_exact_local_bucket_radix,
+    bucket_class_local_hypothesis_layouts,
     plan_local_hypothesis_buckets,
 )
 from recovar.em.local.local_physical_grid import (
@@ -247,6 +253,101 @@ EXACT_LOCAL_SPARSE_ADJOINT_TARGET_ROWS_ENV = "RECOVAR_EXACT_LOCAL_SPARSE_ADJOINT
 EXACT_LOCAL_BIG_JIT_MIN_SIGNIFICANT_ROW_FRACTION = 0.25
 
 
+
+def _accumulate_class_segment_statistics(
+    *,
+    image_indices,
+    unpadded_rows,
+    n_classes: int,
+    segment_rotation_count: int,
+    n_trans: int,
+    batch_norm,
+    log_Z,
+    best_argmax,
+    class_probs_sum,
+    class_best_log_score,
+    class_log_evidence,
+    class_best_argmax,
+    translation_grid,
+    per_class_hard_assignments,
+    per_class_best_pose_rotations,
+    per_class_best_pose_translations,
+    per_class_best_pose_rotation_ids,
+    per_class_best_pose_eulers_deg,
+    probs_sum_t,
+    unpadded_batch_size: int,
+    class_log_evidence_per_image,
+    class_best_log_score_per_image,
+    class_posterior_sums,
+    class_rotation_posterior_sums,
+    class_assignments,
+) -> None:
+    """Scatter one class-segmented bucket's per-class statistics to the host buffers.
+
+    The bucket returns a joint posterior over ``(class, rotation, translation)``.
+    Class k's log evidence is reduced in the bucket program from that segment's own
+    scores, so a class whose posterior mass underflows still reports finite evidence;
+    only a segment with no finite score reports ``-inf``. The offset convention is the
+    single-class path's. The winning class is the winning row's segment, and each
+    class's angular posterior is that segment's rows scattered by their parent
+    rotation ids.
+    """
+
+    rows = int(unpadded_batch_size)
+    offset = -0.5 * np.asarray(batch_norm, dtype=np.float64).reshape(rows, -1)[:rows, 0]
+    mass = np.asarray(class_probs_sum, dtype=np.float64)[:rows]
+    best = np.asarray(class_best_log_score, dtype=np.float64)[:rows]
+    class_log_evidence_per_image[:, image_indices] = (
+        np.asarray(class_log_evidence, dtype=np.float64)[:rows].T + offset[None, :]
+    )
+    class_best_log_score_per_image[:, image_indices] = best.T + offset[None, :]
+    class_posterior_sums += mass.sum(axis=0)
+
+    winning_row = np.asarray(best_argmax, dtype=np.int64)[:rows] // int(n_trans)
+    class_assignments[image_indices] = (winning_row // int(segment_rotation_count)).astype(np.int32)
+
+    posterior_ids = unpadded_rows["local_rotation_posterior_ids"]
+    if posterior_ids is None:
+        posterior_ids = unpadded_rows["local_rotation_ids"]
+    posterior_ids = np.asarray(posterior_ids, dtype=np.int64)[:rows]
+    row_mask = np.asarray(unpadded_rows["local_rotation_mask"], dtype=bool)[:rows]
+    row_mass = np.asarray(probs_sum_t, dtype=np.float64)[:rows]
+    rotation_ids = np.asarray(unpadded_rows["local_rotation_ids"], dtype=np.int64)[:rows]
+    rotations = np.asarray(unpadded_rows["local_rotations"])[:rows]
+    class_winner = np.asarray(class_best_argmax, dtype=np.int64)[:rows]
+    translations = np.asarray(translation_grid)
+    for class_index in range(int(n_classes)):
+        start = class_index * int(segment_rotation_count)
+        stop = start + int(segment_rotation_count)
+        segment_mask = row_mask[:, start:stop]
+        np.add.at(
+            class_rotation_posterior_sums[class_index],
+            posterior_ids[:, start:stop][segment_mask],
+            row_mass[:, start:stop][segment_mask],
+        )
+        winner_row = start + class_winner[:, class_index] // int(n_trans)
+        winner_trans = class_winner[:, class_index] % int(n_trans)
+        winner_rotation_ids = rotation_ids[np.arange(rows), winner_row]
+        if np.any(winner_rotation_ids < 0):
+            raise RuntimeError(
+                f"class-segmented winner selected a padded row in class {class_index}"
+            )
+        per_class_hard_assignments[class_index, image_indices] = encode_hard_assignment(
+            winner_rotation_ids, winner_trans.astype(np.int32), int(n_trans),
+        )
+        if per_class_best_pose_rotations is not None:
+            per_class_best_pose_rotations[class_index, image_indices] = rotations[np.arange(rows), winner_row]
+            per_class_best_pose_translations[class_index, image_indices] = translations[winner_trans]
+            per_class_best_pose_rotation_ids[class_index, image_indices] = winner_rotation_ids
+        if per_class_best_pose_eulers_deg is not None:
+            source_eulers = unpadded_rows["local_source_eulers"]
+            if source_eulers is None:
+                raise RuntimeError("source Euler metadata was lost before class-segmented publication")
+            per_class_best_pose_eulers_deg[class_index, image_indices] = np.asarray(
+                source_eulers, dtype=np.float64,
+            )[:rows][np.arange(rows), winner_row]
+
+
 def run_local_em_exact(
     experiment_dataset,
     mean,
@@ -304,6 +405,7 @@ def run_local_em_exact(
     return_best_pose_details: bool = False,
     normalization_log_z: np.ndarray | None = None,
     class_log_prior: float = 0.0,
+    class_log_priors: np.ndarray | None = None,
     normalization_log_evidence: np.ndarray | None = None,
     normalization_max_posterior: np.ndarray | None = None,
     translation_prior_centers: np.ndarray | None = None,
@@ -615,6 +717,48 @@ def run_local_em_exact(
     stable_window_active = bool(
         stable_fourier_window_shapes and stable_window_plan.logical_spec.use_window
     )
+    # One engine for K=1 and K>1: with class_log_priors the caller passes one layout
+    # per class and a stacked volume, and the classes share a bucket's rows as
+    # class-major segments, so a bucket scores the joint class-by-pose posterior in
+    # one pass instead of a probe pass and an M-step pass per class.
+    class_layouts = None
+    n_classes = 1
+    class_log_priors_np = None
+    if class_log_priors is not None:
+        class_log_priors_np = np.asarray(class_log_priors, dtype=np.float64).reshape(-1)
+        n_classes = int(class_log_priors_np.shape[0])
+        class_layouts = tuple(local_layout) if isinstance(local_layout, (list, tuple)) else (local_layout,)
+        if len(class_layouts) != n_classes:
+            raise ValueError(
+                f"class-segmented local EM needs one layout per class: {len(class_layouts)} layouts, {n_classes} priors"
+            )
+        if float(class_log_prior) != 0.0:
+            raise ValueError("class_log_prior is the single-class scalar; use class_log_priors for K>1")
+        local_layout = class_layouts[0]
+    if n_classes > 1:
+        # Everything below that a class segment cannot express yet. Each of these is a
+        # K=1 exact-RELION path that indexes rows by (image, rotation row) alone, or a
+        # route that writes a single volume pair per call.
+        unsupported = {
+            "score_only": bool(score_only),
+            "fixed-capacity execution": bool(_fixed_capacity_enabled or _fixed_capacity_whole_boundary_enabled),
+            "flat local rows": bool(_flat_local_rows_enabled),
+            "packed local projection": bool(_packed_local_projection_enabled),
+            "fused pair fine score": bool(fused_pair_fine_score),
+            "stable Fourier windows": bool(stable_fourier_window_shapes),
+            "source-ordered native VDAM operands": bool(relion_exact_bpref_operands),
+            "half-volume accumulator return": bool(return_half_volume_accumulators),
+            "reconstruction group ids": reconstruction_group_ids is not None,
+            "projection padding factor above one": int(projection_padding_factor) > 1,
+            "source-faithful spectrum norm": bool(source_faithful_spectrum_norm),
+            "external log-Z normalization": normalization_log_z is not None,
+            "significant-sample index collection": bool(return_reconstruction_sample_indices),
+        }
+        blocked = sorted(name for name, active in unsupported.items() if active)
+        if blocked:
+            raise NotImplementedError(
+                "class-segmented local EM does not support: " + ", ".join(blocked)
+            )
     n_trans = int(local_layout.translation_grid.shape[0])
     n_images = int(local_layout.n_images)
     class_log_prior = float(class_log_prior)
@@ -846,14 +990,75 @@ def run_local_em_exact(
         if reconstruction_group_ids_np is not None
         else (score_only_accumulator_size,)
     )
+    if n_classes > 1:
+        accumulator_shape = (n_classes,) + tuple(accumulator_shape)
     Ft_y = jnp.zeros(accumulator_shape, dtype=recon_y_accum_dtype)
     Ft_ctf = jnp.zeros(accumulator_shape, dtype=recon_ctf_accum_dtype)
     hard_assignment = np.empty(n_images, dtype=np.int64)
-    log_evidence_per_image = np.empty(n_images, dtype=precision_policy.score_real_dtype)
+    # A normalizer, not a score: allocate it at the normalization dtype. The value
+    # assigned in local_bucket_stages is formed in double, and a scoring-dtype buffer
+    # narrows it per class before the driver reduces over classes.
+    log_evidence_per_image = np.empty(n_images, dtype=precision_policy.normalization_real_dtype)
     best_log_score_per_image = np.empty(n_images, dtype=precision_policy.score_real_dtype)
     max_posterior_per_image = np.empty(n_images, dtype=precision_policy.score_real_dtype)
     significant_counts = np.empty(n_images, dtype=np.int32) if return_significant_counts else None
     rotation_posterior_sums = np.zeros(int(local_layout.n_global_rotations), dtype=np.float64)
+    # Diagnostic: the normalizer as reduced, before the cast to the scoring dtype.
+    # Requested only when a capture directory is configured, so production returns and
+    # transfers exactly what it did before.
+    capture_uncast_normalizer = initial_model_capture.k_class_statistics_capture_enabled()
+    uncast_log_evidence_per_image = (
+        np.zeros(n_images, dtype=np.float64) if capture_uncast_normalizer else None
+    )
+    class_log_evidence_per_image = None
+    class_best_log_score_per_image = None
+    class_posterior_sums = None
+    class_rotation_posterior_sums = None
+    class_assignments = None
+    if n_classes > 1:
+        # Match the single-class buffers' precision: the reductions happen in the
+        # engine's normalization dtype and are published at the scoring dtype.
+        class_log_evidence_per_image = np.zeros(
+            (n_classes, n_images), dtype=precision_policy.score_real_dtype,
+        )
+        class_best_log_score_per_image = np.zeros(
+            (n_classes, n_images), dtype=precision_policy.score_real_dtype,
+        )
+        class_posterior_sums = np.zeros(n_classes, dtype=np.float64)
+        class_rotation_posterior_sums = np.zeros(
+            (n_classes, int(local_layout.n_global_rotations)), dtype=np.float64,
+        )
+        class_assignments = np.zeros(n_images, dtype=np.int32)
+        per_class_hard_assignments = np.zeros((n_classes, n_images), dtype=np.int64)
+        per_class_best_pose_rotations = (
+            np.zeros((n_classes, n_images, 3, 3), dtype=precision_policy.score_real_dtype)
+            if return_best_pose_details
+            else None
+        )
+        per_class_best_pose_translations = (
+            np.zeros(
+                (n_classes, n_images, local_layout.translation_grid.shape[1]),
+                dtype=precision_policy.score_real_dtype,
+            )
+            if return_best_pose_details
+            else None
+        )
+        per_class_best_pose_rotation_ids = (
+            np.zeros((n_classes, n_images), dtype=np.int64) if return_best_pose_details else None
+        )
+        # Canonical source Euler angles reach STAR metadata and local search, so they
+        # travel with the winning row instead of being rebuilt from its matrix.
+        per_class_best_pose_eulers_deg = (
+            np.zeros((n_classes, n_images, 3), dtype=np.float64)
+            if (return_best_pose_details and local_layout.source_eulers_flat is not None)
+            else None
+        )
+    else:
+        per_class_hard_assignments = None
+        per_class_best_pose_rotations = None
+        per_class_best_pose_translations = None
+        per_class_best_pose_rotation_ids = None
+        per_class_best_pose_eulers_deg = None
     best_pose_rotations = (
         np.empty((n_images, 3, 3), dtype=precision_policy.score_real_dtype) if return_best_pose_details else None
     )
@@ -1094,12 +1299,35 @@ def run_local_em_exact(
             tuple(int(x) for x in image_shape),
             tuple(int(x) for x in recon_volume_shape),
         )
+    if n_classes > 1:
+        # Capacity estimates size a bucket's rows, and a class-segmented bucket holds
+        # every class's segment, so they must see the padded segmented row count.
+        class_segment_counts = np.max(
+            np.stack([np.asarray(layout.rotation_counts, dtype=np.int64) for layout in class_layouts], axis=1),
+            axis=1,
+        )
+        padded_segment_counts = np.asarray(
+            [
+                _exact_bucket_rotation_size(
+                    int(count), rotation_block_size,
+                    exact_local_bucket_radix=resolved_exact_local_bucket_radix,
+                )
+                for count in class_segment_counts
+            ],
+            dtype=np.int32,
+        )
+        sizing_layout = dataclasses.replace(
+            local_layout,
+            rotation_counts=(padded_segment_counts.astype(np.int64) * n_classes).astype(np.int32),
+        )
+    else:
+        sizing_layout = local_layout
     max_hypotheses_per_microbatch = _exact_local_effective_max_hypotheses_per_microbatch(
         max_hypotheses_per_microbatch,
         n_windowed,
         n_trans=n_trans,
         n_recon_windowed=window_spec.n_recon,
-        local_layout=local_layout,
+        local_layout=sizing_layout,
         image_batch_size=image_batch_size,
         rotation_block_size=rotation_block_size,
         exact_local_bucket_radix=resolved_exact_local_bucket_radix,
@@ -1112,7 +1340,7 @@ def run_local_em_exact(
         uncapped_hypotheses_per_microbatch = int(max_hypotheses_per_microbatch)
         max_hypotheses_per_microbatch = _exact_local_xhalf_tail_microbatch_cap(
             uncapped_hypotheses_per_microbatch,
-            local_layout,
+            sizing_layout,
             image_batch_size=image_batch_size,
             rotation_block_size=rotation_block_size,
         )
@@ -1122,14 +1350,14 @@ def run_local_em_exact(
                 "(max_local_rotations=%d, planned_image_batch=%d, planned_rotation_block=%d)",
                 uncapped_hypotheses_per_microbatch,
                 int(max_hypotheses_per_microbatch),
-                int(np.max(np.asarray(local_layout.rotation_counts), initial=0)),
+                int(np.max(np.asarray(sizing_layout.rotation_counts), initial=0)),
                 int(image_batch_size),
                 int(rotation_block_size),
             )
         tail_capped_hypotheses_per_microbatch = int(max_hypotheses_per_microbatch)
         max_hypotheses_per_microbatch = _exact_local_xhalf_projection_microbatch_cap(
             tail_capped_hypotheses_per_microbatch,
-            local_layout,
+            sizing_layout,
             n_projection_pixels=int(window_spec.n_projection),
             rotation_block_size=rotation_block_size,
             exact_local_bucket_radix=resolved_exact_local_bucket_radix,
@@ -1144,8 +1372,7 @@ def run_local_em_exact(
                 int(_exact_local_xhalf_projection_target_row_pixels()),
             )
     bucket_build_t0 = time.time()
-    bucket_plans = plan_local_hypothesis_buckets(
-        local_layout,
+    bucket_build_kwargs = dict(
         image_batch_size=image_batch_size,
         rotation_block_size=rotation_block_size,
         max_hypotheses_per_microbatch=max_hypotheses_per_microbatch,
@@ -1154,7 +1381,18 @@ def run_local_em_exact(
         exact_local_bucket_radix=resolved_exact_local_bucket_radix,
         consecutive_mixed_bucket_size=consecutive_mixed_bucket_size,
     )
-    bucket_specs = LocalBucketSequence(local_layout, bucket_plans)
+    if n_classes > 1:
+        # The plan-then-materialize path is single-layout, so the class-segmented
+        # route keeps its eager bucketer until that planner covers classes. Its
+        # memory benefit does not reach this route yet.
+        bucket_specs = bucket_class_local_hypothesis_layouts(
+            class_layouts, class_log_priors_np, **bucket_build_kwargs,
+        )
+        bucket_metadata_source = bucket_specs
+    else:
+        bucket_plans = plan_local_hypothesis_buckets(local_layout, **bucket_build_kwargs)
+        bucket_specs = LocalBucketSequence(local_layout, bucket_plans)
+        bucket_metadata_source = bucket_plans
     timing.bucket_build_s += time.time() - bucket_build_t0
     debug_target_only_targets: set[int] = set()
     if debug_score_dump_filter_matches:
@@ -1173,7 +1411,7 @@ def run_local_em_exact(
     )
     debug_target_only_original_bucket_count = len(bucket_specs)
     debug_target_only_original_image_count = int(
-        sum(int(bucket.image_indices.shape[0]) for bucket in bucket_plans)
+        sum(int(bucket.image_indices.shape[0]) for bucket in bucket_metadata_source)
     )
     if debug_score_dump_target_only:
         filter_t0 = time.time()
@@ -1341,7 +1579,15 @@ def run_local_em_exact(
     disabled_group_ids = jnp.zeros(1, dtype=jnp.int32)
     disabled_noise_shell_indices = jnp.zeros(n_half, dtype=jnp.int32)
 
-    local_support_rows = int(np.sum(local_layout.rotation_counts))
+    # In class mode the representative layout holds one class's rows, but the bucket
+    # carries every class, so the support that decides the reconstruction route must
+    # count them all. Otherwise a class-segmented run could take a different
+    # reconstruction route than the per-class run of the same problem.
+    local_support_rows = int(
+        sum(int(np.sum(layout.rotation_counts)) for layout in class_layouts)
+        if class_layouts is not None
+        else np.sum(local_layout.rotation_counts)
+    )
     significant_backprojection_candidate = (
         reconstruct_significant_only
         and n_images > 0
@@ -1433,9 +1679,27 @@ def run_local_em_exact(
     if use_relion_projector:
         if relion_projector_r_max is None:
             raise ValueError("relion_projector_r_max is required when relion_projector_half is provided")
-        relion_projector_half_big_jit = prepare_local_projector_slab(
-            relion_projector_half, path_label="local RELION projector big-JIT path",
-        )
+        if n_classes > 1:
+            projector_classes = jnp.asarray(relion_projector_half)
+            if int(projector_classes.shape[0]) != n_classes:
+                raise ValueError(
+                    "class-segmented local EM expects one RELION projector slab per class, got "
+                    f"{tuple(projector_classes.shape)}"
+                )
+            relion_projector_half_big_jit = jnp.stack(
+                [
+                    prepare_local_projector_slab(
+                        projector_classes[class_index],
+                        path_label="local RELION projector big-JIT path",
+                    )
+                    for class_index in range(n_classes)
+                ],
+                axis=0,
+            )
+        else:
+            relion_projector_half_big_jit = prepare_local_projector_slab(
+                relion_projector_half, path_label="local RELION projector big-JIT path",
+            )
         relion_projector_r_max_big_jit = int(relion_projector_r_max)
         if compact_relion_projector_big_jit:
             big_jit_relion_projector_output_size = int(window_spec.relion_projector_output_size() or 0)
@@ -1491,10 +1755,21 @@ def run_local_em_exact(
             relion_projection_cache_id_map_rows = int(np.unique(valid_layout_ids).size)
             projection_cache_plan.log_enabled(relion_projection_cache_id_map_rows)
     if use_big_jit_buckets and not use_relion_projector and not projection_relion_texture_interp:
-        mean_for_proj_big_jit = fourier_transform_utils.full_volume_to_half_volume(
-            mean_for_proj,
-            proj_volume_shape,
-        ).reshape(-1)
+        if n_classes > 1:
+            mean_for_proj_big_jit = jnp.stack(
+                [
+                    fourier_transform_utils.full_volume_to_half_volume(
+                        mean_for_proj[class_index], proj_volume_shape,
+                    ).reshape(-1)
+                    for class_index in range(n_classes)
+                ],
+                axis=0,
+            )
+        else:
+            mean_for_proj_big_jit = fourier_transform_utils.full_volume_to_half_volume(
+                mean_for_proj,
+                proj_volume_shape,
+            ).reshape(-1)
         projection_half_volume_big_jit = True
 
     can_use_processed_half_cache = not use_big_jit_buckets and processed_half_cache_preferred
@@ -1922,18 +2197,18 @@ def run_local_em_exact(
             normalization_log_z_arg = (
                 jnp.asarray(
                     pad_axis(normalization_log_z_np[bucket_image_indices], 0, batch_size, value=0),
-                    dtype=(jnp.float64 if use_float64_normalization else jnp.float32),
+                    dtype=(precision_policy.normalization_real_dtype),
                 )
                 if normalization_log_z_np is not None
-                else jnp.zeros(batch_size, dtype=(jnp.float64 if use_float64_normalization else jnp.float32))
+                else jnp.zeros(batch_size, dtype=(precision_policy.normalization_real_dtype))
             )
             normalization_log_evidence_arg = (
                 jnp.asarray(
                     pad_axis(normalization_log_evidence_np[bucket_image_indices], 0, batch_size, value=0),
-                    dtype=(jnp.float64 if use_float64_normalization else jnp.float32),
+                    dtype=(precision_policy.normalization_real_dtype),
                 )
                 if normalization_log_evidence_np is not None
-                else jnp.zeros(batch_size, dtype=(jnp.float64 if use_float64_normalization else jnp.float32))
+                else jnp.zeros(batch_size, dtype=(precision_policy.normalization_real_dtype))
             )
             normalization_max_posterior_arg = (
                 jnp.asarray(
@@ -1943,7 +2218,7 @@ def run_local_em_exact(
                         batch_size,
                         value=0,
                     ),
-                    dtype=(jnp.float64 if use_float64_normalization else jnp.float32),
+                    dtype=(precision_policy.normalization_real_dtype),
                 )
                 if normalization_max_posterior_np is not None
                 else jnp.zeros(batch_size, dtype=jnp.float32)
@@ -2179,6 +2454,9 @@ def run_local_em_exact(
                 local_projection_runtime_radius,
             )
             big_jit_static_options = dict(
+                n_classes=n_classes,
+                class_segment_rotation_count=(bucket.segment_rotation_count if n_classes > 1 else None),
+                return_uncast_normalizer=capture_uncast_normalizer,
                 mask_mode=big_jit_mask_mode,
                 score_with_masked_images=score_with_masked_images,
                 apply_integer_pre_shift=apply_integer_pre_shift,
@@ -2364,6 +2642,12 @@ def run_local_em_exact(
                 reconstruction_sample_mask,
                 reconstruction_rotation_mask,
                 reconstruction_row_count_jax,
+                bucket_class_probs_sum,
+                bucket_class_best_log_score,
+                bucket_class_reconstruction_probs_sum,
+                bucket_class_log_evidence,
+                bucket_class_best_argmax,
+                bucket_uncast_log_Z,
             ) = big_jit_result.core
             summed = None
             ctf_probs = None
@@ -2599,6 +2883,11 @@ def run_local_em_exact(
                         ctf_probs=ctf_probs[:unpadded_batch_size],
                         rotations=_local_mstep_rotations(unpadded_bucket),
                         actual_counts=unpadded_bucket.actual_rotation_counts,
+                        # Diagnostic-only: the segmented layout already carries per-class
+                        # valid counts and the segment stride; forwarding them lets the
+                        # writer attribute rows to classes instead of taking a prefix.
+                        class_actual_rotation_counts=unpadded_bucket.class_actual_rotation_counts,
+                        class_segment_rotation_count=unpadded_bucket.class_segment_rotation_count,
                         rotation_indices=unpadded_bucket.local_rotation_ids,
                         fine_translations=local_layout.translation_grid,
                         scores=debug_scores_unpadded,
@@ -2615,7 +2904,42 @@ def run_local_em_exact(
                         ),
                         reconstruction_threshold=reconstruction_threshold_for_dump,
                         candidate_mask=capture_priors.candidate_mask,
-                        **capture_static_kwargs,
+                        **_exact_local_bpref_operand_bundle(
+                            capture_static_kwargs,
+                            experiment_dataset=experiment_dataset,
+                            image_shape=image_shape,
+                            # local_big_jit.py:2195 gates relion_preprocess_real_f32 on
+                            # exact operands AND a positive mask radius, so this site can run
+                            # real RELION CUDA preprocessing. It must not share the split
+                            # site's label.
+                            preprocess_path=(
+                                "big_jit_relion_cuda"
+                                if (relion_exact_bpref_operands
+                                    and relion_cuda_preprocess_radius > 0.0)
+                                else "big_jit_jax"
+                            ),
+                            relion_preprocess_normalization=image_only_corrections_arg,
+                            relion_cuda_preprocess_radius=relion_cuda_preprocess_radius,
+                            relion_cuda_preprocess_cosine_width=relion_cuda_preprocess_cosine_width,
+                            # The big-JIT kernel call always receives big_jit_image_mask_arg
+                            # (resolved unconditionally at :1529), so the capture must too;
+                            # gating it on the exact flag starved the masked non-exact path.
+                            applied_image_mask=big_jit_image_mask_arg,
+                            applied_image_mask_mode=big_jit_mask_mode,
+                            exact_source_star_ctf=relion_exact_bpref_operands,
+                            # The evaluator this route's config actually uses.
+                            production_ctf=big_jit_config.ctf,
+                            raw_batch_data=batch_data,
+                            ctf_params=ctf_params,
+                            noise_variance_half=noise_variance_half,
+                            image_pre_shifts=image_pre_shifts,
+                            integer_pre_shifts=integer_pre_shifts,
+                            real_space_pre_shift_applied=integer_pre_shifts is not None,
+                            image_corrections=image_corrections,
+                            scale_corrections=scale_corrections,
+                            image_indices=unpadded_bucket.image_indices,
+                            unpadded_batch_size=unpadded_batch_size,
+                        ),
                         inline_projector_data_volumes=inline_projector_data_volumes,
                         inline_projector_weight_volumes=inline_projector_weight_volumes,
                         reconstruction_group_ids=(
@@ -2694,6 +3018,7 @@ def run_local_em_exact(
                     )
 
             pack_t0 = time.time()
+            class_packed_adjoint_inputs = None
             reconstruction_rotation_mask_np = np.asarray(reconstruction_rotation_mask, dtype=bool)[:unpadded_batch_size]
             local_mask_np = np.asarray(bucket.local_rotation_mask, dtype=bool)[:unpadded_batch_size]
             # Pack only outputs explicitly returned by the big JIT.  Besides
@@ -2928,6 +3253,41 @@ def run_local_em_exact(
                 packed_summed = _packed_reconstruction_rows(summed[:unpadded_batch_size], reconstruction_take_indices_jnp, reconstruction_pack_mask_jnp)
                 packed_ctf_probs = _packed_reconstruction_rows(ctf_probs[:unpadded_batch_size], reconstruction_take_indices_jnp, reconstruction_pack_mask_jnp)
                 packed_flat_rotations = flatten_bucket_rotations(jnp.asarray(packed_mstep_rotations_np))
+                if n_classes > 1:
+                    # One joint pack would scatter every class's rows into one volume.
+                    # Pack each class's own segment and keep the gathered rows, so the
+                    # scatter below can run once per class into that class's pair.
+                    class_packed_adjoint_inputs = []
+                    for class_take, class_mask, _counts, _rows in build_class_segment_reconstruction_packs(
+                        reconstruction_rotation_mask_np,
+                        local_mask_np,
+                        probs_sum_t_np,
+                        rotation_block_size,
+                        n_classes=n_classes,
+                        segment_rotation_count=int(bucket.segment_rotation_count),
+                        exact_local_bucket_radix=resolved_exact_local_bucket_radix,
+                    ):
+                        (
+                            class_take_jnp,
+                            class_mask_jnp,
+                            _class_rotations_np,
+                            class_mstep_rotations_np,
+                        ) = _packed_bucket_rotations(
+                            bucket, class_take, class_mask, batch_rows=unpadded_batch_size,
+                        )
+                        class_packed_adjoint_inputs.append((
+                            flatten_bucket_rows(
+                                _packed_reconstruction_rows(
+                                    summed[:unpadded_batch_size], class_take_jnp, class_mask_jnp,
+                                )
+                            ),
+                            flatten_bucket_rows(
+                                _packed_reconstruction_rows(
+                                    ctf_probs[:unpadded_batch_size], class_take_jnp, class_mask_jnp,
+                                )
+                            ),
+                            flatten_bucket_rotations(jnp.asarray(class_mstep_rotations_np)),
+                        ))
             else:
                 probs_sum_t_np = None
                 reconstruction_take_indices = np.broadcast_to(
@@ -3449,6 +3809,56 @@ def run_local_em_exact(
                 if return_profile:
                     _block_until_ready(Ft_y, Ft_ctf)
                 timing.adjoint_y_s += time.time() - adjoint_t0
+            elif sparse_big_jit_backprojection and n_classes > 1 and (
+                not disable_adjoint_y or not disable_adjoint_ctf
+            ):
+                # Each class's packed rows scatter into that class's accumulator pair.
+                adjoint_y_t0 = time.time()
+                if class_packed_adjoint_inputs is None:
+                    raise RuntimeError("class-segmented reconstruction packs were not built")
+                updated_y, updated_ctf = [], []
+                for class_index, (class_summed, class_ctf_probs, class_rotations) in enumerate(
+                    class_packed_adjoint_inputs
+                ):
+                    class_y = Ft_y[class_index]
+                    class_weight = Ft_ctf[class_index]
+                    if not disable_adjoint_y:
+                        class_y, n_adjoint_chunks = _adjoint_slice_volume_maybe_windowed_row_chunks(
+                            class_summed,
+                            mstep_recon_window_indices,
+                            class_rotations,
+                            class_y,
+                            image_shape,
+                            recon_volume_shape,
+                            "linear_interp",
+                            use_window=use_window,
+                            max_r=mstep_adjoint_max_r,
+                            relion_x_half=bool(mstep_relion_x_half),
+                            target_rows=sparse_adjoint_target_rows,
+                        )
+                        sparse_adjoint_chunk_count += int(n_adjoint_chunks)
+                    if not disable_adjoint_ctf:
+                        class_weight, n_adjoint_chunks = _adjoint_slice_volume_maybe_windowed_row_chunks(
+                            class_ctf_probs,
+                            mstep_recon_window_indices,
+                            class_rotations,
+                            class_weight,
+                            image_shape,
+                            recon_volume_shape,
+                            "linear_interp",
+                            use_window=use_window,
+                            max_r=mstep_adjoint_max_r,
+                            relion_x_half=bool(mstep_relion_x_half),
+                            target_rows=sparse_adjoint_target_rows,
+                        )
+                        sparse_adjoint_chunk_count += int(n_adjoint_chunks)
+                    updated_y.append(class_y)
+                    updated_ctf.append(class_weight)
+                Ft_y = jnp.stack(updated_y, axis=0)
+                Ft_ctf = jnp.stack(updated_ctf, axis=0)
+                if return_profile:
+                    _block_until_ready(Ft_y, Ft_ctf)
+                timing.adjoint_y_s += time.time() - adjoint_y_t0
             elif sparse_big_jit_backprojection and (
                 not disable_adjoint_y or not disable_adjoint_ctf
             ):
@@ -4067,6 +4477,51 @@ def run_local_em_exact(
                 if probs_sum_t_np is None
                 else np.asarray(postprocess_rows(stats_probs_sum_t), dtype=np.float64)[:unpadded_batch_size]
             )
+            if n_classes > 1:
+                _accumulate_class_segment_statistics(
+                    image_indices=np.asarray(unpadded_bucket.image_indices, dtype=np.int64),
+                    unpadded_rows=_unpadded_bucket_rows(bucket, unpadded_batch_size),
+                    n_classes=n_classes,
+                    segment_rotation_count=int(bucket.segment_rotation_count),
+                    n_trans=n_trans,
+                    batch_norm=postprocess_rows(batch_norm),
+                    log_Z=postprocess_rows(log_Z),
+                    best_argmax=postprocess_rows(best_argmax),
+                    class_probs_sum=postprocess_rows(bucket_class_probs_sum),
+                    class_best_log_score=postprocess_rows(bucket_class_best_log_score),
+                    class_log_evidence=postprocess_rows(bucket_class_log_evidence),
+                    class_best_argmax=postprocess_rows(bucket_class_best_argmax),
+                    translation_grid=local_layout.translation_grid,
+                    per_class_hard_assignments=per_class_hard_assignments,
+                    per_class_best_pose_rotations=per_class_best_pose_rotations,
+                    per_class_best_pose_translations=per_class_best_pose_translations,
+                    per_class_best_pose_rotation_ids=per_class_best_pose_rotation_ids,
+                    per_class_best_pose_eulers_deg=per_class_best_pose_eulers_deg,
+                    probs_sum_t=(
+                        postprocess_rows(stats_probs_sum_t)
+                        if stats_probs_sum_t_np is None
+                        else stats_probs_sum_t_np
+                    ),
+                    unpadded_batch_size=unpadded_batch_size,
+                    class_log_evidence_per_image=class_log_evidence_per_image,
+                    class_best_log_score_per_image=class_best_log_score_per_image,
+                    class_posterior_sums=class_posterior_sums,
+                    class_rotation_posterior_sums=class_rotation_posterior_sums,
+                    class_assignments=class_assignments,
+                )
+            if bucket_uncast_log_Z is not None and uncast_log_evidence_per_image is not None:
+                uncast_rows = np.asarray(
+                    postprocess_rows(bucket_uncast_log_Z), dtype=np.float64,
+                )[:unpadded_batch_size]
+                # Trim to the valid image rows before selecting the column: when host
+                # publication retains the padded rows, reshaping first selects the
+                # wrong rows (four physical rows with two valid would take rows 0 and 2).
+                offset_rows = -0.5 * np.asarray(
+                    postprocess_rows(batch_norm), dtype=np.float64,
+                )[:unpadded_batch_size].reshape(unpadded_batch_size, -1)[:, 0]
+                uncast_log_evidence_per_image[
+                    np.asarray(unpadded_bucket.image_indices, dtype=np.int64)
+                ] = uncast_rows + offset_rows
             significant_sample_count, reconstruction_row_count = _postprocess_local_bucket(
                 image_indices=unpadded_bucket.image_indices,
                 **_unpadded_bucket_rows(bucket, unpadded_batch_size),
@@ -4653,6 +5108,10 @@ def run_local_em_exact(
                     ctf_probs=ctf_probs,
                     rotations=_local_mstep_rotations(bucket),
                     actual_counts=bucket.actual_rotation_counts,
+                    # Same diagnostic-only forwarding as the big-JIT call site above;
+                    # both local routes can reach a class-segmented bucket.
+                    class_actual_rotation_counts=bucket.class_actual_rotation_counts,
+                    class_segment_rotation_count=bucket.class_segment_rotation_count,
                     rotation_indices=bucket.local_rotation_ids,
                     fine_translations=local_layout.translation_grid,
                     scores=scores,
@@ -4667,7 +5126,45 @@ def run_local_em_exact(
                     reconstruction_sum_weight=jnp.sum(reconstruction_probs, axis=(1, 2)),
                     reconstruction_threshold=reconstruction_threshold_for_dump,
                     candidate_mask=capture_priors.candidate_mask,
-                    **capture_static_kwargs,
+                    **_exact_local_bpref_operand_bundle(
+                        capture_static_kwargs,
+                        experiment_dataset=experiment_dataset,
+                        image_shape=image_shape,
+                        # local_preprocessing._process_half: the exact flag selects
+                        # _big_jit_preprocess_half, which bypasses backend preprocessing.
+                        preprocess_path=(
+                            "split_exact" if relion_exact_bpref_operands else "split_backend"
+                        ),
+                        # local_preprocessing resolves its own mask only on the exact
+                        # branch; the ordinary branch masks inside the backend, which this
+                        # boundary cannot observe.
+                        applied_image_mask=(
+                            big_jit_image_mask_arg if relion_exact_bpref_operands else None
+                        ),
+                        applied_image_mask_mode=(
+                            big_jit_mask_mode if relion_exact_bpref_operands else None
+                        ),
+                        exact_source_star_ctf=relion_exact_bpref_operands,
+                        # The evaluator this route's config actually uses.
+                        production_ctf=config.ctf,
+                        raw_batch_data=batch_data,
+                        ctf_params=ctf_params,
+                        noise_variance_half=noise_variance_half,
+                        image_pre_shifts=image_pre_shifts,
+                        integer_pre_shifts=integer_pre_shifts_or_none(
+                            image_pre_shifts,
+                            np.asarray(bucket.image_indices, dtype=np.int32),
+                            batch=batch_data,
+                        ),
+                        # prepare_local_bucket reports whether it applied the real-space
+                        # shift, including the processed_half_cache case where the integer
+                        # array is no longer available.
+                        real_space_pre_shift_applied=real_space_pre_shift_applied,
+                        image_corrections=image_corrections,
+                        scale_corrections=scale_corrections,
+                        image_indices=bucket.image_indices,
+                        unpadded_batch_size=batch_size,
+                    ),
                     reconstruction_group_ids=bucket_reconstruction_group_ids,
                 )
             scores = None
@@ -5252,7 +5749,21 @@ def run_local_em_exact(
                 final_recon_volume_shape,
             )
 
-        if reconstruction_group_ids_np is None:
+        if n_classes > 1:
+            # The accumulators carry a leading class axis; the finalization is a
+            # per-volume operation (x=0 Hermitian enforcement and layout conversion),
+            # so apply it to each class's pair and restack.
+            finalized = [
+                _finalize_accumulator(
+                    Ft_y[class_index],
+                    Ft_ctf[class_index],
+                    label=f"Exact local class {class_index}",
+                )
+                for class_index in range(n_classes)
+            ]
+            Ft_y = jnp.stack([pair[0] for pair in finalized], axis=0)
+            Ft_ctf = jnp.stack([pair[1] for pair in finalized], axis=0)
+        elif reconstruction_group_ids_np is None:
             Ft_y, Ft_ctf = _finalize_accumulator(
                 Ft_y,
                 Ft_ctf,
@@ -5527,6 +6038,17 @@ def run_local_em_exact(
         Ft_ctf=Ft_ctf,
         hard_assignments=hard_assignment,
         stats=relion_stats,
+        uncast_log_evidence_per_image=uncast_log_evidence_per_image,
+        class_log_evidence_per_image=class_log_evidence_per_image,
+        class_best_log_score_per_image=class_best_log_score_per_image,
+        class_posterior_sums=class_posterior_sums,
+        class_rotation_posterior_sums=class_rotation_posterior_sums,
+        class_assignments=class_assignments,
+        per_class_hard_assignments=per_class_hard_assignments,
+        per_class_best_pose_rotations=per_class_best_pose_rotations,
+        per_class_best_pose_translations=per_class_best_pose_translations,
+        per_class_best_pose_rotation_ids=per_class_best_pose_rotation_ids,
+        per_class_best_pose_eulers_deg=per_class_best_pose_eulers_deg,
         best_pose_rotations=best_pose_rotations if return_best_pose_details else None,
         best_pose_translations=best_pose_translations if return_best_pose_details else None,
         best_pose_rotation_ids=best_pose_rotation_ids if return_best_pose_details else None,

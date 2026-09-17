@@ -254,6 +254,13 @@ def _reconstruct_processed_score_half(
                 processed_real,
                 image_mask,
             )
+        elif mask_mode == "relion_cuda_parametric":
+            raise ValueError(
+                "this capture was masked by relion_preprocess_real_f32 using "
+                f"radius={float(np.asarray(values['relion_cuda_preprocess_radius'])):.6g} and "
+                f"cosine_width={float(np.asarray(values['relion_cuda_preprocess_cosine_width'])):.6g}; "
+                "reproduce that parametric mask rather than an array mask"
+            )
         elif mask_mode == "multiply":
             processed_real = processed_real * image_mask[None, :, :]
         else:

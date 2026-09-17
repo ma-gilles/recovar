@@ -70,7 +70,7 @@ def test_batched_pass2_matches_independent_image_layouts(order, index_order, per
         assert batched.rotation_counts[image] == single.rotation_counts[0]
         for field in (
             "rotations_flat", "rotation_ids_flat", "rotation_posterior_ids_flat",
-            "rotation_log_priors_flat", "sample_mask_flat",
+            "rotation_log_priors_flat", "sample_mask_bits",
         ):
             np.testing.assert_array_equal(getattr(batched, field)[start:stop], getattr(single, field))
         np.testing.assert_array_equal(batched.translation_grid, single.translation_grid)
@@ -102,3 +102,28 @@ def test_pass2_generates_only_requested_parent_union_once(monkeypatch):
     )
     assert len(calls) == 1
     np.testing.assert_array_equal(calls[0], [1, 3, 5])
+
+
+@pytest.mark.parametrize("n_translations", [0, 1, 7, 8, 9, 29, 116])
+def test_packed_mask_preserves_boolean_rows_and_bucket_padding(n_translations):
+    mask = np.random.default_rng(91).integers(0, 2, (10, n_translations), dtype=np.uint8).view(bool)
+    layout = local_layout.LocalHypothesisLayout(
+        n_global_rotations=1, n_pixels=1, n_psi=1,
+        rotation_offsets=np.array([0, 3, 10]), rotation_counts=np.array([3, 7]),
+        rotation_ids_flat=np.zeros(10, dtype=np.int64),
+        rotations_flat=np.broadcast_to(np.eye(3, dtype=np.float32), (10, 3, 3)),
+        rotation_log_priors_flat=np.zeros(10, dtype=np.float32),
+        translation_grid=np.zeros((n_translations, 2), dtype=np.float32),
+        translation_log_priors=np.zeros((2, n_translations), dtype=np.float32),
+        sample_mask_bits=np.packbits(mask, axis=1, bitorder="little"),
+    )
+    assert layout.sample_mask_bits.nbytes == 10 * ((n_translations + 7) // 8)
+    np.testing.assert_array_equal(layout.sample_mask_rows(), mask)
+    np.testing.assert_array_equal(layout.sample_mask_rows(3, 8), mask[3:8])
+    for bucket in local_layout.bucket_local_hypothesis_layout(layout, 2, 16):
+        assert bucket.local_sample_mask.dtype == np.bool_
+        for row, image in enumerate(bucket.image_indices):
+            start, stop = layout.rotation_offsets[image:image + 2]
+            count = stop - start
+            np.testing.assert_array_equal(bucket.local_sample_mask[row, :count], mask[start:stop])
+            assert not bucket.local_sample_mask[row, count:].any()

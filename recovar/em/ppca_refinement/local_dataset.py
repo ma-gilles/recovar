@@ -173,7 +173,7 @@ def _slice_local_hypothesis_layout(layout: LocalHypothesisLayout, rows) -> Local
     rotations_parts = []
     prior_parts = []
     posterior_id_parts = [] if layout.rotation_posterior_ids_flat is not None else None
-    sample_mask_parts = [] if layout.sample_mask_flat is not None else None
+    sample_mask_parts = [] if layout.sample_mask_bits is not None else None
     for out_row, row in enumerate(rows.tolist()):
         start = int(layout.rotation_offsets[row])
         end = int(layout.rotation_offsets[row + 1])
@@ -184,7 +184,7 @@ def _slice_local_hypothesis_layout(layout: LocalHypothesisLayout, rows) -> Local
         if posterior_id_parts is not None:
             posterior_id_parts.append(np.asarray(layout.rotation_posterior_ids_flat[start:end], dtype=np.int32))
         if sample_mask_parts is not None:
-            sample_mask_parts.append(np.asarray(layout.sample_mask_flat[start:end], dtype=bool))
+            sample_mask_parts.append(layout.sample_mask_bits[start:end])
 
     translation_priors = np.asarray(layout.translation_log_priors, dtype=np.float32)
     if translation_priors.ndim == 1:
@@ -215,12 +215,12 @@ def _slice_local_hypothesis_layout(layout: LocalHypothesisLayout, rows) -> Local
             if posterior_id_parts is None
             else np.concatenate(posterior_id_parts) if posterior_id_parts else np.zeros(0, dtype=np.int32)
         ),
-        sample_mask_flat=(
+        sample_mask_bits=(
             None
             if sample_mask_parts is None
             else np.concatenate(sample_mask_parts, axis=0)
             if sample_mask_parts
-            else np.zeros((0, int(layout.translation_grid.shape[0])), dtype=bool)
+            else np.zeros((0, (int(layout.translation_grid.shape[0]) + 7) // 8), dtype=np.uint8)
         ),
     )
 

@@ -375,9 +375,17 @@ LOC_BUDGETS = {
     "input_output": (1270, (
         "star_io.py", "../relion/vdam_checkpoint.py", "../relion/initial_noise.py",
     )),
-    "diagnostics": (1160, (
+    # diagnostics/initial_model_capture.py is 87 lines of added ownership for this
+    # responsibility. 61 of them are the two InitialModel K-class captures relocated
+    # from sparse_pass2_estep.py, which was over its own ceiling while it held them,
+    # so the move does not free estep budget to transfer and this is a real raise.
+    # The other 26 are the module header and the shared capture predicate that the
+    # engine and the per-class driver now ask instead of reading the environment.
+    # Raised to keep roughly the headroom this responsibility held before (+29).
+    "diagnostics": (1240, (
         "../diagnostics/gt_metrics.py", "../diagnostics/gt_registration.py",
         "../diagnostics/vdam_mstep_replay.py", "../diagnostics/vdam_noise.py",
+        "../diagnostics/initial_model_capture.py",
     )),
 }
 

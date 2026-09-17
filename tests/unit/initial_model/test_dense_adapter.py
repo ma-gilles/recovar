@@ -2098,7 +2098,7 @@ def test_initial_model_pass2_layout_uses_relion_direction_ids_for_posterior_bins
         translation_grid=np.zeros((2, 2), dtype=np.float32),
         translation_log_priors=np.zeros((1, 2), dtype=np.float32),
         rotation_posterior_ids_flat=np.array([0, 1, 2, 3], dtype=np.int32),
-        sample_mask_flat=np.ones((4, 2), dtype=bool),
+        sample_mask_bits=np.packbits(np.ones((4, 2), dtype=bool), axis=1, bitorder="little"),
     )
 
     out = _initial_model_pass2_layout(layout)

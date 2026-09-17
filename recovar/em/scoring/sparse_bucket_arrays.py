@@ -25,6 +25,36 @@ _DEFAULT_TAIL_BUCKET_COALESCE_MAX_INFLATION = 2.0
 _DEFAULT_TAIL_BUCKET_COALESCE_MIN_BUCKET_SIZE = 4096
 
 
+def _largest_power_of_two_at_most(value: int) -> int:
+    value = int(value)
+    if value <= 1:
+        return 1
+    return 1 << (value.bit_length() - 1)
+
+
+def _split_run_into_chunks(run, max_per_chunk, *, image_rungs: bool):
+    """Split one support-size run of image indices into bucket chunks.
+
+    Default: consecutive ``max_per_chunk``-image slices plus one remainder,
+    exactly as before (ndarray slices are returned as views; no copy).
+    ``image_rungs``: power-of-two image counts not above ``max_per_chunk``,
+    largest first (e.g. 11 images, cap 8 -> 8, 2, 1), so the set of
+    (images, rotation size) bucket shapes is fixed across iterations.
+    """
+
+    cap = max(1, int(max_per_chunk))
+    n = len(run)
+    if not image_rungs:
+        return [run[start : start + cap] for start in range(0, n, cap)]
+    chunks = []
+    start = 0
+    while start < n:
+        take = _largest_power_of_two_at_most(min(cap, n - start))
+        chunks.append(run[start : start + take])
+        start += take
+    return chunks
+
+
 def _bucket_pass2_inputs(
     per_image_inputs,
     n_fine_trans,
@@ -39,8 +69,16 @@ def _bucket_pass2_inputs(
     processing_order_chunk_size=1,
     processing_order_group_by_bucket_size=False,
     processing_order_batch_consecutive_bucket_sizes=False,
+    group_chunk_image_rungs=False,
 ):
     """Group images into buckets that share a padded rotation count.
+
+    ``group_chunk_image_rungs`` (size-grouped ordering only) splits each
+    support-size run into chunks whose image counts are powers of two not above
+    the per-chunk cap, largest first, instead of ``cap, cap, ..., remainder``.
+    Bucket shapes then come from a fixed set for every iteration, so the
+    per-bucket jitted programs stop recompiling once each rung has been seen.
+    Image membership per bucket changes (float32 accumulation order only).
 
     Return bucket specifications: a padded rotation count and the image indices
     assigned to that bucket. Array builders materialize the selected rows later.
@@ -103,8 +141,11 @@ def _bucket_pass2_inputs(
                         1,
                         min(int(max_images_per_microbatch), cap_by_hypotheses),
                     )
-                    for start in range(run_start, run_end, max_per_chunk):
-                        chunk = processing_order[start : min(start + max_per_chunk, run_end)]
+                    for chunk in _split_run_into_chunks(
+                        processing_order[run_start:run_end],
+                        max_per_chunk,
+                        image_rungs=bool(group_chunk_image_rungs),
+                    ):
                         buckets.append(
                             {
                                 "bucket_size": run_bucket_size,
@@ -146,8 +187,11 @@ def _bucket_pass2_inputs(
             int(max_hypotheses_per_microbatch) // max(1, bucket_size * int(n_fine_trans)),
         )
         max_per_chunk = max(1, min(int(max_images_per_microbatch), cap_by_hypotheses))
-        for start in range(0, bucket_image_indices.shape[0], max_per_chunk):
-            chunk = bucket_image_indices[start : start + max_per_chunk]
+        for chunk in _split_run_into_chunks(
+            bucket_image_indices,
+            max_per_chunk,
+            image_rungs=bool(group_chunk_image_rungs),
+        ):
             buckets.append(
                 {
                     "bucket_size": bucket_size,
