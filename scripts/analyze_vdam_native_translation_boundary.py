@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 from pathlib import Path
 
 import jax
@@ -14,11 +13,8 @@ import mrcfile
 import numpy as np
 import starfile
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
-
 from recovar import cuda_backproject
+from recovar.em.diagnostics.bpref_contribution_replay import native_current_fft_rows  # noqa: E402
 from recovar.em.helpers.fourier_window import make_fourier_window_indices_np
 from recovar.em.helpers.half_spectrum import make_relion_noise_shell_indices_half, make_scoring_half_image_weights
 from recovar.em.local.local_big_jit import _centered_rfft2_per_image
@@ -28,7 +24,6 @@ from recovar.em.sparse_pass2.sparse_pass2_scoring import (
     _relion_cuda_pixel_correction_from_rfloat_ctf,
     _relion_cuda_powerclass_highres_xi2_half,
 )
-from recovar.em.diagnostics.bpref_contribution_replay import native_current_fft_rows  # noqa: E402
 from scripts.analyze_em_k1_native_fine_operands import (
     _center,
     _flat_memmap,

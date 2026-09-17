@@ -6,15 +6,10 @@ from __future__ import annotations
 import argparse
 import json
 import re
-import sys
 from pathlib import Path
 from typing import Any, Callable
 
 import numpy as np
-
-REPO_ROOT = Path(__file__).resolve().parents[1]
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
 
 from scripts.file_hash import sha256_file as _sha256
 from scripts.validate_relion_coarse_operand_capture import (  # noqa: E402

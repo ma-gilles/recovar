@@ -6,19 +6,14 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import sys
 from pathlib import Path
 
 import jax
 import jax.numpy as jnp
 import numpy as np
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
-
-from recovar.em.diagnostics.bpref_contribution_replay import native_current_fft_rows  # noqa: E402
 from recovar import cuda_backproject  # noqa: E402
+from recovar.em.diagnostics.bpref_contribution_replay import native_current_fft_rows  # noqa: E402
 from recovar.em.helpers.projection import (  # noqa: E402
     compute_relion_projector_projections_block,
     relion_projector_half_to_texture_full,

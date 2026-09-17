@@ -20,15 +20,10 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import sys
 from pathlib import Path
 from typing import Any
 
 import numpy as np
-
-REPO_ROOT = Path(__file__).resolve().parents[1]
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
 
 from scripts.analyze_em_k1_fine_top_pair_operands import (
     SCHEMA as OPERAND_REPORT_SCHEMA,

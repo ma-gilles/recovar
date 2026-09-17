@@ -12,17 +12,12 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 import time
 from pathlib import Path
 
 import jax
 import jax.numpy as jnp
 import numpy as np
-
-REPO_ROOT = Path(__file__).resolve().parents[1]
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
 
 from recovar.data_io.cryoem_dataset import load_dataset
 from recovar.em.ppca_refinement.config import (

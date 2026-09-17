@@ -5,17 +5,12 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 from pathlib import Path
 
 import numpy as np
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
-
-from scripts.analyze_vdam_native_translation_boundary import analyze  # noqa: E402
 from scripts.analyze_em_k1_native_fine_operands import _center, _flat_memmap  # noqa: E402
+from scripts.analyze_vdam_native_translation_boundary import analyze  # noqa: E402
 from scripts.compare_relion_recovar_estep_dump import (  # noqa: E402
     _nearest_rotation_rows_by_matrix,
 )

@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 import time
 from pathlib import Path
 
@@ -23,12 +22,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
-
 from recovar.data_io.cryoem_dataset import load_dataset
-from recovar.utils.json_utils import to_jsonable
 from recovar.em.local.local_layout import build_pass2_hypothesis_layout
 from recovar.em.ppca_refinement.config import (
     GeometryConfig,
@@ -55,6 +49,7 @@ from recovar.em.ppca_refinement.mean_regularization import (
 )
 from recovar.em.ppca_refinement.postprocess import PostprocessConfig
 from recovar.em.sampling import get_relion_rotation_grid
+from recovar.utils.json_utils import to_jsonable
 from scripts.run_ppca_local_from_init_npz import (
     _half_size,
     _image_ordered_pose_arrays,
