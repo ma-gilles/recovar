@@ -18,7 +18,6 @@ from typing import Any
 
 import numpy as np
 
-from scripts.analyze_vdam_map_relative_l2_envelope import symmetric_relative_l2
 from scripts.summarize_em_completion_bench import _load_relion_volume
 
 SCHEMA = "recovar.vdam_direct_repeat_map_spread.v1"
@@ -26,6 +25,11 @@ SCHEMA = "recovar.vdam_direct_repeat_map_spread.v1"
 
 class DirectRepeatMapSpreadError(RuntimeError):
     """Raised when a direct repeat panel is incomplete or inconsistent."""
+
+
+def _symmetric_relative_l2(lhs: np.ndarray, rhs: np.ndarray) -> float:
+    denominator = max(float(np.linalg.norm(lhs)), float(np.linalg.norm(rhs)))
+    return 0.0 if denominator == 0.0 else float(np.linalg.norm(lhs - rhs) / denominator)
 
 
 def _validated_maps(maps: list[np.ndarray], *, label: str) -> list[np.ndarray]:
@@ -59,18 +63,18 @@ def summarize_repeat_map_spread(
         )
 
     candidate_pairs = [
-        symmetric_relative_l2(candidate[lhs], candidate[rhs])
+        _symmetric_relative_l2(candidate[lhs], candidate[rhs])
         for lhs, rhs in itertools.combinations(range(len(candidate)), 2)
     ]
     native_pairs = [
-        symmetric_relative_l2(native[lhs], native[rhs])
+        _symmetric_relative_l2(native[lhs], native[rhs])
         for lhs, rhs in itertools.combinations(range(len(native)), 2)
     ]
     native_diameter = float(max(native_pairs))
     candidate_diameter = float(max(candidate_pairs))
     cross = np.asarray(
         [
-            [symmetric_relative_l2(candidate_map, native_map) for native_map in native]
+            [_symmetric_relative_l2(candidate_map, native_map) for native_map in native]
             for candidate_map in candidate
         ],
         dtype=np.float64,
