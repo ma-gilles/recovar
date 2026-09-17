@@ -440,6 +440,7 @@ def _project_local_bucket(
     else:
         ordinary_projection_kwargs = dict(projection_kwargs)
         ordinary_projection_kwargs.pop("mask_current_image_disk", None)
+        ordinary_projection_kwargs.pop("relion_acc_double_floorf_quirk", None)
         proj_half_flat, _ = _compute_projections_block(
             mean_for_proj,
             flat_rotations,
