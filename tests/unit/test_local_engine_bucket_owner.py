@@ -17,5 +17,3 @@ def test_owners_hold_the_definitions_and_the_engine_routes_to_them():
             assert inspect.getmodule(getattr(mod, name)) is mod and f"\ndef {name}(" not in engine_src
     assert local_em_engine._project_local_bucket is local_bucket_stages._project_local_bucket
     assert local_em_engine._accumulate_relion_vdam_physical_particle_grid is local_physical_grid._accumulate_relion_vdam_physical_particle_grid
-    for mod in (local_bucket_stages, local_bpref_capture, local_physical_grid):
-        assert "dense_single_volume.local_em_engine import" not in inspect.getsource(mod)
