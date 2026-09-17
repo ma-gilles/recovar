@@ -194,7 +194,7 @@ def test_sum_up_translate_one_image_nofft_weighted_sum(monkeypatch):
     np.testing.assert_allclose(out, expected, atol=1e-6)
 
 
-def test_M_with_precompute_handles_small_rotation_count_without_zero_batch(monkeypatch):
+def test_accumulate_mean_statistics_handles_small_rotation_count_without_zero_batch(monkeypatch):
     from recovar import utils as rec_utils
 
     class _Dataset:
@@ -257,13 +257,13 @@ def test_M_with_precompute_handles_small_rotation_count_without_zero_batch(monke
     trans = jnp.zeros((2, 2), dtype=jnp.float32)
     noise = jnp.ones((4,), dtype=jnp.float32)
 
-    ft_y, ft_ctf = m_step.M_with_precompute(_Dataset(), probs, rots, trans, noise, "linear_interp")
+    ft_y, ft_ctf = m_step.accumulate_mean_statistics(_Dataset(), probs, rots, trans, noise, "linear_interp")
 
     np.testing.assert_allclose(np.asarray(ft_y), np.ones((5,), dtype=np.float32), atol=1e-6)
     np.testing.assert_allclose(np.asarray(ft_ctf), np.ones((5,), dtype=np.float32) * 2.0, atol=1e-6)
 
 
-def test_E_with_precompute_rejects_empty_rotations_or_translations():
+def test_compute_pose_probabilities_rejects_empty_rotations_or_translations():
     ds = type(
         "DS",
         (),
@@ -275,7 +275,7 @@ def test_E_with_precompute_rejects_empty_rotations_or_translations():
     )()
 
     with pytest.raises(ValueError, match="at least one rotation"):
-        e_step.E_with_precompute(
+        e_step.compute_pose_probabilities(
             ds,
             volume=jnp.zeros((8,), dtype=jnp.complex64),
             rotations=jnp.zeros((0, 3, 3), dtype=jnp.float32),
@@ -285,7 +285,7 @@ def test_E_with_precompute_rejects_empty_rotations_or_translations():
         )
 
     with pytest.raises(ValueError, match="at least one translation"):
-        e_step.E_with_precompute(
+        e_step.compute_pose_probabilities(
             ds,
             volume=jnp.zeros((8,), dtype=jnp.complex64),
             rotations=jnp.zeros((1, 3, 3), dtype=jnp.float32),
@@ -295,7 +295,7 @@ def test_E_with_precompute_rejects_empty_rotations_or_translations():
         )
 
 
-def test_M_with_precompute_rejects_empty_rotations_or_translations():
+def test_accumulate_mean_statistics_rejects_empty_rotations_or_translations():
     ds = type(
         "DS",
         (),
@@ -307,7 +307,7 @@ def test_M_with_precompute_rejects_empty_rotations_or_translations():
     )()
 
     with pytest.raises(ValueError, match="at least one rotation"):
-        m_step.M_with_precompute(
+        m_step.accumulate_mean_statistics(
             ds,
             probabilities=jnp.zeros((1, 0, 1), dtype=jnp.float32),
             rotations=jnp.zeros((0, 3, 3), dtype=jnp.float32),
@@ -317,7 +317,7 @@ def test_M_with_precompute_rejects_empty_rotations_or_translations():
         )
 
     with pytest.raises(ValueError, match="at least one translation"):
-        m_step.M_with_precompute(
+        m_step.accumulate_mean_statistics(
             ds,
             probabilities=jnp.zeros((1, 1, 0), dtype=jnp.float32),
             rotations=jnp.zeros((1, 3, 3), dtype=jnp.float32),

@@ -80,7 +80,7 @@ def accumulate_fixed_rotation_mstep(
 
     return Ft_y, Ft_ctf
 
-def M_with_precompute(
+def accumulate_mean_statistics(
     experiment_dataset, probabilities, rotations, translations, noise_variance, disc_type, image_indices=None
 ):
 
@@ -93,9 +93,9 @@ def M_with_precompute(
     n_rotations = rotations.shape[0]
     n_translations = translations.shape[0]
     if n_rotations <= 0:
-        raise ValueError("M_with_precompute requires at least one rotation")
+        raise ValueError("accumulate_mean_statistics requires at least one rotation")
     if n_translations <= 0:
-        raise ValueError("M_with_precompute requires at least one translation")
+        raise ValueError("accumulate_mean_statistics requires at least one translation")
 
     config = ForwardModelConfig.from_dataset(
         experiment_dataset,

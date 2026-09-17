@@ -10,9 +10,9 @@ from recovar.core import mask as mask_fn
 from recovar.heterogeneity import principal_components
 from recovar.reconstruction import relion_functions
 
-from .e_step import E_with_precompute
+from .e_step import compute_pose_probabilities
 from .heterogeneity import compute_H_B, compute_projected_covariance_rhs_lhs, solve_covariance
-from .m_step import M_with_precompute
+from .m_step import accumulate_mean_statistics
 
 logger = logging.getLogger(__name__)
 
@@ -32,13 +32,13 @@ class EMState:
         self.noise_variance = noise_variance
 
     def E_step(self, experiment_dataset, rotations, translations, disc_type, big_image_batch):
-        probabilities = E_with_precompute(
+        probabilities = compute_pose_probabilities(
             experiment_dataset, self.mean, rotations, translations, self.noise_variance, disc_type, big_image_batch
         )
         return probabilities
 
     def M_step(self, experiment_dataset, probabilities, rotations, translations, disc_type, big_image_batch):
-        Ft_y_this, Ft_CTF_this = M_with_precompute(
+        Ft_y_this, Ft_CTF_this = accumulate_mean_statistics(
             experiment_dataset, probabilities, rotations, translations, self.noise_variance, disc_type, big_image_batch
         )
         self.Ft_y += Ft_y_this
@@ -65,7 +65,7 @@ class SGDState:
         self.noise_variance = noise_variance
 
     def E_step(self, experiment_dataset, rotations, translations, disc_type, big_image_batch):
-        probabilities = E_with_precompute(
+        probabilities = compute_pose_probabilities(
             experiment_dataset, self.mean, rotations, translations, self.noise_variance, disc_type, big_image_batch
         )
         return probabilities
@@ -82,7 +82,7 @@ class SGDState:
         volume_mask=None,
     ):
 
-        Ft_y_this, Ft_CTF_this = M_with_precompute(
+        Ft_y_this, Ft_CTF_this = accumulate_mean_statistics(
             experiment_dataset, probabilities, rotations, translations, self.noise_variance, disc_type, big_image_batch
         )
         n_images_batch = len(big_image_batch)
@@ -173,7 +173,7 @@ class HeterogeneousEMState:
         self.volume_mask = mask_fn.raised_cosine_mask(3 * [grid_size], grid_size // 2 - 3, grid_size // 2, -1)
 
     def E_step(self, experiment_dataset, rotations, translations, disc_type, big_image_batch):
-        probabilities = E_with_precompute(
+        probabilities = compute_pose_probabilities(
             experiment_dataset,
             self.mean,
             rotations,
@@ -189,7 +189,7 @@ class HeterogeneousEMState:
     def M_step(self, experiment_dataset, probabilities, rotations, translations, disc_type, big_image_batch):
 
         ## Accumulate Ft_y and Ft_CTF
-        Ft_y_this, Ft_CTF_this = M_with_precompute(
+        Ft_y_this, Ft_CTF_this = accumulate_mean_statistics(
             experiment_dataset, probabilities, rotations, translations, self.noise_variance, disc_type, big_image_batch
         )
         self.Ft_y += Ft_y_this
