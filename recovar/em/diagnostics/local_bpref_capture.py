@@ -14,6 +14,11 @@ import jax.numpy as jnp
 import numpy as np
 
 from recovar.em.diagnostics import bpref_diagnostics
+from recovar.em.helpers.env_flags import parse_env_flag
+from recovar.em.helpers.preprocessing import (
+    resolve_image_mask_for_half_preprocess,
+    uses_relion_cuda_image_preprocessing,
+)
 from recovar.em.local.local_layout import LocalBucketSpec
 from recovar.em.sparse_pass2 import sparse_pass2_posterior
 
@@ -105,6 +110,136 @@ def _bpref_capture_priors(scores, probs_shape, *, bucket, rotation_log_prior) ->
         -jnp.inf,
     )
     return _BprefCapturePriors(candidate_mask, rotation_log_prior, translation_log_prior, preprior_scores)
+
+
+_HIGH_PRECISION_OPERAND_BUNDLE_ENV = "RECOVAR_BPREF_HIGH_PRECISION_OPERAND_BUNDLE"
+
+
+def _require_lossless_float32(name: str, values):
+    """Return ``values`` as float32 only when that cast loses nothing.
+
+    The shared writer stores raw images and corrections as float32, while the
+    kernel's correction dtype follows ``precision_policy.score_real_dtype`` and
+    may be float64.  A silent narrowing would let the capture be described as the
+    operand the kernel received when it is not, so reject the unsupported
+    precision instead of recording a rounded copy.
+    """
+
+    source = np.asarray(values)
+    narrowed = source.astype(np.float32)
+    if source.dtype != np.float32 and not np.array_equal(narrowed.astype(source.dtype), source):
+        raise RuntimeError(
+            f"BPref operand bundle cannot record {name} exactly: the shared writer stores "
+            f"float32 and this capture source is {source.dtype}, which does not round-trip. "
+            "Capture this operand at the writer's precision or leave it declared absent."
+        )
+    return narrowed
+
+
+def _exact_local_bpref_operand_bundle(
+    static_kwargs: dict,
+    *,
+    experiment_dataset,
+    image_shape,
+    raw_batch_data,
+    ctf_params,
+    noise_variance_half,
+    image_pre_shifts,
+    integer_pre_shifts,
+    image_corrections,
+    scale_corrections,
+    image_indices,
+    unpadded_batch_size: int,
+) -> dict:
+    """Attach the engine's own image-side operands when explicitly requested.
+
+    Exact-local search reaches the shared contribution schema through a route
+    that historically declared these operands absent.  The existing
+    ``RECOVAR_BPREF_HIGH_PRECISION_OPERAND_BUNDLE`` request already selects them
+    on the bucketed sparse-pass-2 route; honour the same request here so a replay
+    can *check* a host reconstruction against the operands the kernel actually
+    received instead of assuming they agree.
+
+    Every field this returns is either read from the live engine state or
+    rejected.  Three limits are deliberate and fail closed rather than being
+    filled in:
+
+    * ``ctf_mode`` stays ``"not-captured"``.  The bucketed route reads it from
+      ``config.ctf``; the exact-local route has no such object in scope, so the
+      sentinel is the truthful value and no CTF policy is claimed here.
+    * ``relion_preprocess_normalization_factors`` is recorded as unit only when
+      RELION CUDA preprocessing is off, which is exactly the bucketed route's own
+      convention for "no normalization applied".  When that preprocessing is on
+      the real factors are not observable on this route, so the request is
+      refused rather than answered with ones.
+    * A non-integral ``image_pre_shifts`` means the engine applied Fourier phase
+      shifts, not RELION's zero-filled real-space integer shift.  Recording zeros
+      there would claim the wrong shift path, so it is refused.
+
+    When the request is absent this returns ``static_kwargs`` unchanged, so the
+    default capture keeps declaring the operands absent rather than guessing.
+    Nothing here participates in scoring or M-step arithmetic, and the caller
+    stays outside every JIT boundary.
+    """
+
+    if not parse_env_flag(_HIGH_PRECISION_OPERAND_BUNDLE_ENV, default=False):
+        return static_kwargs
+    if raw_batch_data is None:
+        raise RuntimeError(
+            "RECOVAR_BPREF_HIGH_PRECISION_OPERAND_BUNDLE requires raw real-space image batches; "
+            "this bucket ran from a preprocessed cache with no raw source rows"
+        )
+    rows = int(unpadded_batch_size)
+    indices = np.asarray(image_indices, dtype=np.int64)[:rows]
+    relion_cuda_preprocess = bool(uses_relion_cuda_image_preprocessing(experiment_dataset))
+    if relion_cuda_preprocess:
+        raise RuntimeError(
+            "BPref operand bundle cannot describe a RELION CUDA preprocessed bucket: its "
+            "normalization factors are applied inside preprocessing and are not observable "
+            "on the exact-local route, so they cannot be recorded as unit factors"
+        )
+    if image_pre_shifts is not None and integer_pre_shifts is None:
+        raise RuntimeError(
+            "BPref operand bundle cannot describe non-integral image_pre_shifts: the engine "
+            "applies Fourier phase shifts on this path, which the integer_pre_shifts field "
+            "cannot represent without claiming the wrong shift path"
+        )
+    score_with_masked_images = bool(static_kwargs["score_with_masked_images"])
+    image_mask, image_mask_mode = resolve_image_mask_for_half_preprocess(
+        experiment_dataset, image_shape, require_mask=score_with_masked_images
+    )
+    # Absent corrections are not guessed: the engine multiplies by nothing, which
+    # is exactly the unit operand the bucketed route also records for this case.
+    batch_image_corrections = (
+        np.ones(rows, dtype=np.float32)
+        if image_corrections is None
+        else _require_lossless_float32("image_corrections", np.asarray(image_corrections)[indices])
+    )
+    batch_scale_corrections = (
+        np.ones(rows, dtype=np.float32)
+        if scale_corrections is None
+        else _require_lossless_float32("scale_corrections", np.asarray(scale_corrections)[indices])
+    )
+    return {
+        **static_kwargs,
+        "high_precision_operand_bundle": True,
+        "raw_batch_data": _require_lossless_float32(
+            "raw_batch_data", np.asarray(raw_batch_data)[:rows]
+        ),
+        "ctf_params": np.asarray(ctf_params)[:rows],
+        "noise_variance_half": np.asarray(noise_variance_half),
+        "integer_pre_shifts": (
+            np.zeros((rows, 2), dtype=np.int32)
+            if integer_pre_shifts is None
+            else np.asarray(integer_pre_shifts, dtype=np.int32)[:rows]
+        ),
+        "batch_image_corrections": batch_image_corrections,
+        "batch_scale_corrections": batch_scale_corrections,
+        "relion_preprocess_normalization_factors": np.ones(rows, dtype=np.float32),
+        "relion_cuda_preprocess": relion_cuda_preprocess,
+        "image_mask": image_mask,
+        "image_mask_mode": image_mask_mode,
+    }
 
 
 def _maybe_dump_exact_local_bpref_contribution_rows(**kwargs) -> None:

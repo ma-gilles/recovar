@@ -70,7 +70,12 @@ def test_capture_priors_mask_and_remove_pose_priors():
 def test_exact_local_capture_sites_use_the_owners():
     source = inspect.getsource(local_em_engine.run_local_em_exact)
     assert source.count("_maybe_dump_exact_local_bpref_contribution_rows(") == 2
-    assert source.count("**capture_static_kwargs,") == 2
+    # Both sites still reach the single static-kwargs owner, now through the
+    # operand-bundle wrapper that either fills the image-side operands from live
+    # engine state or refuses; neither site may assemble its own kwargs.
+    assert source.count("**_exact_local_bpref_operand_bundle(") == 2
+    assert source.count("capture_static_kwargs,\n") == 2
+    assert source.count("**capture_static_kwargs,") == 0
     assert source.count("capture_priors = _bpref_capture_priors(") == 2
     assert source.count("capture_static_kwargs = (") == 1
     assert "if bpref_contribution_capture_active\n        else None" in source
