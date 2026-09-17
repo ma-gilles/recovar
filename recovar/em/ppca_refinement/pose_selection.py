@@ -58,7 +58,7 @@ def top_p_from_score_block(score, *, rotation_offset: int = 0, candidate_count: 
     return top_scores.astype(jnp.float32), top_rot, top_trans
 
 
-def _rotation_angle_deg(a: np.ndarray, b: np.ndarray) -> float:
+def rotation_angle_degrees(a: np.ndarray, b: np.ndarray) -> float:
     rel = np.asarray(a, dtype=np.float64).T @ np.asarray(b, dtype=np.float64)
     cos_angle = (float(np.trace(rel)) - 1.0) * 0.5
     return float(np.rad2deg(np.arccos(np.clip(cos_angle, -1.0, 1.0))))
@@ -78,7 +78,7 @@ def _is_pose_distinct(
         if rotations is None or rot_id < 0 or accepted_rot < 0:
             rotation_far = int(rot_id) != int(accepted_rot)
         else:
-            rotation_far = _rotation_angle_deg(rotations[int(rot_id)], rotations[int(accepted_rot)]) >= min_angle_deg
+            rotation_far = rotation_angle_degrees(rotations[int(rot_id)], rotations[int(accepted_rot)]) >= min_angle_deg
         if translations is None or trans_id < 0 or accepted_trans < 0:
             translation_far = int(trans_id) != int(accepted_trans)
         else:
@@ -171,7 +171,7 @@ def select_distinct_top_poses(
                     candidate_mat = candidate_mats[image_idx, int(candidate_idx)]
                     distinct = True
                     for accepted_idx, (_accepted_rot, accepted_trans) in enumerate(accepted):
-                        rotation_far = _rotation_angle_deg(candidate_mat, accepted_mats[accepted_idx]) >= min_angle
+                        rotation_far = rotation_angle_degrees(candidate_mat, accepted_mats[accepted_idx]) >= min_angle
                         if translations is None or trans_id < 0 or accepted_trans < 0:
                             translation_far = int(trans_id) != int(accepted_trans)
                         else:
