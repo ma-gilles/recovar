@@ -77,29 +77,6 @@ def _normalized_log_weights(diff_deg: np.ndarray, sigma_deg: float) -> np.ndarra
     return np.log(np.clip(weights, np.finfo(np.float32).tiny, None)).astype(np.float32)
 
 
-def relion_psi_from_rotation_matrices(rotations: np.ndarray) -> np.ndarray:
-    """Extract RELION psi angles from rotation matrices.
-
-    This avoids a full SciPy ZXZ decomposition for the common non-singular
-    case. Rows near the ZXZ singularity fall back to ``utils.R_to_relion``.
-    """
-    rotations = np.asarray(rotations, dtype=np.float64).reshape(-1, 3, 3)
-    frame_adjust = np.array([[1, -1, 1], [-1, 1, -1], [1, -1, 1]], dtype=np.float64)
-    adjusted = rotations * frame_adjust
-
-    psi = np.empty(rotations.shape[0], dtype=np.float64)
-    xy_norm = np.hypot(adjusted[:, 0, 2], adjusted[:, 1, 2])
-    nonsingular = xy_norm > 1e-12
-
-    if np.any(nonsingular):
-        psi[nonsingular] = np.rad2deg(np.arctan2(adjusted[nonsingular, 0, 2], -adjusted[nonsingular, 1, 2])) + 90.0
-    if np.any(~nonsingular):
-        psi[~nonsingular] = utils.R_to_relion(rotations[~nonsingular], degrees=True)[:, 2]
-
-    psi = (psi + 180.0) % 360.0 - 180.0
-    return psi.astype(np.float32)
-
-
 def build_local_search_grid_metadata(
     healpix_order: int,
     grid_eulers: np.ndarray | None = None,
