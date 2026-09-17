@@ -931,19 +931,3 @@ def summarize_candidate_table_components(candidate_table):
         "prior_delta_error": _stats(prior_delta_error),
         "prior_level_error": _stats(prior_level_error),
     }
-
-
-def compare_relion_recovar_pmax(relion_summary, recovar_summary):
-    """Return a compact comparison between RELION and RECOVAR summaries."""
-    relion_pmax = float(relion_summary["pmax"])
-    recovar_pmax = float(recovar_summary["full"]["pmax"])
-    raw_pmax = float(recovar_summary["raw_only"]["pmax"])
-    return {
-        "relion_pmax": relion_pmax,
-        "recovar_pmax": recovar_pmax,
-        "gap": float(recovar_pmax - relion_pmax),
-        "recovar_raw_only_pmax": raw_pmax,
-        "prior_delta_pmax": float(recovar_pmax - raw_pmax),
-        "relion_effective_support": float(relion_summary["effective_support"]),
-        "recovar_effective_support": float(recovar_summary["full"]["effective_support"]),
-    }
