@@ -23,10 +23,10 @@ import numpy as np
 
 from recovar.em.diagnostics.gt_metrics import DEFAULT_GT_ALIGN_HEALPIX_ORDER, DEFAULT_GT_ALIGN_MAX_SHELL
 from recovar.em.diagnostics.parity_provenance import (
-    _safe_git_commit,
+    assert_parity_ancestors_or_exit as _print_provenance_banner_and_assert_parity_ancestors,
 )
 from recovar.em.diagnostics.parity_provenance import (
-    assert_parity_ancestors_or_exit as _print_provenance_banner_and_assert_parity_ancestors,
+    git_head_or_none,
 )
 from recovar.em.helpers.iteration_history import add_significant_count_artifacts
 from recovar.em.relion.initial_noise import (
@@ -2440,7 +2440,7 @@ def main():
             local_profile_rows = _collect_local_profile_rows(save_intermediates_dir)
         wall_times = [float(x) for x in result.get("wall_times", [])]
         ledger = {
-            "git_commit": _safe_git_commit(),
+            "git_commit": git_head_or_none(),
             "python_version": platform.python_version(),
             "platform": platform.platform(),
             "numpy_version": np.__version__,
@@ -2857,7 +2857,7 @@ def main():
     local_profile_rows = _collect_local_profile_rows(save_intermediates_dir)
     wall_times = [float(x) for x in result.get("wall_times", [])]
     ledger = {
-        "git_commit": _safe_git_commit(),
+        "git_commit": git_head_or_none(),
         "python_version": platform.python_version(),
         "platform": platform.platform(),
         "numpy_version": np.__version__,
