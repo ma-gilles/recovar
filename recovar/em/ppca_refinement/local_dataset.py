@@ -1428,7 +1428,8 @@ def _score_local_ppca_pose_diagnostics(
         # ``R / chunk`` so users can raise ``--image-batch-size`` past 1 on
         # large per-image neighborhoods (HP6 top-p at box 256² needs
         # ~1700-2900 rotations/image; full bucket peaks 3-5x proj_aug).
-        # See docs/perf/ppca_local_hp6_topp_runtime.md for the design.
+        # Historical design and timings:
+        # https://github.com/ma-gilles/recovar-experiments/blob/9c2e4b0b8c10cd58efe86b693f811f0195329b25/docs/perf/ppca_local_hp6_topp_runtime.md
         r_chunk_env = os.environ.get("RECOVAR_PPCA_LOCAL_R_CHUNK_SIZE", "")
         r_chunk = int(r_chunk_env) if r_chunk_env.strip().lstrip("-").isdigit() else 0
         if r_chunk > 0 and r_chunk < int(block.proj_aug.shape[1]):
