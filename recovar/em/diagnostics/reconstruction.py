@@ -9,6 +9,7 @@ import os
 import jax.numpy as jnp
 import numpy as np
 
+from recovar.core import fourier_transform_utils
 from recovar.em.helpers.resolution import shell_index_to_resolution_angstrom
 
 
@@ -86,6 +87,7 @@ def write_kclass_mstep(
         "no",
         "off",
     }
+    dump_dtype = None if _preserve_kclass_dump_dtype else np.complex64
     np.savez(
         pathlib.Path(output_dir) / f"recovar_kclass_mstep_it{iteration + 1:03d}_c{class_idx + 1:02d}.npz",
         iteration=np.int32(iteration + 1),
@@ -100,34 +102,18 @@ def write_kclass_mstep(
         previous_mean=np.asarray(previous_means[0][class_idx], dtype=np.complex64),
         previous_mean_half0=np.asarray(previous_means[0][class_idx], dtype=np.complex64),
         previous_mean_half1=np.asarray(previous_means[1][class_idx], dtype=np.complex64),
-        Ft_y_combined=(
-            np.asarray(Ft_y_combined[class_idx])
-            if _preserve_kclass_dump_dtype
-            else np.asarray(Ft_y_combined[class_idx], dtype=np.complex64)
-        ),
+        Ft_y_combined=np.asarray(Ft_y_combined[class_idx], dtype=dump_dtype),
         Ft_ctf_0=(
-            (
-                np.asarray(Ft_ctf_0[class_idx])
-                if _preserve_kclass_dump_dtype
-                else np.asarray(Ft_ctf_0[class_idx], dtype=np.complex64)
-            )
+            np.asarray(Ft_ctf_0[class_idx], dtype=dump_dtype)
             if Ft_ctf_0 is not None
             else np.empty(0, dtype=np.complex64)
         ),
         Ft_ctf_1=(
-            (
-                np.asarray(Ft_ctf_1[class_idx])
-                if _preserve_kclass_dump_dtype
-                else np.asarray(Ft_ctf_1[class_idx], dtype=np.complex64)
-            )
+            np.asarray(Ft_ctf_1[class_idx], dtype=dump_dtype)
             if Ft_ctf_1 is not None
             else np.empty(0, dtype=np.complex64)
         ),
-        Ft_ctf_combined=(
-            np.asarray(Ft_ctf_combined[class_idx])
-            if _preserve_kclass_dump_dtype
-            else np.asarray(Ft_ctf_combined[class_idx], dtype=np.complex64)
-        ),
+        Ft_ctf_combined=np.asarray(Ft_ctf_combined[class_idx], dtype=dump_dtype),
         dump_preserve_dtype=np.int32(int(_preserve_kclass_dump_dtype)),
         tau2_shells=np.asarray(tau2_shells_recovar_frame_k, dtype=np.float64),
         tau2_shells_relion=np.asarray(tau2_shells_relion_frame_k, dtype=np.float64),
@@ -306,3 +292,39 @@ def write_final_bpref_accumulators(
     _final_dump_path = pathlib.Path(output_dir) / "recovar_final_bpref_accum.npz"
     np.savez(_final_dump_path, **_final_dump)
     logger.info("Final all-data BPref accumulators dumped: %s", _final_dump_path)
+
+
+def write_premask_mean(
+    mean, *, output_dir, half_index, iteration, current_size, grid_size,
+    voxel_size, volume_shape, n_classes,
+):
+    """Write pre-mask Fourier/real maps, preserving the diagnostic NPZ schema."""
+    import pathlib
+
+    pathlib.Path(output_dir).mkdir(parents=True, exist_ok=True)
+    preserve_dtype = os.environ.get("RECOVAR_PREMASK_DUMP_PRESERVE_DTYPE", "").strip().lower() not in {
+        "", "0", "false", "no", "off",
+    }
+    fourier = np.asarray(mean)
+    if n_classes > 1:
+        real = np.stack(
+            [
+                np.asarray(fourier_transform_utils.get_idft3(mean[class_idx].reshape(volume_shape))).real
+                for class_idx in range(n_classes)
+            ],
+            axis=0,
+        )
+    else:
+        real = np.asarray(fourier_transform_utils.get_idft3(mean.reshape(volume_shape))).real
+    np.savez(
+        pathlib.Path(output_dir) / f"recovar_premask_it{iteration + 1:03d}_half{half_index + 1}.npz",
+        iteration=np.int32(iteration + 1),
+        half=np.int32(half_index + 1),
+        current_size=np.int32(current_size),
+        grid_size=np.int32(grid_size),
+        voxel_size=np.float32(voxel_size),
+        volume_shape=np.asarray(volume_shape, dtype=np.int32),
+        means_premask=fourier if preserve_dtype else np.asarray(fourier, dtype=np.complex64),
+        means_premask_real=real if preserve_dtype else np.asarray(real, dtype=np.float32),
+        dump_preserve_dtype=np.int32(int(preserve_dtype)),
+    )
