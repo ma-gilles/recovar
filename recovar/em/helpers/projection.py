@@ -924,6 +924,20 @@ def _compute_scale_correction_terms_per_image_core(
     xa_per_image = jnp.sum(xa_terms, axis=(1, 2)) / safe_scale
     return xa_per_image, aa_per_image
 
+def _pad_image_tensor(array, n_images: int, padded_images: int):
+    """Pad a per-image tensor to the ladder rung; leave broadcast operands alone.
+
+    A tensor owns the image axis only when its leading dimension equals the
+    bucket's image count. Operands carried with a broadcast leading axis of 1
+    (for example a shared ``ctf_probs``) broadcast against the padded axis by
+    themselves and must not be padded. Pixel-axis operands never reach here.
+    """
+
+    if int(array.shape[0]) != int(n_images):
+        return array
+    return pad_image_axis(array, padded_images)
+
+
 def compute_norm_residual_per_image(proj_half, proj_abs2_half, summed_masked, ctf_probs, noise_variance_half):
     """Per-image norm residual, evaluated on the image-axis ladder.
 
@@ -934,7 +948,8 @@ def compute_norm_residual_per_image(proj_half, proj_abs2_half, summed_masked, ct
     identical: the core reduces over axes (1, 2) only, never over the image axis,
     so padded rows cannot contribute to any real image's value, and their own
     outputs are discarded here. Physical particle order, masks, dtypes and
-    reduction order are untouched.
+    reduction order are untouched. ``noise_variance_half`` is a pixel-axis
+    operand and is passed through unchanged.
     """
 
     n = int(proj_half.shape[0])
@@ -944,29 +959,54 @@ def compute_norm_residual_per_image(proj_half, proj_abs2_half, summed_masked, ct
             proj_half, proj_abs2_half, summed_masked, ctf_probs, noise_variance_half
         )
     out = _compute_norm_residual_per_image_core(
-        pad_image_axis(proj_half, padded),
-        pad_image_axis(proj_abs2_half, padded),
-        pad_image_axis(summed_masked, padded),
-        pad_image_axis(ctf_probs, padded),
+        _pad_image_tensor(proj_half, n, padded),
+        _pad_image_tensor(proj_abs2_half, n, padded),
+        _pad_image_tensor(summed_masked, n, padded),
+        _pad_image_tensor(ctf_probs, n, padded),
         noise_variance_half,
     )
     return out[:n]
 
 
-def compute_scale_correction_terms_per_image(*args, **kwargs):
-    """Per-image scale-correction terms on the image-axis ladder (see above)."""
+def compute_scale_correction_terms_per_image(
+    proj_half,
+    proj_abs2_half,
+    summed_masked,
+    ctf_probs,
+    noise_variance_half,
+    old_scale,
+    scale_correction_pixel_mask=None,
+):
+    """Per-image scale-correction terms on the image-axis ladder (see above).
 
-    n = int(args[0].shape[0])
+    Exactly the four image tensors and a per-image ``old_scale`` are padded.
+    ``noise_variance_half`` and ``scale_correction_pixel_mask`` are pixel-axis
+    operands and are never padded, even when the pixel count equals the image
+    count. A scalar or broadcast (shape ``(1,)``) ``old_scale`` is passed
+    through; a per-image scale is padded with ones so the discarded rows stay
+    finite.
+    """
+
+    n = int(proj_half.shape[0])
     padded = image_axis_ladder_size(n)
     if padded == n:
-        return _compute_scale_correction_terms_per_image_core(*args, **kwargs)
-    padded_args = [
-        pad_image_axis(a, padded) if hasattr(a, "ndim") and a.ndim >= 1 and int(a.shape[0]) == n else a
-        for a in args
-    ]
-    xa, aa = _compute_scale_correction_terms_per_image_core(*padded_args, **kwargs)
+        return _compute_scale_correction_terms_per_image_core(
+            proj_half, proj_abs2_half, summed_masked, ctf_probs, noise_variance_half,
+            old_scale, scale_correction_pixel_mask,
+        )
+    scale = old_scale
+    if hasattr(old_scale, "ndim") and old_scale.ndim >= 1 and int(old_scale.shape[0]) == n:
+        scale = jnp.pad(old_scale, [(0, padded - n)] + [(0, 0)] * (old_scale.ndim - 1), constant_values=1)
+    xa, aa = _compute_scale_correction_terms_per_image_core(
+        _pad_image_tensor(proj_half, n, padded),
+        _pad_image_tensor(proj_abs2_half, n, padded),
+        _pad_image_tensor(summed_masked, n, padded),
+        _pad_image_tensor(ctf_probs, n, padded),
+        noise_variance_half,
+        scale,
+        scale_correction_pixel_mask,
+    )
     return xa[:n], aa[:n]
-
 
 
 def relion_scale_correction_pixel_mask(data_vs_prior, shell_indices, *, n_shells=None):
