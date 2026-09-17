@@ -197,6 +197,24 @@ def _relion_cuda_fine_full_to_compact_lookup(image_shape, current_size, compact_
     return lookup
 
 
+_RELION_FINE_DIFF2_MASKED_ENV = "RECOVAR_RELION_FINE_DIFF2_MASKED"
+_DEFAULT_RELION_FINE_DIFF2_MASKED = False
+
+
+def _fine_diff2_masked_enabled() -> bool:
+    """Skip candidate-mask-excluded cells inside the fused rectangular fine kernel.
+
+    RELION's fine pass evaluates only significant (orientation, translation)
+    pairs; the rectangular K=1 scorer evaluates every cell of the padded bucket
+    (all translations for every row), most of which the candidate mask then
+    discards.  Opt-in until the matched hp3 pair qualifies it.
+    """
+
+    return parse_env_flag(
+        _RELION_FINE_DIFF2_MASKED_ENV, default=_DEFAULT_RELION_FINE_DIFF2_MASKED
+    )
+
+
 def _relion_cuda_fine_diff2_sum(
     reference,
     shifted_image,
@@ -204,6 +222,7 @@ def _relion_cuda_fine_diff2_sum(
     relion_full_to_compact=None,
     *,
     use_fused_ffi=False,
+    candidate_mask=None,
 ):
     """Accumulate direct Gaussian diff2 without materializing ``(..., N)``.
 
@@ -261,6 +280,16 @@ def _relion_cuda_fine_diff2_sum(
                 raise ValueError(
                     "fused rectangular fine diff2 received unsupported broadcast shapes: "
                     f"{reference.shape}, {shifted_image.shape}, {pixel_weight.shape}"
+                )
+            if candidate_mask is not None and real_dtype == jnp.float32:
+                # RELION-style pair pruning: skip (row, translation) cells the
+                # candidate mask excludes.  Valid cells stay bitwise identical.
+                return cuda_backproject.relion_fine_diff2_rectangular_masked_f32(
+                    reference[:, :, 0, :],
+                    shifted_image[:, 0, :, :],
+                    pixel_weight[:, 0, 0, :],
+                    relion_full_to_compact,
+                    jnp.asarray(candidate_mask, dtype=bool),
                 )
             fine_diff2_rectangular = (
                 cuda_backproject.relion_fine_diff2_rectangular_f64
@@ -1078,8 +1107,15 @@ def _score_pass2_bucket_relion_gpu_diff2_raw(
     highres_xi2_half=None,  # (B,) float32 powerClass tail already divided by two
     *,
     use_fused_ffi=False,
+    candidate_mask=None,  # (B, R, T) bool: skip excluded cells in the CUDA kernel
 ):
-    """Return positive float32 RELION fine-pass costs without priors or centering."""
+    """Return positive float32 RELION fine-pass costs without priors or centering.
+
+    ``candidate_mask`` (opt-in via :func:`_fine_diff2_masked_enabled`) makes the
+    fused CUDA path skip excluded (row, translation) cells like RELION's
+    ``makeJobsForDiff2Fine``; those cells return 0, which every consumer
+    already masks (``candidate_mask & isfinite``).
+    """
 
     weights = _relion_cuda_fine_pixel_weights(
         corr_img_score, jnp.asarray(half_weights)[None, :]
@@ -1090,6 +1126,7 @@ def _score_pass2_bucket_relion_gpu_diff2_raw(
         weights[:, None, None, :],
         relion_full_to_compact,
         use_fused_ffi=use_fused_ffi,
+        candidate_mask=candidate_mask,
     )
     if highres_xi2_half is not None:
         diff2 = diff2 + jnp.asarray(highres_xi2_half, dtype=diff2.dtype)[:, None, None]
@@ -1160,6 +1197,7 @@ def _score_pass2_bucket_relion_gpu_diff2(
         relion_full_to_compact,
         highres_xi2_half,
         use_fused_ffi=use_fused_ffi,
+        candidate_mask=candidate_mask if _fine_diff2_masked_enabled() else None,
     )
     return _relion_cuda_fine_diff2_to_scores(
         diff2,

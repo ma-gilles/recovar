@@ -251,6 +251,7 @@ from recovar.em.sparse_pass2.sparse_pass2_projection_blocks import (
 )
 from recovar.em.sparse_pass2.sparse_pass2_scoring import (
     _compact_fused_translate_scoring_enabled,
+    _fine_diff2_masked_enabled,
     _gather_pair_rotation_log_prior,
     _gather_pair_translation_log_prior,
     _gather_projection_cache_rows,
@@ -1884,6 +1885,11 @@ def compute_pass2_stats_sparse_bucketed(
                             relion_score_full_to_compact,
                             relion_highres_xi2_half,
                             use_fused_ffi=use_relion_fine_diff2_fused_ffi,
+                            candidate_mask=(
+                                jnp.asarray(candidate_mask[:, start:stop, :])
+                                if _fine_diff2_masked_enabled()
+                                else None
+                            ),
                         )
                     else:
                         score_chunk = _score_pass2_bucket_relion_gpu_diff2(
@@ -3395,6 +3401,9 @@ def compute_pass2_stats_sparse_bucketed(
                 relion_score_full_to_compact,
                 relion_highres_xi2_half,
                 use_fused_ffi=use_relion_fine_diff2_fused_ffi,
+                candidate_mask=(
+                    jnp.asarray(candidate_mask) if _fine_diff2_masked_enabled() else None
+                ),
             )
             min_diff2 = _relion_cuda_fine_diff2_min(
                 raw_diff2,

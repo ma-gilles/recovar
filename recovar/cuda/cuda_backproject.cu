@@ -8181,6 +8181,98 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Ret<ffi::AnyBuffer>()
 );
 
+ffi::Error RelionFineDiff2RectangularMaskedF32Impl(
+    cudaStream_t stream,
+    ffi::AnyBuffer reference,
+    ffi::AnyBuffer shifted_image,
+    ffi::AnyBuffer weight,
+    ffi::AnyBuffer initial_diff2,
+    ffi::AnyBuffer full_to_compact,
+    ffi::AnyBuffer candidate_mask,
+    ffi::Result<ffi::AnyBuffer> output)
+{
+    if (reference.element_type() != ffi::DataType::C64 ||
+        shifted_image.element_type() != ffi::DataType::C64)
+        return ffi::Error::InvalidArgument(
+            "RelionFineDiff2RectangularMaskedF32: reference/image must be C64");
+    if (weight.element_type() != ffi::DataType::F32 ||
+        initial_diff2.element_type() != ffi::DataType::F32 ||
+        output->element_type() != ffi::DataType::F32)
+        return ffi::Error::InvalidArgument(
+            "RelionFineDiff2RectangularMaskedF32: weight/initial/output must be F32");
+    if (full_to_compact.element_type() != ffi::DataType::S32)
+        return ffi::Error::InvalidArgument(
+            "RelionFineDiff2RectangularMaskedF32: lookup must be S32");
+    if (candidate_mask.element_type() != ffi::DataType::PRED &&
+        candidate_mask.element_type() != ffi::DataType::U8 &&
+        candidate_mask.element_type() != ffi::DataType::S8)
+        return ffi::Error::InvalidArgument(
+            "RelionFineDiff2RectangularMaskedF32: candidate_mask must be PRED/U8/S8");
+
+    const auto reference_dims = reference.dimensions();
+    const auto image_dims = shifted_image.dimensions();
+    const auto weight_dims = weight.dimensions();
+    const auto initial_dims = initial_diff2.dimensions();
+    const auto lookup_dims = full_to_compact.dimensions();
+    const auto mask_dims = candidate_mask.dimensions();
+    const auto output_dims = output->dimensions();
+    if (reference_dims.size() != 3 || image_dims.size() != 3 ||
+        weight_dims.size() != 2 || initial_dims.size() != 1 ||
+        lookup_dims.size() != 1 || mask_dims.size() != 3 ||
+        output_dims.size() != 3 || reference_dims[0] <= 0 ||
+        reference_dims[1] <= 0 || reference_dims[2] <= 0 ||
+        image_dims[0] != reference_dims[0] ||
+        image_dims[1] <= 0 || image_dims[2] != reference_dims[2] ||
+        weight_dims[0] != reference_dims[0] ||
+        weight_dims[1] != reference_dims[2] || lookup_dims[0] <= 0 ||
+        initial_dims[0] != reference_dims[0] ||
+        mask_dims[0] != reference_dims[0] ||
+        mask_dims[1] != reference_dims[1] ||
+        mask_dims[2] != image_dims[1] ||
+        output_dims[0] != reference_dims[0] ||
+        output_dims[1] != reference_dims[1] ||
+        output_dims[2] != image_dims[1])
+        return ffi::Error::InvalidArgument(
+            "RelionFineDiff2RectangularMaskedF32: inconsistent operand shapes");
+
+    const int64_t total_hypotheses =
+        reference_dims[0] * reference_dims[1] * image_dims[1];
+    if (total_hypotheses > static_cast<int64_t>(std::numeric_limits<int>::max()))
+        return ffi::Error::InvalidArgument(
+            "RelionFineDiff2RectangularMaskedF32: hypothesis count exceeds CUDA grid");
+    cudaError_t err = launch_relion_fine_diff2_rectangular_masked<float, float2>(
+        stream,
+        reinterpret_cast<const float2*>(reference.untyped_data()),
+        reinterpret_cast<const float2*>(shifted_image.untyped_data()),
+        static_cast<const float*>(weight.untyped_data()),
+        static_cast<const float*>(initial_diff2.untyped_data()),
+        static_cast<const int32_t*>(full_to_compact.untyped_data()),
+        static_cast<const uint8_t*>(candidate_mask.untyped_data()),
+        static_cast<float*>(output->untyped_data()),
+        reference_dims[0],
+        reference_dims[1],
+        image_dims[1],
+        reference_dims[2],
+        lookup_dims[0]);
+    if (err != cudaSuccess)
+        return ffi::Error::Internal(
+            std::string("CUDA: ") + cudaGetErrorString(err));
+    return ffi::Error::Success();
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    RelionFineDiff2RectangularMaskedF32, RelionFineDiff2RectangularMaskedF32Impl,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>()
+);
+
 ffi::Error RelionPowerClassSpectrumHighresF32Impl(
     cudaStream_t stream,
     int64_t xdim,

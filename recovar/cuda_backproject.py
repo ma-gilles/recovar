@@ -619,6 +619,9 @@ _TARGET_RELION_COARSE_DIFF2_RECTANGULAR_F64 = (
 _TARGET_RELION_FINE_DIFF2_RECTANGULAR_F32 = (
     "cuda_relion_fine_diff2_rectangular_f32"
 )
+_TARGET_RELION_FINE_DIFF2_RECTANGULAR_MASKED_F32 = (
+    "cuda_relion_fine_diff2_rectangular_masked_f32"
+)
 _TARGET_RELION_FINE_DIFF2_FUSED_TRANSLATE_RECTANGULAR_F32 = (
     "cuda_relion_fine_diff2_fused_translate_rectangular_f32"
 )
@@ -1134,6 +1137,10 @@ _OPTIONAL_FFI_REGISTRATIONS = {
     _TARGET_BPREF_PARTICLE_PACK: (
         "BprefParticlePack",
         "CUDA BPref packing requires an explicit build with BprefParticlePack",
+    ),
+    _TARGET_RELION_FINE_DIFF2_RECTANGULAR_MASKED_F32: (
+        "RelionFineDiff2RectangularMaskedF32",
+        "Masked rectangular fine diff2 requires an explicit CUDA build with RelionFineDiff2RectangularMaskedF32",
     ),
 }
 
@@ -4384,6 +4391,59 @@ def relion_fine_diff2_rectangular_f32(
         out_type,
         vmap_method="sequential",
     )(reference, shifted_image, weight, initial_diff2, full_to_compact)
+
+
+@jax.jit
+def relion_fine_diff2_rectangular_masked_f32(
+    reference: jax.Array,
+    shifted_image: jax.Array,
+    weight: jax.Array,
+    full_to_compact: jax.Array,
+    candidate_mask: jax.Array,
+    initial_diff2: jax.Array | None = None,
+) -> jax.Array:
+    """Rectangular fine diff2 that skips cells whose candidate mask is False.
+
+    Same operands and output layout as :func:`relion_fine_diff2_rectangular_f32`
+    plus ``candidate_mask=(B,R,T)`` bool.  Masked cells return 0 without any
+    pixel work, mirroring RELION's fine pass, which only evaluates significant
+    (orientation, translation) pairs (``makeJobsForDiff2Fine``).  Valid cells
+    are bitwise identical to the unmasked kernel.  Optional FFI target: it
+    requires a library built with ``RelionFineDiff2RectangularMaskedF32``.
+    """
+
+    _validate_relion_fine_diff2_inputs(
+        reference,
+        shifted_image,
+        weight,
+        full_to_compact,
+    )
+    _validate_relion_fine_rectangular_shapes(reference, shifted_image, weight)
+    candidate_mask = jnp.asarray(candidate_mask)
+    expected = (reference.shape[0], reference.shape[1], shifted_image.shape[1])
+    if candidate_mask.shape != expected or candidate_mask.dtype != jnp.bool_:
+        raise ValueError(
+            "masked rectangular fine diff2 candidate_mask must be bool with shape "
+            f"{expected}, got {candidate_mask.shape} {candidate_mask.dtype}"
+        )
+    if initial_diff2 is None:
+        initial_diff2 = jnp.zeros((reference.shape[0],), dtype=jnp.float32)
+    else:
+        initial_diff2 = jnp.asarray(initial_diff2)
+    if initial_diff2.dtype != jnp.float32 or initial_diff2.shape != (
+        reference.shape[0],
+    ):
+        raise ValueError(
+            "masked rectangular fine diff2 initial_diff2 must be float32 with shape "
+            f"({reference.shape[0]},), got {initial_diff2.shape} {initial_diff2.dtype}"
+        )
+    _ensure_optional_ffi(_TARGET_RELION_FINE_DIFF2_RECTANGULAR_MASKED_F32)
+    out_type = jax.ShapeDtypeStruct(expected, jnp.float32)
+    return jax.ffi.ffi_call(
+        _TARGET_RELION_FINE_DIFF2_RECTANGULAR_MASKED_F32,
+        out_type,
+        vmap_method="sequential",
+    )(reference, shifted_image, weight, initial_diff2, full_to_compact, candidate_mask)
 
 
 @functools.partial(
