@@ -11,11 +11,7 @@ from typing import Any
 
 import numpy as np
 
-if __package__:
-    from scripts.summarize_em_completion_bench import _load_relion_volume
-else:
-    from summarize_em_completion_bench import _load_relion_volume
-
+from scripts.summarize_em_completion_bench import _load_relion_volume
 
 SCHEMA = "recovar.vdam_map_relative_l2_envelope.v1"
 TRAJECTORY_SCHEMA = "recovar.vdam_relion_fsc_trajectory_audit.v1"

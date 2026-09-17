@@ -19,11 +19,7 @@ from recovar.em.diagnostics.bpref_contribution_replay import (
 )
 from recovar.em.local.local_backprojection import enforce_relion_half_volume_x0_hermitian_host
 from recovar.em.vdam.layout import relion_bpref_frame_scales
-
-if __package__:
-    from scripts.analyze_vdam_mstep_boundary import _read_relion_array
-else:
-    from analyze_vdam_mstep_boundary import _read_relion_array
+from scripts.analyze_vdam_mstep_boundary import _read_relion_array
 
 SCHEMA = "recovar.vdam_bpref_accumulator_boundary.v1"
 

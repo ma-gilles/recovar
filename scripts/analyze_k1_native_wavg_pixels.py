@@ -13,21 +13,12 @@ from pathlib import Path
 
 import numpy as np
 
-if __package__:
-    from scripts.compare_k1_relion_recovar_bpref_primitives import (
-        _load_relion_ctf_inputs,
-        _native_ctf_image,
-        _standard_half_indices,
-    )
-    from scripts.validate_relion_preprocess_capture import load_artifact
-else:
-    from compare_k1_relion_recovar_bpref_primitives import (  # type: ignore[no-redef]
-        _load_relion_ctf_inputs,
-        _native_ctf_image,
-        _standard_half_indices,
-    )
-    from validate_relion_preprocess_capture import load_artifact  # type: ignore[no-redef]
-
+from scripts.compare_k1_relion_recovar_bpref_primitives import (
+    _load_relion_ctf_inputs,
+    _native_ctf_image,
+    _standard_half_indices,
+)
+from scripts.validate_relion_preprocess_capture import load_artifact
 
 _WDIFF_RE = re.compile(r"img(?P<img>\d+)_part(?P<part>\d+)_storeWavg_wdiff2_pixels\.bin")
 

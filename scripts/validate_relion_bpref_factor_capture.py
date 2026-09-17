@@ -12,13 +12,9 @@ from pathlib import Path
 
 import numpy as np
 
-if __package__:
-    from .validate_relion_bpref_prescatter import ROTATION_DTYPE, ROW_DTYPE
-else:
-    from validate_relion_bpref_prescatter import (  # type: ignore[no-redef]
-        ROTATION_DTYPE,
-        ROW_DTYPE,
-    )
+from scripts.file_hash import fnv1a64
+from scripts.file_hash import sha256_file as _sha256
+from scripts.validate_relion_bpref_prescatter import ROTATION_DTYPE, ROW_DTYPE
 
 HEADER_MAGIC = b"RLNBPRF2HEADER\0\0"
 FOOTER_MAGIC = b"RLNBPRF2FOOTER\0\0"
@@ -144,11 +140,6 @@ def _selection_records(selection: dict[str, object]) -> list[dict[str, object]]:
     return normalized
 
 
-# Support both direct execution and package imports.
-if __package__:
-    from .file_hash import fnv1a64, sha256_file as _sha256
-else:
-    from file_hash import fnv1a64, sha256_file as _sha256
 
 
 def _float32_from_bits(value: int) -> np.float32:

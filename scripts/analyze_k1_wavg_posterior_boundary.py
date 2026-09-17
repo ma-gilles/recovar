@@ -14,23 +14,16 @@ from pathlib import Path
 
 import numpy as np
 
+from scripts.analyze_k1_native_wavg_pixels import (
+    _load_counted,
+    _normalise_native_weights,
+)
+from scripts.validate_relion_preprocess_capture import load_artifact
+
 try:
     from scripts.file_hash import sha256_file as _sha256
 except ModuleNotFoundError:
     from file_hash import sha256_file as _sha256  # type: ignore[no-redef]
-
-if __package__:
-    from scripts.analyze_k1_native_wavg_pixels import (
-        _load_counted,
-        _normalise_native_weights,
-    )
-    from scripts.validate_relion_preprocess_capture import load_artifact
-else:
-    from analyze_k1_native_wavg_pixels import (  # type: ignore[no-redef]
-        _load_counted,
-        _normalise_native_weights,
-    )
-    from validate_relion_preprocess_capture import load_artifact  # type: ignore[no-redef]
 
 
 _WEIGHTS_RE = re.compile(

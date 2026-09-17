@@ -155,14 +155,14 @@ else
   particle_report=${ANALYSIS_DIR}/sampling_transition_particles.json
 fi
 set +e
-"${PIXI_PY}" "${REPO_ROOT}/scripts/audit_vdam_kclass_trajectory.py" \
+"${PIXI_PY}" -m scripts.audit_vdam_kclass_trajectory \
   --candidate-dir "${RECOVAR_DIR}" --reference-dir "${RELION_DIR}" --K 1 \
   "${map_args[@]}" --minimum-fsc-auc 0.999 --minimum-assignment-accuracy 0.999 \
   --output-json "${map_report}" \
   --output-shells-npz "${shell_report}"
 map_status=$?
 
-"${PIXI_PY}" "${REPO_ROOT}/scripts/audit_vdam_particle_state_trajectory.py" \
+"${PIXI_PY}" -m scripts.audit_vdam_particle_state_trajectory \
   --recovar-dir "${RECOVAR_DIR}" --relion-dir "${RELION_DIR}" \
   --iterations "${particle_iterations[@]}" \
   --output "${particle_report}"

@@ -12,11 +12,7 @@ import numpy as np
 
 from recovar.utils import helpers
 from recovar.utils.file_hash import sha256_file
-
-if __package__:
-    from scripts.fsc_metrics import normalized_fsc_auc, shell_fsc
-else:
-    from fsc_metrics import normalized_fsc_auc, shell_fsc
+from scripts.fsc_metrics import normalized_fsc_auc, shell_fsc
 
 
 def _load_native_real(path: Path) -> np.ndarray:

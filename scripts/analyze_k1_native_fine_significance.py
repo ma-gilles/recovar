@@ -20,12 +20,8 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-if __package__:
-    from .validate_relion_bpref_factor_capture import load_factor_capture
-    from .validate_relion_fine_score_capture import ACTIVE, load_fine_score_capture
-else:
-    from validate_relion_bpref_factor_capture import load_factor_capture
-    from validate_relion_fine_score_capture import ACTIVE, load_fine_score_capture
+from scripts.validate_relion_bpref_factor_capture import load_factor_capture
+from scripts.validate_relion_fine_score_capture import ACTIVE, load_fine_score_capture
 
 
 def _float32_from_header(value: int) -> np.float32:

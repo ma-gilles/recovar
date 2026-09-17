@@ -29,23 +29,13 @@ from recovar.em.sparse_pass2.sparse_pass2_scoring import (
     _relion_cuda_fine_pixel_weights,
 )
 from recovar.utils.file_hash import sha256_file
-
-if __package__:
-    from .validate_relion_fine_operand_capture import (
-        _cuda_fine_contribution,
-        _reduce_lanes,
-        _replay_lanes,
-        load_fine_operand_capture,
-        validate_capture,
-    )
-else:
-    from validate_relion_fine_operand_capture import (  # type: ignore[no-redef]
-        _cuda_fine_contribution,
-        _reduce_lanes,
-        _replay_lanes,
-        load_fine_operand_capture,
-        validate_capture,
-    )
+from scripts.validate_relion_fine_operand_capture import (
+    _cuda_fine_contribution,
+    _reduce_lanes,
+    _replay_lanes,
+    load_fine_operand_capture,
+    validate_capture,
+)
 
 
 def _require(condition: bool, message: str) -> None:

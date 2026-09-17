@@ -52,11 +52,12 @@ def test_accepts_only_two_passed_one_sided_admissions() -> None:
 
 
 @pytest.mark.unit
-def test_direct_script_help_resolves_local_imports() -> None:
+def test_module_help_resolves_package_imports() -> None:
     result = subprocess.run(
         [
             sys.executable,
-            str(REPO_ROOT / "scripts/analyze_em_k4_native_target_local_boundary.py"),
+            "-m",
+            "scripts.analyze_em_k4_native_target_local_boundary",
             "--help",
         ],
         cwd=REPO_ROOT,

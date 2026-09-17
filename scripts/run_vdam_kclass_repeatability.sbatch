@@ -31,7 +31,7 @@ mkdir -p "${PANEL_ROOT}"
 touch "${PANEL_ROOT}/SAFE_TO_DELETE"
 
 for REPEAT_INDEX in 1 2; do
-    .pixi/envs/default/bin/python scripts/run_vdam_kclass_parity_pair.py \
+    .pixi/envs/default/bin/python -m scripts.run_vdam_kclass_parity_pair \
         --fixture-dir "${FIXTURE_DIR}" \
         --output-root "${PANEL_ROOT}/repeat-${REPEAT_INDEX}/pair" \
         --K "${K}" \
@@ -39,7 +39,7 @@ for REPEAT_INDEX in 1 2; do
         --threads "${SLURM_CPUS_PER_TASK}"
 done
 
-.pixi/envs/default/bin/python scripts/audit_vdam_kclass_repeatability.py \
+.pixi/envs/default/bin/python -m scripts.audit_vdam_kclass_repeatability \
     --first-pair-root "${PANEL_ROOT}/repeat-1/pair" \
     --second-pair-root "${PANEL_ROOT}/repeat-2/pair" \
     --output-json "${PANEL_ROOT}/repeatability_report.json" \

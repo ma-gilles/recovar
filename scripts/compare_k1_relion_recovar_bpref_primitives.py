@@ -25,22 +25,9 @@ from recovar.data_io.image_backends import (
 )
 from recovar.em.sparse_pass2.sparse_pass2_bucket_io import _relion_translation_angles_f32
 from recovar.utils.file_hash import sha256_file
-
-if __package__:
-    from .analyze_k1_bpref_factor_boundary import _metric, _pixel_coordinates, _translation_map
-    from .parse_relion_dump_dir import _read_real_2d
-    from .validate_relion_bpref_factor_capture import load_factor_capture
-else:
-    from analyze_k1_bpref_factor_boundary import (  # type: ignore[no-redef]
-        _metric,
-        _pixel_coordinates,
-        _translation_map,
-    )
-    from parse_relion_dump_dir import _read_real_2d  # type: ignore[no-redef]
-    from validate_relion_bpref_factor_capture import (  # type: ignore[no-redef]
-        load_factor_capture,
-    )
-
+from scripts.analyze_k1_bpref_factor_boundary import _metric, _pixel_coordinates, _translation_map
+from scripts.parse_relion_dump_dir import _read_real_2d
+from scripts.validate_relion_bpref_factor_capture import load_factor_capture
 
 SCHEMA = "recovar.em.k1_bpref_primitive_boundary.v2"
 

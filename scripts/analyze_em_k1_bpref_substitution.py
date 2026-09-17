@@ -20,34 +20,19 @@ from typing import Any
 
 import numpy as np
 
-if __package__:
-    from scripts.analyze_em_k1_tau2_substitution import (
-        _general,
-        _model,
-        _reconstruct_and_flatten,
-        _relion_tau2,
-        map_metrics,
-    )
-    from scripts.compare_iter1_bpref_accum import (
-        _apply_recovar_frame,
-        downsample_recovar_accumulator,
-        load_relion_dump,
-    )
-    from scripts.file_hash import sha256_file as _sha256
-else:
-    from analyze_em_k1_tau2_substitution import (
-        _general,
-        _model,
-        _reconstruct_and_flatten,
-        _relion_tau2,
-        map_metrics,
-    )
-    from compare_iter1_bpref_accum import (
-        _apply_recovar_frame,
-        downsample_recovar_accumulator,
-        load_relion_dump,
-    )
-    from file_hash import sha256_file as _sha256
+from scripts.analyze_em_k1_tau2_substitution import (
+    _general,
+    _model,
+    _reconstruct_and_flatten,
+    _relion_tau2,
+    map_metrics,
+)
+from scripts.compare_iter1_bpref_accum import (
+    _apply_recovar_frame,
+    downsample_recovar_accumulator,
+    load_relion_dump,
+)
+from scripts.file_hash import sha256_file as _sha256
 
 OUTPUT_SCHEMA = "recovar.em_k1_bpref_substitution.v1"
 

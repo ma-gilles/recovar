@@ -12,13 +12,11 @@ from typing import Any
 import mrcfile
 import numpy as np
 
+from scripts.file_hash import sha256_file as _sha256
+
 SCHEMA = "em-k1-membership-capture-inertness-v1"
 DEFAULT_FSC_AUC_THRESHOLD = 0.999999
 
-if __package__:
-    from scripts.file_hash import sha256_file as _sha256
-else:
-    from file_hash import sha256_file as _sha256  # type: ignore[no-redef]
 
 
 def _load_map(path: Path) -> np.ndarray:

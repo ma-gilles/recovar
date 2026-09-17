@@ -43,7 +43,7 @@ if [[ -e "${OUTPUT_ROOT}" ]]; then
     exit 2
 fi
 
-exec .pixi/envs/default/bin/python scripts/run_vdam_kclass_parity_pair.py \
+exec .pixi/envs/default/bin/python -m scripts.run_vdam_kclass_parity_pair \
     --fixture-dir "${FIXTURE_DIR}" \
     --output-root "${OUTPUT_ROOT}" \
     --K "${K}" \

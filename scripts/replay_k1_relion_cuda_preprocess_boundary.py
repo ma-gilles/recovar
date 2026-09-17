@@ -15,26 +15,10 @@ import starfile
 
 from recovar.cuda_backproject import relion_preprocess_real_f32
 from recovar.data_io.image_backends import _centered_rfft2_jax
-
-if __package__:
-    from .compare_k1_relion_recovar_fine_operands import _json_default, _metric
-    from .validate_relion_bpref_factor_capture import load_factor_capture
-    from .validate_relion_fine_operand_capture import load_fine_operand_capture
-    from .validate_relion_preprocess_capture import load_artifact as load_preprocess_capture
-else:
-    from compare_k1_relion_recovar_fine_operands import (  # type: ignore[no-redef]
-        _json_default,
-        _metric,
-    )
-    from validate_relion_bpref_factor_capture import (  # type: ignore[no-redef]
-        load_factor_capture,
-    )
-    from validate_relion_fine_operand_capture import (  # type: ignore[no-redef]
-        load_fine_operand_capture,
-    )
-    from validate_relion_preprocess_capture import (  # type: ignore[no-redef]
-        load_artifact as load_preprocess_capture,
-    )
+from scripts.compare_k1_relion_recovar_fine_operands import _json_default, _metric
+from scripts.validate_relion_bpref_factor_capture import load_factor_capture
+from scripts.validate_relion_fine_operand_capture import load_fine_operand_capture
+from scripts.validate_relion_preprocess_capture import load_artifact as load_preprocess_capture
 
 
 def _require(condition: bool, message: str) -> None:

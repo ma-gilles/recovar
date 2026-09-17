@@ -12,11 +12,7 @@ import numpy as np
 from scipy.optimize import linear_sum_assignment
 
 from recovar.data_io.starfile import read_star
-
-if __package__:
-    from scripts.summarize_em_completion_bench import _load_relion_volume, normalized_fsc_auc, shell_fsc
-else:
-    from summarize_em_completion_bench import _load_relion_volume, normalized_fsc_auc, shell_fsc
+from scripts.summarize_em_completion_bench import _load_relion_volume, normalized_fsc_auc, shell_fsc
 
 
 class AuditError(RuntimeError):

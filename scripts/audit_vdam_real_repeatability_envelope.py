@@ -18,12 +18,7 @@ import numpy as np
 import pandas as pd
 
 from recovar.data_io.starfile import read_star
-
-if __package__:
-    from scripts.audit_em_particle_state_distribution import _angular_error_deg
-else:
-    from audit_em_particle_state_distribution import _angular_error_deg
-
+from scripts.audit_em_particle_state_distribution import _angular_error_deg
 
 SCHEMA = "recovar.vdam_real_repeatability_envelope.v1"
 

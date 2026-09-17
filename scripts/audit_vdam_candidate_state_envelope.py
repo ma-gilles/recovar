@@ -12,28 +12,15 @@ import numpy as np
 import pandas as pd
 
 from recovar.data_io.starfile import read_star
-
-if __package__:
-    from scripts.audit_em_particle_state_distribution import _angular_error_deg
-    from scripts.audit_vdam_candidate_native_envelope import (
-        SUITE_SCHEMA,
-        _candidate_provenance,
-        _load_json,
-        _native_panel_provenance,
-        require_same_physical_gpu,
-    )
-    from scripts.audit_vdam_sampling_trajectory import audit_sampling_trajectory
-else:
-    from audit_em_particle_state_distribution import _angular_error_deg
-    from audit_vdam_candidate_native_envelope import (
-        SUITE_SCHEMA,
-        _candidate_provenance,
-        _load_json,
-        _native_panel_provenance,
-        require_same_physical_gpu,
-    )
-    from audit_vdam_sampling_trajectory import audit_sampling_trajectory
-
+from scripts.audit_em_particle_state_distribution import _angular_error_deg
+from scripts.audit_vdam_candidate_native_envelope import (
+    SUITE_SCHEMA,
+    _candidate_provenance,
+    _load_json,
+    _native_panel_provenance,
+    require_same_physical_gpu,
+)
+from scripts.audit_vdam_sampling_trajectory import audit_sampling_trajectory
 
 SCHEMA = "recovar.vdam_candidate_state_envelope.v1"
 POSE_TOLERANCE_DEG = 1e-3

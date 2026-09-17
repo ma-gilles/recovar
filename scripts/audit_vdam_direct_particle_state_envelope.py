@@ -14,12 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from recovar.data_io.starfile import read_star
-
-if __package__:
-    from scripts.audit_vdam_candidate_state_envelope import audit_particle_state_checkpoints
-else:
-    from audit_vdam_candidate_state_envelope import audit_particle_state_checkpoints
-
+from scripts.audit_vdam_candidate_state_envelope import audit_particle_state_checkpoints
 
 SCHEMA = "recovar.vdam_direct_particle_state_envelope.v1"
 

@@ -18,13 +18,8 @@ from typing import Any
 
 import numpy as np
 
-if __package__:
-    from scripts.analyze_vdam_map_relative_l2_envelope import symmetric_relative_l2
-    from scripts.summarize_em_completion_bench import _load_relion_volume
-else:
-    from analyze_vdam_map_relative_l2_envelope import symmetric_relative_l2
-    from summarize_em_completion_bench import _load_relion_volume
-
+from scripts.analyze_vdam_map_relative_l2_envelope import symmetric_relative_l2
+from scripts.summarize_em_completion_bench import _load_relion_volume
 
 SCHEMA = "recovar.vdam_direct_repeat_map_spread.v1"
 

@@ -18,12 +18,7 @@ from typing import Any
 import numpy as np
 
 from recovar.data_io.starfile import read_star
-
-if __package__:
-    from scripts.summarize_em_completion_bench import _load_relion_volume, normalized_fsc_auc, shell_fsc
-else:
-    from summarize_em_completion_bench import _load_relion_volume, normalized_fsc_auc, shell_fsc
-
+from scripts.summarize_em_completion_bench import _load_relion_volume, normalized_fsc_auc, shell_fsc
 
 SCHEMA = "recovar.vdam_relion_fsc_trajectory_audit.v1"
 SCORECARD_SCHEMA = "recovar.vdam_relion_parity_scorecard.v1"

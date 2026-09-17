@@ -13,21 +13,12 @@ import numpy as np
 
 from recovar.cuda_backproject import relion_preprocess_real_f32
 from recovar.data_io.image_backends import _centered_rfft2_jax_per_image
-
-if __package__:
-    from scripts.analyze_k1_native_wavg_pixels import (
-        _comparison,
-        _complex_comparison,
-        _native_standard_half_indices,
-    )
-    from scripts.validate_relion_preprocess_capture import load_artifact
-else:
-    from analyze_k1_native_wavg_pixels import (  # type: ignore[no-redef]
-        _comparison,
-        _complex_comparison,
-        _native_standard_half_indices,
-    )
-    from validate_relion_preprocess_capture import load_artifact  # type: ignore[no-redef]
+from scripts.analyze_k1_native_wavg_pixels import (
+    _comparison,
+    _complex_comparison,
+    _native_standard_half_indices,
+)
+from scripts.validate_relion_preprocess_capture import load_artifact
 
 
 def _real_comparison(native: np.ndarray, recovar: np.ndarray) -> dict[str, object]:
