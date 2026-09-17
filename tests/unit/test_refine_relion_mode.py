@@ -6109,6 +6109,8 @@ def test_k1_mstep_preserves_retained_pose_support_mass():
 
 
 def test_local_k_class_uses_global_reconstruction_threshold(monkeypatch):
+    import weakref
+
     import recovar.em.classification.k_class as k_class_module
 
     dataset = type("Dataset", (), {"n_images": 1, "n_units": 1})()
@@ -6131,12 +6133,16 @@ def test_local_k_class_uses_global_reconstruction_threshold(monkeypatch):
         (np.asarray([0.50015005, 0.30009003, 0.19005702, 0.00970291], dtype=np.float32),),
         (np.asarray([2.0 / 3.0, 1.0 / 3.0], dtype=np.float32),),
     )
+    probe_support_refs = []
     calls = []
 
     def fake_run_local_em_exact(*args, **kwargs):
         del args
         calls.append(kwargs)
         is_probe = kwargs.get("disable_adjoint_y", False)
+        if not is_probe:
+            assert len(probe_support_refs) == 2
+            assert all(ref() is None for ref in probe_support_refs)
         class_index = (sum(1 for call in calls if call.get("disable_adjoint_y", False)) - 1) if is_probe else (
             sum(1 for call in calls if not call.get("disable_adjoint_y", False)) - 1
         )
@@ -6153,7 +6159,9 @@ def test_local_k_class_uses_global_reconstruction_threshold(monkeypatch):
             stats=stats,
         )
         if kwargs.get("return_profile"):
-            return replace(base, profile={"reconstruction_probability_values_by_image": support_values[class_index]})
+            values = tuple(value.copy() for value in support_values[class_index])
+            probe_support_refs.extend(weakref.ref(value) for value in values)
+            return replace(base, profile={"reconstruction_probability_values_by_image": values})
         return base
 
     monkeypatch.setattr(k_class_module, "run_local_em_exact", fake_run_local_em_exact)
