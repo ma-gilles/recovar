@@ -2,8 +2,7 @@
 CUDA backprojector / projector — JAX JIT-compatible via XLA FFI.
 
 Provides ``backproject`` and ``project`` that drop into ``@jax.jit``
-compiled functions.  Also exposes a low-level ctypes path for
-standalone benchmarks.
+compiled functions.
 
 Quick start::
 
@@ -550,8 +549,6 @@ _TARGET_PROJECT_RELION_HALF_IMAGE_RADIUS = "cuda_project_relion_half_image_radiu
 _TARGET_PROJECT_INDEXED = "cuda_project_indexed"
 _TARGET_BATCH_BACKPROJECT = "cuda_batch_backproject"
 _TARGET_BATCH_BACKPROJECT_INDEXED = "cuda_batch_backproject_indexed"
-_TARGET_BATCH_BP_INTERLEAVED = "cuda_batch_bp_interleaved"
-_TARGET_FUSED_BP = "cuda_fused_bp"
 _TARGET_PER_IMAGE_BP = "cuda_per_image_bp"
 _TARGET_RELION_FUSED_X_HALF_BP = "cuda_relion_fused_x_half_bp"
 _TARGET_RELION_FUSED_X_HALF_BP_PARTICLE_GRID = (
@@ -571,7 +568,6 @@ _TARGET_RELION_TRANSLATE_SCORE_F32 = "cuda_relion_translate_score_f32"
 _TARGET_RELION_TRANSLATE_SCORE_F64 = "cuda_relion_translate_score_f64"
 _TARGET_RELION_TRANSLATE_BPREF_F32 = "cuda_relion_translate_bpref_f32"
 _TARGET_RELION_TRANSLATE_BPREF_F64 = "cuda_relion_translate_bpref_f64"
-_TARGET_RELION_BPREF_OPERANDS_F32 = "cuda_relion_bpref_operands_f32"
 _TARGET_BPREF_PARTICLE_PACK = "cuda_bpref_particle_pack"
 _TARGET_DEFERRED_VDAM_HOST_PACK = "cuda_deferred_vdam_host_pack"
 _TARGET_NOISE_PIXEL_PACK = "cuda_noise_pixel_pack"
@@ -700,8 +696,6 @@ _FFI_REGISTRATIONS: tuple[tuple[str, str], ...] = (
     (_TARGET_PROJECT_INDEXED, "ProjectIndexed"),
     (_TARGET_BATCH_BACKPROJECT, "BatchBackproject"),
     (_TARGET_BATCH_BACKPROJECT_INDEXED, "BatchBackprojectIndexed"),
-    (_TARGET_BATCH_BP_INTERLEAVED, "BatchBackprojectInterleaved"),
-    (_TARGET_FUSED_BP, "FusedBackproject"),
     (_TARGET_PER_IMAGE_BP, "PerImageBackproject"),
     (_TARGET_RELION_FUSED_X_HALF_BP, "RelionFusedXHalfBackproject"),
     (
@@ -733,7 +727,6 @@ _FFI_REGISTRATIONS: tuple[tuple[str, str], ...] = (
     (_TARGET_RELION_TRANSLATE_SCORE_F64, "RelionTranslateScoreF64"),
     (_TARGET_RELION_TRANSLATE_BPREF_F32, "RelionTranslateBprefF32"),
     (_TARGET_RELION_TRANSLATE_BPREF_F64, "RelionTranslateBprefF64"),
-    (_TARGET_RELION_BPREF_OPERANDS_F32, "RelionBprefOperandsF32"),
     (_TARGET_RELION_VDAM_MSTEP_SUMS_F32, "RelionVdamMstepSumsF32"),
     (
         _TARGET_RELION_VDAM_MSTEP_DENOMINATOR_F32,
@@ -2033,87 +2026,6 @@ def relion_translate_bpref_f64(
     )
 
 
-@functools.partial(jax.jit, static_argnums=(6, 7))
-def relion_bpref_operands_f32(
-    images: jax.Array,
-    ctf: jax.Array,
-    minvsigma2: jax.Array,
-    posterior_over_weight_norm: jax.Array,
-    translation_angles: jax.Array,
-    pixel_indices: jax.Array,
-    image_shape: Tuple[int, int],
-    arithmetic_variant: int = 0,
-) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array]:
-    """Evaluate RELION BP.cuh's native-unit numerator and denominator terms."""
-
-    if images.dtype != jnp.complex64:
-        raise TypeError(f"images must be complex64, got {images.dtype}")
-    for name, value in (
-        ("ctf", ctf),
-        ("minvsigma2", minvsigma2),
-        ("posterior_over_weight_norm", posterior_over_weight_norm),
-        ("translation_angles", translation_angles),
-    ):
-        if value.dtype != jnp.float32:
-            raise TypeError(f"{name} must be float32, got {value.dtype}")
-    if pixel_indices.dtype != jnp.int32:
-        raise TypeError(f"pixel_indices must be int32, got {pixel_indices.dtype}")
-    if images.ndim != 2:
-        raise ValueError(f"images must have shape (batch, pixels), got {images.shape}")
-    if ctf.shape != images.shape or minvsigma2.shape != images.shape:
-        raise ValueError("ctf and minvsigma2 must have the same shape as images")
-    if translation_angles.ndim != 2 or translation_angles.shape[1:] != (2,):
-        raise ValueError("translation_angles must have shape (translations, 2)")
-    expected_posterior_shape = (images.shape[0], translation_angles.shape[0])
-    if posterior_over_weight_norm.shape != expected_posterior_shape:
-        raise ValueError(
-            "posterior_over_weight_norm must have shape "
-            f"{expected_posterior_shape}, got {posterior_over_weight_norm.shape}"
-        )
-    if pixel_indices.shape != (images.shape[1],):
-        raise ValueError(
-            f"pixel_indices must have shape ({images.shape[1]},), got "
-            f"{pixel_indices.shape}"
-        )
-    if len(image_shape) != 2 or any(int(size) <= 0 for size in image_shape):
-        raise ValueError(f"image_shape must contain two positive sizes, got {image_shape}")
-    if int(arithmetic_variant) not in range(24):
-        raise ValueError("arithmetic_variant must be in [0, 23]")
-    if jax.default_backend() != "gpu":
-        raise RuntimeError("RELION BPref operands require a JAX GPU backend")
-    if not custom_cuda_requested():
-        raise RuntimeError(
-            "RELION BPref operands were explicitly requested but custom CUDA is disabled"
-        )
-    _ensure_ffi()
-
-    image_h, image_w = (int(size) for size in image_shape)
-    half_width = image_w // 2 + 1
-    output_shape = (
-        images.shape[0] * translation_angles.shape[0],
-        images.shape[1],
-    )
-    output_types = (
-        jax.ShapeDtypeStruct(output_shape, jnp.complex64),
-        jax.ShapeDtypeStruct(output_shape, jnp.float32),
-        jax.ShapeDtypeStruct(output_shape, jnp.complex64),
-        jax.ShapeDtypeStruct(output_shape, jnp.float32),
-    )
-    return jax.ffi.ffi_call(
-        _TARGET_RELION_BPREF_OPERANDS_F32,
-        output_types,
-        vmap_method="sequential",
-    )(
-        images,
-        ctf,
-        minvsigma2,
-        posterior_over_weight_norm,
-        translation_angles,
-        pixel_indices,
-        image_h=np.int64(image_h),
-        image_half_width=np.int64(half_width),
-        arithmetic_variant=np.int64(arithmetic_variant),
-    )
 
 
 @functools.partial(jax.jit, static_argnums=(7,))
@@ -6930,97 +6842,8 @@ def batch_backproject(
     )(images, rot6, volumes, **kw)
 
 
-@functools.partial(jax.jit, static_argnums=(3, 4, 5))
-def batch_backproject_interleaved(
-    volumes: jax.Array,
-    images: jax.Array,
-    rotation_matrices: jax.Array,
-    image_shape: Tuple[int, int] = (0, 0),
-    volume_shape: Tuple[int, int, int] = (0, 0, 0),
-    max_r: float | None = None,
-) -> jax.Array:
-    """Back-project images into interleaved volumes: output ``(half_vol, batch)``.
-
-    Like ``batch_backproject`` but output is ``(n_voxels_half, batch_size)``
-    instead of ``(batch_size, n_voxels_half)``.  All batch entries for the
-    same voxel are contiguous → ~30× better L2 cache utilization for large
-    batch sizes (e.g. 210 PPCA upper-tri channels).
-
-    Only supports: real data (float32/64), half_volume=True, trilinear, full images.
-    """
-    _ensure_ffi()
-    N0, N1, N2 = volume_shape
-    H, W = image_shape
-    ups = N0 // H
-    max_r2_x4 = -1 if max_r is None else int(4 * max_r * max_r)
-    # Ensure images dtype matches volumes (kernel dispatches on volume dtype)
-    images = images.astype(volumes.dtype)
-    rot6 = _rot_to_compact(rotation_matrices, volumes.dtype)
-    out_type = jax.ShapeDtypeStruct(volumes.shape, volumes.dtype)
-
-    return jax.ffi.ffi_call(
-        _TARGET_BATCH_BP_INTERLEAVED,
-        out_type,
-        input_output_aliases={2: 0},
-        vmap_method="sequential",
-    )(images, rot6, volumes, image_h=H, image_w=W, vol_n0=N0, vol_n1=N1, vol_n2=N2, upsampling=ups, max_r2_x4=max_r2_x4)
 
 
-@functools.partial(jax.jit, static_argnums=(4, 5, 6))
-def fused_backproject(
-    volumes: jax.Array,
-    base_images: jax.Array,
-    weight_matrix: jax.Array,
-    rotation_matrices: jax.Array,
-    image_shape: Tuple[int, int] = (0, 0),
-    volume_shape: Tuple[int, int, int] = (0, 0, 0),
-    max_r: float | None = None,
-) -> jax.Array:
-    """Fused backproject: base_images × weight_matrix → interleaved volumes.
-
-    Reads ``base_images[n, pix]`` (e.g. ctf²) and ``weight_matrix[n, ch]``
-    (e.g. smz_tri) separately, multiplying inside the CUDA kernel.
-    Eliminates the ``(n_ch, n_img, n_pix)`` intermediate tensor.
-
-    Input bandwidth: ~50 MB vs ~3.4 GB for the unfused path at 256³.
-
-    Parameters
-    ----------
-    volumes : ``(half_vol, n_channels)`` float32 — zero-initialized output
-    base_images : ``(n_images, n_pixels)`` float32 — per-pixel per-image values
-    weight_matrix : ``(n_images, n_channels)`` float32 — per-image per-channel weights
-    rotation_matrices : ``(n_images, 3, 3)`` — shared rotations
-
-    Returns ``(half_vol, n_channels)`` accumulated result.
-    """
-    _ensure_ffi()
-    N0, N1, N2 = volume_shape
-    H, W = image_shape
-    ups = N0 // H
-    max_r2_x4 = -1 if max_r is None else int(4 * max_r * max_r)
-    base_images = base_images.astype(volumes.dtype)
-    weight_matrix = weight_matrix.astype(volumes.dtype)
-    rot6 = _rot_to_compact(rotation_matrices, volumes.dtype)
-    out_type = jax.ShapeDtypeStruct(volumes.shape, volumes.dtype)
-
-    return jax.ffi.ffi_call(
-        _TARGET_FUSED_BP,
-        out_type,
-        input_output_aliases={3: 0},
-        vmap_method="sequential",
-    )(
-        base_images,
-        weight_matrix,
-        rot6,
-        volumes,
-        image_h=H,
-        image_w=W,
-        vol_n0=N0,
-        vol_n1=N1,
-        vol_n2=N2,
-        upsampling=ups,
-        max_r2_x4=max_r2_x4,
-    )
 
 
 @functools.partial(jax.jit, static_argnums=(3, 4, 5))
@@ -7104,149 +6927,3 @@ def batch_project(
             relion_texture_interp=relion_texture_interp,
         )
     )(volumes)
-
-
-# ──────────────────────────────────────────────────────────────────────
-# ctypes helpers  (for standalone benchmarks without JAX JIT overhead)
-# ──────────────────────────────────────────────────────────────────────
-
-_cudart = None
-
-
-def _get_cudart():
-    global _cudart
-    if _cudart is not None:
-        return _cudart
-    import glob as _glob
-
-    for name in ("libcudart.so", "libcudart.so.12", "libcudart.so.11.0"):
-        try:
-            _cudart = ctypes.CDLL(name)
-            return _cudart
-        except OSError:
-            continue
-    for p in sorted(_glob.glob("/usr/local/cuda*/lib64/libcudart.so"), reverse=True):
-        try:
-            _cudart = ctypes.CDLL(p)
-            return _cudart
-        except OSError:
-            continue
-    raise RuntimeError("Cannot find libcudart.so")
-
-
-class GpuArray:
-    """Minimal GPU allocation managed via cudart."""
-
-    def __init__(self, data: np.ndarray):
-        self.shape, self.dtype, self.nbytes = data.shape, data.dtype, data.nbytes
-        data = np.ascontiguousarray(data)
-        rt = _get_cudart()
-        self._ptr = ctypes.c_void_p()
-        assert rt.cudaMalloc(ctypes.byref(self._ptr), ctypes.c_size_t(self.nbytes)) == 0
-        assert (
-            rt.cudaMemcpy(
-                self._ptr, data.ctypes.data_as(ctypes.c_void_p), ctypes.c_size_t(self.nbytes), ctypes.c_int(1)
-            )
-            == 0
-        )
-
-    def as_float_ptr(self):
-        return ctypes.cast(self._ptr, ctypes.POINTER(ctypes.c_float))
-
-    def to_numpy(self):
-        out = np.empty(self.shape, dtype=self.dtype)
-        _get_cudart().cudaMemcpy(
-            out.ctypes.data_as(ctypes.c_void_p), self._ptr, ctypes.c_size_t(self.nbytes), ctypes.c_int(2)
-        )
-        return out
-
-    def free(self):
-        if self._ptr:
-            try:
-                _get_cudart().cudaFree(self._ptr)
-            except Exception:
-                logger.debug("cudaFree failed", exc_info=True)
-            self._ptr = ctypes.c_void_p()
-
-    def __del__(self):
-        try:
-            self.free()
-        except Exception:
-            pass  # destructors must not raise
-
-
-def _random_rotations_6(n, rng=None):
-    """(n, 6) float32: first two rows of random rotation matrices."""
-    if rng is None:
-        rng = np.random.default_rng()
-    z = rng.standard_normal((n, 3, 3))
-    q, r = np.linalg.qr(z)
-    d = np.sign(np.diagonal(r, axis1=1, axis2=2))
-    q = q * d[:, None, :]
-    det = np.linalg.det(q)
-    q[det < 0] *= -1
-    return q[:, :2, :].reshape(n, 6).astype(np.float32)
-
-
-class CudaBenchmarker:
-    """Benchmark helper using ctypes (no JAX overhead)."""
-
-    def __init__(self, image_shape, volume_shape, order=1, half_volume=False, half_image=False):
-        self.ih, self.iw_full = image_shape
-        self.N0, self.N1, self.N2 = volume_shape
-        self.order = order
-        self.half_volume = int(half_volume)
-        self.half_image = int(half_image)
-        self.ups = self.N0 // self.ih
-        self.center = float(self.N0 // 2)
-        self.N2_eff = self.N2 // 2 + 1 if half_volume else self.N2
-
-        if half_image:
-            self.iw = self.iw_full // 2 + 1
-        else:
-            self.iw = self.iw_full
-        self.n_pixels = self.ih * self.iw
-
-        self._lib = _get_lib()
-
-    def benchmark(self, n_images, n_iters=100, kind="backproject"):
-        rng = np.random.default_rng(42)
-        vol_size = self.N0 * self.N1 * self.N2_eff
-        vol_f32 = rng.standard_normal(vol_size * 2).astype(np.float32)
-        img_f32 = rng.standard_normal(n_images * self.n_pixels * 2).astype(np.float32)
-        rots = _random_rotations_6(n_images, rng)
-
-        vol_d = GpuArray(vol_f32)
-        img_d = GpuArray(img_f32)
-        rot_d = GpuArray(rots)
-
-        fn = self._lib.benchmark_backproject_c if kind == "backproject" else self._lib.benchmark_project_c
-        fn.restype = ctypes.c_float
-        ms = fn(
-            vol_d.as_float_ptr(),
-            img_d.as_float_ptr(),
-            rot_d.as_float_ptr(),
-            n_images,
-            self.n_pixels,
-            self.ih,
-            self.iw,
-            self.N0,
-            self.N1,
-            self.N2,
-            self.ups,
-            ctypes.c_float(self.center),
-            self.order,
-            self.half_volume,
-            self.half_image,
-            self.iw_full,
-            n_iters,
-        )
-
-        vol_d.free()
-        img_d.free()
-        rot_d.free()
-        return {
-            "ms_total": float(ms),
-            "ms_per_iter": float(ms) / n_iters,
-            "throughput_img_per_s": n_images * n_iters / (float(ms) / 1000.0),
-        }
