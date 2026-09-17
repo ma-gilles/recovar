@@ -1,26 +1,8 @@
 #!/usr/bin/env python
-"""Build a PPCA refinement init NPZ from a recovar pipeline output (v2).
+"""Build a mask-aware PPCA refinement init NPZ from RECOVAR pipeline output.
 
-Differences vs ``prepare_ppca_init_from_pipeline_output.py``:
-
-* **Mask applied to PCs** — multiplies each eigenvector by the same
-  ``dilated_volume_mask`` the pipeline uses inside its projected-covariance
-  solver. The pipeline solves for the basis in masked-image space; reusing
-  the unmasked eigenvector breaks that representational consistency. The
-  mean is also saved in masked form (alongside the unmasked mean) so the
-  EM refinement starts from a mask-restricted model.
-
-* **Pipeline-side W prior captured** — copies the per-Fourier-voxel
-  signal-variance prior the pipeline computed (``params.pkl['variance_est']['prior']``
-  from ``compute_fsc_prior_gpu_v2``) into the init NPZ together with its
-  per-shell average. Downstream EM refinement scripts can opt into
-  ``--prior-from-init pipeline-variance`` to use this prior directly
-  instead of deriving one from the init W row norms.
-
-The pipeline already saves ``u['rescaled']`` and ``s['rescaled']`` in
-their final post-projected-covariance form (after the ``basis @ eigh``
-recomposition and any contrast-knockout). This script reuses those
-saved values; it does not attempt to undo internal pipeline rescalings.
+The saved payload includes the final projected-covariance basis, pipeline masks,
+and the pipeline signal-variance priors needed by downstream PPCA refinement.
 """
 
 from __future__ import annotations
@@ -105,6 +87,7 @@ def _recompute_mean_prior_from_saved(
     sufficient as a per-shell signal-variance prior for the W M-step Wiener form.
     """
     import jax.numpy as jnp
+
     from recovar.core import fourier_transform_utils as _ftu
     from recovar.reconstruction import regularization as _regularization
 
@@ -138,7 +121,7 @@ def _recompute_mean_prior_from_saved(
     return np.asarray(prior).reshape(-1).real
 
 
-def prepare_ppca_init_v2(
+def prepare_ppca_init_from_pipeline_output(
     pipeline_output: str | Path,
     output_dir: str | Path,
     *,
@@ -330,7 +313,7 @@ def main() -> None:
         help="Which variance_est field to save as the pipeline-side W prior.",
     )
     args = parser.parse_args()
-    out = prepare_ppca_init_v2(
+    out = prepare_ppca_init_from_pipeline_output(
         args.pipeline_output,
         args.output_dir,
         q=int(args.q),

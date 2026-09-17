@@ -27,7 +27,7 @@ session's contributions on ``codex/ppca-highres-refine``:
    ``whiten_W_via_projcov`` exists with the documented signature.
 
 5. **v2 init builder** —
-   ``prepare_ppca_init_v2`` writes the documented set of NPZ keys; the
+   ``prepare_ppca_init_from_pipeline_output`` writes the documented set of NPZ keys; the
    refinement script's ``--prior-from-init pipeline-mean-prior`` mode
    requires the saved ``pipeline_mean_prior_half_voxel``.
 
@@ -155,7 +155,7 @@ def test_build_params_dict_accepts_mean_prior():
     assert "mean_prior" in sig.parameters, (
         "build_params_dict(...) must accept mean_prior= so the pipeline can save "
         "the FSC-derived signal-variance prior for downstream PPCA refinement "
-        "(added in codex/ppca-highres-refine for prepare_ppca_init_from_pipeline_output_v2)."
+        "(added in codex/ppca-highres-refine for prepare_ppca_init_from_pipeline_output)."
     )
     # Default is None so legacy callers (pre-v0.7 ppca-postmerge build_params_dict
     # callsites) continue to work.
@@ -433,31 +433,31 @@ def test_whiten_W_via_projcov_exists_with_documented_signature():
 
 
 # ---------------------------------------------------------------------------
-# 5. v2 init builder
+# 5. Pipeline init builder
 # ---------------------------------------------------------------------------
 
 
-def test_prepare_ppca_init_v2_module_is_importable_and_exposes_function():
-    """The v2 builder must be runnable as a module + as a script."""
+def test_prepare_ppca_init_from_pipeline_output_module_is_importable_and_exposes_function():
+    """The init builder must be runnable as a module + as a script."""
     sys.path.insert(0, str(REPO_ROOT))
     try:
-        import scripts.prepare_ppca_init_from_pipeline_output_v2 as v2
+        import scripts.prepare_ppca_init_from_pipeline_output as builder
     finally:
         sys.path.pop(0)
-    assert hasattr(v2, "prepare_ppca_init_v2"), "Function name lost"
-    assert hasattr(v2, "_recompute_mean_prior_from_saved"), (
+    assert hasattr(builder, "prepare_ppca_init_from_pipeline_output"), "Function name lost"
+    assert hasattr(builder, "_recompute_mean_prior_from_saved"), (
         "Mean-prior recomputation helper lost — pipeline outputs without "
         "params.pkl['mean_prior'] won't be re-derivable."
     )
-    sig = inspect.signature(v2.prepare_ppca_init_v2)
-    # apply_mask default must remain True (this is the whole point of v2).
+    sig = inspect.signature(builder.prepare_ppca_init_from_pipeline_output)
+    # apply_mask default must remain True (this is the maintained contract).
     assert sig.parameters["apply_mask"].default is True
     # Mean-prior + variance-prior save default ON.
     assert sig.parameters["save_pipeline_variance_prior"].default is True
 
 
-def test_prepare_ppca_init_v2_documented_npz_keys_present():
-    """A run of prepare_ppca_init_v2 over a mock pipeline output must save the
+def test_prepare_ppca_init_from_pipeline_output_documented_npz_keys_present():
+    """A run of prepare_ppca_init_from_pipeline_output over a mock pipeline output must save the
     documented set of keys. This is the schema downstream EM scripts depend on.
 
     We don't run a real recovar pipeline; we build a minimal fake output
@@ -466,10 +466,10 @@ def test_prepare_ppca_init_v2_documented_npz_keys_present():
     the dependent ``--prior-from-init pipeline-mean-prior`` path will break
     silently — this guards against that.
     """
-    # The v2 builder depends on PipelineOutput and full recovar pipeline scaffolding.
+    # The init builder depends on PipelineOutput and full recovar pipeline scaffolding.
     # Rather than mocking that, we assert the source contains the expected
     # `payload[...]` assignments and field names. Heavyweight but reliable.
-    src = (REPO_ROOT / "scripts/prepare_ppca_init_from_pipeline_output_v2.py").read_text()
+    src = (REPO_ROOT / "scripts/prepare_ppca_init_from_pipeline_output.py").read_text()
     expected_npz_keys = [
         "mu",
         "mu_unmasked",

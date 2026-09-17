@@ -124,7 +124,7 @@ def _parse_args() -> argparse.Namespace:
             "How to build the mean+W priors. 'constant' uses --mean/W-prior-variance scalars; "
             "'gt-row-norm' derives a per-shell prior from the init's W row norms (legacy default); "
             "'pipeline-variance-shell'/'pipeline-variance-voxel' read the pipeline-side "
-            "signal-variance prior (variance_est['prior']) saved by prepare_ppca_init_from_pipeline_output_v2.py; "
+            "signal-variance prior (variance_est['prior']) saved by prepare_ppca_init_from_pipeline_output.py; "
             "'pipeline-mean-prior' replicates the pipeline's exact covariance regularization shape: "
             "prior_W = mean_prior * REG_INIT_MULTIPLIER / (noise * n_pcs) per voxel, where mean_prior is "
             "the FSC-derived per-Fourier-voxel signal-variance prior the pipeline saves alongside the means."
@@ -151,7 +151,7 @@ def _parse_args() -> argparse.Namespace:
             "'init-volume-mask' loads volume_mask from the v2 init NPZ; "
             "'init-volume-mask-dilated' loads volume_mask_dilated (the pipeline's "
             "PCA mask). Either of the init-* options requires --prior-init-npz or "
-            "an init built with prepare_ppca_init_from_pipeline_output_v2.py."
+            "an init built with prepare_ppca_init_from_pipeline_output.py."
         ),
     )
     parser.add_argument("--postprocess-mask-radius-px", type=float, default=None)
@@ -283,7 +283,7 @@ def main() -> None:
             if field not in z.files:
                 raise ValueError(
                     f"--prior-from-init {args.prior_from_init} requires '{field}' in {prior_init_npz}; "
-                    "rebuild with prepare_ppca_init_from_pipeline_output_v2.py"
+                    "rebuild with prepare_ppca_init_from_pipeline_output.py"
                 )
             variance_array = np.asarray(z[field], dtype=np.float64)
         if variance_array.shape != (half_size,):
@@ -325,7 +325,7 @@ def main() -> None:
             if "pipeline_mean_prior_half_voxel" not in z.files:
                 raise ValueError(
                     f"--prior-from-init pipeline-mean-prior requires 'pipeline_mean_prior_half_voxel' "
-                    f"in {prior_init_npz}; rebuild with prepare_ppca_init_from_pipeline_output_v2.py "
+                    f"in {prior_init_npz}; rebuild with prepare_ppca_init_from_pipeline_output.py "
                     "(it recomputes mean_prior from saved half-maps if pipeline didn't save it)"
                 )
             mean_prior_half = np.asarray(z["pipeline_mean_prior_half_voxel"], dtype=np.float64).reshape(-1)
@@ -363,7 +363,7 @@ def main() -> None:
                 if mask_field not in z.files:
                     raise ValueError(
                         f"--postprocess-mask-source {args.postprocess_mask_source} requires '{mask_field}' "
-                        f"in {mask_npz}; rebuild with prepare_ppca_init_from_pipeline_output_v2.py"
+                        f"in {mask_npz}; rebuild with prepare_ppca_init_from_pipeline_output.py"
                     )
                 external_mask_volume = np.asarray(z[mask_field], dtype=np.float32)
             if external_mask_volume.shape != tuple(dataset.volume_shape):
