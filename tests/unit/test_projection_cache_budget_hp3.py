@@ -122,3 +122,17 @@ def test_per_particle_launches_pad_to_rungs_with_zeroed_spare_rows(monkeypatch):
     np.testing.assert_array_equal(calls[1][0][:3], np.asarray(ctf_values[0, :3])); assert np.all(calls[1][0][3:] == 0)
     np.testing.assert_array_equal(calls[2][0][:5], np.asarray(values[1, :5])); assert np.all(calls[2][0][5:] == 0)
     np.testing.assert_array_equal(calls[0][1], np.asarray(rotations[0, :4]))
+
+
+def test_large_bucket_pow2_rung_is_opt_in(monkeypatch):
+    from recovar.em.scoring import sparse_bucket_arrays as sba
+
+    monkeypatch.delenv("RECOVAR_SPARSE_PASS2_LARGE_BUCKET_POW2", raising=False)
+    monkeypatch.delenv("RECOVAR_LOCAL_BUCKET_QUANTUM", raising=False)
+    default = [sba._pass2_bucket_rotation_size(c, 5000) for c in (7, 100, 900, 5000, 9000, 20000, 100000, 217000)]
+    assert default[:3] == [16, 128, 1024]  # small supports: shared power-of-two rule, unchanged
+    monkeypatch.setenv("RECOVAR_SPARSE_PASS2_LARGE_BUCKET_POW2", "1")
+    pow2 = [sba._pass2_bucket_rotation_size(c, 5000) for c in (7, 100, 900, 5000, 9000, 20000, 100000, 217000)]
+    assert pow2[:3] == default[:3]
+    assert pow2[3:] == [8192, 16384, 32768, 131072, 262144]
+    assert all(p >= d for p, d in zip(pow2, default))  # never smaller than the shared quantiser

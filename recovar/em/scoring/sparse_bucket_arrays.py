@@ -12,6 +12,31 @@ import numpy as np
 
 from recovar.em.helpers.batch_planning import _plan_consecutive_padded_batches
 from recovar.em.local.local_layout import _exact_bucket_rotation_size
+from recovar.em.helpers.env_flags import parse_env_flag
+from recovar.em.helpers.shape_buckets import power_of_two_bucket
+
+_LARGE_BUCKET_POW2_ENV = "RECOVAR_SPARSE_PASS2_LARGE_BUCKET_POW2"
+_LARGE_BUCKET_POW2_THRESHOLD = 1024
+
+
+def _pass2_bucket_rotation_size(count: int, rotation_block_size_for_quantization: int) -> int:
+    """Padded rotation rows for one pass-2 image.
+
+    The shared quantiser pads small supports to powers of two and large ones to
+    multiples of a ~4096 quantum, which at HEALPix order 3 produced 17-31
+    distinct large sizes per half (12288, 20480, 24576, 28672, ..., 217088);
+    each distinct size compiles its own set of bucket programs.  With
+    ``RECOVAR_SPARSE_PASS2_LARGE_BUCKET_POW2=1`` (default off, measurement
+    knob) sizes above the engine cap are rounded up to a power of two instead,
+    bounding the large sizes to about eight and costing at most 2x padding on
+    those rows.  Padded rows carry zero posterior mass, so this changes shape
+    reuse and atomic interleaving, not the candidate set.
+    """
+
+    size = int(_exact_bucket_rotation_size(int(count), rotation_block_size_for_quantization))
+    if size > _LARGE_BUCKET_POW2_THRESHOLD and parse_env_flag(_LARGE_BUCKET_POW2_ENV, default=False):
+        return int(power_of_two_bucket(size))
+    return size
 from recovar.em.scoring.compact_candidates import (
     SparseCandidateMask,
     _candidate_mask_to_dense,
@@ -98,7 +123,7 @@ def _bucket_pass2_inputs(
         return []
 
     bucket_sizes = np.array(
-        [_exact_bucket_rotation_size(int(count), rotation_block_size_for_quantization) for count in rotation_counts],
+        [_pass2_bucket_rotation_size(int(count), rotation_block_size_for_quantization) for count in rotation_counts],
         dtype=np.int64,
     )
     if small_bucket_coalesce_size is not None:
