@@ -49,7 +49,16 @@ _AUTO_EXTERNAL_NORMALIZATION_TRANSLATION_TILE_DEVICE_FRACTION = 0.014
 _AUTO_FUSED_KCLASS_TRANSLATION_TILE_DEVICE_FRACTION = 0.007
 
 
-_AUTO_PROJECTION_CACHE_DEVICE_FRACTION = 0.100
+# Fine-projection cache cap as a fraction of device memory.  The K=1 sparse
+# pass-2 recomputes every image chunk's fine projections when the cache is
+# skipped; at HEALPix order 3 (294912 fine rotations, current_size 92, 256^2)
+# the score+recon+abs2 cache estimate is 18.4 GiB, which the former 10% cap
+# (7.96 GiB on an 80 GB device) rejected in every hp3 iteration of the 10k
+# EMPIAR-10097 convergence run while per-chunk recompute cost 1200-3900 s per
+# iteration.  25% admits that cache on 80 GB devices and still rejects it on
+# 40 GB devices.  Measured evidence: docs handoff em_soft_posterior_block_bpref
+# prototype 2026-09-17, jobs 14045912 / 14046044.
+_AUTO_PROJECTION_CACHE_DEVICE_FRACTION = 0.250
 
 
 _AUTO_PROJECTED_ROTATIONS_DEVICE_FRACTION = 0.040
