@@ -38,7 +38,7 @@ class ParityAncestryError(RuntimeError):
     """Raised when a required parity-fix commit is not in HEAD's ancestry."""
 
 
-def _safe_git_commit() -> str | None:
+def git_head_or_none() -> str | None:
     try:
         return (
             subprocess.check_output(["git", "rev-parse", "HEAD"], text=True, stderr=subprocess.DEVNULL).strip() or None
@@ -138,7 +138,7 @@ def git_worktree_provenance(*, max_untracked_file_bytes: int = 64 * 1024 * 1024)
     return {
         "cwd": str(Path.cwd().resolve()),
         "branch": _safe_git_branch(),
-        "head": _safe_git_commit() or "<unknown>",
+        "head": git_head_or_none() or "<unknown>",
         "dirty_count": len(status.splitlines()),
         "status_porcelain": status,
         "diff_sha256": diff_sha256,
@@ -187,7 +187,7 @@ def assert_parity_ancestors() -> None:
     """Raise ParityAncestryError if any required parity-fix commit is missing."""
     missing = missing_parity_ancestors()
     if missing:
-        head = _safe_git_commit() or "<unknown>"
+        head = git_head_or_none() or "<unknown>"
         details = "\n".join(f"  - {sha} ({desc}) NOT in ancestry of {head[:8]}" for sha, desc in missing)
         raise ParityAncestryError(
             "Worktree is missing required parity-fix commits in HEAD's ancestry:\n"
@@ -207,7 +207,7 @@ def assert_parity_ancestors_or_exit(exit_status: int = 2) -> None:
     print_provenance_banner()
     missing = missing_parity_ancestors()
     if missing:
-        head = _safe_git_commit() or "<unknown>"
+        head = git_head_or_none() or "<unknown>"
         print("=" * 72, flush=True)
         print(
             "ERROR: this worktree is missing required parity-fix commits in HEAD's ancestry:",

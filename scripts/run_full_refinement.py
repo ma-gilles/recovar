@@ -47,7 +47,7 @@ from recovar.em.diagnostics.frozen_boundary import (
     validate_fixed_diagnostic_boundary_runtime_config,
     verify_fixed_diagnostic_boundary_sources,
 )
-from recovar.em.diagnostics.parity_provenance import _safe_git_commit, git_worktree_provenance
+from recovar.em.diagnostics.parity_provenance import git_head_or_none, git_worktree_provenance
 from recovar.em.diagnostics.relion_projector_capture import build_relion_projector_replay_state
 from recovar.em.diagnostics.state_swap_probe import (
     add_state_swap_probe_arguments,
@@ -363,7 +363,7 @@ def _fixed_diagnostic_runtime_config(
         "local_search_translation_prior_mode": "coarse",
         "declared_relion_command_line": str(args.frozen_boundary_relion_command_line),
         "declared_relion_base_git_commit": str(args.frozen_boundary_relion_git_commit),
-        "recovar_git_commit": str(_safe_git_commit() or "<unknown>"),
+        "recovar_git_commit": str(git_head_or_none() or "<unknown>"),
         "declared_relion_build_id": str(args.frozen_boundary_relion_build_id),
         "projector_boundary_kind": "reconstructed-projector boundary",
         "replay_prefix": str(args.frozen_boundary_replay_prefix),
@@ -4875,7 +4875,7 @@ def main():
         profile_summary = {
             "profile_only": True,
             "stop_after_local_search_score_only": bool(result.get("stop_after_local_search_score_only", False)),
-            "git_commit": _safe_git_commit(),
+            "git_commit": git_head_or_none(),
             "python_version": platform.python_version(),
             "platform": platform.platform(),
             "numpy_version": np.__version__,
@@ -5401,7 +5401,7 @@ def main():
         ledger_path = Path(args.benchmark_ledger_json)
         ledger_path.parent.mkdir(parents=True, exist_ok=True)
         ledger = {
-            "git_commit": _safe_git_commit(),
+            "git_commit": git_head_or_none(),
             "git_provenance": git_provenance,
             "python_version": platform.python_version(),
             "platform": platform.platform(),
