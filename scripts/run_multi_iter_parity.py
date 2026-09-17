@@ -2353,7 +2353,6 @@ def main():
             schedule=RefinementSchedule(
                 max_iter=args.max_iter,
                 init_current_size=current_size,
-                fsc_threshold=1.0 / 7.0,
                 init_healpix_order=hp_order,
                 max_healpix_order=args.max_healpix_order,
                 init_translation_range=offset_range / pixel_size,

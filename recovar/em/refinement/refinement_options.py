@@ -21,7 +21,6 @@ class RefinementSchedule:
 
     max_iter: int = 10
     init_current_size: int = 32
-    fsc_threshold: float = 1.0 / 7.0
     init_healpix_order: int = 2
     max_healpix_order: int = 7
     init_translation_range: float = 10.0

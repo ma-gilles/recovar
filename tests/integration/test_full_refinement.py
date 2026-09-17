@@ -88,7 +88,7 @@ def _setup_refinement(n_iter=5, adaptive_oversampling=1, seed=42):
         translations=jnp.asarray(translations),
         options=RefinementOptions(
             disc_type="linear_interp",
-            schedule=RefinementSchedule(max_iter=n_iter, init_current_size=init_current_size, fsc_threshold=1.0 / 7.0),
+            schedule=RefinementSchedule(max_iter=n_iter, init_current_size=init_current_size),
             batching=RefinementBatching(image_batch_size=500, rotation_block_size=5000),
             adaptive=AdaptiveOptions(
                 adaptive_oversampling=adaptive_oversampling,
