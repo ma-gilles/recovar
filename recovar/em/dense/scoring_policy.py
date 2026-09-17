@@ -61,23 +61,13 @@ _DENSE_EM_STATIC_KWARGS: dict = {
     # ``RECOVAR_USE_FLOAT64_PROJECTIONS=1`` to upgrade to double precision.
     # Use fixed-state comparisons to evaluate precision changes; these flags
     # alone do not establish the cause of a trajectory mismatch.
-    "use_float64_scoring": bool(
-        os.environ.get("RECOVAR_USE_FLOAT64_SCORING", "0").strip().lower()
-        in {"1", "true", "yes", "on"}
-    ),
-    "use_float64_projections": bool(
-        os.environ.get("RECOVAR_USE_FLOAT64_PROJECTIONS", "0").strip().lower()
-        in {"1", "true", "yes", "on"}
-    ),
+    "use_float64_scoring": parse_env_true_flag("RECOVAR_USE_FLOAT64_SCORING"),
+    "use_float64_projections": parse_env_true_flag("RECOVAR_USE_FLOAT64_PROJECTIONS"),
     # Default to RELION's float32 fine-search diff2/minimum ordering. This
     # diagnostic bypass retains the historical algebraic sparse scorer for
     # controlled full-trajectory A/B comparisons.
-    "relion_exact_fine_gaussian": not bool(
-        os.environ.get(
-            "RECOVAR_DISABLE_RELION_EXACT_FINE_GAUSSIAN",
-            "0",
-        ).strip().lower()
-        in {"1", "true", "yes", "on"}
+    "relion_exact_fine_gaussian": not parse_env_true_flag(
+        "RECOVAR_DISABLE_RELION_EXACT_FINE_GAUSSIAN"
     ),
     "do_gridding_correction": True,
     "square_window": RELION_FOURIER_WINDOW_SQUARE,
@@ -92,9 +82,8 @@ _DENSE_EM_STATIC_KWARGS: dict = {
 # only has an effect when the texture path is unavailable, e.g. under
 # ``use_float64_scoring``/``use_float64_projections``, since CUDA textures
 # cannot hold complex128).
-RELION_ACC_DOUBLE_FLOORF_QUIRK = bool(
-    os.environ.get("RECOVAR_RELION_ACC_DOUBLE_FLOORF_QUIRK", "0").strip().lower()
-    in {"1", "true", "yes", "on"}
+RELION_ACC_DOUBLE_FLOORF_QUIRK = parse_env_true_flag(
+    "RECOVAR_RELION_ACC_DOUBLE_FLOORF_QUIRK"
 )
 
 
