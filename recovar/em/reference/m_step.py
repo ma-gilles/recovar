@@ -1,10 +1,8 @@
 """M-step: volume update via weighted backprojection."""
 
-import functools
 import logging
 
 import equinox as eqx
-import jax
 import jax.numpy as jnp
 import numpy as np
 
@@ -12,8 +10,6 @@ import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar import core, utils
 from recovar.core.configs import ForwardModelConfig
 from recovar.em.sampling import translations_to_indices
-
-from .core import VOL_AXIS
 
 logger = logging.getLogger(__name__)
 
@@ -34,61 +30,6 @@ def sum_up_translate_one_image(image, probabilities, translations, image_shape, 
     return summed_up_images
 
 
-sum_up_translations = jax.vmap(sum_up_translate_one_image, in_axes=(0, 0, 0, None, None))
-sum_up_translations_shared_translations = jax.vmap(sum_up_translate_one_image, in_axes=(0, 0, None, None, None))
-
-
-@functools.partial(jax.jit, static_argnums=[7, 8, 9, 10, 11])
-def backproject_one_image(
-    probabilities,
-    images_i,
-    rotation_matrices,
-    translations,
-    CTF_params,
-    noise_variance,
-    voxel_size,
-    volume_shape,
-    image_shape,
-    disc_type,
-    ctf,
-    translation_fn="fft",
-):
-    images = sum_up_translations(images_i, probabilities, translations, image_shape, translation_fn)
-    CTF = ctf(CTF_params, image_shape, voxel_size)
-    images *= CTF[:, None, None] / noise_variance
-
-    images_half = fourier_transform_utils.full_image_to_half_image(images, image_shape)
-    Ft_y = batch_vol_adjoint_slice_volume_half(images_half, rotation_matrices, image_shape, volume_shape, None)
-
-    probabilites_summed_over_translations = jnp.sum(probabilities, axis=-1)[..., None]
-    CTF_probs = (CTF**2 / noise_variance)[:, None, None] * probabilites_summed_over_translations
-    CTF_probs_half = fourier_transform_utils.full_image_to_half_image(CTF_probs, image_shape)
-    Ft_ctf = batch_vol_adjoint_slice_volume_half(CTF_probs_half, rotation_matrices, image_shape, volume_shape, None)
-
-    return Ft_y, Ft_ctf
-
-
-batch_vol_adjoint_slice_volume = jax.vmap(
-    lambda images, rots, image_shape, volume_shape, volume: core.adjoint_slice_volume(
-        images, rots, image_shape, volume_shape, "linear_interp", volume=volume
-    ),
-    in_axes=(VOL_AXIS, VOL_AXIS, None, None, None),
-    out_axes=0,
-)
-batch_vol_adjoint_slice_volume_half = jax.vmap(
-    lambda images, rots, image_shape, volume_shape, volume: core.adjoint_slice_volume(
-        images, rots, image_shape, volume_shape, "linear_interp", volume=volume, half_image=True
-    ),
-    in_axes=(VOL_AXIS, VOL_AXIS, None, None, None),
-    out_axes=0,
-)
-
-
-# ============================================================================
-# Equinox-based M-step API
-# ============================================================================
-
-
 @eqx.filter_jit
 def sum_up_images_fixed_rots_eqx(
     config: ForwardModelConfig,
@@ -101,7 +42,7 @@ def sum_up_images_fixed_rots_eqx(
     Ft_y=0,
     Ft_ctf=0,
 ):
-    """Equinox version of sum_up_images_fixed_rots (13 → 9 params)."""
+    """Accumulate fixed-rotation image and CTF terms for the M-step."""
     assert probabilities.shape[0] == batch.shape[0]
     assert probabilities.shape[1] == rotations.shape[0]
     assert probabilities.shape[2] == translations.shape[0]
@@ -138,63 +79,6 @@ def sum_up_images_fixed_rots_eqx(
     )
 
     return Ft_y, Ft_ctf
-
-
-# ============================================================================
-# Legacy M-step API
-# ============================================================================
-
-
-@functools.partial(jax.jit, static_argnums=[5, 8, 9, 10])
-def sum_up_images_fixed_rots(
-    batch,
-    probabilities,
-    translations,
-    rotations,
-    CTF_params,
-    ctf,
-    noise_variance,
-    voxel_size,
-    image_shape,
-    volume_shape,
-    process_images,
-    Ft_y=0,
-    Ft_ctf=0,
-):
-
-    assert probabilities.shape[0] == batch.shape[0]
-    assert probabilities.shape[1] == rotations.shape[0]
-    assert probabilities.shape[2] == translations.shape[0]
-    n_rotations = rotations.shape[0]
-    n_translations = translations.shape[0]
-    n_images = batch.shape[0]
-    n_shifted_images = n_images * n_translations
-
-    CTF = ctf(CTF_params, image_shape, voxel_size)
-    batch = process_images(batch, apply_image_mask=False) * CTF / noise_variance
-    shifted_images = core.batch_trans_translate_images(
-        batch, jnp.repeat(translations[None], batch.shape[0], axis=0), image_shape
-    )
-    shifted_images = shifted_images.reshape(n_shifted_images, shifted_images.shape[-1])
-
-    P = probabilities.swapaxes(0, 1).reshape(n_rotations, n_shifted_images)
-    summed_images = P @ shifted_images
-
-    summed_half = fourier_transform_utils.full_image_to_half_image(summed_images, image_shape)
-    Ft_y = core.adjoint_slice_volume(
-        summed_half, rotations, image_shape, volume_shape, "linear_interp", volume=Ft_y, half_image=True
-    )
-
-    probabilites_summed_over_translations = jnp.sum(probabilities, axis=-1)
-
-    CTF_probs = probabilites_summed_over_translations.T @ (CTF**2 / noise_variance)
-    CTF_probs_half = fourier_transform_utils.full_image_to_half_image(CTF_probs, image_shape)
-    Ft_ctf = core.adjoint_slice_volume(
-        CTF_probs_half, rotations, image_shape, volume_shape, "linear_interp", volume=Ft_ctf, half_image=True
-    )
-
-    return Ft_y, Ft_ctf
-
 
 def M_with_precompute(
     experiment_dataset, probabilities, rotations, translations, noise_variance, disc_type, image_indices=None

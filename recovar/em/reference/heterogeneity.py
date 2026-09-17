@@ -221,7 +221,7 @@ def _fixed_rotation_covariance_images(
 
 @eqx.filter_jit
 def sum_up_images_fixed_rots_covariance_precompute_eqx(config: ForwardModelConfig, batch, translations, ctf_params):
-    """Equinox version of sum_up_images_fixed_rots_covariance_precompute (7 → 4 params)."""
+    """Prepare shifted, CTF-weighted images for covariance accumulation."""
     CTF = config.compute_ctf(ctf_params)
     batch = config.process_fn(batch, apply_image_mask=False) * CTF
     shifted_CTFed_images = core.batch_trans_translate_images(
@@ -295,7 +295,7 @@ def reduce_covariance_est_inner_eqx(
     ctf_params,
     noise_variance,
 ):
-    """Equinox version of reduce_covariance_est_inner (11 → 8 params)."""
+    """Accumulate projected covariance normal-equation terms."""
     CTF = config.compute_ctf(ctf_params)
     batch = config.process_fn(batch, apply_image_mask=False)
     batch *= config.compute_ctf(ctf_params)
@@ -324,7 +324,7 @@ def reduce_covariance_est_inner_eqx(
 
 
 # ============================================================================
-# Legacy EM heterogeneity API
+# Independent covariance backprojection reference
 # ============================================================================
 
 
@@ -436,20 +436,6 @@ def compute_H_B(
         start_idx = end_idx
 
     return H, B
-
-
-@functools.partial(jax.jit, static_argnums=[3, 5, 6])
-def sum_up_images_fixed_rots_covariance_precompute(
-    batch, translations, CTF_params, ctf, voxel_size, image_shape, process_images
-):
-
-    CTF = ctf(CTF_params, image_shape, voxel_size)
-    batch = process_images(batch, apply_image_mask=False) * CTF
-    shifted_CTFed_images = core.batch_trans_translate_images(
-        batch, jnp.repeat(translations[None], batch.shape[0], axis=0), image_shape
-    )
-
-    return shifted_CTFed_images, CTF
 
 
 @functools.partial(jax.jit, static_argnums=[7, 8, 12, 13])
@@ -662,51 +648,6 @@ def solve_covariance(lhs, rhs):
     logger.info("end of solve")
 
     return covar
-
-
-@functools.partial(jax.jit, static_argnums=[6, 9, 10])
-def reduce_covariance_est_inner(
-    mean_projections,
-    u_projections,
-    probabilities,
-    batch,
-    translations,
-    CTF_params,
-    ctf,
-    noise_variance,
-    voxel_size,
-    image_shape,
-    process_images,
-):
-
-    CTF = ctf(CTF_params, image_shape, voxel_size)
-
-    batch = process_images(batch, apply_image_mask=False)
-    batch *= ctf(CTF_params, image_shape, voxel_size)
-
-    probabilities = probabilities.swapaxes(0, 1)
-
-    b = compute_bLambdainvPU_terms(
-        mean_projections, u_projections, batch, translations, CTF, jnp.ones_like(noise_variance), image_shape
-    )
-    b = b.swapaxes(-1, -2)
-    b *= jnp.sqrt(probabilities[..., None])
-    outer_products = covariance_estimation.summed_outer_products(b.reshape(-1, b.shape[-1]))
-
-    probabilities_summed_over_translations = jnp.sum(probabilities, axis=-1)
-    UALambdaAUs = compute_UPLambdainvPU(u_projections, CTF, 1 / noise_variance)
-    UALambdaAUs = jnp.sum(probabilities_summed_over_translations[..., None, None] * UALambdaAUs, axis=(0, 1))
-
-    rhs = outer_products - UALambdaAUs
-    rhs = rhs.real.astype(CTF_params.dtype)
-
-    H = compute_UPLambdainvPU(u_projections, CTF, jnp.ones_like(noise_variance))
-
-    H *= jnp.sqrt(probabilities_summed_over_translations[..., None, None])
-    H = H.reshape(-1, H.shape[-2], H.shape[-1])
-    lhs = jnp.sum(covariance_estimation.batch_kron(H, H), axis=(0))
-
-    return lhs, rhs
 
 
 def compute_regularized_covariance_columns(
