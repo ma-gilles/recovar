@@ -295,7 +295,6 @@ def _run_with_halfset_fsc_schedule(
         W_prior=jnp.asarray(W_prior, dtype=jnp.float32),
         mean_prior=jnp.asarray(mean_prior, dtype=jnp.float32),
         noise_variance=jnp.asarray(noise_variance, dtype=jnp.float32),
-        z_prior_precision_diag=jnp.ones((int(q),), dtype=jnp.float32),
         schedule_state=None,
     )
 

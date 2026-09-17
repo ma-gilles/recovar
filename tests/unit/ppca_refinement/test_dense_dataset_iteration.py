@@ -443,7 +443,6 @@ def test_halfset_dense_ppca_iteration_updates_scoring_state(tiny_inputs):
         W_prior=jnp.ones((HALF_VOL, 1), dtype=jnp.float32) * 5.0,
         mean_prior=jnp.ones((HALF_VOL,), dtype=jnp.float32) * 10.0,
         noise_variance=jnp.ones((N_HALF,), dtype=jnp.float32),
-        z_prior_precision_diag=jnp.ones((1,), dtype=jnp.float32),
         schedule_state=None,
     )
 
@@ -472,7 +471,6 @@ def test_dense_ppca_refinement_loop_advances_current_size_when_gates_pass(tiny_i
         W_prior=jnp.ones((HALF_VOL, 1), dtype=jnp.float32) * 5.0,
         mean_prior=jnp.ones((HALF_VOL,), dtype=jnp.float32) * 10.0,
         noise_variance=jnp.ones((N_HALF,), dtype=jnp.float32),
-        z_prior_precision_diag=jnp.ones((1,), dtype=jnp.float32),
         schedule_state=None,
     )
 
@@ -515,7 +513,6 @@ def test_dense_ppca_refinement_loop_blocks_on_halfset_gate(tiny_inputs):
         W_prior=jnp.ones((HALF_VOL, 1), dtype=jnp.float32) * 5.0,
         mean_prior=jnp.ones((HALF_VOL,), dtype=jnp.float32) * 10.0,
         noise_variance=jnp.ones((N_HALF,), dtype=jnp.float32),
-        z_prior_precision_diag=jnp.ones((1,), dtype=jnp.float32),
         schedule_state=None,
     )
 
@@ -766,7 +763,6 @@ def test_exact_local_refinement_loop_uses_same_resolution_gate(tiny_inputs):
         W_prior=jnp.ones((HALF_VOL, 1), dtype=jnp.float32) * 5.0,
         mean_prior=jnp.ones((HALF_VOL,), dtype=jnp.float32) * 10.0,
         noise_variance=jnp.ones((N_HALF,), dtype=jnp.float32),
-        z_prior_precision_diag=jnp.ones((1,), dtype=jnp.float32),
         schedule_state=None,
     )
 
@@ -805,7 +801,6 @@ def test_dense_ppca_wrapper_uses_production_kclass_schedule_bridge(tiny_inputs):
         W_prior=jnp.ones((HALF_VOL, 1), dtype=jnp.float32) * 5.0,
         mean_prior=jnp.ones((HALF_VOL,), dtype=jnp.float32) * 10.0,
         noise_variance=jnp.ones((N_HALF,), dtype=jnp.float32),
-        z_prior_precision_diag=jnp.ones((1,), dtype=jnp.float32),
         schedule_state=None,
     )
 

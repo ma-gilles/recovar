@@ -143,7 +143,6 @@ def _build_state(mu, W):
         W_prior=jnp.ones((HALF_VOL, 1), dtype=jnp.float32) * 5.0,
         mean_prior=jnp.ones((HALF_VOL,), dtype=jnp.float32) * 10.0,
         noise_variance=jnp.ones((N_HALF,), dtype=jnp.float32),
-        z_prior_precision_diag=jnp.ones((1,), dtype=jnp.float32),
         schedule_state=None,
     )
 
