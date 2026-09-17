@@ -11,9 +11,7 @@ from recovar.em.reference.core import hard_assignment_idx_to_pose
 logger = logging.getLogger(__name__)
 
 
-def run_batched_em_iteration(
-    experiment_dataset, state_obj, rotations, translations, disc_type, memory_to_use=128, volume_mask=None
-):
+def run_batched_em_iteration(experiment_dataset, state_obj, rotations, translations, disc_type, memory_to_use=128):
 
     if rotations.shape[0] <= 0:
         raise ValueError("run_batched_em_iteration requires at least one rotation")
