@@ -220,7 +220,7 @@ def _fixed_rotation_covariance_images(
 
 
 @eqx.filter_jit
-def sum_up_images_fixed_rots_covariance_precompute_eqx(config: ForwardModelConfig, batch, translations, ctf_params):
+def prepare_fixed_rotation_covariance(config: ForwardModelConfig, batch, translations, ctf_params):
     """Prepare shifted, CTF-weighted images for covariance accumulation."""
     CTF = config.compute_ctf(ctf_params)
     batch = config.process_fn(batch, apply_image_mask=False) * CTF
@@ -231,7 +231,7 @@ def sum_up_images_fixed_rots_covariance_precompute_eqx(config: ForwardModelConfi
 
 
 @eqx.filter_jit
-def sum_up_images_fixed_rots_covariance_with_precompute_eqx(
+def accumulate_fixed_rotation_covariance(
     config: ForwardModelConfig,
     shifted_CTFed_images,
     mean_projections,
@@ -285,7 +285,7 @@ def sum_up_images_fixed_rots_covariance_with_precompute_eqx(
 
 
 @eqx.filter_jit
-def reduce_covariance_est_inner_eqx(
+def reduce_covariance_normal_equations(
     config: ForwardModelConfig,
     mean_projections,
     u_projections,
@@ -408,7 +408,7 @@ def compute_H_B(
     ):
         end_idx = start_idx + len(indices)
         prob_batch = jnp.array(probabilities[start_idx:end_idx])
-        shifted_CTFed_images, CTF = sum_up_images_fixed_rots_covariance_precompute_eqx(
+        shifted_CTFed_images, CTF = prepare_fixed_rotation_covariance(
             config,
             images,
             translations,
@@ -417,7 +417,7 @@ def compute_H_B(
         for rot_indices in utils.index_batch_iter(n_rotations, rotation_batch):  # k in range(mult):
             gridpoints = core.batch_get_gridpoint_coords(rotations[rot_indices], image_shape, volume_shape)
             for k, picked_freq_coord in enumerate(picked_freq_coords):
-                H[k], B[k] = sum_up_images_fixed_rots_covariance_with_precompute_eqx(
+                H[k], B[k] = accumulate_fixed_rotation_covariance(
                     config,
                     shifted_CTFed_images,
                     mean_projections[np.array(rot_indices)],
@@ -612,7 +612,7 @@ def compute_projected_covariance_rhs_lhs(
     ):
         for rot_indices in utils.index_batch_iter(n_rotations, rotation_batch):  # k in range(mult):
             end_idx = start_idx + len(batch_image_ind)
-            lhs_this, rhs_this = reduce_covariance_est_inner_eqx(
+            lhs_this, rhs_this = reduce_covariance_normal_equations(
                 config,
                 mean_projections[rot_indices],
                 u_projections[rot_indices],

@@ -41,7 +41,7 @@ norm_squared_residuals_from_ft = jax.vmap(norm_squared_residuals_from_ft_one_ima
 
 
 @eqx.filter_jit
-def compute_dot_products_eqx(config: ForwardModelConfig, projections, batch, translations, ctf_params, noise_variance):
+def compute_dot_products(config: ForwardModelConfig, projections, batch, translations, ctf_params, noise_variance):
     """Compute image/projection dot products over the translation grid."""
     batch = config.process_fn(batch, apply_image_mask=False)
     batch_norm = jnp.linalg.norm(batch / jnp.sqrt(noise_variance), axis=(-1), keepdims=True) ** 2
@@ -57,7 +57,7 @@ def compute_dot_products_eqx(config: ForwardModelConfig, projections, batch, tra
 
 
 @eqx.filter_jit
-def compute_CTFed_proj_norms_eqx(config: ForwardModelConfig, projections, ctf_params, noise_variance):
+def compute_ctf_projection_norms(config: ForwardModelConfig, projections, ctf_params, noise_variance):
     """Compute noise-weighted squared-CTF projection norms."""
     CTFs = config.compute_ctf(ctf_params) ** 2 / noise_variance
     return CTFs @ projections.T

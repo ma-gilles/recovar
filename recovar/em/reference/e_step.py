@@ -15,8 +15,8 @@ from .core import (
     NORM_FFT,
     batch_vol_rot_slice_volume,
     batch_vol_slice_volume,
-    compute_CTFed_proj_norms_eqx,
-    compute_dot_products_eqx,
+    compute_ctf_projection_norms,
+    compute_dot_products,
     norm_squared_residuals_from_ft,
 )
 from .heterogeneity import compute_bHb_terms
@@ -96,7 +96,7 @@ def E_with_precompute(
         by_image=False,
     ):
         end_idx = start_idx + len(indices)
-        residuals[start_idx:end_idx] = compute_dot_products_eqx(
+        residuals[start_idx:end_idx] = compute_dot_products(
             config,
             projections,
             batch,
@@ -164,7 +164,7 @@ def E_with_precompute(
     )
 
     for array_indices, dataset_indices in utils.subset_and_indices_batch_iter(image_indices, norm_batch_size):
-        res = compute_CTFed_proj_norms_eqx(
+        res = compute_ctf_projection_norms(
             config,
             projections,
             experiment_dataset.CTF_params[dataset_indices],

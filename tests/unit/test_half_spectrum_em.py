@@ -479,7 +479,7 @@ class TestHalfInnerProductCorrectness:
 
 class TestEStepHalfMatchesFull:
     """Verify that the half-spectrum E-step produces the same scores as the
-    full-spectrum reference (compute_dot_products_eqx + norm term)."""
+    full-spectrum reference (compute_dot_products + norm term)."""
 
     def test_scores_match(self, seeded_inputs):
         """E-step scores from half-spectrum path match full-spectrum scores."""
@@ -506,11 +506,11 @@ class TestEStepHalfMatchesFull:
         proj_abs2_full = jnp.abs(proj_full) ** 2
 
         # Cross-term via existing function
-        cross_term = em_core.compute_dot_products_eqx(
+        cross_term = em_core.compute_dot_products(
             config, proj_full, batch_data, translations, ctf_params, noise_variance
         )
         # Norm-term
-        norm_term = em_core.compute_CTFed_proj_norms_eqx(config, proj_abs2_full, ctf_params, noise_variance)
+        norm_term = em_core.compute_ctf_projection_norms(config, proj_abs2_full, ctf_params, noise_variance)
         # Full residual: scores = -0.5 * (cross + norm)
         scores_full = -0.5 * (cross_term + norm_term[..., None])
 
@@ -575,10 +575,10 @@ class TestEStepHalfMatchesFull:
 
         proj_full = core.slice_volume(volume, rotations, IMAGE_SHAPE, VOLUME_SHAPE, "linear_interp", half_image=False)
         proj_abs2_full = jnp.abs(proj_full) ** 2
-        cross_term = em_core.compute_dot_products_eqx(
+        cross_term = em_core.compute_dot_products(
             config, proj_full, batch_data, translations, ctf_params, noise_variance
         )
-        norm_term = em_core.compute_CTFed_proj_norms_eqx(config, proj_abs2_full, ctf_params, noise_variance)
+        norm_term = em_core.compute_ctf_projection_norms(config, proj_abs2_full, ctf_params, noise_variance)
         scores_full = -0.5 * (cross_term + norm_term[..., None])
         # Softmax
         scores_flat = scores_full.reshape(n_images, -1)
