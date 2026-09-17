@@ -126,7 +126,14 @@ def test_local_debug_source_eulers_follow_bucket_row_and_actual_count(row):
     bucket = _bucket()
     count = int(bucket.actual_rotation_counts[row])
     original_matrices = bucket.local_rotations.copy()
-    metadata = local_debug._local_candidate_metadata(local_layout=_layout(), bucket=bucket, row=row, actual_count=count)
+    candidate_rows, candidate_classes = local_debug._local_candidate_rows(bucket, row)
+    # A bucket without class segments still addresses exactly the leading rows, and
+    # has no class to attribute its candidates to.
+    np.testing.assert_array_equal(candidate_rows, np.arange(count))
+    assert candidate_classes is None
+    metadata = local_debug._local_candidate_metadata(
+        local_layout=_layout(), bucket=bucket, row=row, candidate_rows=candidate_rows,
+    )
     assert metadata["local_rotation_eulers"].dtype == np.float64
     np.testing.assert_array_equal(metadata["local_rotation_eulers"], bucket.local_source_eulers[row, :count])
     assert metadata["local_rotation_eulers_source"] == "source_eulers"
@@ -144,7 +151,10 @@ def test_local_debug_matrix_only_eulers_preserve_legacy_values(missing):
         del bucket.local_source_eulers
     else:
         bucket.local_source_eulers = None
-    metadata = local_debug._local_candidate_metadata(local_layout=_layout(), bucket=bucket, row=2, actual_count=2)
+    metadata = local_debug._local_candidate_metadata(
+        local_layout=_layout(), bucket=bucket, row=2,
+        candidate_rows=local_debug._local_candidate_rows(bucket, 2)[0],
+    )
     expected = utils.R_to_relion(bucket.local_rotations[2, :2], degrees=True).astype(np.float32)
     assert metadata["local_rotation_eulers"].dtype == np.float32
     np.testing.assert_array_equal(metadata["local_rotation_eulers"], expected)
