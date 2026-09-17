@@ -1307,12 +1307,10 @@ fixed-target raw diff2 pass; complete active-table raw diff2 and combined
 score fail.  The result is therefore 2/4 passing and 4/4 evaluated, with
 classification
 `global_raw_and_score_paths_differ_but_fixed_target_closes`.  The exact
-cases, checkmarks, owner jobs, policy, and evidence hashes are checked in as
-`docs/math/em_k4_causal_boundary_scorecard_v1.json` and rendered as
-`docs/math/em_k4_causal_boundary_scorecard.md`; validate them with
-`pixi run python scripts/summarize_em_k4_causal_boundary_scorecard.py
---check`.  This diagnostic is non-scoring and cannot change the frozen K=1
-or K=4 FSC/FSC-AUC totals.
+cases, checkmarks, owner jobs, policy, and evidence hashes are preserved in the
+[archived causal-boundary report](https://github.com/ma-gilles/recovar-experiments/blob/b07a33026e7ced5bf4a841caa5767d962520c4ee/docs/math/em_k4_causal_boundary_scorecard.md).
+Its original JSON, validator and integrity tests remain alongside it. This
+diagnostic is non-scoring and cannot change the frozen K=1 or K=4 FSC/FSC-AUC totals.
 
 The exact case-4 iteration-2 coarse join now covers all
 `1,069,056/1,069,056` class-pose-translation candidates.  RELION and RECOVAR
