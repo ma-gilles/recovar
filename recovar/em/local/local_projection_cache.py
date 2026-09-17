@@ -47,7 +47,6 @@ class LocalRelionProjectionCache:
     # int32 range never reach the device and the map does not scale with the id
     # space (about 9.7e9 entries at fine HEALPix order 9).
     unique_ids: "np.ndarray | None" = None
-    n_projection_pixels: int = 0
     estimated_gb: float = 0.0
     build_s: float = 0.0
 
@@ -364,7 +363,6 @@ def build_cache(
         row_count=row_count,
         id_map_row_count=id_map_row_count,
         unique_ids=np.asarray(unique_ids, dtype=np.int64),
-        n_projection_pixels=n_projection_pixels,
         estimated_gb=estimated_gb,
         build_s=build_s,
     )

@@ -68,7 +68,6 @@ class _RelionEMBatchPlan:
     persistent_estimate_gb: float
     usable_estimate_gb: float
     gpu_used_estimate_gb: float
-    runtime_free_estimate_gb: float
     projection_block_gb: float
     active_score_tile_budget_gb: float
     active_score_tile_gb: float
@@ -1133,7 +1132,6 @@ def _estimate_relion_em_batch_sizes(
         persistent_estimate_gb=float(persistent_gb),
         usable_estimate_gb=float(usable_gb),
         gpu_used_estimate_gb=float(gpu_used_gb),
-        runtime_free_estimate_gb=float(runtime_free_gb),
         projection_block_gb=float(projection_block_gb),
         active_score_tile_budget_gb=float(active_score_tile_budget_gb),
         active_score_tile_gb=float(active_score_tile_gb),
