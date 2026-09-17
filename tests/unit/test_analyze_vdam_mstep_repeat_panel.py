@@ -96,3 +96,22 @@ def test_repeat_panel_runner_pins_same_gpu_and_nested_capture_contract():
     )
     missing = [token for token in required if token not in runner]
     assert not missing, f"M-step repeat panel lost provenance/same-GPU gates: {missing}"
+
+
+def test_repeat_panel_reports_zero_repeat_error_without_floor_ratios(tmp_path):
+    arm_a = tmp_path / "a"
+    arm_b = tmp_path / "b"
+    _make_arm(arm_a, native_delta=0.0, recovar_delta=0.0)
+    _make_arm(arm_b, native_delta=0.0, recovar_delta=0.0)
+
+    report = analyze_repeat_panel(arm_a, arm_b)
+
+    assert report["schema"] == SCHEMA
+    assert report["native_repeat"]["raw_accumulator_data_half0"]["relative_l2"] == 0.0
+    assert report["recovar_repeat"]["raw_accumulator_weight_half1"]["relative_l2"] == 0.0
+    assert report["native_floor_ratios"]["raw_accumulator_data_half0"] == {
+        "cross_arm_a_over_native_repeat": None,
+        "cross_arm_b_over_native_repeat": None,
+    }
+    assert report["cross_arm_a"]["all_stages_bitwise_exact"] is True
+    assert report["cross_arm_b"]["all_stages_bitwise_exact"] is True

@@ -9,10 +9,7 @@ from pathlib import Path
 
 import numpy as np
 
-try:
-    from scripts.analyze_k1_coarse_capture_ab import _metrics, _sha256
-except ModuleNotFoundError:  # Support direct execution from the repository root.
-    from analyze_k1_coarse_capture_ab import _metrics, _sha256
+from scripts.analyze_k1_coarse_capture_ab import _metrics, _sha256
 
 
 ORDERED_FIELDS = (
