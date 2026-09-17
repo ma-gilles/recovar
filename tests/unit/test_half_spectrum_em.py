@@ -1664,7 +1664,6 @@ class TestFullIterationHalfMatches:
             + em_profile.pass2_score_s
             + em_profile.pass2_postprocess_s
             + em_profile.mstep_s
-            + em_profile.window_scatter_s
             + em_profile.adjoint_y_s
             + em_profile.adjoint_ctf_s
             + em_profile.noise_s

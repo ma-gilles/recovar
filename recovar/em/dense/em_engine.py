@@ -177,7 +177,6 @@ _DENSE_TIMING_FIELDS = (
     "pass2_score_s",
     "pass2_postprocess_s",
     "mstep_s",
-    "window_scatter_s",
     "adjoint_y_s",
     "adjoint_ctf_s",
     "noise_s",
