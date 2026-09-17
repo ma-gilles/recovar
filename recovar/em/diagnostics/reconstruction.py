@@ -9,6 +9,7 @@ import os
 import jax.numpy as jnp
 import numpy as np
 
+from recovar.core import fourier_transform_utils
 from recovar.em.helpers.resolution import shell_index_to_resolution_angstrom
 
 
@@ -306,3 +307,39 @@ def write_final_bpref_accumulators(
     _final_dump_path = pathlib.Path(output_dir) / "recovar_final_bpref_accum.npz"
     np.savez(_final_dump_path, **_final_dump)
     logger.info("Final all-data BPref accumulators dumped: %s", _final_dump_path)
+
+
+def write_premask_mean(
+    mean, *, output_dir, half_index, iteration, current_size, grid_size,
+    voxel_size, volume_shape, n_classes,
+):
+    """Write pre-mask Fourier/real maps, preserving the diagnostic NPZ schema."""
+    import pathlib
+
+    pathlib.Path(output_dir).mkdir(parents=True, exist_ok=True)
+    preserve_dtype = os.environ.get("RECOVAR_PREMASK_DUMP_PRESERVE_DTYPE", "").strip().lower() not in {
+        "", "0", "false", "no", "off",
+    }
+    fourier = np.asarray(mean)
+    if n_classes > 1:
+        real = np.stack(
+            [
+                np.asarray(fourier_transform_utils.get_idft3(mean[class_idx].reshape(volume_shape))).real
+                for class_idx in range(n_classes)
+            ],
+            axis=0,
+        )
+    else:
+        real = np.asarray(fourier_transform_utils.get_idft3(mean.reshape(volume_shape))).real
+    np.savez(
+        pathlib.Path(output_dir) / f"recovar_premask_it{iteration + 1:03d}_half{half_index + 1}.npz",
+        iteration=np.int32(iteration + 1),
+        half=np.int32(half_index + 1),
+        current_size=np.int32(current_size),
+        grid_size=np.int32(grid_size),
+        voxel_size=np.float32(voxel_size),
+        volume_shape=np.asarray(volume_shape, dtype=np.int32),
+        means_premask=fourier if preserve_dtype else np.asarray(fourier, dtype=np.complex64),
+        means_premask_real=real if preserve_dtype else np.asarray(real, dtype=np.float32),
+        dump_preserve_dtype=np.int32(int(preserve_dtype)),
+    )

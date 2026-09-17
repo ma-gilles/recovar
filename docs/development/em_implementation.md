@@ -446,8 +446,8 @@ module that owns each operation. Capture state and counters belong to the
 separate diagnostic owner below.
 
 [`diagnostics.reconstruction`](../../recovar/em/diagnostics/reconstruction.py)
-serializes the K-class current-size/M-step, tau2-update and final BPref NPZ
-captures. The refinement controller retains the environment gates and call
+serializes pre-mask maps, K-class current-size/M-step, tau2-update and final BPref
+NPZ captures. Refinement callers retain the environment gates and call
 boundaries; writers preserve historical fields, casts and optional entries.
 
 [`helpers.coarse_score_diagnostics`](../../recovar/em/diagnostics/coarse_score_diagnostics.py)
