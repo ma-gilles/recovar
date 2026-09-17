@@ -915,7 +915,7 @@ def iter_local_ppca_dataset_bucket_blocks(
     volume_domain: str = "auto",
     image_indices: np.ndarray | None = None,
     score_with_masked_images: bool = False,
-    half_spectrum_scoring: bool = False,
+    relion_unit_half_weights: bool = False,
     square_window: bool = False,
     class_log_prior: float = 0.0,
     image_scale_corrections: np.ndarray | None = None,
@@ -935,7 +935,7 @@ def iter_local_ppca_dataset_bucket_blocks(
         q=q,
         volume_domain=volume_domain,
         current_size=current_size,
-        half_spectrum_scoring=half_spectrum_scoring,
+        relion_unit_half_weights=relion_unit_half_weights,
         square_window=square_window,
     )
     config = ForwardModelConfig.from_dataset(
@@ -1092,7 +1092,7 @@ def _accumulate_local_ppca_fused_stats(
     q = geometry.q
     volume_domain = geometry.volume_domain
     score_with_masked_images = scoring.score_with_masked_images
-    half_spectrum_scoring = scoring.half_spectrum_scoring
+    relion_unit_half_weights = scoring.relion_unit_half_weights
     square_window = scoring.square_window
     image_scale_corrections = scoring.image_scale_corrections
 
@@ -1142,7 +1142,7 @@ def _accumulate_local_ppca_fused_stats(
         volume_domain=volume_domain,
         image_indices=image_indices,
         score_with_masked_images=score_with_masked_images,
-        half_spectrum_scoring=half_spectrum_scoring,
+        relion_unit_half_weights=relion_unit_half_weights,
         square_window=square_window,
         class_log_prior=class_log_prior,
         image_scale_corrections=image_scale_corrections,
@@ -1379,7 +1379,7 @@ def _score_local_ppca_pose_diagnostics(
     q = geometry.q
     volume_domain = geometry.volume_domain
     score_with_masked_images = scoring.score_with_masked_images
-    half_spectrum_scoring = scoring.half_spectrum_scoring
+    relion_unit_half_weights = scoring.relion_unit_half_weights
     square_window = scoring.square_window
     image_scale_corrections = scoring.image_scale_corrections
 
@@ -1415,7 +1415,7 @@ def _score_local_ppca_pose_diagnostics(
         volume_domain=volume_domain,
         image_indices=image_indices,
         score_with_masked_images=score_with_masked_images,
-        half_spectrum_scoring=half_spectrum_scoring,
+        relion_unit_half_weights=relion_unit_half_weights,
         square_window=square_window,
         class_log_prior=class_log_prior,
         image_scale_corrections=image_scale_corrections,

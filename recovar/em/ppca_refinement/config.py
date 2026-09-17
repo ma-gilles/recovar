@@ -44,20 +44,16 @@ class ScoringConfig:
 
     Attributes
     ----------
-    half_spectrum_scoring : bool
-        Misleading legacy name. ``False`` (default) **enables Hermitian
-        half-image weights** (``w_f = 2`` for non-DC/non-Nyquist pixels,
-        ``w_f = 1`` else) so every Fourier inner product in the E-step
-        equals the full-Fourier inner product exactly, the ``.real()``
-        projections in :func:`engine._per_pose_stats_block` are exact,
-        and ``z`` stays exactly real. ``True`` switches to RELION-style
-        unit weights everywhere, which biases pose scores by ~½, makes
-        ``Re(half_IP)`` an approximation of the full IP, and shifts the
-        effective ``z`` prior — only use for RELION-parity tests.
+    relion_unit_half_weights : bool
+        ``True`` uses RELION-style unit weights on the stored half image.
+        ``False`` (default) uses Hermitian multiplicity (``w_f = 2`` for
+        non-DC/non-Nyquist pixels and ``w_f = 1`` otherwise), so Fourier
+        inner products equal their full-image values. Enable unit weights
+        only for RELION parity.
     """
 
     score_with_masked_images: bool = False
-    half_spectrum_scoring: bool = False
+    relion_unit_half_weights: bool = False
     square_window: bool = False
     relion_texture_interp: bool = True
     class_log_prior: float = 0.0
