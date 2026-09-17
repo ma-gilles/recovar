@@ -1,20 +1,7 @@
-"""Centralized configuration dataclasses for PPCA refinement EM iterations.
+"""Geometry, batching, scoring and pose-selection options for PPCA refinement.
 
-Every tunable knob that an EM iteration accepts lives here. A reader who wants
-to know what dials exist should be able to read this file end-to-end in two
-minutes.
-
-Concerns are split orthogonally:
-
-* :class:`GeometryConfig` — volume/image shape, latent dim, domain.
-* :class:`ScheduleConfig` — batch sizes, M-step solve chunk size.
-* :class:`ScoringConfig` — image-side scoring options.
-* :class:`PoseSelectionConfig` — best/top-p pose diagnostic selection.
-* :class:`SparsePass2Config` — pass-2 backprojection sparsity culling.
-* :class:`MeanRegularizationConfig` — re-exported from :mod:`mean_regularization`.
-* :class:`PostprocessConfig` — re-exported from :mod:`postprocess`.
-
-Every config is ``frozen=True``.
+Mean regularization and postprocessing configs live in their implementation
+modules. All configuration dataclasses are frozen.
 """
 
 from __future__ import annotations
@@ -23,17 +10,12 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from recovar.em.ppca_refinement.mean_regularization import MeanRegularizationConfig
-from recovar.em.ppca_refinement.postprocess import PostprocessConfig
-
 __all__ = [
     "GeometryConfig",
     "ScheduleConfig",
     "ScoringConfig",
     "PoseSelectionConfig",
     "SparsePass2Config",
-    "MeanRegularizationConfig",
-    "PostprocessConfig",
 ]
 
 
