@@ -8,11 +8,12 @@ import pytest
 from recovar.em.sparse_pass2 import sparse_pass2_bucketed as bucketed
 
 
-def test_pipeline_tail_knob_is_default_off(monkeypatch):
+def test_pipeline_tail_knob_defaults_on_and_is_disableable(monkeypatch):
+    """Default on after the matched hp3 pair (job 14100290); 0 runs the tail inline."""
     monkeypatch.delenv(bucketed._PIPELINE_TAIL_ENV, raising=False)
-    assert bucketed._pipeline_tail_enabled() is False
-    monkeypatch.setenv(bucketed._PIPELINE_TAIL_ENV, "1")
     assert bucketed._pipeline_tail_enabled() is True
+    monkeypatch.setenv(bucketed._PIPELINE_TAIL_ENV, "0")
+    assert bucketed._pipeline_tail_enabled() is False
     assert bucketed._PIPELINE_TAIL_ENV == "RECOVAR_SPARSE_PASS2_PIPELINE_TAIL"
 
 

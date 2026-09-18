@@ -492,11 +492,13 @@ def _pipeline_tail_enabled() -> bool:
     drains and the numpy runs with the GPU idle. Handing the tail to a single
     ordered worker lets the main thread issue the next bucket during that
     wait and that numpy. The tail's statements and their bucket order are
-    unchanged, so the accumulators see identical arithmetic. Opt-in until the
-    matched hp3 pair qualifies it.
+    unchanged, so the accumulators see identical arithmetic. On by default:
+    the matched hp3 pair (job 14100290) measured warm iteration 2 at 65.0/65.1 s
+    with the tail inline versus 60.5/61.7 s on the worker, with every numerical
+    delta inside the same-source band. Set the variable to 0 to run inline.
     """
 
-    return parse_env_flag(_PIPELINE_TAIL_ENV, default=False)
+    return parse_env_flag(_PIPELINE_TAIL_ENV, default=True)
 
 
 class _BucketTailRunner:
