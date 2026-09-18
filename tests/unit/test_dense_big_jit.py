@@ -261,15 +261,11 @@ def _reference_scores(s, *, score_mode="gaussian", use_window=False, current_siz
         else:
             scores = _e_step_block_scores(
                 s["shifted_score_half"],
-                s["batch_norm"],
                 s["score_weight_half"],
                 proj_score * s["half_weights"],
                 proj_abs2_score * s["half_weights"],
-                s["half_weights"],
                 N_IMAGES,
                 N_TRANS,
-                IMAGE_SHAPE,
-                VOLUME_SHAPE,
             )
     if score_mode != "normalized_cc":
         scores = scores + s["rotation_log_prior"][:, :, None]

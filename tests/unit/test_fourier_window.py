@@ -480,15 +480,11 @@ class TestWindowedEStepMatchesFull:
         # Non-windowed E-step
         scores_full = _e_step_block_scores(
             shifted_half,
-            batch_norm,
             ctf2_over_nv_half,
             proj_half_weighted,
             proj_abs2_weighted,
-            half_weights,
             n_images,
             n_trans,
-            IMAGE_SHAPE,
-            VOLUME_SHAPE,
         )
 
         # Windowed E-step using ALL indices (identity window)

@@ -533,15 +533,11 @@ class TestEStepHalfMatchesFull:
 
         scores_half = _e_step_block_scores(
             shifted_half,
-            batch_norm,
             ctf2_over_nv_half,
             proj_half_weighted,
             proj_abs2_weighted,
-            half_weights,
             n_images,
             n_trans,
-            IMAGE_SHAPE,
-            VOLUME_SHAPE,
         )
 
         score_offset = 0.5 * np.asarray(batch_norm).reshape(n_images, 1, 1)
@@ -603,15 +599,11 @@ class TestEStepHalfMatchesFull:
 
         scores_half = _e_step_block_scores(
             shifted_half,
-            batch_norm,
             ctf2_over_nv_half,
             proj_half_weighted,
             proj_abs2_weighted,
-            half_weights,
             n_images,
             n_trans,
-            IMAGE_SHAPE,
-            VOLUME_SHAPE,
         )
         scores_h_flat = scores_half.reshape(n_images, -1)
         log_Z_half = jax.scipy.special.logsumexp(scores_h_flat, axis=1)
@@ -669,15 +661,11 @@ class TestMStepHalfMatchesFull:
 
         scores = _e_step_block_scores(
             shifted_half,
-            batch_norm,
             ctf2_over_nv_half,
             proj_half_weighted,
             proj_abs2_weighted,
-            half_weights,
             n_images,
             n_trans,
-            IMAGE_SHAPE,
-            VOLUME_SHAPE,
         )
         scores_flat = scores.reshape(n_images, -1)
         log_Z = jax.scipy.special.logsumexp(scores_flat, axis=1)
@@ -949,15 +937,11 @@ class TestFullIterationHalfMatches:
         half_weights = make_half_image_weights(IMAGE_SHAPE)
         scores = _e_step_block_scores(
             shifted_half,
-            batch_norm,
             ctf2_over_nv_half,
             proj_half * half_weights,
             proj_abs2_half * half_weights,
-            half_weights,
             N_IMAGES,
             N_TRANSLATIONS,
-            IMAGE_SHAPE,
-            VOLUME_SHAPE,
         )
         scores_flat = np.asarray(scores).reshape(N_IMAGES, -1)
         expected_best = np.max(scores_flat, axis=1)
@@ -1131,15 +1115,11 @@ class TestFullIterationHalfMatches:
         half_weights = make_half_image_weights(IMAGE_SHAPE)
         scores = _e_step_block_scores(
             shifted_half,
-            batch_norm,
             ctf2_over_nv_half,
             proj_half * half_weights,
             proj_abs2_half * half_weights,
-            half_weights,
             N_IMAGES,
             N_TRANSLATIONS,
-            IMAGE_SHAPE,
-            VOLUME_SHAPE,
         )
         scores_flat = np.asarray(scores).reshape(N_IMAGES, -1)
         max_scores = np.max(scores_flat, axis=1)

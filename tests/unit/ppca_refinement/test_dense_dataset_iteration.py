@@ -146,15 +146,11 @@ def test_dataset_blocks_match_homogeneous_dense_q0_score_convention(tiny_inputs)
     proj = block.proj_aug[:, 0, :]
     dense_scores = _e_step_block_scores(
         block.Y1_recon.reshape(block.Y1_recon.shape[0] * block.Y1_recon.shape[1], -1),
-        block.y_norm[:, None],
         block.ctf2_over_noise_recon,
         proj * half_weights[None, :],
         (jnp.abs(proj) ** 2) * half_weights[None, :],
-        half_weights,
         block.Y1_recon.shape[0],
         block.Y1_recon.shape[1],
-        IMAGE_SHAPE,
-        VOLUME_SHAPE,
     )
     expected_logz = (
         jax.scipy.special.logsumexp(

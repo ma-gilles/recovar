@@ -352,15 +352,11 @@ class TestPosteriorParity:
         scores = np.asarray(
             _e_step_block_scores(
                 shifted_jax,
-                batch_norm_jax,
                 ctf2_nv_half,
                 proj_half * hw,
                 proj_abs2 * hw,
-                hw,
                 1,
                 s["n_trans"],
-                image_shape,
-                volume_shape,
             )
         )[0]
 
