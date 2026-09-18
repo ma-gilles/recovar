@@ -403,10 +403,6 @@ def test_k1_local_records_coarse_parent_support_not_fine_reconstruction_count():
 def test_k1_local_search_does_not_score_learned_global_direction_prior():
     source = inspect.getsource(half_scoring._score_half_local)
     assert "RELION's convertAllSquaredDifferencesToWeights uses mymodel.pdf_direction" in source
-    assert "relion_local_rotation_log_prior_k = None" in source
-    assert "rotation_log_prior=relion_local_rotation_log_prior_k" in source
-    assert "else relion_local_rotation_log_prior_k" in source
-
     # Both passes build their pdf_direction log priors through one RELION-semantics
     # owner; local searches yield no direction prior there.
     loop_source = inspect.getsource(iteration_loop.refine_single_volume)
