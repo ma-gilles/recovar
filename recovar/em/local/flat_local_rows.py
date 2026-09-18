@@ -17,11 +17,7 @@ class FlatLocalRowPlan:
 
     image_indices: np.ndarray
     rotation_rows: np.ndarray
-    present_mask: np.ndarray
     valid_mask: np.ndarray
-    batch_size: int
-    physical_image_count: int
-    dense_rotation_count: int
     packed_row_count: int
 
 
@@ -213,7 +209,6 @@ def build_pool_flat_local_row_plan(
         raise ValueError(
             f"packed_row_count {packed_row_count} is smaller than required rows {required_rows}",
         )
-    present_mask = np.arange(packed_row_count, dtype=np.int32) < required_rows
     if packed_row_count > required_rows:
         pad = packed_row_count - required_rows
         image_indices = np.pad(image_indices, (0, pad), constant_values=0)
@@ -223,11 +218,7 @@ def build_pool_flat_local_row_plan(
     return FlatLocalRowPlan(
         image_indices=image_indices,
         rotation_rows=rotation_rows,
-        present_mask=present_mask,
         valid_mask=valid_mask,
-        batch_size=dense_batch_size,
-        physical_image_count=physical_image_count,
-        dense_rotation_count=dense_rotation_count,
         packed_row_count=packed_row_count,
     )
 
