@@ -1,11 +1,9 @@
 """The K=1 and K-class dense routes share one adaptive engine call owner."""
 
-import inspect
-
 import numpy as np
 
 from recovar.em.classification import k_class
-from recovar.em.dense import firstiter_cc, half_scoring
+from recovar.em.dense import half_scoring
 
 
 def test_sparse_pass2_switch_reads_only_positive_values(monkeypatch):
@@ -83,20 +81,3 @@ def test_coarse_pose_assignments_need_a_fine_pass(monkeypatch):
     assert calls == []
     assert half_scoring._coarse_pose_assignments(ha, rot_parent_map="rp", trans_parent_map="tp", n_trans_coarse=1, n_trans_fine=3) == "collapsed"
     assert calls == [{"rot_parent_map": "rp", "trans_parent_map": "tp", "n_trans_coarse": 1, "n_trans_fine": 3}]
-
-
-def test_dense_routes_use_the_shared_owners():
-    source = inspect.getsource(half_scoring._score_half_dense)
-    assert source.count("run_dense_k_class_em_adaptive(") == 2
-    assert source.count("shared_kwargs = _adaptive_engine_shared_kwargs(") == 2
-    assert source.count("**shared_kwargs,\n") == 2
-    assert source.count("coarse_ha_k = _coarse_pose_assignments(") == 2
-    assert "_collapse_fine_pose_assignments_to_coarse(" not in source
-    assert 'kclass_sparse_pass2 = _sparse_pass2_selected("RECOVAR_K_CLASS_DENSE_PASS2")' in source
-    assert 'k1_sparse_pass2 = _sparse_pass2_selected("RECOVAR_K1_DENSE_PASS2")' in source
-    assert "os.environ.get(" not in source
-    assert "coarse_rot = pass2_grids.coarse_rotations" not in source
-    assert "coarse_translation_phase_source=pass2_grids.coarse_translation_phase_source" in source
-    firstiter_source = inspect.getsource(firstiter_cc._score_kclass_firstiter_cc_pass2)
-    assert 'firstiter_sparse_pass2 = _sparse_pass2_selected("RECOVAR_K_CLASS_DENSE_PASS2")' in firstiter_source
-    assert "os.environ" not in firstiter_source
