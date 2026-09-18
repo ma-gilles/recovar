@@ -66,8 +66,6 @@ class FourierWindowSpec:
     score_indices_np: np.ndarray | None
     recon_indices_np: np.ndarray | None
     projection_indices_np: np.ndarray | None
-    score_projection_take_np: np.ndarray | None
-    recon_projection_take_np: np.ndarray | None
     score_indices: Any
     recon_indices: Any
     projection_indices: Any
@@ -258,8 +256,6 @@ class StableFourierWindowShapePlan:
             score_indices_np=score_indices_np,
             recon_indices_np=recon_indices_np,
             projection_indices_np=projection_indices_np,
-            score_projection_take_np=score_projection_take_np,
-            recon_projection_take_np=recon_projection_take_np,
             score_indices=jnp.asarray(score_indices_np, dtype=dtype),
             recon_indices=jnp.asarray(recon_indices_np, dtype=dtype),
             projection_indices=jnp.asarray(projection_indices_np, dtype=dtype),
@@ -456,8 +452,6 @@ def make_fourier_window_spec(
             score_indices_np=None,
             recon_indices_np=None,
             projection_indices_np=None,
-            score_projection_take_np=None,
-            recon_projection_take_np=None,
             score_indices=None,
             recon_indices=None,
             projection_indices=None,
@@ -522,8 +516,6 @@ def make_fourier_window_spec(
         score_indices_np=score_indices_np,
         recon_indices_np=recon_indices_np,
         projection_indices_np=projection_indices_np,
-        score_projection_take_np=score_projection_take_np,
-        recon_projection_take_np=recon_projection_take_np,
         score_indices=jnp.asarray(score_indices_np, dtype=dtype),
         recon_indices=recon_indices,
         projection_indices=jnp.asarray(projection_indices_np, dtype=dtype),
