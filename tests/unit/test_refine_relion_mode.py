@@ -2358,7 +2358,7 @@ def test_score_half_local_forwards_mstep_grid_for_each_class_count(monkeypatch, 
     np.testing.assert_array_equal(captured["rotation_grid_mstep_rotations"], mstep_grid)
     assert captured["generate_relion_mstep_rotations"] is True
     assert (captured["class_log_priors"] is not None) is k_class_enabled
-    assert captured["return_significant_counts"] is False
+    assert "return_significant_counts" not in captured
     assert captured["use_float64_scoring"] is True
     assert captured["use_float64_projections"] is True
 
@@ -4177,8 +4177,6 @@ def test_run_local_search_iteration_exact_engine_uses_model_sigma_for_translatio
                 sumw=0.0,
             ),
         )
-        if kwargs.get("return_significant_counts"):
-            output = replace(output, significant_counts=np.full(mock_dataset.n_units, 7, dtype=np.int32))
         return output
 
     monkeypatch.setattr(local_iteration_module, "build_local_hypothesis_layout", fake_build_local_hypothesis_layout)
@@ -4208,7 +4206,6 @@ def test_run_local_search_iteration_exact_engine_uses_model_sigma_for_translatio
         accumulate_noise=True,
         relion_exact_score_translation=True,
         translation_prior_reference_translations=reference_translations,
-        return_significant_counts=True,
     )
 
     assert captured["offset_range_pixels"] is None
@@ -4228,14 +4225,12 @@ def test_run_local_search_iteration_exact_engine_uses_model_sigma_for_translatio
     )
     assert isinstance(outputs, _LocalSearchIterationResult)
     assert outputs.noise_stats is not None
-    assert outputs.significant_counts is not None
     assert outputs.profile_summary is None
     assert outputs.best_pose_rotations is None
     assert outputs.best_pose_translations is None
     assert outputs.class_assignments is None
     assert outputs.class_posterior_sums is None
     assert outputs.class_full_posterior_sums is None
-    np.testing.assert_array_equal(outputs.significant_counts, np.full(mock_dataset.n_units, 7, dtype=np.int32))
 
 
 @pytest.mark.parametrize("k_class_enabled", [False, True])
@@ -4391,7 +4386,6 @@ def test_run_local_search_iteration_clamps_highres_local_batches(monkeypatch):
     assert isinstance(outputs, _LocalSearchIterationResult)
     assert outputs.noise_stats is None
     assert outputs.profile_summary is None
-    assert outputs.significant_counts is None
     assert outputs.best_pose_rotations is None
     assert outputs.best_pose_translations is None
     assert outputs.class_assignments is None
@@ -4648,7 +4642,6 @@ def test_run_local_search_iteration_plumbs_normalization_log_evidence(monkeypatc
     assert isinstance(outputs, _LocalSearchIterationResult)
     assert outputs.noise_stats is None
     assert outputs.profile_summary is None
-    assert outputs.significant_counts is None
     assert outputs.best_pose_rotations is None
     assert outputs.best_pose_translations is None
     assert outputs.class_assignments is None
@@ -4717,7 +4710,6 @@ def test_run_local_search_iteration_plumbs_stats_use_reconstruction_probs(monkey
     assert isinstance(outputs, _LocalSearchIterationResult)
     assert outputs.noise_stats is None
     assert outputs.profile_summary is None
-    assert outputs.significant_counts is None
     assert outputs.best_pose_rotations is None
     assert outputs.best_pose_translations is None
     assert outputs.class_assignments is None
@@ -4890,7 +4882,6 @@ def test_run_local_search_iteration_exact_engine_uses_factorized_prior_metadata_
     assert isinstance(outputs, _LocalSearchIterationResult)
     assert outputs.noise_stats is not None
     assert outputs.profile_summary is None
-    assert outputs.significant_counts is None
     assert outputs.best_pose_rotations is None
     assert outputs.best_pose_translations is None
     assert outputs.class_assignments is None

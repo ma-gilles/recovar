@@ -393,7 +393,7 @@ def test_k1_local_records_coarse_parent_support_not_fine_reconstruction_count():
     parent_count_end = source.index("if local_adaptive_pass2_full_parent:", parent_count_start)
     parent_count_source = source[parent_count_start:parent_count_end]
     assert "relion_significant_counts_k = _relion_coarse_significant_counts(" in parent_count_source
-    assert "return_significant_counts=False" in source
+    assert "return_significant_counts" not in source
     assert "significant_counts=relion_significant_counts_k" in source
 
     counts = half_scoring._relion_coarse_significant_counts(
@@ -455,8 +455,6 @@ def test_k1_local_search_passes_relion_x_half_mstep(monkeypatch):
             relion_stats=_Stats(),
             noise_stats="noise",
         )
-        if kwargs.get("return_significant_counts"):
-            outputs.significant_counts = np.array([7], dtype=np.int32)
         return outputs
 
     monkeypatch.delenv("RECOVAR_K1_RELION_X_HALF_MSTEP", raising=False)
@@ -509,7 +507,6 @@ def test_k1_local_search_passes_relion_x_half_mstep(monkeypatch):
     )
 
     assert captured["mstep_relion_x_half"] is True
-    assert captured["return_significant_counts"] is False
     assert result.significant_counts is None
     assert result.mstep_full_half_axis == 0
     assert result.mstep_accumulator_shape == (19, 19, 19)
@@ -649,13 +646,13 @@ def test_k1_local_search_records_parent_counts_without_changing_fine_mstep(
             fine_call["normalization_log_evidence"], _Stats.log_evidence_per_image
         )
     assert parent_call["score_only"] is True
-    assert parent_call.get("return_significant_counts", False) is False
+    assert "return_significant_counts" not in parent_call
     assert parent_call["apply_max_significants_to_support"] is True
     assert parent_call["max_significants"] == 23
     assert fine_call["score_only"] is False
     assert fine_call["reconstruct_significant_only"] is True
     assert fine_call["stats_use_reconstruction_probs"] is True
-    assert fine_call["return_significant_counts"] is False
+    assert "return_significant_counts" not in fine_call
     assert result.Ft_y == "fine_ft_y"
     assert result.Ft_ctf == "fine_ft_ctf"
     assert result.noise_stats == "fine_noise"
