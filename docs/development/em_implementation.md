@@ -86,9 +86,9 @@ The same module owns `_expected_accuracy_class_ids`, which supplies half-1 class
 `sampling._advance_relion_perturbation` owns the update beside its seeded and generator primitives, and advances RELION's SamplingPerturbation to an iteration
 (seeded `random_seed + iteration`, or the run's generator) for both passes
 ([`test_perturbation_advance_owner.py`](../../tests/unit/test_perturbation_advance_owner.py)).
-The controller's adaptive and single-pass dense half-scoring calls share one keyword
-set (`dense_half_kwargs`); only the adaptive branch adds its pass-1 grid and
-batch/size overrides ([`test_dense_half_kwargs_owner.py`](../../tests/unit/test_dense_half_kwargs_owner.py)). `_exact_local_fine_grid` materializes RELION's fine local-search grid
+The controller transports coarse scoring geometry separately from the effective
+rotation grid used by both dense half-scoring routes
+([`test_zero_coarse_geometry.py`](../../tests/unit/test_zero_coarse_geometry.py)). `_exact_local_fine_grid` materializes RELION's fine local-search grid
 once with its perturbation and exact M-step rotations, and
 `_local_search_mstep_rotations` reuses or rebuilds the M-step matrices of a
 scoring grid; the final pass sizes its parent pass with
