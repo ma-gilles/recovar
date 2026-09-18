@@ -1160,13 +1160,9 @@ def _estimate_raw_image_cache_bytes(loader) -> int:
     return int(n_images * image_size * image_size * dtype.itemsize)
 
 
-def _em_raw_image_cache_mode() -> str:
-    return os.environ.get(_EM_RAW_IMAGE_CACHE_ENV, "auto").strip().lower()
-
-
 def maybe_cache_raw_image_loaders(experiment_datasets) -> None:
     """Keep file-backed raw particles in host memory across RELION EM passes."""
-    mode = _em_raw_image_cache_mode()
+    mode = os.environ.get(_EM_RAW_IMAGE_CACHE_ENV, "auto").strip().lower()
     if mode in {"0", "false", "no", "off", "disable", "disabled"}:
         logger.info("RELION mode raw image cache disabled by %s=%s", _EM_RAW_IMAGE_CACHE_ENV, mode)
         return

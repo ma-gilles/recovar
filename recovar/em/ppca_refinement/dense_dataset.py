@@ -35,7 +35,6 @@ from recovar.em.ppca_refinement.engine import (
     DensePPCAFusedBlock,
     DensePPCAFusedEMResult,
     DenseScoreStats,
-    DenseScoreTensorStats,
     _enforce_augmented_x0,
     accumulate_pose_ppca_block_cached,
     dense_pose_ppca_score_stats_blocked,
@@ -344,15 +343,6 @@ def _top_pose_from_score_stats(score_stats: DenseScoreStats, *, rotation_offset:
             + jnp.asarray(int(rotation_offset), dtype=jnp.int32)
         )[:, None],
         jnp.asarray(score_stats.best_translation_idx, dtype=jnp.int32)[:, None],
-    )
-
-
-def _score_tensor_stats_to_score_stats(stats: DenseScoreTensorStats) -> DenseScoreStats:
-    return DenseScoreStats(
-        logZ=stats.logZ,
-        best_log_score_per_image=stats.best_log_score_per_image,
-        best_rotation_idx=stats.best_rotation_idx,
-        best_translation_idx=stats.best_translation_idx,
     )
 
 
@@ -931,7 +921,12 @@ def run_dense_ppca_fused_em_iteration(
                         block.y_norm,
                         block.pose_log_prior,
                     )
-                    score_stats = _score_tensor_stats_to_score_stats(score_tensor_stats)
+                    score_stats = DenseScoreStats(
+                        logZ=score_tensor_stats.logZ,
+                        best_log_score_per_image=score_tensor_stats.best_log_score_per_image,
+                        best_rotation_idx=score_tensor_stats.best_rotation_idx,
+                        best_translation_idx=score_tensor_stats.best_translation_idx,
+                    )
                     top_scores, top_rot, top_trans = top_p_from_score_block(
                         score_tensor_stats.score,
                         rotation_offset=int(block.rotation_start),

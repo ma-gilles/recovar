@@ -243,7 +243,7 @@ def compute_residuals_many_poses(
         if NORM_FFT != "ortho":
             projected_volumes = projected_volumes * image_size
         translations_indices = translations_to_indices(translations, image_shape)
-        dots_chosen = batch_take(projected_volumes, translations_indices, axis=-1)
+        dots_chosen = _batch_take(projected_volumes, translations_indices, -1)
 
         norm_res_squared = proj_volume_norm - 2 * dots_chosen.real
         # Match the other implementation
@@ -258,8 +258,4 @@ def compute_residuals_many_poses(
     return norm_res_squared
 
 
-take_vmap = jax.vmap(lambda x, y, axis: jnp.take(x, y, axis), in_axes=(0, 0, None))
-
-
-def batch_take(arr, indices, axis):
-    return take_vmap(arr, indices, axis)
+_batch_take = jax.vmap(lambda x, y, axis: jnp.take(x, y, axis), in_axes=(0, 0, None))
