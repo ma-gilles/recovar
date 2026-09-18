@@ -107,7 +107,6 @@ def _run_local_search_iteration(
     rotation_grid_angular_sampling_deg=None,
     local_parent_oversampling_order: int = 0,
     class_log_priors=None,
-    return_class_details=False,
     return_reconstruction_sample_indices=False,
     apply_max_significants_to_support=False,
     stats_use_reconstruction_probs=False,
@@ -422,15 +421,4 @@ def _run_local_search_iteration(
         result.profile_summary["selector_time_s"] = np.float64(selector_time)
         result.profile_summary["translation_prior_time_s"] = np.float64(0.0)
 
-    if return_class_details:
-        if (
-            result.class_assignments is None
-            or result.class_posterior_sums is None
-            or result.class_full_posterior_sums is None
-        ):
-            raise ValueError("return_class_details=True requires class_log_priors")
-    else:
-        result.class_assignments = None
-        result.class_posterior_sums = None
-        result.class_full_posterior_sums = None
     return result

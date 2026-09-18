@@ -933,8 +933,7 @@ def _score_half_local(
     Sizes the per-chunk M-step batches against the cone-restricted
     rotation count (not the full HEALPix grid) so chunk_size doesn't
     collapse at high HEALPix orders. Routes through
-    ``_run_local_search_iteration`` which itself handles K-class /
-    K=1 internally via ``return_class_details=k_class_enabled``.
+    ``_run_local_search_iteration`` which handles K-class and K=1 internally.
 
     Caller handles ``noise_stats_per_half[k]``, ``pose_rotations[k] = None``,
     and ``coarse_ha[k] = ha_k`` from the returned ``HalfScoreResult``.
@@ -1383,7 +1382,6 @@ def _score_half_local(
         rotation_grid_angular_sampling_deg=local_search_angular_sampling_deg,
         local_parent_oversampling_order=local_parent_oversampling_order,
         class_log_priors=class_log_priors if k_class_enabled else None,
-        return_class_details=k_class_enabled,
         score_only=diagnostic_score_only,
         rotation_grid_mstep_rotations=local_search_mstep_rotations,
         generate_relion_mstep_rotations=True,
