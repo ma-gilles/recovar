@@ -588,6 +588,12 @@ _TARGET_NOISE_PIXEL_PACK = "cuda_noise_pixel_pack"
 _TARGET_NOISE_RESIDUAL_STATISTICS = "recovar_noise_residual_statistics"
 _TARGET_SPARSE_PASS2_LOG_Z_F64 = "recovar_sparse_pass2_log_z_f64"
 _TARGET_SPARSE_PASS2_POSTERIOR_F32 = "recovar_sparse_pass2_posterior_f32"
+_TARGET_SPARSE_PASS2_SEGMENTED_LOG_Z_F64 = (
+    "cuda_sparse_pass2_segmented_log_z_f64"
+)
+_TARGET_SPARSE_PASS2_SEGMENTED_POSTERIOR_F32 = (
+    "cuda_sparse_pass2_segmented_posterior_f32"
+)
 _TARGET_RELION_VDAM_MSTEP_SUMS_F32 = "cuda_relion_vdam_mstep_sums_f32"
 _TARGET_RELION_VDAM_MSTEP_DENOMINATOR_F32 = (
     "cuda_relion_vdam_mstep_denominator_f32"
@@ -1165,6 +1171,14 @@ _OPTIONAL_FFI_REGISTRATIONS = {
     _TARGET_SPARSE_PASS2_POSTERIOR_F32: (
         "SparsePass2PosteriorF32",
         "The fused sparse pass-2 posterior requires an explicit CUDA build with SparsePass2PosteriorF32",
+    ),
+    _TARGET_SPARSE_PASS2_SEGMENTED_LOG_Z_F64: (
+        "SparsePass2SegmentedLogZF64",
+        "The segmented sparse pass-2 log-Z requires an explicit CUDA build with SparsePass2SegmentedLogZF64",
+    ),
+    _TARGET_SPARSE_PASS2_SEGMENTED_POSTERIOR_F32: (
+        "SparsePass2SegmentedPosteriorF32",
+        "The segmented sparse pass-2 posterior requires an explicit CUDA build with SparsePass2SegmentedPosteriorF32",
     ),
     _TARGET_BACKPROJECT_INDEXED_SKIP_ZERO: (
         "BackprojectIndexedSkipZero",
@@ -1988,6 +2002,173 @@ def sparse_pass2_posterior_f32(
         use_external_sum_weight=np.int64(use_external_sum_weight),
     )
     return tuple(result[:11])
+
+
+# Byte size of the device-side per-segment state record of
+# SparsePass2SegmentedPosteriorF32: the rectangular RowState plus the segment
+# extent (valid flag, explicit padding, begin, cell count).
+_SPARSE_PASS2_SEGMENT_STATE_BYTES = _SPARSE_PASS2_ROW_STATE_BYTES + 24
+
+
+def sparse_pass2_segmented_supported() -> bool:
+    """Return whether the loaded library exports both segmented pass-2 targets.
+
+    The segmented handlers are an optional ABI, so a library built before them
+    stays loadable and callers fall back to the rectangular handlers.
+    """
+
+    try:
+        _ensure_ffi()
+        lib = _get_lib()
+        return all(
+            getattr(lib, _OPTIONAL_FFI_REGISTRATIONS[target][0], None) is not None
+            for target in (
+                _TARGET_SPARSE_PASS2_SEGMENTED_LOG_Z_F64,
+                _TARGET_SPARSE_PASS2_SEGMENTED_POSTERIOR_F32,
+            )
+        )
+    except Exception:
+        return False
+
+
+def _sparse_pass2_segment_geometry(
+    scores: jax.Array, segment_offsets: jax.Array, n_valid_images: jax.Array
+) -> tuple[int, int]:
+    """Validate a segmented pass-2 operand set and return ``(cells, segments)``.
+
+    ``scores`` holds ``cells`` candidate scores in image order; image ``i`` owns
+    ``scores.reshape(-1)[segment_offsets[i]:segment_offsets[i + 1]]``.  Offsets
+    are cell indices, must be nondecreasing and must stay within ``[0, cells]``;
+    cells covered by no segment are treated as padding.
+    """
+
+    if scores.dtype != jnp.float32:
+        raise TypeError(f"scores must be float32, got {scores.dtype}")
+    if scores.ndim < 1 or any(int(d) < 1 for d in scores.shape):
+        raise ValueError(f"scores must be a nonempty array, got {scores.shape}")
+    cells = int(np.prod(scores.shape))
+    if cells > np.iinfo(np.int32).max:
+        raise ValueError(f"scores {scores.shape} exceed the int32 cell-offset range")
+    if segment_offsets.dtype != jnp.int32:
+        raise TypeError(f"segment_offsets must be int32, got {segment_offsets.dtype}")
+    if segment_offsets.ndim != 1 or int(segment_offsets.shape[0]) < 2:
+        raise ValueError(
+            "segment_offsets must have shape (n_segments + 1,) with n_segments >= 1, "
+            f"got {segment_offsets.shape}"
+        )
+    segments = int(segment_offsets.shape[0]) - 1
+    if n_valid_images.dtype != jnp.int32:
+        raise TypeError(f"n_valid_images must be int32, got {n_valid_images.dtype}")
+    if int(np.prod(n_valid_images.shape)) != 1:
+        raise ValueError(
+            f"n_valid_images must hold exactly one value, got {n_valid_images.shape}"
+        )
+    return cells, segments
+
+
+@jax.jit
+def sparse_pass2_segmented_log_z_f64(
+    scores: jax.Array,
+    segment_offsets: jax.Array,
+    n_valid_images: jax.Array,
+) -> jax.Array:
+    """Per-segment float64 log-sum-exp of flat float32 sparse pass-2 scores.
+
+    Segmented form of :func:`sparse_pass2_log_z_f64`: segments without a finite
+    score, empty segments and segments at or beyond ``n_valid_images`` return
+    ``-inf``, which is what the rectangular handler returns for an all ``-inf``
+    row.  Flattening a rectangular row into a segment reproduces that row's
+    value bitwise.  This handler runs entirely on the device.
+    """
+
+    _, segments = _sparse_pass2_segment_geometry(scores, segment_offsets, n_valid_images)
+    _require_sparse_pass2_cuda_backend("Segmented sparse pass-2 log-Z")
+    _ensure_optional_ffi(_TARGET_SPARSE_PASS2_SEGMENTED_LOG_Z_F64)
+    return jax.ffi.ffi_call(
+        _TARGET_SPARSE_PASS2_SEGMENTED_LOG_Z_F64,
+        jax.ShapeDtypeStruct((segments,), jnp.float64),
+    )(scores, segment_offsets, n_valid_images.astype(jnp.int32).reshape(()))
+
+
+@functools.partial(
+    jax.jit, static_argnames=("adaptive_fraction", "keep_all", "use_external_sum_weight")
+)
+def sparse_pass2_segmented_posterior_f32(
+    scores: jax.Array,
+    segment_offsets: jax.Array,
+    n_valid_images: jax.Array,
+    log_z: jax.Array,
+    external_sum_weight: jax.Array,
+    *,
+    adaptive_fraction: float,
+    keep_all: bool,
+    use_external_sum_weight: bool,
+) -> tuple[jax.Array, ...]:
+    """Segmented form of :func:`sparse_pass2_posterior_f32`.
+
+    ``scores`` is a flat cell array whose segment ``i`` is
+    ``[segment_offsets[i], segment_offsets[i + 1])``; the per-segment operands
+    and outputs replace the rectangular per-row ones.  Returns ``(log_z,
+    best_log_score, best_cell_index, max_posterior, probs, normalized_weights,
+    reconstruction_probs, mask, n_significant, sum_weight, threshold)``.
+    ``best_cell_index`` is relative to the segment, so it equals the rectangular
+    ``best_argmax`` of the row a segment was flattened from; add
+    ``segment_offsets[i]`` for the flat cell.  Per-cell outputs keep the shape
+    of ``scores``; cells covered by no segment, empty segments and segments at
+    or beyond ``n_valid_images`` carry the values the rectangular handler
+    produces for an all ``-inf`` row.
+
+    The RELION significance boundary reuses the per-segment CUB radix sort and
+    pinned Ampere inclusive scan of the rectangular handler, which needs the
+    segment lengths on the host: this call synchronizes the stream once.
+    """
+
+    _, segments = _sparse_pass2_segment_geometry(scores, segment_offsets, n_valid_images)
+    if log_z.dtype != jnp.float64 or log_z.shape != (segments,):
+        raise TypeError(
+            f"log_z must be float64 with shape ({segments},), got {log_z.dtype} {log_z.shape}"
+        )
+    if external_sum_weight.dtype != jnp.float32 or external_sum_weight.shape != (segments,):
+        raise TypeError(
+            f"external_sum_weight must be float32 with shape ({segments},), got "
+            f"{external_sum_weight.dtype} {external_sum_weight.shape}"
+        )
+    if type(keep_all) is not bool or type(use_external_sum_weight) is not bool:
+        raise TypeError("keep_all and use_external_sum_weight must be static Python bools")
+    _require_sparse_pass2_cuda_backend("Segmented sparse pass-2 posterior")
+    _ensure_optional_ffi(_TARGET_SPARSE_PASS2_SEGMENTED_POSTERIOR_F32)
+    full = scores.shape
+    outputs = (
+        jax.ShapeDtypeStruct((segments,), jnp.float64),  # log_z
+        jax.ShapeDtypeStruct((segments,), jnp.float32),  # best_log_score
+        jax.ShapeDtypeStruct((segments,), jnp.int64),    # best_cell_index
+        jax.ShapeDtypeStruct((segments,), jnp.float32),  # max_posterior
+        jax.ShapeDtypeStruct(full, jnp.float64),         # probs
+        jax.ShapeDtypeStruct(full, jnp.float32),         # normalized_weights
+        jax.ShapeDtypeStruct(full, jnp.float32),         # reconstruction_probs
+        jax.ShapeDtypeStruct(full, jnp.bool_),           # mask
+        jax.ShapeDtypeStruct((segments,), jnp.int32),    # n_significant
+        jax.ShapeDtypeStruct((segments,), jnp.float32),  # sum_weight
+        jax.ShapeDtypeStruct((segments,), jnp.float32),  # threshold
+        jax.ShapeDtypeStruct(full, jnp.float32),         # raw weights (scratch)
+        jax.ShapeDtypeStruct(full, jnp.float32),         # sorted (scratch)
+        jax.ShapeDtypeStruct(full, jnp.float32),         # cumulative (scratch)
+        jax.ShapeDtypeStruct(
+            (segments, _SPARSE_PASS2_SEGMENT_STATE_BYTES), jnp.uint8
+        ),                                               # segment state
+    )
+    result = jax.ffi.ffi_call(_TARGET_SPARSE_PASS2_SEGMENTED_POSTERIOR_F32, outputs)(
+        scores,
+        segment_offsets,
+        n_valid_images.astype(jnp.int32).reshape(()),
+        log_z,
+        external_sum_weight,
+        adaptive_fraction=np.float32(adaptive_fraction),
+        keep_all=np.int64(keep_all),
+        use_external_sum_weight=np.int64(use_external_sum_weight),
+    )
+    return tuple(result[:11])
+
 
 @jax.jit
 def relion_cub_positive_sort_scan_f32(
