@@ -702,6 +702,12 @@ _TARGET_RELION_WAVG_SEQUENTIAL_TRIPLET_F32 = (
 _TARGET_RELION_WAVG_SEQUENTIAL_RUNTIME_TRIPLET_F32 = (
     "cuda_relion_wavg_sequential_runtime_triplet_f32"
 )
+_TARGET_RELION_WAVG_SEQUENTIAL_RUNTIME_FLAT_ROWS_TRIPLET_F32 = (
+    "cuda_relion_wavg_sequential_runtime_flat_rows_triplet_f32"
+)
+_TARGET_RELION_WAVG_ROTATION_ATOMIC_RUNTIME_FLAT_ROWS_TRIPLET_ADD_F32 = (
+    "cuda_relion_wavg_rotation_atomic_runtime_flat_rows_triplet_add_f32"
+)
 _TARGET_RELION_WAVG_NATIVE_PREFIX_F32 = "cuda_relion_wavg_native_prefix_f32"
 _TARGET_RELION_WAVG_NATIVE_PREFIX_DEBUG_F32 = "cuda_relion_wavg_native_prefix_debug_f32"
 _wavg_native_prefix_ffi_registered = False
@@ -1183,6 +1189,14 @@ _OPTIONAL_FFI_REGISTRATIONS = {
     _TARGET_BACKPROJECT_INDEXED_SKIP_ZERO: (
         "BackprojectIndexedSkipZero",
         "RECOVAR_BACKPROJECT_SKIP_ZERO requires an explicit CUDA build with BackprojectIndexedSkipZero",
+    ),
+    _TARGET_RELION_WAVG_SEQUENTIAL_RUNTIME_FLAT_ROWS_TRIPLET_F32: (
+        "RelionWavgSequentialRuntimeFlatRowsTripletF32",
+        "Flat-row RELION Wavg requires an explicit CUDA build with RelionWavgSequentialRuntimeFlatRowsTripletF32",
+    ),
+    _TARGET_RELION_WAVG_ROTATION_ATOMIC_RUNTIME_FLAT_ROWS_TRIPLET_ADD_F32: (
+        "RelionWavgRotationAtomicRuntimeFlatRowsTripletAddF32",
+        "Flat-row RELION Wavg atomics require an explicit CUDA build with RelionWavgRotationAtomicRuntimeFlatRowsTripletAddF32",
     ),
 }
 
@@ -7052,6 +7066,172 @@ def relion_wavg_sequential_runtime_triplet_f32(
         posterior,
         logical_pixel_count,
     )
+
+
+def _optional_target_supported(target: str) -> bool:
+    """Return whether the loaded library exports an optional target's symbol."""
+
+    try:
+        _ensure_ffi()
+        symbol_name = _OPTIONAL_FFI_REGISTRATIONS[target][0]
+        return getattr(_get_lib(), symbol_name, None) is not None
+    except Exception:
+        return False
+
+
+def relion_wavg_sequential_runtime_flat_rows_triplet_f32_supported() -> bool:
+    """Return whether the loaded library exports the flat-row Wavg target."""
+
+    return _optional_target_supported(
+        _TARGET_RELION_WAVG_SEQUENTIAL_RUNTIME_FLAT_ROWS_TRIPLET_F32
+    )
+
+
+def relion_wavg_rotation_atomic_runtime_flat_rows_triplet_add_f32_supported() -> bool:
+    """Return whether the loaded library exports the flat-row Wavg atomics."""
+
+    return _optional_target_supported(
+        _TARGET_RELION_WAVG_ROTATION_ATOMIC_RUNTIME_FLAT_ROWS_TRIPLET_ADD_F32
+    )
+
+
+@jax.jit
+def relion_wavg_sequential_runtime_flat_rows_triplet_f32(
+    projections: jax.Array,
+    row_image_ids: jax.Array,
+    raw_ctf: jax.Array,
+    scale: jax.Array,
+    shifted_images: jax.Array,
+    posterior: jax.Array,
+    logical_pixel_count: jax.Array,
+) -> jax.Array:
+    """Accumulate Wavg triplets over packed candidate rows.
+
+    ``projections`` is ``(Q,P)`` and ``posterior`` is ``(Q,T)``; every row's
+    image/CTF/scale/shifted-image address comes from ``row_image_ids`` ``(Q,)``
+    instead of the rectangular ``[B,R]`` grid, the same substitution the
+    flat-row fine scorer makes.  The CUDA implementation shares the rectangular
+    kernel's per-pixel binary32 arithmetic and its translation-storage order, so
+    a flattened rectangular problem returns bitwise identical triplets.  Rows
+    whose id is negative are padding: they read nothing and stay zero.  The
+    output is ``(Q,P,3)`` holding ``[XA, AA, diff2]``.
+    """
+
+    projections = jnp.asarray(projections)
+    row_image_ids = jnp.asarray(row_image_ids)
+    raw_ctf = jnp.asarray(raw_ctf)
+    scale = jnp.asarray(scale)
+    shifted_images = jnp.asarray(shifted_images)
+    posterior = jnp.asarray(posterior)
+    logical_pixel_count = jnp.asarray(logical_pixel_count, dtype=jnp.int32)
+    if projections.dtype != jnp.complex64 or projections.ndim != 2:
+        raise ValueError(
+            "flat-row RELION Wavg expects complex64 projections[Q,P]"
+        )
+    row_count, pixel_capacity = projections.shape
+    if row_image_ids.dtype != jnp.int32 or row_image_ids.shape != (row_count,):
+        raise ValueError("flat-row RELION Wavg expects int32 row_image_ids[Q]")
+    if raw_ctf.dtype != jnp.float32 or raw_ctf.ndim != 2 or (
+        raw_ctf.shape[1] != pixel_capacity
+    ):
+        raise ValueError("flat-row RELION Wavg expects float32 raw_ctf[B,P]")
+    batch_size = raw_ctf.shape[0]
+    if scale.dtype != jnp.float32 or scale.shape != (batch_size,):
+        raise ValueError("flat-row RELION Wavg expects float32 scale[B]")
+    if (
+        shifted_images.dtype != jnp.complex64
+        or shifted_images.ndim != 3
+        or shifted_images.shape[0] != batch_size
+        or shifted_images.shape[2] != pixel_capacity
+    ):
+        raise ValueError(
+            "flat-row RELION Wavg expects complex64 shifted_images[B,T,P]"
+        )
+    if posterior.dtype != jnp.float32 or posterior.shape != (
+        row_count,
+        shifted_images.shape[1],
+    ):
+        raise ValueError("flat-row RELION Wavg expects float32 posterior[Q,T]")
+    if logical_pixel_count.shape != ():
+        raise ValueError("logical_pixel_count must be an int32 scalar")
+    if jax.default_backend() != "gpu":
+        raise RuntimeError("flat-row RELION Wavg requires a JAX GPU backend")
+    if not custom_cuda_requested():
+        raise RuntimeError("flat-row RELION Wavg requires custom CUDA")
+    _ensure_optional_ffi(
+        _TARGET_RELION_WAVG_SEQUENTIAL_RUNTIME_FLAT_ROWS_TRIPLET_F32
+    )
+    output_type = jax.ShapeDtypeStruct((row_count, pixel_capacity, 3), jnp.float32)
+    return jax.ffi.ffi_call(
+        _TARGET_RELION_WAVG_SEQUENTIAL_RUNTIME_FLAT_ROWS_TRIPLET_F32,
+        output_type,
+        vmap_method="sequential",
+    )(
+        projections,
+        row_image_ids,
+        raw_ctf,
+        scale,
+        shifted_images,
+        posterior,
+        logical_pixel_count,
+    )
+
+
+@jax.jit
+def relion_wavg_rotation_atomic_runtime_flat_rows_triplet_add_f32(
+    terms: jax.Array,
+    row_image_ids: jax.Array,
+    accumulator: jax.Array,
+    logical_pixel_count: jax.Array,
+) -> jax.Array:
+    """Atomically add packed-row Wavg triplets into per-image accumulators.
+
+    ``terms`` is ``(Q,P,3)``, ``row_image_ids`` ``(Q,)`` and ``accumulator``
+    ``(B,P,3)``.  The launch keeps one block per row, so a flattened
+    rectangular problem issues exactly the same multiset of per-cell atomic
+    adds as :func:`relion_wavg_rotation_atomic_runtime_triplet_add_f32`, and
+    the linear block index matches that kernel's ``rotation + image *
+    rotation_count``.  The order in which those adds land is hardware
+    scheduled, so the accumulated float32 sums agree bitwise only when the
+    summands are exactly representable; the rectangular kernel does not
+    reproduce itself bitwise either at realistic rotation counts.  Rows whose
+    id is negative contribute nothing.
+    """
+
+    terms = jnp.asarray(terms)
+    row_image_ids = jnp.asarray(row_image_ids)
+    accumulator = jnp.asarray(accumulator)
+    logical_pixel_count = jnp.asarray(logical_pixel_count, dtype=jnp.int32)
+    if terms.dtype != jnp.float32 or terms.ndim != 3 or terms.shape[-1] != 3:
+        raise ValueError(
+            "flat-row RELION Wavg atomics require float32 [row, pixel, 3] terms"
+        )
+    row_count, pixel_capacity = terms.shape[0], terms.shape[1]
+    if row_image_ids.dtype != jnp.int32 or row_image_ids.shape != (row_count,):
+        raise ValueError(
+            "flat-row RELION Wavg atomics require int32 row_image_ids[Q]"
+        )
+    if (
+        accumulator.dtype != jnp.float32
+        or accumulator.ndim != 3
+        or accumulator.shape[1] != pixel_capacity
+        or accumulator.shape[2] != 3
+    ):
+        raise ValueError(
+            "flat-row RELION Wavg atomics require a float32 [batch,pixel,3] accumulator"
+        )
+    if logical_pixel_count.shape != ():
+        raise ValueError("logical_pixel_count must be an int32 scalar")
+    _ensure_optional_ffi(
+        _TARGET_RELION_WAVG_ROTATION_ATOMIC_RUNTIME_FLAT_ROWS_TRIPLET_ADD_F32
+    )
+    output_type = jax.ShapeDtypeStruct(accumulator.shape, jnp.float32)
+    return jax.ffi.ffi_call(
+        _TARGET_RELION_WAVG_ROTATION_ATOMIC_RUNTIME_FLAT_ROWS_TRIPLET_ADD_F32,
+        output_type,
+        input_output_aliases={2: 0},
+        vmap_method="sequential",
+    )(terms, row_image_ids, accumulator, logical_pixel_count)
 
 
 @jax.jit
