@@ -75,19 +75,26 @@ def test_coarse_prior_recovered_from_parent_major_fine_prior():
         coarse_prior_from_pass2_prior(coarse[:-1], n_rot_coarse=N_ROT, children_per_parent=CHILDREN)
 
 
-@pytest.mark.parametrize("perturbation", [0.0, 0.25])
-def test_layout_matches_compact_engine_candidates(perturbation):
+@pytest.mark.parametrize(
+    ("perturbation", "layout_perturbation"),
+    [(0.0, 0.0), (0.25, 0.25), (0.25, 0.0)],
+    ids=["unperturbed", "perturbed", "caller-perturbed-layout-unperturbed"],
+)
+def test_layout_matches_compact_engine_candidates(perturbation, layout_perturbation):
     (
         coarse_rot, coarse_trans, fine_rot, fine_trans, rot_parent, trans_parent, fine_mstep_rot,
     ) = _grids(perturbation)
     samples = _significant_samples(seed=3)
     coarse_prior = np.linspace(-1.0, 1.0, N_ROT, dtype=np.float32)
     fine_prior = coarse_prior[rot_parent]
+    # The adaptive driver regenerates the layout with perturbation 0 while the
+    # caller's grids carry the iteration perturbation; the alignment must accept
+    # that and still hand over the caller's rows.
     layout = build_pass2_hypothesis_layout(
         samples, N_ROT, N_TRANS, ORDER, coarse_trans,
         oversampling_order=OVERSAMPLING, translation_step=1.0,
         rotation_log_prior=coarse_prior_from_pass2_prior(fine_prior, n_rot_coarse=N_ROT, children_per_parent=CHILDREN),
-        random_perturbation=perturbation, allow_empty=True, dtype=np.float32,
+        random_perturbation=layout_perturbation, allow_empty=True, dtype=np.float32,
     )
     layout = align_layout_to_pass2_grids(
         layout,
@@ -124,7 +131,8 @@ def test_alignment_fails_closed_on_a_foreign_rotation_grid():
         oversampling_order=OVERSAMPLING, translation_step=1.0, random_perturbation=0.0,
         allow_empty=True, dtype=np.float32,
     )
-    foreign = _grids(0.25)[2]
+    # A permuted grid pairs unrelated rotations: no single perturbation relates them.
+    foreign = grids[2][np.random.default_rng(0).permutation(grids[2].shape[0])]
     with pytest.raises(RuntimeError):
         align_layout_to_pass2_grids(
             layout, fine_rotations=foreign, fine_mstep_rotations=None, fine_translations=grids[3],

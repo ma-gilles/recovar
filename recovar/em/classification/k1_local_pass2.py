@@ -121,11 +121,19 @@ def align_layout_to_pass2_grids(
             f"fine rotations must be the full parent-major children grid, got {fine_rotations.shape}"
         )
     gathered = fine_rotations[ids].astype(layout.rotations_flat.dtype, copy=False)
-    if not np.array_equal(gathered, np.asarray(layout.rotations_flat)):
-        raise RuntimeError(
-            "pass-2 layout rotations differ from the caller's fine rotation grid; "
-            "the local route cannot claim the compact engine's candidate set"
-        )
+    # The caller's grid carries RELION's per-iteration perturbation, a common
+    # right-multiplied rotation P; the regenerated layout may not (the adaptive
+    # driver regenerates with perturbation 0).  Row r of both grids describes the
+    # same child exactly when layout_r^T @ caller_r is the same P for every row.
+    if n_rows:
+        relative = np.einsum("rji,rjk->rik", np.asarray(layout.rotations_flat, dtype=np.float64), gathered.astype(np.float64))
+        spread = float(np.max(np.abs(relative - relative[0])))
+        if not np.isfinite(spread) or spread > 1e-4:
+            raise RuntimeError(
+                "pass-2 layout rotations are not the caller's fine rotation grid up to one "
+                f"common perturbation (max spread {spread:.3e}); the local route cannot claim "
+                "the compact engine's candidate set"
+            )
     updates = dict(
         rotation_ids_flat=ids,
         rotations_flat=gathered,
