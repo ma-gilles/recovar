@@ -85,23 +85,6 @@ def _align_volume_stack(volumes: np.ndarray, alignment_fn: VolumeAligner | None)
     return np.stack(aligned, axis=0), True
 
 
-def empirical_weighted_covariance(volumes: np.ndarray, weights) -> np.ndarray:
-    """Return the probability-weighted centered covariance of flattened volumes."""
-    volumes = np.asarray(volumes)
-    weights = _normalize_weights(weights, int(volumes.shape[0]))
-    flat = volumes.reshape(volumes.shape[0], -1)
-    mean = np.sum(weights[:, None] * flat, axis=0)
-    centered = flat - mean[None, :]
-    return (centered * weights[:, None]).T @ np.conj(centered)
-
-
-def covariance_from_loading_matrix(W: np.ndarray) -> np.ndarray:
-    """Return ``W W*`` for loading volumes shaped ``[q, *volume_shape]``."""
-    W = np.asarray(W)
-    flat = W.reshape(W.shape[0], -1)
-    return flat.T @ np.conj(flat)
-
-
 def real_volume_to_centered_fourier(volume: np.ndarray) -> np.ndarray:
     """Convert a recovar-frame real-space volume to centered Fourier storage."""
     volume = np.asarray(volume)

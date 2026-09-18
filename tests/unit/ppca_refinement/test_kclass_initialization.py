@@ -3,23 +3,20 @@ import pickle
 import numpy as np
 import pytest
 
+import recovar.core.fourier_transform_utils as ftu
 from recovar.em.ppca_refinement.initialization import (
-    covariance_from_loading_matrix,
-    empirical_weighted_covariance,
     initialize_ppca_from_gt_volumes,
     initialize_ppca_from_kclass_volumes,
-    loading_row_norm_variance_prior,
     load_volume_stack,
+    loading_row_norm_variance_prior,
     real_volume_to_centered_fourier,
     real_volume_to_centered_fourier_half,
     volume_power_variance_prior,
 )
-import recovar.core.fourier_transform_utils as ftu
 from recovar.em.ppca_refinement.schedule import loading_subspace_agreement
 from recovar.simulation import synthetic_dataset
 from recovar.utils import helpers as utils
 from scripts.prepare_gt_weighted_ppca_init import prepare_gt_weighted_ppca_init
-
 
 pytestmark = pytest.mark.unit
 
@@ -40,8 +37,12 @@ def test_kclass_initialization_covariance_from_w_matches_weighted_covariance():
     weights = np.array([0.2, 0.5, 0.3], dtype=np.float64)
     init = initialize_ppca_from_kclass_volumes(volumes, q=2, class_weights=weights, frame="recovar")
 
-    expected_cov = empirical_weighted_covariance(init.aligned_volumes, weights)
-    actual_cov = covariance_from_loading_matrix(init.W)
+    normalized_weights = weights / weights.sum()
+    flat_volumes = init.aligned_volumes.reshape(init.aligned_volumes.shape[0], -1)
+    centered = flat_volumes - np.sum(normalized_weights[:, None] * flat_volumes, axis=0)
+    expected_cov = (centered * normalized_weights[:, None]).T @ np.conj(centered)
+    flat_loadings = init.W.reshape(init.W.shape[0], -1)
+    actual_cov = flat_loadings.T @ np.conj(flat_loadings)
     np.testing.assert_allclose(actual_cov, expected_cov, rtol=1e-5, atol=1e-6)
     expected_mean = np.sum((weights / weights.sum())[:, None, None, None] * volumes, axis=0)
     np.testing.assert_allclose(init.mu, expected_mean, rtol=1e-6, atol=1e-6)
