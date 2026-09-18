@@ -72,7 +72,6 @@ def test_kclass_optional_outputs_preserve_statistics(
     assert result.best_pose_rotations is engine_result.best_pose_rotations
     assert result.best_pose_translations is engine_result.best_pose_translations
     assert result.profile_summary is None
-    assert result.significant_counts is None
     if return_class_details:
         np.testing.assert_array_equal(result.class_assignments, assignments)
         np.testing.assert_array_equal(result.class_posterior_sums, class_sums)
@@ -84,26 +83,21 @@ def test_kclass_optional_outputs_preserve_statistics(
 
 
 @pytest.mark.parametrize("return_profile", [False, True])
-@pytest.mark.parametrize("return_significant_counts", [False, True])
-def test_local_sample_capture_does_not_shift_significant_counts(
-    monkeypatch, return_profile, return_significant_counts
-):
+def test_local_sample_capture_preserves_profile_visibility(monkeypatch, return_profile):
     """Sample capture enables an internal profile even if the caller hides it."""
-    counts = np.array([3, 7], dtype=np.int32)
     profile = {"reconstruction_sample_indices_by_image": (np.array([1]), np.array([2]))}
     stats = object()
 
     def run_local(*args, **kwargs):
         assert kwargs["return_reconstruction_sample_indices"] is True
         assert kwargs["return_profile"] == return_profile
-        assert kwargs["return_significant_counts"] == return_significant_counts
+        assert "return_significant_counts" not in kwargs
         return LocalEMResult(
             Ft_y=np.zeros(8, dtype=np.complex64),
             Ft_ctf=np.ones(8, dtype=np.float32),
             hard_assignments=np.array([0, 1], dtype=np.int32),
             stats=stats,
             profile=profile,
-            significant_counts=counts if return_significant_counts else None,
         )
 
     monkeypatch.setattr(local_search_iteration, "run_local_em_exact", run_local)
@@ -126,11 +120,9 @@ def test_local_sample_capture_does_not_shift_significant_counts(
         current_size=2,
         pass2_layout=SimpleNamespace(rotation_counts=np.ones(2, dtype=np.int32), translation_grid=translations[:1]),
         return_reconstruction_sample_indices=True,
-        return_significant_counts=return_significant_counts,
         return_profile=return_profile,
     )
     assert result.relion_stats is stats
-    assert result.significant_counts is (counts if return_significant_counts else None)
     if return_profile:
         assert result.profile_summary is not profile
         assert result.profile_summary["reconstruction_sample_indices_by_image"] is profile["reconstruction_sample_indices_by_image"]

@@ -1388,9 +1388,6 @@ def _score_half_local(
         rotation_log_prior=None if pass2_layout is not None else relion_local_rotation_log_prior_k,
         class_log_priors=class_log_priors if k_class_enabled else None,
         return_class_details=k_class_enabled,
-        # The engine count describes fine-pass reconstruction support. It is
-        # deliberately not exposed as RELION's coarse pass-1 metadata count.
-        return_significant_counts=False,
         score_only=diagnostic_score_only,
         rotation_grid_mstep_rotations=local_search_mstep_rotations,
         generate_relion_mstep_rotations=True,

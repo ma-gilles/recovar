@@ -44,7 +44,6 @@ class _LocalSearchIterationResult:
     relion_stats: RelionStats
     noise_stats: NoiseStats | None = None
     profile_summary: dict | None = None
-    significant_counts: np.ndarray | None = None
     best_pose_rotations: object | None = None
     best_pose_translations: object | None = None
     class_assignments: np.ndarray | None = None
@@ -117,7 +116,6 @@ def _run_local_search_iteration(
     class_log_priors=None,
     return_class_details=False,
     return_reconstruction_sample_indices=False,
-    return_significant_counts=False,
     apply_max_significants_to_support=False,
     stats_use_reconstruction_probs=False,
     score_only=False,
@@ -281,8 +279,6 @@ def _run_local_search_iteration(
     if class_log_priors is not None:
         if return_reconstruction_sample_indices:
             raise NotImplementedError("K-class local search does not return reconstruction sample indices")
-        if return_significant_counts:
-            raise NotImplementedError("K-class local search does not return significant counts")
         if score_only:
             raise NotImplementedError("K-class local search does not support score_only")
         if return_profile:
@@ -414,7 +410,6 @@ def _run_local_search_iteration(
             normalization_log_evidence=normalization_log_evidence,
             translation_prior_centers=translation_prior_centers,
             return_reconstruction_sample_indices=return_reconstruction_sample_indices,
-            return_significant_counts=return_significant_counts,
             stats_use_reconstruction_probs=stats_use_reconstruction_probs,
             score_only=score_only,
             source_faithful_spectrum_norm=source_faithful_spectrum_norm,
@@ -431,7 +426,6 @@ def _run_local_search_iteration(
         relion_stats=engine_outputs.stats,
         noise_stats=engine_outputs.noise_stats,
         profile_summary=engine_outputs.profile if return_profile else None,
-        significant_counts=engine_outputs.significant_counts,
         best_pose_rotations=engine_outputs.best_pose_rotations,
         best_pose_translations=engine_outputs.best_pose_translations,
         best_pose_eulers_deg=engine_outputs.best_pose_eulers_deg,
