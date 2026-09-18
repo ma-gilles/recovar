@@ -34,7 +34,6 @@ from recovar.em.dense.score_outputs import (
 from recovar.em.dense.scoring_policy import (
     _DENSE_EM_STATIC_KWARGS,
     _LOCAL_ADAPTIVE_PASS2_DENOMINATOR_SUPPORT_ENV,
-    _LOCAL_ADAPTIVE_PASS2_DISABLE_FULL_PARENT_ENV,
     _LOCAL_ADAPTIVE_PASS2_FULL_PARENT_ENV,
     _LOCAL_ADAPTIVE_PASS2_ROTATION_ONLY_ENV,
     PADDING_FACTOR,
@@ -1192,9 +1191,8 @@ def _score_half_local(
             significant_sample_indices = [None] * len(significant_sample_indices)
             logger.info(
                 "RELION local adaptive pass 2: expanding all parent samples; "
-                "set %s=0 or %s=1 for diagnostic pruned-parent support",
+                "set %s=0 for pruned-parent support",
                 _LOCAL_ADAPTIVE_PASS2_FULL_PARENT_ENV,
-                _LOCAL_ADAPTIVE_PASS2_DISABLE_FULL_PARENT_ENV,
             )
         elif local_adaptive_pass2_rotation_only:
             significant_sample_indices = _expand_significant_samples_to_full_parent_translations(

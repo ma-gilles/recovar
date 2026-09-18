@@ -14,10 +14,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from recovar.em.helpers.env_flags import parse_env_binary_flag
 from recovar.em.helpers.types import NoiseStats, RelionStats, make_noise_stats, make_relion_stats
-
-_K1_POSE_PUBLISH_DIRECT_ENV = "RECOVAR_K1_POSE_PUBLISH_DIRECT"
 
 
 class KClassEMResult(NamedTuple):
@@ -71,25 +68,7 @@ def _stack_or_none(values):
 
 
 
-def _k1_pose_publish_direct_requested() -> bool:
-    return parse_env_binary_flag(_K1_POSE_PUBLISH_DIRECT_ENV)
-
-
-
-def _selected_by_class(per_class_values, class_assignments: np.ndarray, *, direct_single_class: bool = False):
-    if (
-        direct_single_class
-        and per_class_values is not None
-        and len(per_class_values) == 1
-        and isinstance(class_assignments, np.ndarray)
-        and class_assignments.ndim == 1
-        and np.all(class_assignments == 0)
-    ):
-        # The sole class already has the requested image order. Avoid stacking,
-        # index normalization and a device gather for each changing subset N.
-        value = jnp.asarray(per_class_values[0])
-        if value.ndim > 0 and value.shape[0] == class_assignments.shape[0]:
-            return value
+def _selected_by_class(per_class_values, class_assignments: np.ndarray):
     stacked = _stack_or_none(per_class_values)
     if stacked is None:
         return None
@@ -339,16 +318,9 @@ def _assemble_result(
         rotation_dtype=rotation_posterior_sums.dtype,
         host_arrays=host_stats_publication,
     )
-    direct_single_class = _k1_pose_publish_direct_requested()
-    best_pose_rotations = _selected_by_class(
-        per_class_best_pose_rotations, class_assignments, direct_single_class=direct_single_class
-    )
-    best_pose_translations = _selected_by_class(
-        per_class_best_pose_translations, class_assignments, direct_single_class=direct_single_class
-    )
-    best_pose_rotation_ids = _selected_by_class(
-        per_class_best_pose_rotation_ids, class_assignments, direct_single_class=direct_single_class
-    )
+    best_pose_rotations = _selected_by_class(per_class_best_pose_rotations, class_assignments)
+    best_pose_translations = _selected_by_class(per_class_best_pose_translations, class_assignments)
+    best_pose_rotation_ids = _selected_by_class(per_class_best_pose_rotation_ids, class_assignments)
     best_pose_eulers_deg = None
     if per_class_best_pose_eulers_deg is not None:
         selected_classes = np.asarray(class_assignments)

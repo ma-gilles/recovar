@@ -23,7 +23,6 @@ logger = logging.getLogger(__name__)
 RELION_ADAPTIVE_FRACTION = float(np.float32("0.999"))
 
 _LOCAL_ADAPTIVE_PASS2_FULL_PARENT_ENV = "RECOVAR_LOCAL_ADAPTIVE_PASS2_FULL_PARENT"
-_LOCAL_ADAPTIVE_PASS2_DISABLE_FULL_PARENT_ENV = "RECOVAR_LOCAL_ADAPTIVE_PASS2_DISABLE_FULL_PARENT"
 _LOCAL_ADAPTIVE_PASS2_ROTATION_ONLY_ENV = "RECOVAR_LOCAL_ADAPTIVE_PASS2_ROTATION_ONLY"
 _LOCAL_ADAPTIVE_PASS2_DENOMINATOR_SUPPORT_ENV = "RECOVAR_LOCAL_ADAPTIVE_PASS2_DENOMINATOR_SUPPORT"
 _K1_SKIP_SIGNIFICANCE_PRUNING_ENV = "RECOVAR_K1_SKIP_SIGNIFICANCE_PRUNING"
@@ -213,8 +212,6 @@ def _k1_relion_x_half_mstep_enabled() -> bool:
 def _local_adaptive_pass2_full_parent_enabled() -> bool:
     """Return whether K=1 adaptive local pass-2 expands all parent samples."""
 
-    if parse_env_true_flag(_LOCAL_ADAPTIVE_PASS2_DISABLE_FULL_PARENT_ENV):
-        return False
     value = os.environ.get(_LOCAL_ADAPTIVE_PASS2_FULL_PARENT_ENV)
     if value is None or value.strip() == "":
         return False
