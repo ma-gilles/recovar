@@ -20,35 +20,17 @@ from recovar.em.diagnostics import iteration as debug_dumps
 
 pytestmark = pytest.mark.unit
 
-def test_kclass_mstep_defaults_to_relion_x_half_with_full_and_native_escape_hatches(monkeypatch):
+def test_kclass_mstep_defaults_to_relion_x_half_with_full_volume_escape_hatch(monkeypatch):
     """K-class quality parity should use RELION x-half BPref accumulators by default."""
 
     monkeypatch.delenv("RECOVAR_K_CLASS_RELION_X_HALF_MSTEP", raising=False)
-    monkeypatch.delenv("RECOVAR_K_CLASS_FULL_VOLUME_MSTEP", raising=False)
-    monkeypatch.delenv("RECOVAR_K_CLASS_HALF_VOLUME_MSTEP", raising=False)
     assert scoring_policy._k_class_relion_x_half_mstep_enabled() is True
-    assert scoring_policy._k_class_relion_half_volume_mstep_enabled() is False
 
     monkeypatch.setenv("RECOVAR_K_CLASS_RELION_X_HALF_MSTEP", "0")
     assert scoring_policy._k_class_relion_x_half_mstep_enabled() is False
-    assert scoring_policy._k_class_relion_half_volume_mstep_enabled() is False
 
     monkeypatch.setenv("RECOVAR_K_CLASS_RELION_X_HALF_MSTEP", "1")
     assert scoring_policy._k_class_relion_x_half_mstep_enabled() is True
-
-    monkeypatch.delenv("RECOVAR_K_CLASS_RELION_X_HALF_MSTEP", raising=False)
-    monkeypatch.setenv("RECOVAR_K_CLASS_FULL_VOLUME_MSTEP", "1")
-    assert scoring_policy._k_class_relion_x_half_mstep_enabled() is False
-    assert scoring_policy._k_class_relion_half_volume_mstep_enabled() is False
-
-    monkeypatch.setenv("RECOVAR_K_CLASS_FULL_VOLUME_MSTEP", "0")
-    assert scoring_policy._k_class_relion_x_half_mstep_enabled() is False
-    assert scoring_policy._k_class_relion_half_volume_mstep_enabled() is True
-
-    monkeypatch.setenv("RECOVAR_K_CLASS_FULL_VOLUME_MSTEP", "1")
-    monkeypatch.setenv("RECOVAR_K_CLASS_HALF_VOLUME_MSTEP", "1")
-    assert scoring_policy._k_class_relion_x_half_mstep_enabled() is False
-    assert scoring_policy._k_class_relion_half_volume_mstep_enabled() is True
 
 def test_k1_relion_x_half_mstep_defaults_on_with_escape_hatch(monkeypatch):
     """K=1 adaptive RELION mode should use x-half BPref layout by default."""
