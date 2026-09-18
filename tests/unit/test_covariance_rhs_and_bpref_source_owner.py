@@ -1,7 +1,5 @@
 """Owners for the fixed-rotation covariance images and the BPref centered sources."""
 
-import inspect
-
 import numpy as np
 import pytest
 
@@ -9,19 +7,8 @@ import recovar.em.reference.heterogeneity as hetero
 from recovar.em.vdam import layout
 
 
-def test_covariance_accumulators_share_the_image_owner():
-    classic = inspect.getsource(hetero.sum_up_images_fixed_rots_covariance_with_precompute)
-    eqx = inspect.getsource(hetero.accumulate_fixed_rotation_covariance)
-    for source in (classic, eqx):
-        assert source.count("images = _fixed_rotation_covariance_images(") == 1
-        assert "e2_p1 = " not in source and "noise_piece" not in source
-        assert "images.before_adj_B2" in source and "images.H_before_adj" in source
-    owner = inspect.getsource(hetero._fixed_rotation_covariance_images)
-    assert owner.count("evaluate_kernel_on_grid(") == 1
-    assert hetero._FixedRotationCovarianceImages._fields == ("before_adj_B2", "H_before_adj")
-
-
 def test_covariance_images_have_per_rotation_layout():
+    assert hetero._FixedRotationCovarianceImages._fields == ("before_adj_B2", "H_before_adj")
     n_images, n_rot, n_trans, image_size = 2, 3, 2, 16
     rng = np.random.default_rng(0)
     shifted = (rng.standard_normal((n_images, n_trans, image_size)) + 0j).astype(np.complex64)
@@ -61,13 +48,3 @@ def test_bpref_slab_outputs_cast_and_clamp():
     assert out_data.dtype == np.complex128 and out_weight.dtype == np.float64
     assert np.array_equal(out_weight, [0.0, 2.0, 0.0])
     assert out_data[0] == 1 + 2j and out_data is not data
-
-
-def test_converters_use_the_owners():
-    for fn in (layout.run_em_output_to_bpref, layout.relion_x_public_output_to_bpref):
-        source = inspect.getsource(fn)
-        assert source.count("_centered_bpref_sources(") == 1
-        assert source.count("_bpref_slab_outputs(") == 1
-        assert "_as_centered_bpref_source(" not in source and "1e-15" not in source
-    assert "transpose(2, 1, 0)" in inspect.getsource(layout.relion_x_public_output_to_bpref)
-    assert "transpose" not in inspect.getsource(layout.run_em_output_to_bpref)

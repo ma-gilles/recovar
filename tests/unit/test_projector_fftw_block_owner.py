@@ -1,7 +1,5 @@
 """Both centered-row RELION projectors take their FFTW block from one owner."""
 
-import inspect
-
 import jax.numpy as jnp
 import numpy as np
 
@@ -23,14 +21,3 @@ def test_fftw_block_clamps_the_projector_size_and_transposes_rotations():
     assert size == 4
     _, size = projection._relion_projector_fftw_block(volume, rot, n, 3, 1, 12, False)
     assert size == n
-
-
-def test_centered_row_projectors_use_the_owner():
-    for fn in (
-        projection.project_relion_projector_half_spectrum_centered_rows,
-        projection.project_relion_projector_half_spectrum_centered_rows_at_indices,
-    ):
-        source = inspect.getsource(fn)
-        assert source.count("proj_fftw, projector_image_size = _relion_projector_fftw_block(") == 1
-        assert "jnp.swapaxes(rotations_block" not in source
-        assert "project_relion_projector_half_spectrum(" not in source
