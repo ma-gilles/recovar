@@ -86,11 +86,10 @@ switch from single-set to halfset).
 | `engine.py` | JIT-compiled E+M kernel: `fused_dense_pose_ppca_block` and `dense_pose_ppca_score_stats_blocked`. Shared by both flavors. |
 | `dense_dataset.py` | Dataset-facing dense-flavor iteration (`run_dense_ppca_fused_em_iteration`) + halfset wrapper + the dense block iterator. |
 | `local_dataset.py` | Dataset-facing exact-local-flavor iteration (`run_local_ppca_fused_em_iteration`) + halfset wrapper + the per-image bucket iterator. |
-| `refinement_loop.py` | `run_dense_ppca_refinement_loop` and `run_local_ppca_refinement_loop` — multi-iteration drivers. |
+| `refinement_loop.py` | `run_dense_ppca_refinement_loop` — the maintained dense multi-iteration driver and shared resolution gate. |
 | `fixture_validation.py` | Test fixtures shared with `tests/unit/ppca_refinement/`. |
 | `highres_refinement.py` | Adaptive halfset refinement and top-p local hypothesis layouts used by the dense-to-local workflow. |
 | `pose_selection.py` | Top-p pose diagnostics: `TopPoseSelection`, pose-id packing, distinct top-pose selection, per-block top-p scores. |
-| `ppca_bridge.py` | The K-class side of the schedule agreement: `PPCAKClassScheduleBridge` feeds PPCA best-pose/Pmax diagnostics through `update_refinement_state` so HEALPix, local search and convergence evolve on the same controller as `refine_single_volume`. |
 
 ---
 
@@ -110,10 +109,7 @@ from recovar.em.ppca_refinement.local_dataset import (
     run_local_ppca_halfset_fused_em_iteration,
 )
 # Multi-iteration loops
-from recovar.em.ppca_refinement.refinement_loop import (
-    run_dense_ppca_refinement_loop,
-    run_local_ppca_refinement_loop,
-)
+from recovar.em.ppca_refinement.refinement_loop import run_dense_ppca_refinement_loop
 # State + schedule
 from recovar.em.ppca_refinement.state import PoseMarginalPPCAEMState
 from recovar.em.ppca_refinement.schedule import PPCARefinementScheduleState

@@ -23,7 +23,6 @@ from recovar.em.diagnostics import reconstruction as reconstruction_diagnostics
 from recovar.em.helpers import orientation_priors
 from recovar.em.helpers.convergence import _native_final_perturbation_healpix_order
 from recovar.em.local.local_search_iteration import _LocalSearchIterationResult
-from recovar.em.ppca_refinement import ppca_bridge
 from recovar.em.refinement import mean_helpers, noise_updates
 from recovar.em.relion import relion_worker_scale
 from recovar.em.vdam.iteration_loop import run_vdam_iterations
@@ -902,8 +901,6 @@ def test_iteration_dependencies_and_ppca_vdam_entry_points_are_available():
     assert "read_relion_optimiser_metadata(" not in controller_source
     assert callable(relion_replay.read_relion_direction_prior)
     assert callable(relion_replay.read_relion_direction_priors)
-    assert callable(ppca_bridge.PPCAKClassScheduleBridge)
-    assert callable(ppca_bridge.run_dense_ppca_refinement_with_kclass_schedule)
     assert callable(run_vdam_iterations)
 
 

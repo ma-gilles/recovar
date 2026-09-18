@@ -10,9 +10,10 @@ entry points and data flow. Historical experiments do not qualify this source.
 - [engine.py](../../recovar/em/ppca_refinement/engine.py) owns shared dense/local
   scoring and accumulation. The independent score/moment formulation and
   augmented solve live in `recovar/ppca/`; preserve the `q=0` and `W=0` limits.
-- [ppca_bridge.py](../../recovar/em/ppca_refinement/ppca_bridge.py) feeds pose/Pmax
-  diagnostics through the shared `RefinementState` controller. K-class execution
-  lives in [classification/k_class.py](../../recovar/em/classification/k_class.py).
+- [refinement_loop.py](../../recovar/em/ppca_refinement/refinement_loop.py) owns
+  the maintained dense halfset resolution gate. The dense-to-local workflow
+  calls the single-iteration owners directly. K-class execution lives in
+  [classification/k_class.py](../../recovar/em/classification/k_class.py).
 - [local_dataset.py](../../recovar/em/ppca_refinement/local_dataset.py) consumes
   `LocalHypothesisLayout`; local priors and pruning constrain support without
   changing the PPCA score. Do not introduce a parallel local-search layout.
