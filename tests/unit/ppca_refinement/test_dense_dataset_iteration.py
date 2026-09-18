@@ -19,11 +19,9 @@ from recovar.em.ppca_refinement.dense_dataset import (
 )
 from recovar.em.ppca_refinement.engine import dense_pose_ppca_E_step_blocked
 from recovar.em.ppca_refinement.local_dataset import run_local_ppca_fused_em_iteration
-from recovar.em.ppca_refinement.ppca_bridge import run_dense_ppca_refinement_with_kclass_schedule
 from recovar.em.ppca_refinement.refinement_loop import (
     HalfsetMeanComparison,
     run_dense_ppca_refinement_loop,
-    run_local_ppca_refinement_loop,
 )
 from recovar.em.ppca_refinement.state import PoseMarginalPPCAEMState
 from recovar.em.scoring.scoring import _e_step_block_scores
@@ -743,86 +741,3 @@ def test_exact_local_topk_mstep_records_retained_mass(tiny_inputs):
     assert retained.shape == (dataset.n_images,)
     assert np.all(retained > 0)
     assert np.all(retained <= 1.0 + 1e-6)
-
-
-def test_exact_local_refinement_loop_uses_same_resolution_gate(tiny_inputs):
-    dataset, mu, W, rotations, translations = tiny_inputs
-    halfsets = (dataset.get_halfset(0), dataset.get_halfset(1))
-    layouts = tuple(_all_retained_local_layout(ds, rotations, translations) for ds in halfsets)
-    state = PoseMarginalPPCAEMState(
-        mu_half=(jnp.asarray(mu), jnp.asarray(mu)),
-        W_half=(jnp.asarray(W), jnp.asarray(W)),
-        mu_score=jnp.asarray(mu),
-        W_score=jnp.asarray(W),
-        W_prior=jnp.ones((HALF_VOL, 1), dtype=jnp.float32) * 5.0,
-        mean_prior=jnp.ones((HALF_VOL,), dtype=jnp.float32) * 10.0,
-        noise_variance=jnp.ones((N_HALF,), dtype=jnp.float32),
-        schedule_state=None,
-    )
-
-    def comparator(_state, proposed_current_size):
-        return HalfsetMeanComparison(
-            means_aligned=True,
-            resolution_supports=True,
-            no_halfset_drift=True,
-        )
-
-    final_state, records = run_local_ppca_refinement_loop(
-        state,
-        halfsets,
-        layouts,
-        n_iterations=1,
-        init_current_size=2,
-        max_current_size=4,
-        halfset_comparator=comparator,
-        pose_stability_threshold=1.0,
-        mstep_chunk_size=8,
-    )
-
-    assert final_state.schedule_state.current_size == 4
-    assert records[0].resolution_decision.allow_increase
-    assert records[0].diagnostics["path"] == "exact_local"
-
-
-def test_dense_ppca_wrapper_uses_production_kclass_schedule_bridge(tiny_inputs):
-    dataset, mu, W, rotations, translations = tiny_inputs
-    state = PoseMarginalPPCAEMState(
-        mu_half=(jnp.asarray(mu), jnp.asarray(mu)),
-        W_half=(jnp.asarray(W), jnp.asarray(W)),
-        mu_score=jnp.asarray(mu),
-        W_score=jnp.asarray(W),
-        W_prior=jnp.ones((HALF_VOL, 1), dtype=jnp.float32) * 5.0,
-        mean_prior=jnp.ones((HALF_VOL,), dtype=jnp.float32) * 10.0,
-        noise_variance=jnp.ones((N_HALF,), dtype=jnp.float32),
-        schedule_state=None,
-    )
-
-    def comparator(_state, proposed_current_size):
-        return HalfsetMeanComparison(
-            means_aligned=True,
-            resolution_supports=True,
-            no_halfset_drift=True,
-        )
-
-    final_state, records, bridge = run_dense_ppca_refinement_with_kclass_schedule(
-        state,
-        dataset,
-        rotations=rotations,
-        translations=translations,
-        n_iterations=1,
-        image_batch_size=2,
-        rotation_block_size=1,
-        init_current_size=2,
-        max_current_size=4,
-        halfset_comparator=comparator,
-        pose_stability_threshold=1.0,
-        mstep_chunk_size=8,
-        init_healpix_order=2,
-        max_healpix_order=3,
-    )
-
-    assert final_state.schedule_state.current_size == 4
-    assert records[0].resolution_decision.allow_increase
-    assert len(bridge.history) == 1
-    assert bridge.history[0]["allowed"]
-    assert bridge.state.iteration == 1

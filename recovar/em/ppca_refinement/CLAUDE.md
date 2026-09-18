@@ -21,16 +21,15 @@ Near-term scope:
 
 1. K-class/GT volume initialization with explicit frame and scaling checks.
 2. Dense PPCA score/moment and augmented M-step foundation.
-3. PPCA schedule state that reuses K-class pose/current-size evolution but
-   requires halfset mean agreement and pose stability before resolution growth.
+3. PPCA schedule state requires halfset mean agreement and pose stability
+   before resolution growth.
 4. Dataset-backed dense PPCA uses the current dense preprocessing/projection
    helpers, normalizes across rotation blocks, and streams fused pass-2
    backprojection into augmented `[mu, W]` normal equations.
 5. Dense PPCA refinement-loop code advances `current_size` only through the
-   PPCA halfset gate plus the K-class schedule bridge in
-   `recovar/em/ppca_refinement/ppca_bridge.py`.
+   PPCA halfset gate. The maintained dense-to-local workflow calls the
+   single-iteration dense and exact-local owners directly.
 6. Exact-local PPCA consumes `LocalHypothesisLayout`; local pruning must remain
    support-only and must not change the PPCA score expression.
-7. The bridge updates production `RefinementState`; callers should switch to
-   exact-local PPCA when `bridge.state.do_local_search` is true. Do not add a
-   parallel local-search implementation.
+7. Do not add a parallel local-search implementation; exact-local PPCA must
+   consume the shared layout and sampling owners.

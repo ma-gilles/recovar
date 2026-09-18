@@ -14,10 +14,8 @@ from recovar.em.ppca_refinement.config import (
     PoseSelectionConfig,
     ScheduleConfig,
     ScoringConfig,
-    SparsePass2Config,
 )
 from recovar.em.ppca_refinement.dense_dataset import run_dense_ppca_halfset_fused_em_iteration
-from recovar.em.ppca_refinement.local_dataset import run_local_ppca_halfset_fused_em_iteration
 from recovar.em.ppca_refinement.schedule import (
     HalfsetResolutionGateDecision,
     PPCARefinementScheduleState,
@@ -316,104 +314,6 @@ def run_dense_ppca_refinement_loop(
             kclass_schedule_allows=kclass_schedule_allows,
             pose_stability_threshold=pose_stability_threshold,
             path_diagnostics={},
-        )
-        records.append(record)
-        state = updated
-    return state, records
-
-
-def run_local_ppca_refinement_loop(
-    state: PoseMarginalPPCAEMState,
-    halfset_datasets,
-    halfset_local_layouts,
-    *,
-    n_iterations: int,
-    disc_type: str = "linear_interp",
-    init_current_size: int | None = None,
-    max_current_size: int | None = None,
-    kclass_schedule_allows=True,
-    halfset_comparator: Callable[[PoseMarginalPPCAEMState, int], HalfsetMeanComparison] | None = None,
-    pose_stability_threshold: float = 0.0,
-    fsc_threshold: float = 0.143,
-    current_size_growth_factor: float = 2.0,
-    score_with_masked_images: bool = False,
-    relion_unit_half_weights: bool = False,
-    square_window: bool = False,
-    mstep_chunk_size: int | None = None,
-    local_image_shard_count: int = 1,
-    local_mstep_top_k: int = 0,
-    local_mstep_min_pmax: float = 0.999,
-    image_scale_corrections: np.ndarray | None = None,
-    pose_selection: PoseSelectionConfig | None = None,
-    top_pose_count: int = 1,
-) -> tuple[PoseMarginalPPCAEMState, list[PPCARefinementIterationRecord]]:
-    """Run exact-local halfset PPCA refinement iterations behind the same gate."""
-
-    if len(halfset_datasets) != 2 or len(halfset_local_layouts) != 2:
-        raise ValueError("halfset_datasets and halfset_local_layouts must each have length 2")
-    reference_dataset = halfset_datasets[0]
-    if int(n_iterations) < 0:
-        raise ValueError("n_iterations must be nonnegative")
-    max_current_size = int(max_current_size if max_current_size is not None else reference_dataset.image_shape[0])
-    schedule_state = _initial_schedule_state(state, reference_dataset, init_current_size)
-    state = state.replace(schedule_state=schedule_state)
-    records: list[PPCARefinementIterationRecord] = []
-    n_trans = int(np.asarray(halfset_local_layouts[0].translation_grid).shape[0])
-
-    for iteration in range(int(n_iterations)):
-        schedule_state = state.schedule_state
-        current_size = int(schedule_state.current_size)
-        proposed_size = propose_next_current_size(
-            current_size,
-            max_current_size=max_current_size,
-            growth_factor=current_size_growth_factor,
-        )
-        updated = run_local_ppca_halfset_fused_em_iteration(
-            state,
-            halfset_datasets,
-            halfset_local_layouts,
-            geometry=GeometryConfig(current_size=current_size, volume_domain="fourier_half"),
-            schedule=ScheduleConfig(
-                image_batch_size=2,
-                rotation_block_size=512,
-                mstep_chunk_size=mstep_chunk_size,
-                local_image_shard_count=int(local_image_shard_count),
-            ),
-            scoring=ScoringConfig(
-                score_with_masked_images=score_with_masked_images,
-                relion_unit_half_weights=relion_unit_half_weights,
-                square_window=square_window,
-                image_scale_corrections=image_scale_corrections,
-            ),
-            sparse_pass2=SparsePass2Config(
-                enabled=int(local_mstep_top_k) > 0,
-                local_mstep_top_k=int(local_mstep_top_k),
-                local_mstep_min_pmax=float(local_mstep_min_pmax),
-            ),
-            pose_selection=pose_selection,
-            top_pose_count=top_pose_count,
-            disc_type=disc_type,
-        )
-        best_pose_indices = _combined_best_pose_ids(updated.pose_diagnostics, n_trans)
-        comparison = (
-            halfset_comparator(updated, proposed_size)
-            if halfset_comparator is not None
-            else compare_halfset_means_by_fsc(
-                updated.mu_half,
-                volume_shape=reference_dataset.volume_shape,
-                proposed_current_size=proposed_size,
-                fsc_threshold=fsc_threshold,
-                means_aligned=True,
-            )
-        )
-        updated, record = _finish_refinement_iteration(
-            updated, schedule_state, comparison, best_pose_indices,
-            iteration=iteration,
-            current_size=current_size,
-            proposed_size=proposed_size,
-            kclass_schedule_allows=kclass_schedule_allows,
-            pose_stability_threshold=pose_stability_threshold,
-            path_diagnostics={"path": "exact_local"},
         )
         records.append(record)
         state = updated

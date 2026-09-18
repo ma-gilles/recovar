@@ -505,11 +505,12 @@ hypothesis budgets and adaptive pass plans belong to `batch_planning`.
 precomputation limit belongs to `local_search_iteration`. Their values and
 environment overrides are unchanged.
 
-The PPCA schedule bridge and its dense/local wrappers are imported from
-[`ppca_bridge`](../../recovar/em/ppca_refinement/ppca_bridge.py).
-Their unused controller re-exports have been retired. Helper-only callers also
-import sign alignment and combined noise statistics from `mean_helpers`, rotation
-metadata from `relion_metadata`, and replay iteration mapping from `relion_replay`.
+The maintained dense PPCA runner uses `ppca_refinement.refinement_loop` for its
+halfset resolution gate. The dense-to-local workflow calls the single-iteration
+dense and exact-local owners directly, so it does not carry a second schedule
+controller. Helper-only callers import sign alignment and combined noise
+statistics from `mean_helpers`, rotation metadata from `relion_metadata`, and
+replay iteration mapping from `relion_replay`.
 
 [`relion_normalization`](../../recovar/em/relion/relion_normalization.py)
 owns per-image norm and per-group scale formulas and their result type. It
