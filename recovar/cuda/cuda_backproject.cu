@@ -2368,32 +2368,59 @@ cudaError_t launch_relion_wavg_rotation_atomic_triplet_add_f32(
     return cudaGetLastError();
 }
 
+/* One body for both term layouts.  ``FLAT_ROWS`` replaces the rectangular
+ * ``[batch, rotation]`` block address with a packed row whose image comes from
+ * ``row_image_ids``, exactly as the flat-row fine scorer does.  The launcher
+ * keeps grid.x = row so a flattened rectangular problem issues the same
+ * multiset of per-cell atomic adds under the same linear block index
+ * ``rotation + batch * n_rotations``.  The order those adds land in is
+ * hardware scheduled in both layouts, so the float32 accumulator is bitwise
+ * reproducible only for exactly representable summands. */
+template <bool FLAT_ROWS = false>
 __global__ void __launch_bounds__(256)
 relion_wavg_rotation_atomic_runtime_triplet_f32_kernel(
     const float* __restrict__ terms,
     float* __restrict__ output,
     int n_rotations,
     int pixel_capacity,
-    const int32_t* __restrict__ runtime_logical_pixel_count)
+    const int32_t* __restrict__ runtime_logical_pixel_count,
+    const int32_t* __restrict__ row_image_ids = nullptr,
+    int64_t row_count = 0,
+    int64_t batch_size = 0)
 {
-    const int rotation = blockIdx.x;
-    const int batch = blockIdx.y;
+    const int rotation = FLAT_ROWS ? 0 : static_cast<int>(blockIdx.x);
+    const int64_t row = FLAT_ROWS
+        ? static_cast<int64_t>(blockIdx.x)
+        : static_cast<int64_t>(blockIdx.y) * n_rotations +
+              static_cast<int64_t>(blockIdx.x);
+    int64_t batch = FLAT_ROWS ? -1 : static_cast<int64_t>(blockIdx.y);
     const int logical_pixel_count = runtime_logical_pixel_count == nullptr
         ? pixel_capacity
         : runtime_logical_pixel_count[0];
     if (logical_pixel_count < 0 || logical_pixel_count > pixel_capacity) {
-        if (rotation == 0 && batch == 0 && threadIdx.x == 0)
+        if (row == 0 && threadIdx.x == 0)
             output[0] = nanf("");
         return;
+    }
+    if constexpr (FLAT_ROWS) {
+        if (row >= row_count) return;
+        batch = static_cast<int64_t>(row_image_ids[row]);
+        /* Padding rows contribute nothing and read no term. */
+        if (batch < 0) return;
+        if (batch >= batch_size) {
+            /* Fail closed on an out-of-range map, as the runtime kernels do. */
+            if (threadIdx.x == 0) output[0] = nanf("");
+            return;
+        }
     }
     for (int pixel = threadIdx.x;
          pixel < logical_pixel_count;
          pixel += blockDim.x) {
-        const int64_t input_index =
-            ((static_cast<int64_t>(batch) * n_rotations + rotation) *
-                 pixel_capacity + pixel) * 3;
+        const int64_t input_index = FLAT_ROWS
+            ? (row * pixel_capacity + pixel) * 3
+            : ((batch * n_rotations + rotation) * pixel_capacity + pixel) * 3;
         const int64_t output_index =
-            (static_cast<int64_t>(batch) * pixel_capacity + pixel) * 3;
+            (batch * pixel_capacity + pixel) * 3;
         atomicAdd(&output[output_index], terms[input_index]);
         atomicAdd(&output[output_index + 1], terms[input_index + 1]);
         atomicAdd(&output[output_index + 2], terms[input_index + 2]);
@@ -2411,12 +2438,37 @@ cudaError_t launch_relion_wavg_rotation_atomic_runtime_triplet_add_f32(
 {
     dim3 grid(static_cast<unsigned>(n_rotations), static_cast<unsigned>(batch_size));
     dim3 block(256);
-    relion_wavg_rotation_atomic_runtime_triplet_f32_kernel<<<grid, block, 0, stream>>>(
+    relion_wavg_rotation_atomic_runtime_triplet_f32_kernel<false><<<grid, block, 0, stream>>>(
         terms,
         output,
         static_cast<int>(n_rotations),
         static_cast<int>(pixel_capacity),
         runtime_logical_pixel_count);
+    return cudaGetLastError();
+}
+
+cudaError_t launch_relion_wavg_rotation_atomic_runtime_flat_rows_triplet_add_f32(
+    cudaStream_t stream,
+    const float* terms,
+    const int32_t* row_image_ids,
+    float* output,
+    int64_t batch_size,
+    int64_t row_count,
+    int64_t pixel_capacity,
+    const int32_t* runtime_logical_pixel_count)
+{
+    if (row_count == 0) return cudaSuccess;
+    dim3 grid(static_cast<unsigned>(row_count));
+    dim3 block(256);
+    relion_wavg_rotation_atomic_runtime_triplet_f32_kernel<true><<<grid, block, 0, stream>>>(
+        terms,
+        output,
+        0,
+        static_cast<int>(pixel_capacity),
+        runtime_logical_pixel_count,
+        row_image_ids,
+        row_count,
+        batch_size);
     return cudaGetLastError();
 }
 
@@ -2519,7 +2571,7 @@ cudaError_t launch_relion_wavg_sequential_triplet_f32(
     return cudaGetLastError();
 }
 
-template <bool INDEXED_RECTANGLE = false>
+template <bool INDEXED_RECTANGLE = false, bool FLAT_ROWS = false>
 __global__ void __launch_bounds__(256)
 relion_wavg_sequential_runtime_triplet_f32_kernel(
     const float2* __restrict__ projections,
@@ -2538,27 +2590,62 @@ relion_wavg_sequential_runtime_triplet_f32_kernel(
     const int32_t* __restrict__ recon_indices = nullptr,
     int64_t rectangle_capacity = 0,
     int64_t full_pixel_count = 0,
-    const int32_t* __restrict__ invalid = nullptr)
+    const int32_t* __restrict__ invalid = nullptr,
+    const int32_t* __restrict__ row_image_ids = nullptr,
+    int64_t row_count = 0)
 {
-    const int64_t rotation = blockIdx.x;
-    const int64_t batch = blockIdx.y;
-    if (batch >= batch_size || rotation >= rotation_count) return;
+    /* ``FLAT_ROWS`` packs the rectangular ``[batch, rotation]`` grid into one
+     * ``[row]`` axis whose image address is ``row_image_ids[row]``, the same
+     * substitution the flat-row fine scorer makes.  Every arithmetic statement
+     * below, the translation order included, is the rectangular body. */
+    static_assert(!(INDEXED_RECTANGLE && FLAT_ROWS),
+                  "indexed-rectangle and flat-row addressing are exclusive");
+    const int64_t rotation = FLAT_ROWS ? 0 : static_cast<int64_t>(blockIdx.x);
+    const int64_t row = FLAT_ROWS
+        ? static_cast<int64_t>(blockIdx.x)
+        : static_cast<int64_t>(blockIdx.y) * rotation_count +
+              static_cast<int64_t>(blockIdx.x);
+    int64_t batch = FLAT_ROWS ? -1 : static_cast<int64_t>(blockIdx.y);
+    if constexpr (FLAT_ROWS) {
+        if (row >= row_count) return;
+    } else {
+        if (batch >= batch_size || rotation >= rotation_count) return;
+    }
     if constexpr (INDEXED_RECTANGLE) { if (*invalid) return; }
     const int64_t logical_pixel_count = runtime_logical_pixel_count == nullptr
         ? pixel_capacity
         : static_cast<int64_t>(runtime_logical_pixel_count[0]);
     if (logical_pixel_count < 0 || logical_pixel_count > pixel_capacity) {
-        if (rotation == 0 && batch == 0 && threadIdx.x == 0)
+        if (row == 0 && threadIdx.x == 0)
             output[0] = nanf("");
         return;
     }
+    if constexpr (FLAT_ROWS) {
+        batch = static_cast<int64_t>(row_image_ids[row]);
+        /* Padding rows read nothing and keep the zeros the launcher wrote. */
+        if (batch < 0) return;
+        if (batch >= batch_size) {
+            /* Fail closed on an out-of-range map, as the runtime kernels do. */
+            for (int64_t pixel = threadIdx.x;
+                 pixel < pixel_capacity;
+                 pixel += blockDim.x) {
+                const int64_t invalid_base = (row * pixel_capacity + pixel) * 3;
+                output[invalid_base] = nanf("");
+                output[invalid_base + 1] = nanf("");
+                output[invalid_base + 2] = nanf("");
+            }
+            return;
+        }
+    }
     const float batch_scale = scale[batch];
-    const int64_t posterior_base =
-        (batch * rotation_count + rotation) * translation_count;
+    const int64_t posterior_base = FLAT_ROWS
+        ? row * translation_count
+        : (batch * rotation_count + rotation) * translation_count;
     const int64_t shifted_stride = INDEXED_RECTANGLE ? rectangle_capacity : pixel_capacity;
     const int64_t shifted_base = batch * translation_count * shifted_stride;
-    const int64_t projection_base =
-        (batch * rotation_count + rotation) * pixel_capacity;
+    const int64_t projection_base = FLAT_ROWS
+        ? row * pixel_capacity
+        : (batch * rotation_count + rotation) * pixel_capacity;
     for (int64_t pixel = threadIdx.x;
          pixel < (INDEXED_RECTANGLE ? pixel_capacity : logical_pixel_count);
          pixel += blockDim.x)
@@ -2654,6 +2741,55 @@ cudaError_t launch_relion_wavg_sequential_runtime_triplet_f32(
         translation_count,
         pixel_capacity,
         runtime_logical_pixel_count);
+    return cudaGetLastError();
+}
+
+cudaError_t launch_relion_wavg_sequential_runtime_flat_rows_triplet_f32(
+    cudaStream_t stream,
+    const float2* projections,
+    const int32_t* row_image_ids,
+    const float* raw_ctf,
+    const float* scale,
+    const float2* shifted_images,
+    const float* posterior,
+    float* output,
+    int64_t batch_size,
+    int64_t row_count,
+    int64_t translation_count,
+    int64_t pixel_capacity,
+    const int32_t* runtime_logical_pixel_count)
+{
+    const int64_t output_count = row_count * pixel_capacity;
+    if (output_count == 0) return cudaSuccess;
+    /* The zero fill owns the physical pixel tail and every padding row; the
+     * kernel then writes only the rows and pixels it is allowed to read. */
+    cudaError_t err = cudaMemsetAsync(
+        output,
+        0,
+        static_cast<size_t>(output_count) * 3 * sizeof(float),
+        stream);
+    if (err != cudaSuccess) return err;
+    dim3 grid(static_cast<unsigned>(row_count));
+    relion_wavg_sequential_runtime_triplet_f32_kernel<false, true><<<grid, 256, 0, stream>>>(
+        projections,
+        raw_ctf,
+        scale,
+        shifted_images,
+        posterior,
+        output,
+        batch_size,
+        0,
+        translation_count,
+        pixel_capacity,
+        runtime_logical_pixel_count,
+        nullptr,
+        nullptr,
+        nullptr,
+        0,
+        0,
+        nullptr,
+        row_image_ids,
+        row_count);
     return cudaGetLastError();
 }
 
@@ -10826,6 +10962,149 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>());
+
+// Flat-row Wavg: projections[Q,P] and posterior[Q,T] are packed candidate rows,
+// row_image_ids[Q] carries each row's image, and negative ids mark padding.
+ffi::Error RelionWavgSequentialRuntimeFlatRowsTripletF32Impl(
+    cudaStream_t stream,
+    ffi::AnyBuffer projections,
+    ffi::AnyBuffer row_image_ids,
+    ffi::AnyBuffer raw_ctf,
+    ffi::AnyBuffer scale,
+    ffi::AnyBuffer shifted_images,
+    ffi::AnyBuffer posterior,
+    ffi::AnyBuffer logical_pixel_count,
+    ffi::Result<ffi::AnyBuffer> output)
+{
+    if (projections.element_type() != ffi::DataType::C64 ||
+        raw_ctf.element_type() != ffi::DataType::F32 ||
+        scale.element_type() != ffi::DataType::F32 ||
+        shifted_images.element_type() != ffi::DataType::C64 ||
+        posterior.element_type() != ffi::DataType::F32 ||
+        output->element_type() != ffi::DataType::F32 ||
+        row_image_ids.element_type() != ffi::DataType::S32 ||
+        logical_pixel_count.element_type() != ffi::DataType::S32 ||
+        logical_pixel_count.dimensions().size() != 0)
+        return ffi::Error::InvalidArgument(
+            "RelionWavgSequentialRuntimeFlatRowsTripletF32: invalid buffers");
+    const auto projection_dims = projections.dimensions();
+    const auto row_dims = row_image_ids.dimensions();
+    const auto ctf_dims = raw_ctf.dimensions();
+    const auto scale_dims = scale.dimensions();
+    const auto shifted_dims = shifted_images.dimensions();
+    const auto posterior_dims = posterior.dimensions();
+    const auto output_dims = output->dimensions();
+    if (projection_dims.size() != 2 || row_dims.size() != 1 ||
+        ctf_dims.size() != 2 || scale_dims.size() != 1 ||
+        shifted_dims.size() != 3 || posterior_dims.size() != 2 ||
+        output_dims.size() != 3 || output_dims[2] != 3)
+        return ffi::Error::InvalidArgument(
+            "RelionWavgSequentialRuntimeFlatRowsTripletF32: invalid ranks");
+    const int64_t row_count = projection_dims[0];
+    const int64_t pixel_capacity = projection_dims[1];
+    const int64_t batch_size = ctf_dims[0];
+    const int64_t translation_count = shifted_dims[1];
+    if (row_count <= 0 || row_count > std::numeric_limits<int>::max() ||
+        batch_size <= 0 || translation_count <= 0 || pixel_capacity <= 0 ||
+        pixel_capacity > std::numeric_limits<int>::max() ||
+        row_dims[0] != row_count || ctf_dims[1] != pixel_capacity ||
+        scale_dims[0] != batch_size || shifted_dims[0] != batch_size ||
+        shifted_dims[2] != pixel_capacity || posterior_dims[0] != row_count ||
+        posterior_dims[1] != translation_count ||
+        output_dims[0] != row_count || output_dims[1] != pixel_capacity)
+        return ffi::Error::InvalidArgument(
+            "RelionWavgSequentialRuntimeFlatRowsTripletF32: inconsistent topology");
+    cudaError_t err = launch_relion_wavg_sequential_runtime_flat_rows_triplet_f32(
+        stream,
+        reinterpret_cast<const float2*>(projections.untyped_data()),
+        static_cast<const int32_t*>(row_image_ids.untyped_data()),
+        static_cast<const float*>(raw_ctf.untyped_data()),
+        static_cast<const float*>(scale.untyped_data()),
+        reinterpret_cast<const float2*>(shifted_images.untyped_data()),
+        static_cast<const float*>(posterior.untyped_data()),
+        static_cast<float*>(output->untyped_data()),
+        batch_size,
+        row_count,
+        translation_count,
+        pixel_capacity,
+        static_cast<const int32_t*>(logical_pixel_count.untyped_data()));
+    if (err != cudaSuccess)
+        return ffi::Error::Internal(std::string("CUDA: ") + cudaGetErrorString(err));
+    return ffi::Error::Success();
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    RelionWavgSequentialRuntimeFlatRowsTripletF32,
+    RelionWavgSequentialRuntimeFlatRowsTripletF32Impl,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>());
+
+ffi::Error RelionWavgRotationAtomicRuntimeFlatRowsTripletAddF32Impl(
+    cudaStream_t stream,
+    ffi::AnyBuffer terms,
+    ffi::AnyBuffer row_image_ids,
+    ffi::AnyBuffer accumulator_in,
+    ffi::AnyBuffer logical_pixel_count,
+    ffi::Result<ffi::AnyBuffer> accumulator_out)
+{
+    if (terms.element_type() != ffi::DataType::F32 ||
+        accumulator_in.element_type() != ffi::DataType::F32 ||
+        accumulator_out->element_type() != ffi::DataType::F32 ||
+        row_image_ids.element_type() != ffi::DataType::S32 ||
+        logical_pixel_count.element_type() != ffi::DataType::S32 ||
+        logical_pixel_count.dimensions().size() != 0)
+        return ffi::Error::InvalidArgument(
+            "RelionWavgRotationAtomicRuntimeFlatRowsTripletAddF32: invalid buffers");
+    const auto dims = terms.dimensions();
+    const auto row_dims = row_image_ids.dimensions();
+    const auto accumulator_dims = accumulator_in.dimensions();
+    const auto output_dims = accumulator_out->dimensions();
+    if (dims.size() != 3 || row_dims.size() != 1 ||
+        accumulator_dims.size() != 3 || output_dims.size() != 3 ||
+        dims[2] != 3 || accumulator_dims[2] != 3 ||
+        output_dims[0] != accumulator_dims[0] ||
+        output_dims[1] != accumulator_dims[1] ||
+        output_dims[2] != accumulator_dims[2] ||
+        row_dims[0] != dims[0] || accumulator_dims[1] != dims[1] ||
+        dims[0] <= 0 || dims[0] > std::numeric_limits<int>::max() ||
+        dims[1] <= 0 || dims[1] > std::numeric_limits<int>::max() ||
+        accumulator_dims[0] <= 0 ||
+        accumulator_dims[0] > std::numeric_limits<int>::max())
+        return ffi::Error::InvalidArgument(
+            "RelionWavgRotationAtomicRuntimeFlatRowsTripletAddF32: inconsistent topology");
+    cudaError_t err =
+        launch_relion_wavg_rotation_atomic_runtime_flat_rows_triplet_add_f32(
+            stream,
+            static_cast<const float*>(terms.untyped_data()),
+            static_cast<const int32_t*>(row_image_ids.untyped_data()),
+            static_cast<float*>(accumulator_out->untyped_data()),
+            accumulator_dims[0],
+            dims[0],
+            dims[1],
+            static_cast<const int32_t*>(logical_pixel_count.untyped_data()));
+    if (err != cudaSuccess)
+        return ffi::Error::Internal(std::string("CUDA: ") + cudaGetErrorString(err));
+    return ffi::Error::Success();
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    RelionWavgRotationAtomicRuntimeFlatRowsTripletAddF32,
+    RelionWavgRotationAtomicRuntimeFlatRowsTripletAddF32Impl,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
