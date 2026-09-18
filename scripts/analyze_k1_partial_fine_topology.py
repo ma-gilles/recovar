@@ -124,7 +124,7 @@ def load_recovar_candidate_table(path: Path) -> dict[str, np.ndarray]:
 
     path = Path(path)
     with np.load(path, allow_pickle=False) as archive:
-        schema = str(np.asarray(archive["schema"]).item()) if "schema" in archive.files else ""
+        schema = str(np.asarray(archive["schema"]).item())
         _require(schema == PRODUCTION_CAPTURE_SCHEMA, f"unsupported RECOVAR capture schema {schema!r}")
         required = {
             "schema", "original_indices", "candidate_offset", "rotation_offset",
@@ -176,7 +176,6 @@ def load_recovar_candidate_table(path: Path) -> dict[str, np.ndarray]:
         "production_rotation_log_prior": dense("rotation_log_prior", fill=np.nan),
         "production_translation_log_prior": dense("translation_log_prior", fill=np.nan),
         "production_significant": dense("significant", fill=0, dtype=bool),
-        "capture_schema": np.asarray(schema),
     }
 
 
