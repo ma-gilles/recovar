@@ -905,7 +905,6 @@ def test_iteration_dependencies_and_ppca_vdam_entry_points_are_available():
 
 def test_local_adaptive_pass2_defaults_to_relion_pruned_parent(monkeypatch):
     monkeypatch.delenv(scoring_policy._LOCAL_ADAPTIVE_PASS2_FULL_PARENT_ENV, raising=False)
-    monkeypatch.delenv(scoring_policy._LOCAL_ADAPTIVE_PASS2_DISABLE_FULL_PARENT_ENV, raising=False)
 
     assert scoring_policy._local_adaptive_pass2_full_parent_enabled() is False
 
@@ -913,10 +912,6 @@ def test_local_adaptive_pass2_defaults_to_relion_pruned_parent(monkeypatch):
     assert scoring_policy._local_adaptive_pass2_full_parent_enabled() is True
 
     monkeypatch.setenv(scoring_policy._LOCAL_ADAPTIVE_PASS2_FULL_PARENT_ENV, "0")
-    assert scoring_policy._local_adaptive_pass2_full_parent_enabled() is False
-
-    monkeypatch.setenv(scoring_policy._LOCAL_ADAPTIVE_PASS2_FULL_PARENT_ENV, "1")
-    monkeypatch.setenv(scoring_policy._LOCAL_ADAPTIVE_PASS2_DISABLE_FULL_PARENT_ENV, "1")
     assert scoring_policy._local_adaptive_pass2_full_parent_enabled() is False
 
 
