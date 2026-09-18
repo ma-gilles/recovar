@@ -198,3 +198,31 @@ def test_kclass_bucket_unification_is_dropped_when_it_would_add_too_many_rows(mo
         # all class segments, so it is bounded by the whole bucket width.
         assert bucket.bucket_rotation_count % n_classes == 0
         assert bucket.bucket_rotation_count >= int(np.max(bucket.actual_rotation_counts))
+
+
+def test_bucket_size_class_cap_rounds_up_and_never_truncates(monkeypatch):
+    """Capping distinct sizes trades padding back for fewer compiled shapes.
+
+    It must only ever round a bucket UP: sizing below an image's true neighborhood
+    would silently drop candidate rotations.
+    """
+    monkeypatch.setenv(local_layout.EXACT_LOCAL_UNIFY_MAX_PADDED_ROWS_ENV, "0")
+    layout = _unequal_support_layout()
+
+    monkeypatch.setenv(local_layout.EXACT_LOCAL_MAX_BUCKET_SIZE_CLASSES_ENV, "0")
+    uncapped = local_layout.plan_local_hypothesis_buckets(layout, 2, 32, unify_bucket_sizes=True)
+    monkeypatch.setenv(local_layout.EXACT_LOCAL_MAX_BUCKET_SIZE_CLASSES_ENV, "2")
+    capped = local_layout.plan_local_hypothesis_buckets(layout, 2, 32, unify_bucket_sizes=True)
+
+    n_uncapped = len({plan.bucket_rotation_count for plan in uncapped})
+    n_capped = len({plan.bucket_rotation_count for plan in capped})
+    assert n_capped < n_uncapped and n_capped <= 2
+    for plan in capped:
+        assert plan.bucket_rotation_count >= int(np.max(plan.actual_rotation_counts))
+
+
+def test_bucket_size_class_cap_is_off_by_default(monkeypatch):
+    monkeypatch.delenv(local_layout.EXACT_LOCAL_MAX_BUCKET_SIZE_CLASSES_ENV, raising=False)
+    sizes = np.asarray([16, 32, 64, 128], dtype=np.int32)
+
+    np.testing.assert_array_equal(local_layout._cap_bucket_size_classes(sizes), sizes)

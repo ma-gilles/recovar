@@ -46,6 +46,14 @@ EXACT_LOCAL_BUCKET_QUANTUM_ENV = "RECOVAR_EXACT_LOCAL_BUCKET_QUANTUM"
 # 150.7 M was a large loss, so the default sits between them with margin.
 EXACT_LOCAL_UNIFY_MAX_PADDED_ROWS = 32_000_000
 EXACT_LOCAL_UNIFY_MAX_PADDED_ROWS_ENV = "RECOVAR_EXACT_LOCAL_UNIFY_MAX_PADDED_ROWS"
+
+# When the bound above drops unification, each image keeps its own size, which at
+# K=4 100k/256 produced 7 new bucket shapes at the all-data iteration and 67.4 s of
+# XLA compilation (14 compiles of run_local_bucket_big_jit at ~4.74 s each). Capping
+# the number of distinct sizes trades a little of the padding win back for fewer
+# compiled shapes. 0 means uncapped, which is the measured 1426.1 s behavior.
+EXACT_LOCAL_MAX_BUCKET_SIZE_CLASSES = 0
+EXACT_LOCAL_MAX_BUCKET_SIZE_CLASSES_ENV = "RECOVAR_EXACT_LOCAL_MAX_BUCKET_SIZE_CLASSES"
 EXACT_LOCAL_BUCKET_RADIX_ENV = "RECOVAR_EXACT_LOCAL_BUCKET_RADIX"
 EXACT_LOCAL_BUCKET_MIN_QUANTUM = 256
 
@@ -126,6 +134,33 @@ def _exact_bucket_rotation_size(
             minimum=16,
         ),
     )
+
+
+def _exact_local_max_bucket_size_classes() -> int:
+    """Cap on distinct bucket sizes when unification is dropped; 0 means uncapped."""
+
+    raw = os.environ.get(EXACT_LOCAL_MAX_BUCKET_SIZE_CLASSES_ENV, "").strip()
+    if not raw:
+        return int(EXACT_LOCAL_MAX_BUCKET_SIZE_CLASSES)
+    value = int(raw)
+    if value < 0:
+        raise ValueError(f"{EXACT_LOCAL_MAX_BUCKET_SIZE_CLASSES_ENV} must be non-negative")
+    return value
+
+
+def _cap_bucket_size_classes(sizes: np.ndarray) -> np.ndarray:
+    """Round sizes up onto at most N distinct values, never below the true need."""
+
+    max_classes = _exact_local_max_bucket_size_classes()
+    distinct = np.unique(sizes)
+    if max_classes <= 0 or distinct.size <= max_classes:
+        return sizes
+    # Keep representative ceilings spread over the observed ladder, always including
+    # the largest so no neighborhood is truncated, then round every size up onto them.
+    picks = np.unique(np.linspace(0, distinct.size - 1, max_classes).round().astype(int))
+    kept = distinct[picks]
+    kept[-1] = distinct[-1]
+    return kept[np.clip(np.searchsorted(kept, sizes, side="left"), 0, kept.size - 1)]
 
 
 def _exact_local_unify_max_padded_rows() -> int:
@@ -1392,8 +1427,10 @@ def plan_local_hypothesis_buckets(
         added_rows = unified_size * int(bucket_sizes.size) - int(bucket_sizes.sum(dtype=np.int64))
         if added_rows <= _exact_local_unify_max_padded_rows():
             bucket_sizes = np.full_like(bucket_sizes, unified_size)
-        # Otherwise keep each image's own size: past this point the rows unification
-        # would add cost more than the extra compiled shapes it avoids.
+        else:
+            # Past this point the rows unification would add cost more than the extra
+            # compiled shapes it avoids; optionally bound how many shapes that creates.
+            bucket_sizes = _cap_bucket_size_classes(bucket_sizes)
     processing_order = (
         np.arange(layout.n_images, dtype=np.int32)
         if preserve_image_order
@@ -1739,6 +1776,8 @@ def bucket_class_local_hypothesis_layouts(
         )
         if added_rows <= _exact_local_unify_max_padded_rows():
             segment_sizes = np.full_like(segment_sizes, unified_segment)
+        else:
+            segment_sizes = _cap_bucket_size_classes(segment_sizes)
     total_sizes = (segment_sizes.astype(np.int64) * n_classes).astype(np.int32)
 
     bucket_specs: list[LocalBucketSpec] = []
