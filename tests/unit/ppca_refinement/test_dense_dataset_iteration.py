@@ -17,7 +17,7 @@ from recovar.em.ppca_refinement.dense_dataset import (
     run_dense_ppca_fused_em_iteration,
     run_dense_ppca_halfset_fused_em_iteration,
 )
-from recovar.em.ppca_refinement.engine import dense_pose_ppca_E_step_blocked
+from recovar.em.ppca_refinement.engine import dense_pose_ppca_score_stats_blocked
 from recovar.em.ppca_refinement.local_dataset import run_local_ppca_fused_em_iteration
 from recovar.em.ppca_refinement.refinement_loop import (
     HalfsetMeanComparison,
@@ -133,7 +133,7 @@ def test_dataset_blocks_match_homogeneous_dense_q0_score_convention(tiny_inputs)
         )
     )
 
-    _stats, diag = dense_pose_ppca_E_step_blocked(
+    score_stats = dense_pose_ppca_score_stats_blocked(
         block.Y1,
         block.proj_aug,
         block.ctf2_over_noise,
@@ -157,7 +157,7 @@ def test_dataset_blocks_match_homogeneous_dense_q0_score_convention(tiny_inputs)
         )
         - 0.5 * block.y_norm
     )
-    np.testing.assert_allclose(np.asarray(diag.logZ), np.asarray(expected_logz), rtol=5e-4, atol=5e-2)
+    np.testing.assert_allclose(np.asarray(score_stats.logZ), np.asarray(expected_logz), rtol=5e-4, atol=5e-2)
 
 
 def test_dataset_blocks_apply_known_image_scale_corrections(tiny_inputs):

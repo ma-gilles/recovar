@@ -47,11 +47,6 @@ class DensePPCAFusedEMResult(NamedTuple):
     diagnostics: dict
 
 
-class DenseImageStats(NamedTuple):
-    alpha_aug_acc: jax.Array
-    G_aug_tri_acc: jax.Array
-
-
 class PosteriorDiagnostics(NamedTuple):
     logZ: jax.Array
     pmax: jax.Array
@@ -219,41 +214,6 @@ def _add_pose_log_prior(score, pose_log_prior):
     if pose_log_prior is None:
         return score
     return score + jnp.swapaxes(jnp.asarray(pose_log_prior), -1, -2)
-
-
-@partial(jax.jit, static_argnames=("significance_threshold", "top_pose_count"))
-def dense_pose_ppca_E_step_blocked(
-    Y1,
-    proj_aug,
-    ctf2_over_noise,
-    y_norm,
-    pose_log_prior=None,
-    *,
-    significance_threshold: float = 1e-3,
-    top_pose_count: int = 1,
-):
-    """Run a dense PPCA E-step on one static block.
-
-    ``Y1`` has shape ``[B, T, F]``. ``proj_aug`` has shape ``[R, q+1, F]``
-    with component 0 equal to the mean projection and components 1..q equal
-    to loading projections. ``pose_log_prior`` is optional ``[B, R, T]``.
-    """
-    B, T, _F = jnp.asarray(Y1).shape
-    R, P, _ = jnp.asarray(proj_aug).shape
-    if pose_log_prior is not None and jnp.asarray(pose_log_prior).shape != (B, R, T):
-        raise ValueError(f"pose_log_prior shape {jnp.asarray(pose_log_prior).shape} != ({B}, {R}, {T})")
-    gamma, alpha, G_tri, diagnostics = _score_gamma_and_moments(
-        jnp.asarray(Y1),
-        jnp.asarray(proj_aug),
-        jnp.asarray(ctf2_over_noise),
-        jnp.asarray(y_norm),
-        pose_log_prior,
-        significance_threshold,
-        top_pose_count=top_pose_count,
-    )
-    alpha_aug_acc = jnp.einsum("btr,btrp->bp", gamma.astype(alpha.dtype), alpha)
-    G_aug_tri_acc = jnp.einsum("btr,btrk->bk", gamma.astype(G_tri.dtype), G_tri)
-    return DenseImageStats(alpha_aug_acc=alpha_aug_acc, G_aug_tri_acc=G_aug_tri_acc), diagnostics
 
 
 @jax.jit
