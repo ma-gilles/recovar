@@ -68,6 +68,8 @@ def test_complete_stage_comparison_closes_on_additively_shifted_scores(tmp_path:
         scores_with_prior=scores_with_prior,
         probs=probs,
         reconstruction_mask=reconstruction_mask,
+        oversampled_rot_indices=np.asarray([0, 1], dtype=np.int64),
+        parent_map=np.asarray([0, 1], dtype=np.int32),
     )
 
     report = analyzer.analyze(

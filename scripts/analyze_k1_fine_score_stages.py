@@ -186,16 +186,10 @@ def analyze(
     with np.load(recovar_capture, allow_pickle=False) as archive:
         rotations = archive["rotations"]
         translations = archive["fine_translations"]
-        oversampled_rotation_ids = (
-            np.asarray(archive["oversampled_rot_indices"], dtype=np.int64)
-            if "oversampled_rot_indices" in archive.files
-            else np.arange(rotations.shape[0], dtype=np.int64)
+        oversampled_rotation_ids = np.asarray(
+            archive["oversampled_rot_indices"], dtype=np.int64
         )
-        parent_map = (
-            np.asarray(archive["parent_map"], dtype=np.int64)
-            if "parent_map" in archive.files
-            else np.full(rotations.shape[0], -1, dtype=np.int64)
-        )
+        parent_map = np.asarray(archive["parent_map"], dtype=np.int64)
     rotation_map, rotation_error = _rotation_map(factor.rotations, rotations)
     translation_map, translation_error = _translation_map(
         factor.translations,
