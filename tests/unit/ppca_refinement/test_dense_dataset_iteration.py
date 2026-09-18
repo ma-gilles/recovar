@@ -225,6 +225,7 @@ def test_dataset_backed_dense_ppca_iteration_returns_finite_update(tiny_inputs):
     assert np.all(np.isfinite(np.asarray(result.mu_half)))
     assert np.all(np.isfinite(np.asarray(result.W_half)))
     assert result.diagnostics["mstep_objective_solved_delta"] >= -1e-5
+    assert result.diagnostics["mstep_objective_solved_delta_per_image"] >= -1e-5
     assert result.diagnostics["mstep_objective_scope"] == "fixed_e_step_augmented_quadratic_without_constants"
 
 

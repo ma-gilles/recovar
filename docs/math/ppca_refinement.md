@@ -56,8 +56,8 @@ The runner reports three objective families separately:
    EM objective, because it mixes E-step log evidence with a prior penalty from
    a different fixed-statistics quadratic.
 
-The regression guard checks that `mstep_objective_solved_delta_per_image` is
-non-negative up to numerical tolerance. It does not require the postprocessed
+The dense iteration tests check that `mstep_objective_solved_delta_per_image`
+is non-negative up to numerical tolerance. They do not require the postprocessed
 scoring model to improve the M-step objective, because RELION-style masking,
 background fill, and grid correction are explicit heuristics outside the
 augmented solve. Clean algorithmic experiments should use
