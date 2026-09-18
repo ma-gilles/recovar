@@ -9,10 +9,7 @@ it changes production arithmetic.
 from __future__ import annotations
 
 import logging
-import os
 from pathlib import Path
-
-import numpy as np
 
 from recovar.em.diagnostics import pass2 as pass2_diagnostics
 from recovar.em.helpers.env_flags import parse_env_flag
@@ -84,91 +81,6 @@ def _k1_pass2_dump_progress(
         for original_index in sorted(target_indices)
     ]
     return sum(path.is_file() for path in expected_paths), len(expected_paths)
-
-
-_PASS2_TOP2_DEBUG_INDICES_ENV = "RECOVAR_PASS2_TOP2_DEBUG_INDICES"
-
-
-def _pass2_top2_debug_target_indices() -> tuple[int, ...]:
-    """Diagnostic only: original (combined, pre-half-split) dataset image
-    indices to log the fine (pass-2) top-2 candidate score margin for,
-    mirroring ``k_class._pass1_top2_debug_target_indices`` but for the
-    oversampled fine-grid decision within pass-1's surviving coarse
-    cell(s), where the per-particle candidate set actually differs
-    (children of that particle's own coarse winner). Resolved to this
-    call's local (within-half) index space via
-    ``_resolve_local_target_indices`` before use -- a half-1 and a half-2
-    particle can share the same local position, so matching on the raw
-    env value directly would silently also hit an unrelated particle in
-    the other half.
-    """
-
-    raw = os.environ.get(_PASS2_TOP2_DEBUG_INDICES_ENV, "").strip()
-    if not raw:
-        return ()
-    return tuple(int(token) for token in raw.split(",") if token.strip())
-
-
-def _resolve_local_target_indices(experiment_dataset, original_targets: tuple[int, ...]) -> tuple[int, ...]:
-    """Map original (combined dataset) indices to this half's local indices.
-
-    Only returns the subset of ``original_targets`` actually present in
-    ``experiment_dataset`` (e.g. the half this call is scoring). Required
-    because pass-1/pass-2 debug/override target indices are specified in
-    original-dataset space but ``image_indices`` inside the per-half
-    scoring functions is local (within-half) space, and two different
-    halves' particles can land on the same local position.
-    """
-
-    if not original_targets:
-        return ()
-    resolver = getattr(experiment_dataset, "local_image_indices_from_original", None)
-    if not callable(resolver):
-        raise RuntimeError(
-            "pass1/pass2 top-2 debug/override requires "
-            "experiment_dataset.local_image_indices_from_original()"
-        )
-    local = np.asarray(
-        resolver(np.asarray(original_targets, dtype=np.int64), allow_missing=True)
-    )
-    return tuple(int(v) for v in local if v >= 0)
-
-
-def _log_pass2_top2_debug(scores, image_indices, targets: tuple[int, ...], *, dataset_tag=None) -> None:
-    image_indices_np = np.asarray(image_indices, dtype=np.int64).reshape(-1)
-    for target in targets:
-        rows = np.flatnonzero(image_indices_np == target)
-        if rows.size == 0:
-            continue
-        row = int(rows[0])
-        flat = np.asarray(scores[row], dtype=np.float64).reshape(-1)
-        finite = flat[np.isfinite(flat)]
-        if finite.size < 1:
-            logger.warning("PASS2_TOP2_DEBUG dataset=%s image_idx=%d: no finite fine candidates", dataset_tag, target)
-            continue
-        order = np.argsort(finite)
-        best = float(finite[order[-1]])
-        second = float(finite[order[-2]]) if finite.size >= 2 else float("-inf")
-        n_row_trans = int(np.asarray(scores).shape[-1])
-        best_flat_id = int(np.flatnonzero(flat == best)[0])
-        second_candidates = np.flatnonzero(flat == second) if finite.size >= 2 else np.array([], dtype=np.int64)
-        second_flat_id = int(second_candidates[0]) if second_candidates.size else -1
-        logger.warning(
-            "PASS2_TOP2_DEBUG dataset=%s image_idx=%d n_candidates=%d best_score=%.8f second_score=%.8f "
-            "margin=%.8g best_flat_id=%d(rot=%d,trans=%d) second_flat_id=%d(rot=%d,trans=%d)",
-            dataset_tag,
-            target,
-            finite.size,
-            best,
-            second,
-            best - second,
-            best_flat_id,
-            best_flat_id // n_row_trans,
-            best_flat_id % n_row_trans,
-            second_flat_id,
-            second_flat_id // n_row_trans if second_flat_id >= 0 else -1,
-            second_flat_id % n_row_trans if second_flat_id >= 0 else -1,
-        )
 
 
 def _add_sparse_group_timing(group_timing: dict[str, float] | None, key: str, elapsed_s: float) -> None:

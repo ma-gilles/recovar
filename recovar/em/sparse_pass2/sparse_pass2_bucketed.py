@@ -57,12 +57,9 @@ from recovar.em.diagnostics.sparse_pass2_dump import (
     _add_sparse_group_timing,
     _k1_pass2_dump_progress,
     _k_class_pass2_dump_progress,
-    _log_pass2_top2_debug,
     _log_sparse_kclass_group_timing,
     _pass2_dump_requested_for_bucket,
-    _pass2_top2_debug_target_indices,
     _prioritize_stopped_pass2_dump_buckets,
-    _resolve_local_target_indices,
 )
 from recovar.em.helpers.batch_fetch import fetch_indexed_batch, original_image_indices
 from recovar.em.helpers.env_flags import parse_env_flag, parse_env_int_set, parse_env_nonnegative_int
@@ -3326,13 +3323,6 @@ def compute_pass2_stats_sparse_bucketed(
             else:
                 scores = _score_pass2_bucket_normalized_cc(*score_args)
             preprior_scores = scores
-            _pass2_top2_targets = _resolve_local_target_indices(
-                experiment_dataset, _pass2_top2_debug_target_indices()
-            )
-            if _pass2_top2_targets:
-                _log_pass2_top2_debug(
-                    scores, image_indices, _pass2_top2_targets, dataset_tag=id(experiment_dataset)
-                )
             if bucket_shadow_only_mode:
                 if relion_exact_fine_normalized_cc:
                     shadow_scores = _score_pass2_bucket_relion_gpu_normalized_cc(
