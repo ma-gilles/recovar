@@ -9,6 +9,7 @@ from recovar.em.ppca_refinement.initialization import (
     initialize_ppca_from_kclass_volumes,
     load_volume_stack,
     loading_row_norm_variance_prior,
+    pipeline_variance_W_prior,
     real_volume_to_centered_fourier,
     real_volume_to_centered_fourier_half,
     volume_power_variance_prior,
@@ -48,6 +49,16 @@ def test_kclass_initialization_covariance_from_w_matches_weighted_covariance():
     np.testing.assert_allclose(init.mu, expected_mean, rtol=1e-6, atol=1e-6)
     assert init.diagnostics["latent_prior"] == "identity"
     assert init.diagnostics["W_stores_covariance_scale"] is True
+
+
+def test_pipeline_variance_prior_splits_total_variance_across_loadings():
+    total_variance = np.full(16, 4.0, dtype=np.float32)
+
+    split = pipeline_variance_W_prior(total_variance, q=4)
+    unsplit = pipeline_variance_W_prior(total_variance, q=4, divide_by_q=False)
+
+    np.testing.assert_array_equal(split, np.ones((16, 4), dtype=np.float32))
+    np.testing.assert_array_equal(unsplit, np.full((16, 4), 4.0, dtype=np.float32))
 
 
 def test_relion_to_recovar_volume_conversion_is_applied_once():
