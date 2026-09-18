@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import dataclasses
 import gc
 import logging
-import dataclasses
 import os
 import time
 
@@ -2271,7 +2271,7 @@ def run_local_em_exact(
                 reconstruction_probability_threshold_arg = jnp.asarray(threshold_values, dtype=jnp.float64)
                 has_reconstruction_probability_threshold = True
 
-            projection_max_r_big_jit = window_spec.dense_big_jit_max_r()
+            projection_max_r_big_jit = window_spec.dense_big_jit_projection_max_r()
             return_big_jit_mstep_tensors = _return_local_big_jit_mstep_tensors(
                 sparse_big_jit_backprojection=sparse_big_jit_backprojection,
                 source_faithful_bpref=source_faithful_bpref,

@@ -195,10 +195,10 @@ def test_projection_cache_builder_rejects_unadmitted_plan_before_allocation(monk
         destination_alias_proven=True,
     )
 
-    def fail_allocation(_plan):
+    def fail_allocation(*_args, **_kwargs):
         raise AssertionError("an unadmitted plan must not allocate")
 
-    monkeypatch.setattr(projection_cache, "_allocate_projection_cache", fail_allocation)
+    monkeypatch.setattr(projection_cache.jnp, "zeros", fail_allocation)
     with pytest.raises(MemoryError, match="predicted projection-cache peak"):
         projection_cache.build_projection_cache(
             plan,
@@ -217,10 +217,10 @@ def test_projection_cache_builder_rejects_noncallable_before_allocation(monkeypa
         destination_alias_proven=True,
     )
 
-    def fail_allocation(_plan):
+    def fail_allocation(*_args, **_kwargs):
         raise AssertionError("a noncallable project_block must not allocate")
 
-    monkeypatch.setattr(projection_cache, "_allocate_projection_cache", fail_allocation)
+    monkeypatch.setattr(projection_cache.jnp, "zeros", fail_allocation)
     with pytest.raises(TypeError, match="project_block must be callable"):
         projection_cache.build_projection_cache(plan, None)
 
