@@ -176,11 +176,11 @@ detail record with `fsc_shells` left `None`. The controller keeps the enabling
 conditions, the replay `class_tau2` branch, the round/floor weight statistics
 and the dump calls, and passes the regular or final accumulators, current size
 and layout explicitly. Both owners reach `regularization` through the module
-attribute, so monkeypatched controller tests keep working. Source guards in
-[`test_dense_iteration_loop_merge_guards.py`](../../tests/unit/test_dense_iteration_loop_merge_guards.py)
-check that the controller no longer calls those regularization functions
-directly; [`test_class_tau2_lowres_join_owner.py`](../../tests/unit/test_class_tau2_lowres_join_owner.py)
-pins the argument layout, dtypes and record layout.
+attribute, so monkeypatched controller tests keep working. The final-iteration
+cases in [`test_refine_relion_mode.py`](../../tests/unit/test_refine_relion_mode.py)
+exercise the controller boundary, while
+[`test_class_tau2_lowres_join_owner.py`](../../tests/unit/test_class_tau2_lowres_join_owner.py)
+pins the owner arguments, dtypes and record layout.
 
 The local kernel returns `LocalEMResult` from
 [`helpers.types`](../../recovar/em/helpers/types.py):
