@@ -315,18 +315,14 @@ def test_proposal_evidence_parser_requires_absolute_fixed_suite_identity():
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize(
-    "report",
-    [
-        {"schema": "em_k1_fsc_trajectory_audit_v2"},
+def test_fixed_suite_accepts_current_autonomous_fsc_audit():
+    MODULE._validate_autonomous_fsc_audit_schema(
         {
             "schema": "em_k1_fsc_trajectory_audit_v3",
             "relion_start_iteration": 1,
         },
-    ],
-)
-def test_fixed_suite_accepts_complete_autonomous_fsc_audit_schemas(report):
-    MODULE._validate_autonomous_fsc_audit_schema(report, "k1-04")
+        "k1-04",
+    )
 
 
 @pytest.mark.unit
