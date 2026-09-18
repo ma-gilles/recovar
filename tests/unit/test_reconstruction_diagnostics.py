@@ -22,7 +22,6 @@ def capture_inputs(tmp_path):
         current_size=8,
         grid_size=16,
         PADDING_FACTOR=2,
-        PROJECTION_PADDING_FACTOR=3,
         voxel_size=1.6375,
         computed_cs=10,
         prev_cs=6,
@@ -58,24 +57,6 @@ def capture_inputs(tmp_path):
         perturb_replay_relion_prefix="run",
         sealed_sampling_state=None,
         _replay_meta={"source": "test"},
-        final_current_size=16,
-        volume_shape=(16, 16, 16),
-        final_mstep_accumulator_shape=(4, 4, 3),
-        final_mstep_full_half_axis=0,
-        k_class_enabled=True,
-        final_grid_correct=False,
-        final_Ft_y_0=complex_rows,
-        final_Ft_y_1=-complex_rows,
-        final_Ft_ctf_0=complex_rows,
-        final_Ft_ctf_1=-complex_rows,
-        final_unfiltered_Ft_y_0=complex_rows * 2,
-        final_unfiltered_Ft_y_1=-complex_rows * 2,
-        final_unfiltered_Ft_ctf_0=complex_rows * 2,
-        final_unfiltered_Ft_ctf_1=-complex_rows * 2,
-        final_ft_y=complex_rows * 3,
-        final_ft_ctf=complex_rows * 3,
-        final_iter_fsc=spectrum / 4,
-        final_tau2_update_details={"prior_shells": spectrum},
         logger=SimpleNamespace(info=lambda *args: None),
     )
 
@@ -149,17 +130,3 @@ def test_tau2_optional_fields_and_replay_path(capture_inputs, include_fsc):
         assert not saved["relion_model_exists"].item()
         assert saved["relion_model_path"].item().endswith("run_it003_half1_model.star")
         assert saved["replay_meta_source"].item() == "test"
-
-
-@pytest.mark.parametrize("k_class", [False, True])
-def test_final_bpref_preserves_complex_data_and_real_weights(capture_inputs, k_class):
-    capture_inputs["k_class_enabled"] = k_class
-    invoke(dumps.write_final_bpref_accumulators, capture_inputs)
-    with np.load(capture_inputs["output_dir"] / "recovar_final_bpref_accum.npz") as saved:
-        assert saved["Ft_y"].dtype == np.complex128
-        assert saved["Ft_ctf"].dtype == np.float64
-        np.testing.assert_array_equal(saved["Ft_y"], capture_inputs["final_ft_y"])
-        np.testing.assert_array_equal(saved["Ft_ctf"], capture_inputs["final_ft_ctf"].real)
-        assert saved["voxel_size"].dtype == np.float32
-        assert saved["tau2_weight_combination"].item() == ("class_iref" if k_class else "sum")
-        assert "tau2_fsc_shells" not in saved

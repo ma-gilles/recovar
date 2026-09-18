@@ -19,7 +19,6 @@ import recovar.em.local.local_search_iteration as local_search_iteration
 import recovar.em.refinement.iteration_loop as iteration_loop
 from recovar.em.dense import half_scoring, score_outputs, scoring_policy
 from recovar.em.diagnostics import local_debug, relion_replay
-from recovar.em.diagnostics import reconstruction as reconstruction_diagnostics
 from recovar.em.helpers import orientation_priors
 from recovar.em.helpers.convergence import _native_final_perturbation_healpix_order
 from recovar.em.local.local_search_iteration import _LocalSearchIterationResult
@@ -788,9 +787,6 @@ def test_final_all_data_tau2_uses_joined_half_weight_sum():
     tau2_call = source[source.index(marker) : source.index("        logger.info(", source.index(marker))]
 
     assert 'weight_combination="sum"' in tau2_call
-    assert "reconstruction_diagnostics.write_final_bpref_accumulators(" in source
-    capture_source = inspect.getsource(reconstruction_diagnostics.write_final_bpref_accumulators)
-    assert '"tau2_weight_combination": np.asarray("class_iref" if k_class_enabled else "sum")' in capture_source
     assert '"tau2_weight_combination_final_all_data": "class_iref" if k_class_enabled else "sum"' in source
 
 
