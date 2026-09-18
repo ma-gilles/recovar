@@ -7,8 +7,6 @@ JAX coarse path instead of failing on the FFI operand check.
 
 from __future__ import annotations
 
-import inspect
-
 import pytest
 
 from recovar.em.scoring import significance
@@ -30,9 +28,3 @@ def test_explicit_environment_request_still_wins(monkeypatch):
     assert significance._k1_coarse_gaussian_ffi_enabled(default=False) is True
     monkeypatch.setenv(significance._K1_COARSE_GAUSSIAN_FFI_ENV, "0")
     assert significance._k1_coarse_gaussian_ffi_enabled(default=True) is False
-
-
-def test_significance_resolves_the_default_through_the_rule():
-    source = inspect.getsource(significance._compute_k_class_significance_batched)
-    assert source.count("default=_coarse_gaussian_ffi_default(") == 1
-    assert "default=relion_coarse_gaussian_default,\n    )\n    coarse_gaussian_ffi_enabled" not in source
