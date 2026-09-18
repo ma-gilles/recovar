@@ -31,8 +31,8 @@ def captured_variance(test_v, U, s):
             first.
 
     NOTE on a historical convention bug: many existing call sites in this repo
-    (e.g. ``run_test_all_metrics.py``, the older ``compare_covariance_vs_ppca_pipeline``
-    code, several ``scripts/`` files) pass the raw output of ``gt.get_vol_svd()``
+    (e.g. ``run_test_all_metrics.py`` and several ``scripts/`` files) pass the
+    raw output of ``gt.get_vol_svd()``
     which returns **singular values**, not eigenvalues. With singular values the
     formula returns a sqrt-weighted quantity that does NOT correspond to the
     standard "fraction of variance captured", and the resulting numbers are
