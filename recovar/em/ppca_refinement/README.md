@@ -83,7 +83,7 @@ switch from single-set to halfset).
 | `postprocess.py` | `PostprocessConfig` + `postprocess_ppca_half_volumes`. RELION-style soft mask + grid correction applied after the M-step. Marked clearly as a heuristic; the long-term target is masked-PCG. |
 | `diagnostics.py` | `build_iteration_diagnostics`, `resolve_image_scale_range`. Single home for the diagnostic-dict contract. |
 | `initialization.py` | `initialize_ppca_from_gt_volumes`, `loading_row_norm_variance_prior`, `volume_power_variance_prior` etc. |
-| `engine.py` | JIT-compiled E+M kernel: `fused_dense_pose_ppca_block`, `dense_pose_ppca_score_stats_blocked`, `run_dense_ppca_fused_refinement_blocks`. Shared by both flavors. |
+| `engine.py` | JIT-compiled E+M kernel: `fused_dense_pose_ppca_block` and `dense_pose_ppca_score_stats_blocked`. Shared by both flavors. |
 | `dense_dataset.py` | Dataset-facing dense-flavor iteration (`run_dense_ppca_fused_em_iteration`) + halfset wrapper + the dense block iterator. |
 | `local_dataset.py` | Dataset-facing exact-local-flavor iteration (`run_local_ppca_fused_em_iteration`) + halfset wrapper + the per-image bucket iterator. |
 | `refinement_loop.py` | `run_dense_ppca_refinement_loop` and `run_local_ppca_refinement_loop` — multi-iteration drivers. |

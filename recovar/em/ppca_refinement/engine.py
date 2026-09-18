@@ -9,20 +9,13 @@ materializing global pose moment tensors.
 
 from __future__ import annotations
 
-import dataclasses
 from functools import partial
 from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
 
-from recovar.em.ppca_refinement.diagnostics import build_iteration_diagnostics
-from recovar.em.ppca_refinement.mean_regularization import (
-    MeanRegularizationConfig,
-    resolve_mean_precision,
-)
-from recovar.em.ppca_refinement.postprocess import PostprocessConfig, postprocess_ppca_half_volumes
-from recovar.ppca import AugmentedPPCAStats, augmented_ppca_mstep_objective, solve_augmented_ppca_mstep
+from recovar.ppca import AugmentedPPCAStats
 from recovar.ppca.pose_marginal import compute_ppca_pose_scores_and_moments_no_contrast
 from recovar.ppca.triangular import _tri_size
 
@@ -669,155 +662,3 @@ def _enforce_augmented_x0(volumes, volume_shape):
 
     enforced = [enforce_relion_half_volume_x0_hermitian(volumes[i], volume_shape) for i in range(volumes.shape[0])]
     return jnp.stack(enforced, axis=0)
-
-
-def run_dense_ppca_fused_refinement_blocks(
-    blocks,
-    *,
-    q: int,
-    image_shape,
-    volume_shape,
-    mean_prior,
-    W_prior,
-    mean_reg: MeanRegularizationConfig | None = None,
-    postprocess: PostprocessConfig | None = None,
-    disc_type_backproject: str = "linear_interp",
-    enforce_x0: bool = True,
-    mstep_chunk_size: int | None = None,
-    fixed_mean_half=None,
-):
-    """Run one dense PPCA EM update over prepared fused blocks.
-
-    This is the first integration layer above :func:`fused_dense_pose_ppca_block`.
-    It streams the prepared blocks into augmented ``[μ, W]`` half-volume
-    sufficient statistics (``rhs``, ``lhs_tri``) and then calls the joint
-    augmented M-step :func:`recovar.ppca.augmented_mstep.solve_augmented_ppca_mstep`.
-
-    The caller is responsible for building the block list from the dataset
-    given the current iteration's geometry (``current_size``, ``q``,
-    ``volume_domain``) and schedule (batch sizes); this function does not
-    know about HEALPix orders or per-iter schedules. The dataset-facing
-    entry point :func:`recovar.em.ppca_refinement.dense_dataset.iter_dense_ppca_dataset_blocks`
-    is what produces the blocks.
-    """
-    mean_reg = mean_reg if mean_reg is not None else MeanRegularizationConfig()
-    postprocess = postprocess if postprocess is not None else PostprocessConfig()
-    q = int(q)
-    P = q + 1
-    tri = _tri_size(P)
-    mean_prior = jnp.asarray(mean_prior)
-    W_prior = jnp.asarray(W_prior)
-    if W_prior.shape != (mean_prior.shape[0], q):
-        raise ValueError(f"W_prior shape {W_prior.shape} != ({mean_prior.shape[0]}, {q})")
-
-    rhs_volume = jnp.zeros((P, mean_prior.shape[0]), dtype=jnp.complex64)
-    lhs_tri_volume = jnp.zeros((tri, mean_prior.shape[0]), dtype=jnp.float32)
-    log_likelihood = 0.0
-    n_images = 0
-    pmax_values = []
-    nsig_values = []
-    best_rotations = []
-    best_translations = []
-    postprocess_bandlimit_max_r = None
-
-    for block in blocks:
-        if postprocess_bandlimit_max_r is None and bool(block.use_recon_window):
-            postprocess_bandlimit_max_r = block.backprojection_max_r
-        rhs_volume, lhs_tri_volume, posterior = fused_dense_pose_ppca_block(
-            block.Y1,
-            block.proj_aug,
-            block.ctf2_over_noise,
-            block.y_norm,
-            block.rotations,
-            image_shape,
-            volume_shape,
-            rhs_volume,
-            lhs_tri_volume,
-            block.pose_log_prior,
-            Y1_recon=block.Y1_recon,
-            ctf2_over_noise_recon=block.ctf2_over_noise_recon,
-            disc_type_backproject=disc_type_backproject,
-            recon_window_indices=block.recon_window_indices,
-            use_recon_window=block.use_recon_window,
-            backprojection_max_r=block.backprojection_max_r,
-        )
-        log_likelihood += float(jnp.sum(posterior.logZ))
-        n_images += int(posterior.logZ.shape[0])
-        pmax_values.append(jnp.asarray(posterior.pmax))
-        nsig_values.append(jnp.asarray(posterior.n_significant_per_image))
-        best_rotations.append(jnp.asarray(posterior.best_rotation_idx))
-        best_translations.append(jnp.asarray(posterior.best_translation_idx))
-
-    if enforce_x0:
-        rhs_volume = _enforce_augmented_x0(rhs_volume, volume_shape)
-        lhs_tri_volume = _enforce_augmented_x0(lhs_tri_volume.astype(jnp.complex64), volume_shape).real.astype(
-            jnp.float32
-        )
-
-    diagnostics = build_iteration_diagnostics(
-        pmax_values=pmax_values,
-        nsig_values=nsig_values,
-        best_rotations=best_rotations,
-        best_translations=best_translations,
-        log_likelihood=log_likelihood,
-        n_images=n_images,
-        mean_reg=mean_reg,
-        image_scale_min=1.0,
-        image_scale_max=1.0,
-        image_scale_corrections=None,
-    )
-    stats = AugmentedPPCAStats(
-        rhs=jnp.swapaxes(rhs_volume, 0, 1),
-        lhs_tri=jnp.swapaxes(lhs_tri_volume, 0, 1),
-        log_likelihood=log_likelihood,
-        n_images=n_images,
-        diagnostics=diagnostics,
-    )
-    mean_precision = resolve_mean_precision(stats, mean_prior, volume_shape, mean_reg)
-    mu_half, W_half = solve_augmented_ppca_mstep(
-        stats,
-        mean_prior=mean_prior,
-        W_prior=W_prior,
-        mean_precision=mean_precision,
-        fixed_mean=fixed_mean_half,
-        chunk_size=mstep_chunk_size,
-    )
-    solved_objective = augmented_ppca_mstep_objective(
-        stats,
-        mu_half,
-        W_half,
-        mean_prior=mean_prior,
-        W_prior=W_prior,
-        mean_precision=mean_precision,
-        chunk_size=mstep_chunk_size,
-    )
-    postprocessed = postprocess_ppca_half_volumes(
-        mu_half,
-        W_half,
-        volume_shape,
-        config=dataclasses.replace(postprocess, bandlimit_max_r=postprocess_bandlimit_max_r),
-    )
-    diagnostics.update(postprocessed.diagnostics)
-    mu_half, W_half = postprocessed.mu_half, postprocessed.W_half
-    diagnostics["mean_frozen"] = fixed_mean_half is not None
-    diagnostics["mstep_mode"] = "fixed_mean_conditional_W" if fixed_mean_half is not None else "joint_mu_W"
-    if fixed_mean_half is not None:
-        mu_half = jnp.asarray(fixed_mean_half)
-    output_objective = augmented_ppca_mstep_objective(
-        stats,
-        mu_half,
-        W_half,
-        mean_prior=mean_prior,
-        W_prior=W_prior,
-        mean_precision=mean_precision,
-        chunk_size=mstep_chunk_size,
-    )
-    diagnostics.update(solved_objective.diagnostics("mstep_objective_solved", n_images=n_images))
-    diagnostics.update(output_objective.diagnostics("mstep_objective_output", n_images=n_images))
-    diagnostics["mstep_objective_postprocess_delta"] = float(output_objective.total - solved_objective.total)
-    diagnostics["mstep_objective_postprocess_delta_per_image"] = (
-        float((output_objective.total - solved_objective.total) / n_images) if n_images else float("nan")
-    )
-    diagnostics["mstep_objective_scope"] = "fixed_e_step_augmented_quadratic_without_constants"
-    diagnostics["mstep_objective_postprocess_in_objective"] = False
-    return DensePPCAFusedEMResult(mu_half=mu_half, W_half=W_half, stats=stats, diagnostics=diagnostics)
