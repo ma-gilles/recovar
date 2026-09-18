@@ -91,7 +91,6 @@ switch from single-set to halfset).
 | `highres_refinement.py` | High-resolution refinement over the K-class pose hierarchy: `HighresPPCARefinementResult`, pipeline-PPCA state initialization, top-p local hypothesis layouts. |
 | `pose_selection.py` | Top-p pose diagnostics: `TopPoseSelection`, pose-id packing, distinct top-pose selection, per-block top-p scores. |
 | `ppca_bridge.py` | The K-class side of the schedule agreement: `PPCAKClassScheduleBridge` feeds PPCA best-pose/Pmax diagnostics through `update_refinement_state` so HEALPix, local search and convergence evolve on the same controller as `refine_single_volume`. |
-| `projcov_whiten.py` | Post-M-step whitening: `whiten_W_svd_post_mstep` (matches the recovar PPCA route's M-step) and `whiten_W_via_projcov`. |
 
 ---
 
