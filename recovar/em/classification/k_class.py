@@ -150,23 +150,15 @@ def _positive_k_class_threshold(
     n_classes: int,
     env_name: str,
     default: int | float,
-    *,
-    legacy_disable_env: str | None = None,
 ) -> int | float | None:
     """Read a K-class route threshold with the default's integer/float type.
 
-    K=1 and nonpositive overrides disable the threshold. The mean-support
-    threshold also honors a disabled legacy threshold when its own override
-    is absent; this fallback deliberately retains the legacy float parsing.
+    K=1 and nonpositive overrides disable the threshold.
     """
     if int(n_classes) <= 1:
         return None
     value = _env_value_or_none(env_name)
     if value is None:
-        if legacy_disable_env is not None:
-            legacy_value = _env_value_or_none(legacy_disable_env)
-            if legacy_value is not None and float(legacy_value) <= 0.0:
-                return None
         return default
     threshold = type(default)(value)
     if isinstance(default, float) and not np.isfinite(threshold):
@@ -2901,7 +2893,6 @@ def run_dense_k_class_em_adaptive(
     ):
         dense_mean_support_threshold = _positive_k_class_threshold(
             n_classes, "RECOVAR_K_CLASS_DENSE_PASS2_MEAN_SUPPORT_FRACTION", 0.15,
-            legacy_disable_env="RECOVAR_K_CLASS_DENSE_PASS2_SUPPORT_FRACTION",
         )
         support_stats = _fine_support_stats(
             sig_sample_indices_by_class,
