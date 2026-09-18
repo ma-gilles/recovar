@@ -301,6 +301,25 @@ def _native_dual_weighted_sums_enabled_for_pass(
     return bool(jax.default_backend() == "gpu" and custom_cuda_requested())
 
 
+def _native_dual_weighted_sums_supported_for_operands(
+    *,
+    requested: bool,
+    accumulate_noise: bool,
+    probability_dtype,
+    reconstruction_dtype,
+    noise_dtype,
+) -> bool:
+    """Return whether operands satisfy the native F32/C64 reduction contract."""
+
+    return bool(
+        requested
+        and accumulate_noise
+        and np.dtype(probability_dtype) == np.dtype(np.float32)
+        and np.dtype(reconstruction_dtype) == np.dtype(np.complex64)
+        and np.dtype(noise_dtype) == np.dtype(np.complex64)
+    )
+
+
 def _fused_mstep_noise_enabled_for_pass(
     *,
     native_dual_weighted_sums: bool,
