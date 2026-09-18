@@ -15,6 +15,12 @@ pytestmark = pytest.mark.unit
 IMAGE_SIZE = 64
 
 
+def test_numbered_relion_iteration_includes_completed_continuations():
+    assert relion_replay_module._numbered_relion_iteration(0, 0) == 1
+    assert relion_replay_module._numbered_relion_iteration(1, 0) == 2
+    assert relion_replay_module._numbered_relion_iteration(11, 2) == 14
+
+
 def _sealed_sampling_fixture():
     return {
         "consumer_relion_iteration": 2,

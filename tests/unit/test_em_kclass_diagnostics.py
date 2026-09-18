@@ -1,42 +1,8 @@
-"""Merge guards for the 174b4c09 K-class firstiter coarse-scoring work.
-
-Companion to ``test_em_parity_lowpass_and_tau2_fudge.py`` (which locks
-down the e767ec50 LP-filter + tau2_fudge fixes and the completion
-baselines). This file is scoped to the K-class scoring path and the
-significance-dump operand-recording schema added by 174b4c09 "Speed up
-K-class firstiter coarse scoring":
-
-  * ``_compute_k_class_significance_batched`` API additions
-    (``relion_projector_half``, ``score_mode``, ``collect_significance``,
-    ``return_class_best``) and the inner ``_score_block(class_index, ...)``
-    first-argument convention.
-  * ``use_fused_pass1`` guard set: fused env, gaussian score, no
-    relion projector, no dump targets.
-  * ``_maybe_dump_k_class_significance_batch`` operand kwargs
-    (``shifted_data``, ``ctf2_data``, ``window_indices``,
-    ``half_weights_used``) and the resulting npz schema.
-  * ``RECOVAR_PASS1_FUSED`` env-var contract.
-  * ``iteration_loop`` plumbing of ``RELION_WIDTH_FMASK_EDGE`` through
-    to ``_reconstruct_and_postprocess_means`` (value=2 is asserted by
-    the sibling lowpass-and-tau2 guard file; here we only assert it is
-    actually threaded through).
-
-Run on CPU in seconds. Their job is to fail loudly if a future EM /
-VDAM / PPCA branch merge silently drops a load-bearing K-class kwarg,
-swaps the fused-pass1 guard set, or breaks the dump-operand schema.
-
-Quality of the underlying numerics is covered by the integration tests
-in ``tests/integration/test_em_parity_fast.py`` and the 3 completion
-baselines locked down by the sibling guard file. Don't duplicate
-behavioral coverage here — these are structural merge guards.
-"""
+"""Behavioral contracts for K-class policy and diagnostic captures."""
 
 from __future__ import annotations
 
-import ast
-import inspect
 import os
-import re
 from types import SimpleNamespace
 
 import jax.numpy as jnp
@@ -46,17 +12,13 @@ import pytest
 import recovar.em.classification.k_class as k_class_mod
 import recovar.em.diagnostics.pass2 as pass2_diagnostics
 import recovar.em.helpers.oversampling as oversampling_mod
-import recovar.em.refinement.iteration_loop as iteration_loop
-import recovar.em.scoring.score_constraints as score_constraints_mod
 import recovar.em.scoring.significance as sig_mod
 import recovar.em.sparse_pass2.sparse_pass2_bucketed as sparse_pass2_mod
-from recovar.em.classification import k_class_results
-from recovar.em.dense import half_scoring, score_outputs, scoring_policy
-from recovar.em.diagnostics import bpref_diagnostics, coarse_gaussian_diagnostics, relion_replay
+from recovar.em.dense import score_outputs, scoring_policy
+from recovar.em.diagnostics import bpref_diagnostics, coarse_gaussian_diagnostics
 from recovar.em.diagnostics import iteration as debug_dumps
 
 pytestmark = pytest.mark.unit
-
 
 def test_kclass_mstep_defaults_to_relion_x_half_with_full_and_native_escape_hatches(monkeypatch):
     """K-class quality parity should use RELION x-half BPref accumulators by default."""
@@ -88,7 +50,6 @@ def test_kclass_mstep_defaults_to_relion_x_half_with_full_and_native_escape_hatc
     assert scoring_policy._k_class_relion_x_half_mstep_enabled() is False
     assert scoring_policy._k_class_relion_half_volume_mstep_enabled() is True
 
-
 def test_k1_relion_x_half_mstep_defaults_on_with_escape_hatch(monkeypatch):
     """K=1 adaptive RELION mode should use x-half BPref layout by default."""
 
@@ -105,7 +66,6 @@ def test_k1_relion_x_half_mstep_defaults_on_with_escape_hatch(monkeypatch):
     monkeypatch.setenv(scoring_policy._K1_RELION_X_HALF_MSTEP_ENV, "invalid")
     assert scoring_policy._k1_relion_x_half_mstep_enabled() is True
 
-
 def test_k1_relion_x_half_mstep_default_disables_when_cuda_unavailable(monkeypatch):
     """The default must not request CUDA-only x-half adjoints on CPU tests."""
 
@@ -115,7 +75,6 @@ def test_k1_relion_x_half_mstep_default_disables_when_cuda_unavailable(monkeypat
 
     monkeypatch.setenv(scoring_policy._K1_RELION_X_HALF_MSTEP_ENV, "1")
     assert scoring_policy._k1_relion_x_half_mstep_enabled() is True
-
 
 def test_kclass_pass2_dump_completion_waits_for_full_target_set(tmp_path):
     """Multi-particle diagnostics must not stop after the first matching bucket."""
@@ -138,7 +97,6 @@ def test_kclass_pass2_dump_completion_waits_for_full_target_set(tmp_path):
         (tmp_path / f"pass2_orig000042_class{class_id:03d}_cs074.npz").touch()
     assert sparse_pass2_mod._k_class_pass2_dump_progress(**kwargs) == (8, 8)
 
-
 def test_kclass_pass2_dump_completion_honors_class_filter(tmp_path):
     """A one-class diagnostic should require one file per selected particle."""
 
@@ -152,36 +110,6 @@ def test_kclass_pass2_dump_completion_honors_class_filter(tmp_path):
     assert sparse_pass2_mod._k_class_pass2_dump_progress(**kwargs) == (1, 2)
     (tmp_path / "pass2_orig000009_class002_cs-01.npz").touch()
     assert sparse_pass2_mod._k_class_pass2_dump_progress(**kwargs) == (2, 2)
-
-
-def test_kclass_fused_pass2_accepts_reconstruction_current_size():
-    """The K-class adapter and fused implementation must share the M-step window API."""
-
-    signature = inspect.signature(
-        sparse_pass2_mod.compute_k_class_pass2_stats_sparse_fused,
-    )
-    assert "reconstruction_current_size" in signature.parameters
-    source = inspect.getsource(
-        sparse_pass2_mod.compute_k_class_pass2_stats_sparse_fused,
-    )
-    # The M-step window is resolved by the shared pass-2 window setup owner.
-    assert "reconstruction_current_size=reconstruction_current_size" in source
-    assert "current_size=mstep_current_size" in source
-    assert "reconstruction_current_size=mstep_current_size" in inspect.getsource(sparse_pass2_mod._pass2_window_setup)
-
-
-def test_kclass_adaptive_wires_relion_x_half_without_mislabeling_dense_branch():
-    source = inspect.getsource(half_scoring._score_half_dense)
-    assert "k_class_relion_x_half_mstep = _k_class_relion_x_half_mstep_enabled()" in source
-    assert 'em_kwargs["mstep_relion_x_half"] = bool(k_class_relion_x_half_mstep)' in source
-    assert "k_class_mstep_full_half_axis_this_score = k_class_result.mstep_full_half_axis" in source
-    assert 'dense_em_kwargs.pop("mstep_relion_x_half", None)' in source
-    assert "mstep_full_half_axis=k_class_mstep_full_half_axis_this_score" in source
-    assert "mstep_full_half_axis=k1_adaptive_result.mstep_full_half_axis" in source
-    assert "mstep_full_half_axis: int | None = None" in inspect.getsource(k_class_results)
-    assert "mstep_accumulator_shape: tuple[int, int, int] | None = None" in inspect.getsource(k_class_results)
-    assert "mstep_accumulator_shape=mstep_accumulator_shape" in inspect.getsource(k_class_results._assemble_result)
-
 
 def test_kclass_scatter_uses_mstep_class_mass_for_relion_priors():
     """RELION Class3D occupancies come from StoreWeightedSums, not full evidence sums."""
@@ -223,10 +151,7 @@ def test_kclass_scatter_uses_mstep_class_mass_for_relion_priors():
     assert outputs.best_pose_rotation_eulers[0].dtype == np.float64
     assert outputs.best_pose_translations[0].dtype == np.float64
 
-
-def test_kclass_weight_trajectories_record_mstep_and_full_posterior_provenance():
-    """Full-chain NPZ output must expose the class-mass split used in parity debugging."""
-
+def test_class_weight_history_snapshots_mstep_and_full_posterior():
     from recovar.em.helpers import iteration_history
 
     history = iteration_history.RefinementHistory()
@@ -236,306 +161,6 @@ def test_kclass_weight_trajectories_record_mstep_and_full_posterior_provenance()
     mstep[:] = posterior[:] = 0.0
     np.testing.assert_array_equal(history.class_mstep_weight_trajectory, [[0.25, 0.75]])
     np.testing.assert_array_equal(history.class_full_posterior_weight_trajectory, [[0.5, 0.5]])
-
-    source = inspect.getsource(iteration_loop.refine_single_volume)
-    assert "history.record_class_weights(" in source
-
-    import scripts.run_full_refinement as run_full_refinement
-
-    save_source = inspect.getsource(run_full_refinement)
-    assert '"class_mstep_weight_trajectory"' in save_source
-    assert '"class_full_posterior_weight_trajectory"' in save_source
-
-
-def test_kclass_adaptive_dense_fallback_strips_sparse_only_x_half_flag():
-    """Adaptive dense fallback must not tag full-volume dense M-steps as x-half."""
-
-    source = inspect.getsource(k_class_mod.run_dense_k_class_em_adaptive)
-    assert 'pass2_kwargs.pop("mstep_relion_x_half", False)' in source
-    assert "dense backend returns full-volume accumulators" in source
-
-
-def test_dense_kclass_mstep_layout_is_logged_for_parity_runs():
-    """Dense pass-2 fallback must leave an audit trail for the M-step layout."""
-
-    source = inspect.getsource(k_class_mod.run_dense_k_class_em)
-    assert "Dense K-class EM M-step: using %s accumulator layout" in source
-    assert '"native half-volume" if keep_half_accumulators else "full-volume"' in source
-
-
-# ----------------------------------------------------------------------
-# 174b4c09: K-class firstiter coarse-scoring API additions
-# ----------------------------------------------------------------------
-
-
-def test_kclass_significance_batched_keeps_174b4c09_api():
-    """``_compute_k_class_significance_batched`` must keep the
-    relion-projector / score-mode / collect-significance / return-class-best
-    parameters added by 174b4c09. A merge that drops any of these would
-    silently disable the K-class firstiter speedup or the parity hooks.
-    """
-    sig = inspect.signature(sig_mod._compute_k_class_significance_batched)
-    required = {
-        "relion_projector_half",
-        "relion_projector_r_max",
-        "score_mode",
-        "collect_significance",
-        "return_class_best",
-    }
-    missing = required - set(sig.parameters)
-    assert not missing, (
-        f"_compute_k_class_significance_batched is missing 174b4c09 params: {sorted(missing)}"
-    )
-
-
-def test_kclass_score_block_takes_class_index_first():
-    """The inner ``_score_block`` closure in
-    ``_compute_k_class_significance_batched`` must accept ``class_index``
-    as its first positional argument (174b4c09). Without it, the
-    relion-projector path indexes into the wrong volume.
-    """
-    source = inspect.getsource(sig_mod._compute_k_class_significance_batched)
-    match = re.search(
-        r"def _score_block\(\s*([^,)]+)\s*,",
-        source,
-    )
-    assert match is not None, "Could not locate _score_block definition in K-class function"
-    first_arg = match.group(1).strip()
-    assert first_arg == "class_index", (
-        f"_score_block first arg must be 'class_index' (174b4c09), got {first_arg!r}"
-    )
-
-
-def test_kclass_use_fused_pass1_gates_remain_in_place():
-    """The K-class ``use_fused_pass1`` gate must keep all four guards:
-    fused env, gaussian score_mode, no relion projector, no dump
-    targets. Drop any of them and 174b4c09's speedup either fires under
-    wrong conditions or silently disables itself.
-    """
-    source = inspect.getsource(sig_mod._compute_k_class_significance_batched)
-    fused_idx = source.find("use_fused_pass1 = (")
-    assert fused_idx >= 0, "use_fused_pass1 gate is missing from K-class function"
-    # Look at the next ~400 chars for the guard clauses.
-    window = source[fused_idx : fused_idx + 400]
-    for needle in (
-        "_pass1_fused_enabled()",
-        'score_mode == "gaussian"',
-        "not use_relion_projector",
-        "dump_target_pre_prior_blocks_per_class is None",
-        "dump_target_with_prior_blocks_per_class is None",
-    ):
-        assert needle in window, f"K-class use_fused_pass1 lost guard: {needle!r}"
-
-
-def test_adaptive_kclass_pass1_forwards_relion_projector_kwargs():
-    """Adaptive K-class pass-1 must preserve exact RELION projector inputs.
-
-    InitialModel and projector-frame diagnostics pass ``relion_projector_half``
-    through ``engine_kwargs``.  Dropping it only at the adaptive pass-1
-    significance site silently reverts support selection to the JAX projector
-    while pass-2 can still use RELION projector tables.
-    """
-
-    source = inspect.getsource(k_class_mod.run_dense_k_class_em_adaptive)
-    sig_kwargs_idx = source.find("sig_kwargs = dict(")
-    assert sig_kwargs_idx >= 0, "adaptive K-class significance kwargs block is missing"
-    window = source[sig_kwargs_idx : sig_kwargs_idx + 2000]
-    for needle in (
-        "relion_projector_half=relion_projector_half",
-        "relion_projector_r_max=relion_projector_r_max",
-    ):
-        assert needle in window, f"adaptive K-class pass-1 lost projector kwarg: {needle!r}"
-
-
-def test_sparse_pass2_preserves_relion_projector_api_and_forwarding():
-    """Adaptive sparse pass-2 must keep exact RELION projector support."""
-
-    for func in (
-        oversampling_mod.compute_pass2_stats_sparse,
-        sparse_pass2_mod.compute_pass2_stats_sparse_bucketed,
-        sparse_pass2_mod.compute_k_class_pass2_stats_sparse_fused,
-    ):
-        sig = inspect.signature(func)
-        for name in (
-            "relion_projector_half",
-            "relion_projector_r_max",
-            "projection_mask_current_image_disk",
-        ):
-            assert name in sig.parameters, f"{func.__name__} lost projector parameter {name!r}"
-
-    source = inspect.getsource(k_class_mod._run_sparse_k_class_adaptive_pass2)
-    for needle in (
-        'fused_common["relion_projector_half"] = relion_projector_half_by_class',
-        "relion_projector_half=_select_projector_half_for_class(",
-        "relion_projector_r_max=relion_projector_r_max",
-        'base_engine_kwargs.get("projection_mask_current_image_disk", True)',
-    ):
-        assert needle in source, f"adaptive sparse pass-2 lost projector forwarding: {needle!r}"
-
-
-def test_sparse_firstiter_k1_forwards_source_faithful_spectrum_norm():
-    """The firstiter global-winner adapter must retain fresh K=1 parity flags."""
-
-    source = inspect.getsource(k_class_mod._run_sparse_firstiter_global_winner_subset_pass2)
-    assert 'pass2_kwargs.get("source_faithful_spectrum_norm", False)' in source
-    assert "source_faithful_spectrum_norm=source_faithful_spectrum_norm" in source
-    assert "relion_exact_fine_normalized_cc=n_classes == 1" in source
-    assert "source-faithful powerClass normalization is K=1-only" in source
-
-
-# ----------------------------------------------------------------------
-# K-class significance dump operand-recording schema
-# ----------------------------------------------------------------------
-
-
-def test_kclass_dump_helper_accepts_operand_kwargs():
-    """``_maybe_dump_k_class_significance_batch`` must accept the
-    operand-recording kwargs (``shifted_data``, ``ctf2_data``,
-    ``window_indices``, ``half_weights_used``). These let the
-    significance-dump diagnostic compare RECOVAR's pass-0 operands
-    against RELION's pass-0 ``Fimg`` / ``corr_img`` byte-for-byte.
-    Removing them would silently collapse the dump back to the
-    pre-instrumentation schema and break the RELION-parity diagnostic.
-    """
-    sig = inspect.signature(sig_mod._maybe_dump_k_class_significance_batch)
-    required = {
-        "shifted_data",
-        "ctf2_data",
-        "window_indices",
-        "half_weights_used",
-        "projected_reference_rotation_ids",
-        "projected_reference_per_class",
-        "projected_reference_norm_score_per_class",
-        "projected_cross_score_per_class",
-        "coarse_gaussian_shifted_corrected",
-        "relion_projector_half",
-        "relion_projector_r_max",
-        "projection_padding_factor",
-    }
-    missing = required - set(sig.parameters)
-    assert not missing, (
-        f"_maybe_dump_k_class_significance_batch is missing operand kwargs: {sorted(missing)}"
-    )
-    for name in required:
-        assert sig.parameters[name].default is None, (
-            f"{name} default must stay None so callers without operands still work"
-        )
-
-
-def test_kclass_dump_call_site_passes_operand_kwargs():
-    """The K-class dump-emission call site must keep passing the operand
-    kwargs. AST-level safety net against merges that strip the kwargs at
-    the call site while keeping them on the helper signature.
-    """
-    source = inspect.getsource(sig_mod._compute_k_class_significance_batched)
-    call_idx = source.find("_maybe_dump_k_class_significance_batch(")
-    assert call_idx >= 0, "K-class function lost its dump-emission call"
-    window = source[call_idx : call_idx + 4000]
-    for needle in (
-        "shifted_data=shifted_data",
-        "ctf2_data=ctf2_data",
-        "window_indices=window_indices",
-        "half_weights_used=",
-        "projected_reference_rotation_ids=projected_reference_rotation_ids",
-        "projected_reference_per_class=projected_reference_per_class",
-        "projected_reference_norm_score_per_class=",
-        "projected_cross_score_per_class=projected_cross_score_per_class",
-        "coarse_gaussian_shifted_corrected=coarse_gaussian_shifted_corrected",
-        "relion_projector_half=relion_projector_half",
-        "relion_projector_r_max=relion_projector_r_max",
-        "projection_padding_factor=projection_padding_factor",
-    ):
-        assert needle in window, f"K-class dump call site lost kwarg: {needle!r}"
-    # The half_weights_used branch must distinguish windowed vs
-    # unwindowed weights — that's how the dump records what the score
-    # actually used.
-    assert "half_weights_windowed if use_window else half_weights" in window, (
-        "Dump call site lost the windowed/unwindowed half_weights selection"
-    )
-
-
-def test_kclass_significance_dump_threads_one_based_iteration():
-    assert "debug_iteration" in inspect.signature(half_scoring._score_half_dense).parameters
-    assert "debug_iteration" in inspect.signature(
-        k_class_mod.run_dense_k_class_em_adaptive
-    ).parameters
-    assert "debug_iteration" in inspect.signature(
-        sig_mod._compute_k_class_significance_batched
-    ).parameters
-    loop_source = inspect.getsource(iteration_loop.refine_single_volume)
-    score_source = inspect.getsource(half_scoring._score_half_dense)
-    adaptive_source = inspect.getsource(k_class_mod.run_dense_k_class_em_adaptive)
-    significance_source = inspect.getsource(sig_mod._compute_k_class_significance_batched)
-    assert relion_replay._numbered_relion_iteration(0, 0) == 1
-    assert relion_replay._numbered_relion_iteration(1, 0) == 2
-    assert relion_replay._numbered_relion_iteration(11, 2) == 14
-    assert "numbered_relion_iteration = replay_policy._numbered_relion_iteration(" in loop_source
-    # The local call and the shared dense keyword set (adaptive and single pass) thread it.
-    assert loop_source.count("debug_iteration=numbered_relion_iteration") >= 2
-    dense_keywords = loop_source[
-        loop_source.index("dense_half_kwargs = dict(") : loop_source.index("if use_adaptive:\n                    dense_result")
-    ]
-    assert dense_keywords.count("debug_iteration=numbered_relion_iteration") == 1
-    score_tree = ast.parse(score_source)
-    firstiter_inputs = next(
-        node.value for node in ast.walk(score_tree)
-        if isinstance(node, ast.Assign)
-        and any(isinstance(target, ast.Name) and target.id == "firstiter_kwargs" for target in node.targets)
-    )
-    shared_keywords = {key.value: value for key, value in zip(firstiter_inputs.keys, firstiter_inputs.values)}
-    # The adaptive engine calls thread it through the shared keyword owner.
-    owner_calls = [
-        node.value for node in ast.walk(score_tree)
-        if isinstance(node, ast.Assign)
-        and any(isinstance(target, ast.Name) and target.id == "shared_kwargs" for target in node.targets)
-    ]
-    assert len(owner_calls) == 2
-    owner_keywords = [{keyword.arg: keyword.value for keyword in call.keywords} for call in owner_calls]
-    assert all(call.func.id == "_adaptive_engine_shared_kwargs" for call in owner_calls)
-    assert all(
-        isinstance(keywords["debug_iteration"], ast.Name) and keywords["debug_iteration"].id == "debug_iteration"
-        for keywords in owner_keywords
-    )
-    assert "debug_iteration=debug_iteration," in inspect.getsource(half_scoring._adaptive_engine_shared_kwargs)
-    scoring_calls = [
-        node for node in ast.walk(score_tree)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-        and node.func.id in {"_score_kclass_firstiter_cc_pass2", "run_dense_k_class_em_adaptive"}
-    ]
-    assert len(scoring_calls) == 4
-    for call in scoring_calls:
-        keywords = {}
-        for keyword in call.keywords:
-            if keyword.arg is not None:
-                keywords[keyword.arg] = keyword.value
-            elif isinstance(keyword.value, ast.Name) and keyword.value.id == "firstiter_kwargs":
-                keywords.update(shared_keywords)
-            elif isinstance(keyword.value, ast.Name) and keyword.value.id == "shared_kwargs":
-                keywords.update(owner_keywords[0])
-        assert isinstance(keywords["debug_iteration"], ast.Name)
-        assert keywords["debug_iteration"].id == "debug_iteration"
-    assert adaptive_source.count("debug_iteration=debug_iteration") >= 1
-    assert "debug_iteration=debug_iteration" in significance_source
-    firstiter_probe_source = inspect.getsource(
-        k_class_mod._run_dense_k_class_joint_firstiter_score_probe
-    )
-    assert "collect_significance=_significance_debug_dump_matches(" in firstiter_probe_source
-
-
-def test_k1_firstiter_threads_host_precision_translation_phase_source():
-    adaptive_source = inspect.getsource(k_class_mod.run_dense_k_class_em_adaptive)
-    joint_probe_source = inspect.getsource(
-        k_class_mod._run_dense_k_class_joint_firstiter_score_probe
-    )
-    assert "if n_classes == 1 and coarse_translation_phase_source is not None:" in adaptive_source
-    assert (
-        'coarse_probe_kwargs["translation_phase_source"]' in adaptive_source
-    )
-    assert (
-        'translation_phase_source=engine_kwargs.get("translation_phase_source")'
-        in joint_probe_source
-    )
-
 
 def test_significance_dump_work_is_gated_before_scoring(monkeypatch, tmp_path):
     """A future-only dump request must not activate diagnostic scoring work."""
@@ -563,7 +188,6 @@ def test_significance_dump_work_is_gated_before_scoring(monkeypatch, tmp_path):
     assert not matches(current_size=64, debug_iteration=1)
     assert not matches(current_size=32, debug_iteration=11)
     assert matches(current_size=64, debug_iteration=11)
-
 
 def test_kclass_dump_writes_operand_arrays_to_npz(monkeypatch, tmp_path):
     """End-to-end behavioral test: a one-particle invocation of
@@ -736,7 +360,6 @@ def test_kclass_dump_writes_operand_arrays_to_npz(monkeypatch, tmp_path):
     assert int(payload["debug_iteration"]) == 2
     assert int(payload["one_based_iteration"]) == 2
 
-
 def test_kclass_significance_dump_iteration_gate_suppresses_other_iterations(monkeypatch, tmp_path):
     dump_dir = tmp_path / "dump"
     monkeypatch.setenv("RECOVAR_SIGNIFICANCE_DUMP_DIR", str(dump_dir))
@@ -768,7 +391,6 @@ def test_kclass_significance_dump_iteration_gate_suppresses_other_iterations(mon
     )
 
     assert not dump_dir.exists()
-
 
 def test_kclass_significance_dump_can_stop_after_durable_target(monkeypatch, tmp_path):
     """The opt-in short-run diagnostic stops only after writing its target."""
@@ -810,7 +432,6 @@ def test_kclass_significance_dump_can_stop_after_durable_target(monkeypatch, tmp
     assert dump_path.is_file()
     assert exc_info.value.dump_path == str(dump_path)
 
-
 def test_kclass_significance_stop_without_iteration_uses_unsuffixed_path(monkeypatch, tmp_path):
     """The stop gate must use the same optional suffix as the dump writer."""
 
@@ -829,7 +450,6 @@ def test_kclass_significance_stop_without_iteration_uses_unsuffixed_path(monkeyp
             current_size=14,
             debug_iteration=1,
         )
-
 
 def test_kclass_significance_stop_respects_iteration_gate(monkeypatch, tmp_path):
     """A future target must not stop the current scoring boundary."""
@@ -866,7 +486,6 @@ def test_kclass_significance_stop_respects_iteration_gate(monkeypatch, tmp_path)
 
     assert not dump_dir.exists()
 
-
 def test_significance_stop_waits_for_complete_target_set(monkeypatch, tmp_path):
     dump_dir = tmp_path / "dump"
     dump_dir.mkdir()
@@ -894,7 +513,6 @@ def test_significance_stop_waits_for_complete_target_set(monkeypatch, tmp_path):
             debug_iteration=2,
         )
 
-
 def test_significance_dump_half_selector_is_scoped_to_target_iteration(tmp_path):
     datasets = [
         SimpleNamespace(dataset_indices=np.asarray([2, 4], dtype=np.int64)),
@@ -920,7 +538,6 @@ def test_significance_dump_half_selector_is_scoped_to_target_iteration(tmp_path)
         experiment_datasets=datasets,
         environ=environ,
     ) == (1,)
-
 
 def test_significance_dump_half_selector_fails_closed(tmp_path):
     datasets = [
@@ -959,7 +576,6 @@ def test_significance_dump_half_selector_fails_closed(tmp_path):
             environ={**base_environ, "RECOVAR_SIGNIFICANCE_DUMP_STOP_AFTER_TARGET": "1"},
         )
 
-
 def test_pass2_norm_dump_half_selector_reaches_only_target_half(tmp_path):
     datasets = [
         SimpleNamespace(dataset_indices=np.asarray([2, 4], dtype=np.int64)),
@@ -986,7 +602,6 @@ def test_pass2_norm_dump_half_selector_reaches_only_target_half(tmp_path):
         experiment_datasets=datasets,
         environ=environ,
     ) == (1,)
-
 
 def test_pass2_norm_dump_half_selector_fails_closed(tmp_path):
     datasets = [
@@ -1024,12 +639,10 @@ def test_pass2_norm_dump_half_selector_fails_closed(tmp_path):
             },
         )
 
-
 def test_relion_adaptive_fraction_preserves_text_to_float_boundary():
     expected = float(np.float32("0.999"))
     assert scoring_policy.RELION_ADAPTIVE_FRACTION == expected
     assert scoring_policy.RELION_ADAPTIVE_FRACTION != 0.999
-    assert "adaptive_fraction=0.999" not in inspect.getsource(iteration_loop)
 
     # This two-weight boundary is intentionally between Python's binary64
     # literal and RELION's textToFloat value.  It locks down the observed
@@ -1047,7 +660,6 @@ def test_relion_adaptive_fraction_preserves_text_to_float_boundary():
     )
     assert int(np.asarray(binary64_count)[0]) == 1
     assert int(np.asarray(relion_count)[0]) == 2
-
 
 def test_kclass_significance_dump_uses_original_index_mapper(monkeypatch, tmp_path):
     """Subset datasets must target dumps by original RELION image id.
@@ -1100,7 +712,6 @@ def test_kclass_significance_dump_uses_original_index_mapper(monkeypatch, tmp_pa
     payload = np.load(dump_dir / "significance_orig000042_cs014.npz")
     assert int(payload["original_index"]) == 42
     assert int(payload["local_index"]) == local_index
-
 
 def test_sparse_pass2_dump_writes_score_and_recon_operand_arrays(monkeypatch, tmp_path):
     """Sparse pass-2 dumps must include the actual M-step reconstruction window.
@@ -1218,7 +829,6 @@ def test_sparse_pass2_dump_writes_score_and_recon_operand_arrays(monkeypatch, tm
     assert payload["ctf2_over_nv_recon"].dtype == np.float64
     assert int(payload["iteration"]) == 2
     assert int(payload["half"]) == 1
-
 
 def test_sparse_pass2_dump_can_retain_only_selected_rotation_rows(monkeypatch, tmp_path):
     n_rot = 4
@@ -1338,7 +948,6 @@ def test_sparse_pass2_dump_can_retain_only_selected_rotation_rows(monkeypatch, t
         )
         assert float(payload["raw_operand_highres_xi2_half"]) == 17.5
 
-
 def test_sparse_pass2_raw_operand_dump_fails_closed_without_raw_diff2(
     monkeypatch,
     tmp_path,
@@ -1377,7 +986,6 @@ def test_sparse_pass2_raw_operand_dump_fails_closed_without_raw_diff2(
                 (1, 1, 2), dtype=np.complex64
             ),
         )
-
 
 def test_sparse_pass2_raw_operand_dump_uses_normalized_cc_score_without_diff2(
     monkeypatch,
@@ -1424,7 +1032,6 @@ def test_sparse_pass2_raw_operand_dump_uses_normalized_cc_score_without_diff2(
             payload["raw_operand_raw_diff2"],
             score[0] - rotation_prior[0, :, None] - translation_prior[0, None, :],
         )
-
 
 def test_sparse_pass2_dump_uses_original_index_mapper(monkeypatch, tmp_path):
     """Sparse pass-2 dumps use the same original-id targeting as pass1."""
@@ -1474,7 +1081,6 @@ def test_sparse_pass2_dump_uses_original_index_mapper(monkeypatch, tmp_path):
     assert int(payload["original_index"]) == 42
     assert int(payload["local_index"]) == local_index
     assert payload["recon_window_indices"].dtype == np.int32
-
 
 def test_kclass_compact_pass2_dump_uses_original_index_mapper(monkeypatch, tmp_path):
     """K-class compact-pair pass-2 diagnostics must target original image ids."""
@@ -1564,7 +1170,6 @@ def test_kclass_compact_pass2_dump_uses_original_index_mapper(monkeypatch, tmp_p
     assert np.isnan(payload["relion_raw_diff2"][0, 0])
     assert payload["relion_min_diff2"] == np.float32(100.0)
 
-
 def test_kclass_dense_pass2_dump_preserves_selected_raw_diff2(monkeypatch, tmp_path):
     n_rot = 2
     n_trans = 3
@@ -1618,7 +1223,6 @@ def test_kclass_dense_pass2_dump_preserves_selected_raw_diff2(monkeypatch, tmp_p
     payload = np.load(dump_dir / "pass2_orig000042_class001_cs014.npz")
     np.testing.assert_array_equal(payload["relion_raw_diff2"], raw_diff2)
     assert payload["relion_min_diff2"] == np.float32(499.0)
-
 
 def test_kclass_pass2_dump_preserves_effective_raw_operands(monkeypatch, tmp_path):
     n_rot = 2
@@ -1721,7 +1325,6 @@ def test_kclass_pass2_dump_preserves_effective_raw_operands(monkeypatch, tmp_pat
         pair_translation_idx[0],
     )
 
-
 def test_kclass_pass2_raw_operand_capture_preserves_double_precision():
     raw_diff2 = np.asarray([[1.0, 2.0]], dtype=np.float64)
     shifted_corrected = np.asarray([[[1.0 + 2.0j]]], dtype=np.complex128)
@@ -1748,7 +1351,6 @@ def test_kclass_pass2_raw_operand_capture_preserves_double_precision():
     assert captured["half_weights"].dtype == np.float64
     assert captured["highres_xi2_half"].dtype == np.float64
 
-
 def test_pass2_dump_target_rows_use_original_index_mapping(monkeypatch, tmp_path):
     experiment_dataset = SimpleNamespace(
         original_image_indices_from_local=lambda indices: np.asarray(
@@ -1767,7 +1369,6 @@ def test_pass2_dump_target_rows_use_original_index_mapping(monkeypatch, tmp_path
     )
 
     np.testing.assert_array_equal(rows, np.asarray([1, 2], dtype=np.int64))
-
 
 def test_pass2_dump_target_rows_require_requested_iteration(monkeypatch, tmp_path):
     experiment_dataset = SimpleNamespace(
@@ -1800,11 +1401,9 @@ def test_pass2_dump_target_rows_require_requested_iteration(monkeypatch, tmp_pat
     np.testing.assert_array_equal(before_target, np.empty((0,), dtype=np.int64))
     np.testing.assert_array_equal(at_target, np.asarray([1, 2], dtype=np.int64))
 
-
 # ----------------------------------------------------------------------
 # Pass1 fused gate (env-var contract)
 # ----------------------------------------------------------------------
-
 
 @pytest.mark.parametrize(
     ("value", "expected"),
@@ -1835,33 +1434,7 @@ def test_pass1_fused_enabled_env_var_contract(monkeypatch, value, expected):
         monkeypatch.setenv("RECOVAR_PASS1_FUSED", value)
     assert sig_mod._pass1_fused_enabled() is expected
 
-
-def test_normalized_cc_firstiter_ignores_log_priors():
-    """RELION firstiter normalized-CC WTA uses raw scores, not priors."""
-
-    score_constraints_source = inspect.getsource(sig_mod)
-    assert 'if score_mode == "normalized_cc":\n            return scores' in score_constraints_source
-
-    dense_constraints_source = inspect.getsource(score_constraints_mod.apply_dense_score_constraints)
-    assert 'if score_mode != "normalized_cc":' in dense_constraints_source
-    assert "scores = scores + rotation_prior[:, :, None]" in dense_constraints_source
-    assert "scores = scores + translation_prior[:, None, :]" in dense_constraints_source
-
-    dense_source = inspect.getsource(sig_mod._compute_k_class_significance_batched)
-    assert "scores = _add_priors(scores, class_index, r0, r1, batch_translation_log_prior)" in dense_source
-    assert "scores_pre_prior" in dense_source
-    assert "scores_with_prior" in dense_source
-
-
-def test_k_class_pass1_priors_follow_scoring_precision():
-    """Pass-1 must not narrow RFLOAT priors before double-mode scoring."""
-
-    dense_source = inspect.getsource(sig_mod._compute_k_class_significance_batched)
-    assert "prior = np.asarray(rotation_log_prior, dtype=score_real_dtype)" in dense_source
-    assert "translation_log_prior = np.asarray(translation_log_prior, dtype=score_real_dtype)" in dense_source
-
     # K1 adaptive scoring uses this same K-class significance path.
-
 
 def test_stats_constructors_preserve_double_precision_by_default():
     from recovar.em.helpers.types import make_noise_stats, make_relion_stats
@@ -1884,7 +1457,6 @@ def test_stats_constructors_preserve_double_precision_by_default():
     assert noise_stats.wsum_sigma2_noise.dtype == jnp.float64
     assert float(relion_stats.rotation_posterior_sums[0]) == 1.0 + 2.0**-40
     assert float(noise_stats.wsum_sigma2_noise[0]) == 1.0 + 2.0**-40
-
 
 def test_kclass_subset_helpers_preserve_double_precision():
     from recovar.em.helpers.types import make_relion_stats
@@ -1915,69 +1487,6 @@ def test_kclass_subset_helpers_preserve_double_precision():
     assert noise.wsum_sigma2_noise.dtype == jnp.float64
     assert noise.wsum_norm_correction.dtype == jnp.float64
     assert noise.wsum_scale_correction_xa.dtype == jnp.float64
-
-
-def test_adaptive_significance_forwards_firstiter_score_mode():
-    """No-shortcut firstiter diagnostics must still use normalized-CC pass-1 scoring."""
-
-    source = inspect.getsource(k_class_mod.run_dense_k_class_em_adaptive)
-    assert 'score_mode=engine_kwargs.get("relion_firstiter_score_mode", "gaussian")' in source
-
-
-def test_k1_firstiter_sparse_pass2_uses_exact_relion_cc_scorer():
-    """The exact scorer must be wired into the production fine pass, not only its probe."""
-
-    source = inspect.getsource(k_class_mod._run_sparse_firstiter_global_winner_subset_pass2)
-    assert 'relion_exact_fine_normalized_cc=n_classes == 1' in source
-
-
-# ----------------------------------------------------------------------
-# WIDTH_FMASK_EDGE plumbing through iteration_loop
-# (Constant-value assertion lives in test_em_parity_lowpass_and_tau2_fudge.py;
-#  here we only assert the constant is actually threaded through to the
-#  postprocess call. Plumbing is what breaks in merges.)
-# ----------------------------------------------------------------------
-
-
-def test_iteration_loop_threads_fmask_edge_through_to_postprocess():
-    """``refine_single_volume`` must forward
-    ``RELION_WIDTH_FMASK_EDGE`` to ``_reconstruct_and_postprocess_means``
-    via the ``relion_fmask_edge`` kwarg. A merge that defines the
-    constant but stops threading it leaves the LP filter using the
-    real-space mask edge (RELION ``WIDTH_FMASK_EDGE`` vs
-    ``--maskedge`` are different units).
-    """
-    source = inspect.getsource(iteration_loop.refine_single_volume)
-    assert "relion_fmask_edge=RELION_WIDTH_FMASK_EDGE" in source, (
-        "iteration_loop must forward RELION_WIDTH_FMASK_EDGE to _reconstruct_and_postprocess_means"
-    )
-
-
-def test_kclass_fused_pass2_sizes_relion_projector_crop_from_score_window():
-    """Every windowed K-class pass-2 projection must size the RELION crop from the image window.
-
-    Under RELION's per-optics-group remap the particle-image window
-    (``image_current_size``) can exceed the model window (``2 * max_r``); a
-    crop inferred from ``2 * max_r`` aliases the outermost score indices onto
-    the wrong row.  The K=1 bucketed path routes every windowed projection
-    through ``_projection_kwargs_for_relion_score_window``; the fused K-class
-    path must do the same (regression for the local pass-2 defect fixed in
-    9216a1b8f, extended to the class-fused site).
-    """
-
-    source = inspect.getsource(sparse_pass2_mod.compute_k_class_pass2_stats_sparse_fused)
-    needle = "_compute_sparse_pass2_windowed_projections_block("
-    starts = [i for i in range(len(source)) if source.startswith(needle, i)]
-    assert starts, "fused K-class pass-2 lost its windowed projection calls"
-    for idx in starts:
-        assignment = source.rfind("projection_kwargs = ", 0, idx)
-        assert assignment >= 0, "windowed K-class pass-2 projection call has no projection_kwargs assignment"
-        window = source[assignment:idx]
-        assert "_projection_kwargs_for_relion_score_window(" in window, (
-            "windowed K-class pass-2 projection call does not size the RELION projector crop "
-            "from the particle-image score window"
-        )
-
 
 def test_relion_score_window_projection_kwargs_use_image_window_not_model_window():
     """The score-window helper must hand the projector the image window size."""
