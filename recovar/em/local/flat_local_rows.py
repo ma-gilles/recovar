@@ -149,12 +149,15 @@ def build_pool_flat_local_row_plan(
     exact_local_bucket_radix: int | None = None,
     packed_row_count: int | None = None,
     dense_batch_size: int | None = None,
+    large_bucket_quantum: int | None = None,
 ) -> FlatLocalRowPlan:
     """Pack consecutive physical pools without changing image/rotation order.
 
     Each pool uses the largest ordinary exact-local rotation bucket needed by
     one member. ``packed_row_count`` may pad the final flat axis to one static
     shape shared by several outer calls; padded rows are marked absent.
+    ``large_bucket_quantum`` must be the bucket planner's quantum for supports
+    above the engine cap, otherwise a pool bucket can outgrow the dense axis.
     """
 
     rotation_counts = np.asarray(rotation_counts, dtype=np.int32).reshape(-1)
@@ -181,6 +184,7 @@ def build_pool_flat_local_row_plan(
             _exact_bucket_rotation_size(
                 int(count),
                 rotation_block_size,
+                large_bucket_quantum=large_bucket_quantum,
                 exact_local_bucket_radix=exact_local_bucket_radix,
             )
             for count in rotation_counts

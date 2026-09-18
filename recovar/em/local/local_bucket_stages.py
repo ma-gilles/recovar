@@ -930,6 +930,7 @@ def _plan_flat_local_row_capacities(
     rotation_block_size: int,
     exact_local_bucket_radix: int,
     stable_rectangular_capacity: bool = False,
+    large_bucket_quantum: int | None = None,
 ) -> dict[tuple[int, int], int]:
     """Choose one packed-row shape for every existing dense bucket ABI.
 
@@ -955,6 +956,7 @@ def _plan_flat_local_row_capacities(
             rotation_block_size=rotation_block_size,
             exact_local_bucket_radix=exact_local_bucket_radix,
             dense_batch_size=dense_batch_size,
+            large_bucket_quantum=large_bucket_quantum,
         )
         key = (dense_batch_size, dense_rotation_count)
         required_capacity = int(plan.packed_row_count)
@@ -971,6 +973,7 @@ def _build_flat_local_row_argument(
     dense_batch_size: int,
     rotation_block_size: int,
     exact_local_bucket_radix: int,
+    large_bucket_quantum: int | None = None,
 ) -> np.ndarray:
     """Materialize one source-ordered packed plan at its shared static shape."""
 
@@ -986,6 +989,7 @@ def _build_flat_local_row_argument(
         exact_local_bucket_radix=exact_local_bucket_radix,
         packed_row_count=int(capacities[key]),
         dense_batch_size=int(dense_batch_size),
+        large_bucket_quantum=large_bucket_quantum,
     )
     return encode_flat_local_row_plan(plan)
 

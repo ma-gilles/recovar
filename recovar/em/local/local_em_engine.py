@@ -170,6 +170,7 @@ from recovar.em.local.local_layout import (
     LocalBucketSequence,
     LocalHypothesisLayout,
     _exact_bucket_rotation_size,
+    _exact_local_large_bucket_quantum,
     _local_mstep_rotations,
     _resolve_exact_local_bucket_radix,
     bucket_class_local_hypothesis_layouts,
@@ -1451,6 +1452,7 @@ def run_local_em_exact(
             rotation_block_size=rotation_block_size,
             exact_local_bucket_radix=resolved_exact_local_bucket_radix,
             stable_rectangular_capacity=stable_flat_row_capacity_enabled,
+            large_bucket_quantum=_exact_local_large_bucket_quantum(rotation_block_size),
         )
         if flat_local_rows_enabled
         else {}
@@ -2346,6 +2348,7 @@ def run_local_em_exact(
                     dense_batch_size=batch_size,
                     rotation_block_size=rotation_block_size,
                     exact_local_bucket_radix=resolved_exact_local_bucket_radix,
+                    large_bucket_quantum=_exact_local_large_bucket_quantum(rotation_block_size),
                 )
                 if flat_local_rows_enabled
                 else np.zeros((1, 3), dtype=np.int32)

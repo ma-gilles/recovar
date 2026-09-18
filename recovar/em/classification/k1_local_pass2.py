@@ -57,7 +57,10 @@ def k1_local_pass2_execution_flags() -> dict:
         and parse_env_flag(_PACKED_PROJECTION_ENV, default=True),
         "stable_fourier_window_shapes": parse_env_flag(_STABLE_WINDOWS_ENV, default=True),
         "fused_pair_fine_score": flat_rows and parse_env_flag(_FUSED_PAIR_SCORE_ENV, default=False),
-        "unify_local_bucket_sizes": parse_env_flag(_UNIFY_BUCKET_SIZES_ENV, default=True),
+        # Auto-refine supports are heavy-tailed (median ~100 rows, max ~90k at
+        # order 3); one run-global bucket size would pad every image to the
+        # largest support, so unification stays off unless requested.
+        "unify_local_bucket_sizes": parse_env_flag(_UNIFY_BUCKET_SIZES_ENV, default=False),
     }
 
 
