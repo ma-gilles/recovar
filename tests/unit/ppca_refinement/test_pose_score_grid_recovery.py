@@ -6,7 +6,7 @@ from recovar.core.configs import ForwardModelConfig
 from recovar.core.ctf import as_ctf_evaluator
 from recovar.em.helpers.preprocessing import half_translation_phase_table, preprocess_batch
 from recovar.em.ppca_refinement.dense_dataset import _project_augmented_half_volumes, iter_dense_ppca_dataset_blocks
-from recovar.em.ppca_refinement.engine import dense_pose_ppca_E_step_blocked, dense_pose_ppca_logZ_blocked
+from recovar.em.ppca_refinement.engine import dense_pose_ppca_E_step_blocked, dense_pose_ppca_score_stats_blocked
 from recovar.em.ppca_refinement.initialization import real_volume_to_centered_fourier_half
 from recovar.em.sampling import get_rotation_grid_at_order
 
@@ -121,13 +121,13 @@ def test_dense_ppca_score_moments_and_prior_axes_match_numpy_reference():
     expected = _numpy_ppca_pose_reference(Y1, proj_aug, ctf2_over_noise, y_norm, pose_log_prior)
 
     np.testing.assert_allclose(np.asarray(diagnostics.logZ), expected["logZ"], rtol=2e-5, atol=2e-5)
-    score_only_logZ = dense_pose_ppca_logZ_blocked(
+    score_only_logZ = dense_pose_ppca_score_stats_blocked(
         jnp.asarray(Y1),
         jnp.asarray(proj_aug),
         jnp.asarray(ctf2_over_noise),
         jnp.asarray(y_norm),
         pose_log_prior=jnp.asarray(pose_log_prior),
-    )
+    ).logZ
     np.testing.assert_allclose(np.asarray(score_only_logZ), expected["logZ"], rtol=2e-5, atol=2e-5)
     np.testing.assert_allclose(np.asarray(diagnostics.pmax), expected["pmax"], rtol=2e-5, atol=2e-5)
     np.testing.assert_array_equal(np.asarray(diagnostics.best_rotation_idx), expected["best_rotation_idx"])
