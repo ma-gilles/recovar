@@ -28,7 +28,14 @@ from recovar.em.helpers.preprocessing import process_half_image
 
 # Cache and sparse-M-step allocation limits are owned here. Engine callers
 # and tests import this module rather than maintaining copies of the caps.
-EXACT_LOCAL_RAW_CACHE_MAX_GB = 16.0
+# The raw-image cache cap is derived from the host memory this process may
+# actually use, not from a fixed constant: the cache holds one whole halfset of
+# complex images, so the requirement scales with particle count and box size and
+# a constant either wastes a large machine or silently disables the cache at
+# completion scale. ``EXACT_LOCAL_RAW_CACHE_MIN_GB`` is the floor used when the
+# host budget cannot be read.
+EXACT_LOCAL_RAW_CACHE_MIN_GB = 16.0
+EXACT_LOCAL_RAW_CACHE_HOST_FRACTION = 0.5
 EXACT_LOCAL_RAW_CACHE_MAX_GB_ENV = "RECOVAR_EXACT_LOCAL_RAW_CACHE_MAX_GB"
 
 EXACT_LOCAL_PROCESSED_HALF_CACHE_MAX_GB = 0.0
@@ -93,11 +100,127 @@ class _FixedCapacityLocalOperands:
     plan_generation_token: _FixedCapacityLocalGenerationToken
 
 
+def _cgroup_memory_budget_bytes() -> int | None:
+    """Return memory still available under this process's own cgroup limit."""
+
+    try:
+        with open("/proc/self/cgroup") as handle:
+            entries = handle.read().splitlines()
+    except OSError:
+        return None
+
+    relative_paths = []
+    for entry in entries:
+        fields = entry.split(":", 2)
+        if len(fields) != 3:
+            continue
+        hierarchy, controllers, path = fields
+        # cgroup v2 uses the single "0::" hierarchy; v1 splits by controller.
+        if hierarchy == "0" or "memory" in controllers.split(","):
+            relative_paths.append(path.strip().lstrip("/"))
+    if not relative_paths:
+        return None
+
+    budgets = []
+    for relative in relative_paths:
+        segments = relative.split("/") if relative else []
+        # The enforced limit may sit on any ancestor, so take the tightest.
+        for depth in range(len(segments), -1, -1):
+            prefix = "/".join(segments[:depth])
+            for base, limit_name, usage_name in (
+                ("/sys/fs/cgroup", "memory.max", "memory.current"),
+                ("/sys/fs/cgroup/memory", "memory.limit_in_bytes", "memory.usage_in_bytes"),
+            ):
+                directory = f"{base}/{prefix}" if prefix else base
+                try:
+                    with open(f"{directory}/{limit_name}") as handle:
+                        raw_limit = handle.read().strip()
+                except OSError:
+                    continue
+                if raw_limit == "max":
+                    continue
+                try:
+                    limit = int(raw_limit)
+                except ValueError:
+                    continue
+                # cgroup v1 reports an unlimited allocation as a huge sentinel.
+                if limit <= 0 or limit >= (1 << 62):
+                    continue
+                try:
+                    with open(f"{directory}/{usage_name}") as handle:
+                        usage = int(handle.read().strip())
+                except (OSError, ValueError):
+                    usage = 0
+                budgets.append(max(0, limit - usage))
+    if not budgets:
+        return None
+    return min(budgets)
+
+
+def _slurm_memory_budget_bytes() -> int | None:
+    """Return the memory this Slurm allocation grants, in bytes."""
+
+    per_node = os.environ.get("SLURM_MEM_PER_NODE", "").strip()
+    if per_node:
+        try:
+            return int(per_node) * 1024**2
+        except ValueError:
+            pass
+    per_cpu = os.environ.get("SLURM_MEM_PER_CPU", "").strip()
+    cpus = os.environ.get("SLURM_CPUS_ON_NODE", "").strip() or os.environ.get("SLURM_CPUS_PER_TASK", "").strip()
+    if per_cpu and cpus:
+        try:
+            return int(per_cpu) * int(cpus) * 1024**2
+        except ValueError:
+            pass
+    return None
+
+
+def _host_memory_budget_bytes() -> int | None:
+    """Return the host memory this process may use, or None if unreadable.
+
+    Every bound that can actually kill the process is consulted and the
+    tightest wins: the cgroup limit enforced on this process, the Slurm
+    allocation, and the free memory psutil reports. The cgroup and Slurm limits
+    are needed because node-wide free memory on a shared or large node says
+    nothing about how much this job may touch; psutil is needed because a
+    generous limit says nothing about what is already resident.
+    """
+
+    candidates = [
+        _cgroup_memory_budget_bytes(),
+        _slurm_memory_budget_bytes(),
+    ]
+    try:
+        import psutil
+
+        candidates.append(int(psutil.virtual_memory().available))
+    except Exception:
+        pass
+
+    usable = [int(value) for value in candidates if value is not None and int(value) > 0]
+    if not usable:
+        return None
+    return min(usable)
+
+
+def _local_raw_cache_max_gb() -> float:
+    """Cap on the raw-image cache, in GB, for this host and this process."""
+
+    raw = os.environ.get(EXACT_LOCAL_RAW_CACHE_MAX_GB_ENV, "").strip()
+    if raw:
+        return float(raw)
+    budget_bytes = _host_memory_budget_bytes()
+    if budget_bytes is None:
+        return float(EXACT_LOCAL_RAW_CACHE_MIN_GB)
+    budget_gb = float(budget_bytes) * EXACT_LOCAL_RAW_CACHE_HOST_FRACTION / 1e9
+    return max(float(EXACT_LOCAL_RAW_CACHE_MIN_GB), budget_gb)
+
+
 def _local_raw_cache_enabled(n_images: int, image_shape, dtype) -> bool:
     bytes_per_pixel = np.dtype(dtype).itemsize if dtype is not None else np.dtype(np.float32).itemsize
     estimated_gb = int(n_images) * int(np.prod(image_shape)) * bytes_per_pixel / 1e9
-    max_gb = float(os.environ.get(EXACT_LOCAL_RAW_CACHE_MAX_GB_ENV, EXACT_LOCAL_RAW_CACHE_MAX_GB))
-    return estimated_gb <= max_gb
+    return estimated_gb <= _local_raw_cache_max_gb()
 
 
 def _local_processed_half_cache_enabled(n_images: int, n_half: int, dtype, *, store_recon_half: bool) -> bool:
