@@ -438,7 +438,6 @@ def _run_sparse_pass2_initial_model_estep(
     joint_particle_ids: np.ndarray,
     joint_halfset_ids: np.ndarray | None,
     means,
-    mean_variance,
     relion_projector_half_by_class: np.ndarray | None = None,
     relion_projector_r_max: int | None = None,
     engine_kwargs: dict[str, Any],

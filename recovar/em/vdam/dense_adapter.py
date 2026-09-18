@@ -594,7 +594,6 @@ def run_dense_initial_model_estep(
             joint_particle_ids=selected_particle_ids,
             joint_halfset_ids=selected_halfset_ids,
             means=means,
-            mean_variance=mean_variance,
             relion_projector_half_by_class=relion_projector_half_by_class,
             relion_projector_r_max=relion_projector_r_max,
             engine_kwargs=engine_kwargs,
