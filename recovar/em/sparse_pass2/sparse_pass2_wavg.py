@@ -707,6 +707,68 @@ def _replace_low_shell_noise_with_relion_wavg_direct_residual(
     return residual, image_power
 
 
+def _replace_low_shell_noise_with_relion_wavg_direct_residual_jnp(
+    residual_shells,
+    image_power_shells,
+    atomic_diff2_per_pixel,
+    shell_indices,
+    *,
+    exclusive_shell_stop: int,
+    shell_count: int,
+):
+    """``jax.numpy`` twin of the numpy direct-residual replacement above.
+
+    Same contract, same float32 -> float64 widening of the atomic Wavg
+    ``diff2`` stream and the same shell-stop clamping as
+    :func:`_replace_low_shell_noise_with_relion_wavg_direct_residual`; written
+    for the device-resident statistics stage, which must keep the whole bucket
+    tail inside one traced program instead of pulling per-bucket shells to the
+    host (see ``recovar/em/sparse_pass2/resident_statistics.py``).
+
+    The only difference from the numpy original is the association order of
+    the float64 shell sum: the original adds one image row at a time through
+    ``np.add.at``, this one sums the image axis and bins once.  Both add the
+    same float64 summands, so results agree to float64 rounding and are
+    bitwise identical whenever each shell receives at most one summand.
+    ``shell_count`` is static because it fixes the traced output shape;
+    ``residual_shells`` must already have that length.
+    """
+
+    shell_count = int(shell_count)
+    residual = jnp.asarray(residual_shells, dtype=jnp.float64)
+    image_power = jnp.asarray(image_power_shells, dtype=jnp.float64)
+    atomic_diff2 = jnp.asarray(atomic_diff2_per_pixel, dtype=jnp.float32)
+    shells = jnp.asarray(shell_indices, dtype=jnp.int32).reshape(-1)
+    if residual.ndim != 1 or residual.shape[0] != shell_count:
+        raise ValueError(
+            f"noise residual shells must be a vector of length {shell_count}, got {residual.shape}"
+        )
+    if image_power.shape != residual.shape:
+        raise ValueError(
+            "noise residual and image-power shells must be matching vectors, got "
+            f"{residual.shape} and {image_power.shape}"
+        )
+    if atomic_diff2.ndim != 2 or atomic_diff2.shape[1] != shells.shape[0]:
+        raise ValueError(
+            "atomic Wavg diff2 must have shape (images, pixels) matching shell indices, got "
+            f"{atomic_diff2.shape} and {shells.shape}"
+        )
+    shell_stop = min(max(0, int(exclusive_shell_stop)), shell_count)
+    # Pixels at or above the stop shell are dropped entirely, exactly as the
+    # numpy original's ``valid`` mask does, not merely overwritten afterwards.
+    covered_shells = jnp.where(shells < shell_stop, shells, jnp.int32(-1))
+    direct_shells = bin_shell_values_jax(
+        jnp.sum(atomic_diff2.astype(jnp.float64), axis=0),
+        covered_shells,
+        shell_count,
+    )
+    replaced = jnp.arange(shell_count, dtype=jnp.int32) < jnp.int32(shell_stop)
+    return (
+        jnp.where(replaced, direct_shells, residual),
+        jnp.where(replaced, jnp.float64(0.0), image_power),
+    )
+
+
 @jax.jit
 def _translated_wavg_low_shell_power_pixels(
     shifted_score,
