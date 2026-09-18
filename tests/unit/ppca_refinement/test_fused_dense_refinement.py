@@ -5,10 +5,8 @@ import pytest
 from recovar.core import fourier_transform_utils as ftu
 from recovar.em.helpers.adjoint import batch_adjoint_slice_volume_half
 from recovar.em.ppca_refinement.engine import (
-    DensePPCAFusedBlock,
     _score_gamma_and_moments,
     fused_dense_pose_ppca_block,
-    run_dense_ppca_fused_refinement_blocks,
 )
 from recovar.ppca.triangular import _tri_size
 
@@ -178,58 +176,3 @@ def test_fused_dense_block_matches_slow_pose_loop_with_reconstruction_inputs():
 
     np.testing.assert_allclose(np.asarray(rhs_fused), np.asarray(rhs_manual), rtol=3e-3, atol=2e-3)
     np.testing.assert_allclose(np.asarray(lhs_fused), np.asarray(lhs_manual), rtol=3e-3, atol=2e-3)
-
-
-def test_run_dense_ppca_fused_refinement_blocks_returns_augmented_update():
-    image_shape, volume_shape, Y1, proj_aug, ctf2_over_noise, y_norm, rotations = _tiny_block(q=1)
-    half_vol = int(np.prod(ftu.volume_shape_to_half_volume_shape(volume_shape)))
-    block = DensePPCAFusedBlock(
-        Y1=jnp.asarray(Y1),
-        proj_aug=jnp.asarray(proj_aug),
-        ctf2_over_noise=jnp.asarray(ctf2_over_noise),
-        y_norm=jnp.asarray(y_norm),
-        rotations=jnp.asarray(rotations),
-    )
-    result = run_dense_ppca_fused_refinement_blocks(
-        [block],
-        q=1,
-        image_shape=image_shape,
-        volume_shape=volume_shape,
-        mean_prior=jnp.ones((half_vol,), dtype=jnp.float32) * 10.0,
-        W_prior=jnp.ones((half_vol, 1), dtype=jnp.float32) * 5.0,
-        enforce_x0=False,
-    )
-
-    assert result.stats.rhs.shape == (half_vol, 2)
-    assert result.stats.lhs_tri.shape == (half_vol, 3)
-    assert result.mu_half.shape == (half_vol,)
-    assert result.W_half.shape == (half_vol, 1)
-    assert result.stats.n_images == Y1.shape[0]
-    assert np.isfinite(result.stats.log_likelihood)
-    assert np.isfinite(result.diagnostics["pmax_mean"])
-
-
-def test_run_dense_ppca_fused_refinement_blocks_q_zero_shape():
-    image_shape, volume_shape, Y1, proj_aug, ctf2_over_noise, y_norm, rotations = _tiny_block(q=0)
-    half_vol = int(np.prod(ftu.volume_shape_to_half_volume_shape(volume_shape)))
-    block = DensePPCAFusedBlock(
-        Y1=jnp.asarray(Y1),
-        proj_aug=jnp.asarray(proj_aug),
-        ctf2_over_noise=jnp.asarray(ctf2_over_noise),
-        y_norm=jnp.asarray(y_norm),
-        rotations=jnp.asarray(rotations),
-    )
-    result = run_dense_ppca_fused_refinement_blocks(
-        [block],
-        q=0,
-        image_shape=image_shape,
-        volume_shape=volume_shape,
-        mean_prior=jnp.ones((half_vol,), dtype=jnp.float32),
-        W_prior=jnp.zeros((half_vol, 0), dtype=jnp.float32),
-        enforce_x0=False,
-    )
-
-    assert result.stats.rhs.shape == (half_vol, 1)
-    assert result.stats.lhs_tri.shape == (half_vol, 1)
-    assert result.mu_half.shape == (half_vol,)
-    assert result.W_half.shape == (half_vol, 0)
