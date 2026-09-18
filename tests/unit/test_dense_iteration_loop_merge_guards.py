@@ -452,7 +452,6 @@ def test_k1_local_search_passes_relion_x_half_mstep(monkeypatch):
             hard_assignment=np.array([0], dtype=np.int32),
             best_pose_rotations=best_rotation[None, :, :],
             best_pose_translations=np.zeros((1, 2), dtype=np.float32),
-            best_pose_rotation_ids=np.array([0], dtype=np.int32),
             relion_stats=_Stats(),
             noise_stats="noise",
         )
@@ -571,7 +570,6 @@ def test_k1_local_search_records_parent_counts_without_changing_fine_mstep(
             hard_assignment=np.array([4, 5], dtype=np.int32),
             best_pose_rotations=np.broadcast_to(best_rotation, (2, 3, 3)).copy(),
             best_pose_translations=np.zeros((2, 2), dtype=np.float32),
-            best_pose_rotation_ids=np.array([0, 1], dtype=np.int32),
             relion_stats=_Stats(),
             noise_stats="fine_noise",
         )
@@ -688,7 +686,6 @@ def test_kclass_local_search_passes_relion_x_half_mstep(monkeypatch):
             hard_assignment=np.array([0], dtype=np.int32),
             best_pose_rotations=best_rotation[None, :, :],
             best_pose_translations=np.zeros((1, 2), dtype=np.float32),
-            best_pose_rotation_ids=np.array([0], dtype=np.int32),
             relion_stats=_Stats(),
             noise_stats="noise",
             class_assignments=np.array([1], dtype=np.int32),

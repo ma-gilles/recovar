@@ -47,7 +47,6 @@ class _LocalSearchIterationResult:
     significant_counts: np.ndarray | None = None
     best_pose_rotations: object | None = None
     best_pose_translations: object | None = None
-    best_pose_rotation_ids: object | None = None
     class_assignments: np.ndarray | None = None
     class_posterior_sums: np.ndarray | None = None
     class_full_posterior_sums: np.ndarray | None = None
@@ -352,7 +351,6 @@ def _run_local_search_iteration(
             stats=k_class_result.stats,
             best_pose_rotations=k_class_result.best_pose_rotations if return_best_pose_details else None,
             best_pose_translations=k_class_result.best_pose_translations if return_best_pose_details else None,
-            best_pose_rotation_ids=k_class_result.best_pose_rotation_ids if return_best_pose_details else None,
             best_pose_eulers_deg=getattr(k_class_result, "best_pose_eulers_deg", None)
             if return_best_pose_details
             else None,
@@ -436,7 +434,6 @@ def _run_local_search_iteration(
         significant_counts=engine_outputs.significant_counts,
         best_pose_rotations=engine_outputs.best_pose_rotations,
         best_pose_translations=engine_outputs.best_pose_translations,
-        best_pose_rotation_ids=engine_outputs.best_pose_rotation_ids,
         best_pose_eulers_deg=engine_outputs.best_pose_eulers_deg,
         class_assignments=class_assignments,
         class_posterior_sums=class_posterior_sums,
