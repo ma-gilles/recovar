@@ -36,6 +36,7 @@ _PACKED_PROJECTION_ENV = "RECOVAR_K1_LOCAL_PASS2_PACKED_PROJECTION"
 _STABLE_WINDOWS_ENV = "RECOVAR_K1_LOCAL_PASS2_STABLE_WINDOWS"
 _FUSED_PAIR_SCORE_ENV = "RECOVAR_K1_LOCAL_PASS2_FUSED_PAIR_SCORE"
 _UNIFY_BUCKET_SIZES_ENV = "RECOVAR_K1_LOCAL_PASS2_UNIFY_BUCKET_SIZES"
+_SOURCE_FAITHFUL_BPREF_ENV = "RECOVAR_K1_LOCAL_PASS2_SOURCE_FAITHFUL_BPREF"
 
 
 def k1_local_pass2_engine_selected() -> bool:
@@ -55,7 +56,12 @@ def k1_local_pass2_execution_flags() -> dict:
         and parse_env_flag(_STABLE_ROW_CAPACITY_ENV, default=True),
         "_packed_local_projection_enabled": flat_rows
         and parse_env_flag(_PACKED_PROJECTION_ENV, default=True),
-        "stable_fourier_window_shapes": parse_env_flag(_STABLE_WINDOWS_ENV, default=True),
+        # Stable Fourier windows require the source-faithful (RELION particle
+        # order) BPref, which the local engine only provides through the
+        # InitialModel residual M-step route; off until that path exists for
+        # the plain auto-refine M-step.
+        "stable_fourier_window_shapes": parse_env_flag(_STABLE_WINDOWS_ENV, default=False),
+        "preserve_bpref_particle_order": parse_env_flag(_SOURCE_FAITHFUL_BPREF_ENV, default=False),
         "fused_pair_fine_score": flat_rows and parse_env_flag(_FUSED_PAIR_SCORE_ENV, default=False),
         # Auto-refine supports are heavy-tailed (median ~100 rows, max ~90k at
         # order 3); one run-global bucket size would pad every image to the
@@ -332,7 +338,6 @@ def run_k1_local_adaptive_pass2(
         relion_exact_fine_diff2=True,
         relion_exact_score_translation=True,
         relion_wavg_sequential_cuda=True,
-        preserve_bpref_particle_order=bool(common.get("preserve_bpref_particle_order", False)),
         include_unweighted_norm_high_shell=True,
         source_faithful_spectrum_norm=bool(common.get("source_faithful_spectrum_norm", False)),
         debug_iteration=engine_kwargs.get("debug_iteration"),
