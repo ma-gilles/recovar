@@ -361,7 +361,6 @@ def solve_no_contrast(
     return_legacy : bool
         If True, also return LegacyEmbeddingResult.
     """
-    K = lambdas.shape[0]
     B = g.shape[0]
 
     # A = Lambda^{-1} + H

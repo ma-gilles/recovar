@@ -98,8 +98,6 @@ def _e_step_half_inner(
 
     Contrast dispatch happens OUTSIDE JIT in E_M_step_batch_half.
     """
-    basis_size = W_half.shape[1]
-
     w_1d = linalg.half_spectrum_last_axis_weights(image_shape[1])
     rfft_w = jnp.tile(w_1d, (image_shape[0], 1)).reshape(-1)
 
@@ -213,7 +211,6 @@ def E_M_step_batch_half(
     """
     basis_size = W_half.shape[1]
     tri_i, tri_j = np.triu_indices(basis_size)
-    tri_sz = len(tri_i)
 
     from recovar.ppca import contrast_posterior
 
@@ -510,7 +507,6 @@ def _build_pc_mask_projection(masks, pc_mask_assignment, sup, q, vol):
     pc_sup_mask : (n_sup, q) bool array
         True where PC k is allowed at union-support voxel i.
     """
-    n_sup = sup.shape[0]
     masks_flat = jnp.asarray(masks).reshape(len(masks), vol)
     # For each (support_voxel, pc): is that voxel in the PC's assigned mask?
     assignment = jnp.asarray(pc_mask_assignment)  # (q,)
@@ -1246,7 +1242,6 @@ def EM(
     print("\n" + "=" * 140)
     print("EM ALGORITHM CONVERGENCE TABLE")
     print("=" * 140)
-    noise_cols = " | {'Noise_Mean':>10}" if update_noise else ""
     header = f"{'Iter':>4} | {'Neg_LL_Total':>12} | {'Neg_LL_Data':>12} | {'Neg_LL_Prior':>12} | {'Neg_Marg_LL':>12} | {'Exp_ZS_Mean':>12} | {'Exp_ZS_Var':>12}"
     if update_noise:
         header += f" | {'Noise_Mean':>10}"
@@ -1454,7 +1449,6 @@ def EM(
 
         # Recompute LL with the FINAL W (after mask + gridding) for fair comparison
         if recompute_ll:
-            ll_sum = jnp.array(0.0, dtype=jnp.complex64)
             _hv = int(np.prod(ftu.volume_shape_to_half_volume_shape(vs)))
             _tsz = _tri_size(basis_size)
             ll_sum_r = jnp.array(0.0, dtype=jnp.complex64)
@@ -1554,7 +1548,6 @@ def EM(
     else:
         U_real, S_squared, _Vt = _orthonormalize_W_to_basis(W, volume_shape)
     q_out = U_real.shape[0]
-    half_vs_out = ftu.volume_shape_to_half_volume_shape(volume_shape)
     U_half_F = ftu.get_dft3_real(jnp.array(U_real))  # (q, *half_vs)
     U = U_half_F.reshape(q_out, -1).T  # (half_vol, q)
     S = jnp.array(np.sqrt(np.maximum(S_squared, 0.0)).astype(np.float32))
