@@ -383,18 +383,14 @@ def _score_rotation_block(
     )
 
 
-@partial(jax.jit, static_argnums=(6, 7, 8, 9))
+@partial(jax.jit, static_argnums=(4, 5))
 def _e_step_block_scores(
     shifted_half,
-    batch_norm,
     ctf2_over_nv_half,
     proj_half_weighted,
     proj_abs2_half,
-    half_weights,
     n_images,
     n_trans,
-    image_shape,
-    volume_shape,
 ):
     """E-step for one rotation block using half-spectrum GEMMs.
 

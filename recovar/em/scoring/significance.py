@@ -798,15 +798,11 @@ def _fused_score_priors_logsumexp_block(
             proj_abs2_half_b = proj_abs2_half_b.astype(jnp.float32)
         scores = _e_step_block_scores(
             shifted_data,
-            batch_norm,
             ctf2_data,
             proj_half_b * half_weights_for_score,
             proj_abs2_half_b * half_weights_for_score,
-            half_weights_for_score,
             batch_size,
             n_trans,
-            image_shape,
-            volume_shape,
         )
 
     # Padding mask: -inf for rotations beyond valid_count (= n_rot - r0).
@@ -2517,15 +2513,11 @@ def _compute_k_class_significance_batched(
             )
         return _e_step_block_scores(
             shifted_data,
-            batch_norm,
             ctf2_data,
             proj_half_b * half_weights,
             proj_abs2_half_b * half_weights,
-            half_weights,
             batch_size,
             n_trans,
-            image_shape,
-            volume_shape,
         )
 
     def _add_priors(scores, class_index, r0, r1, batch_translation_log_prior):

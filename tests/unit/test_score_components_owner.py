@@ -22,7 +22,7 @@ def test_components_match_the_documented_gemms():
     expected_norms = jnp.matmul(ctf2, proj_abs2.T, precision=jax.lax.Precision.HIGHEST)
     assert np.array_equal(np.asarray(cross), np.asarray(expected_cross))
     assert np.array_equal(np.asarray(norms), np.asarray(expected_norms))
-    residual = scoring._e_step_block_scores(shifted, jnp.zeros(n_images), ctf2, proj_w, proj_abs2, jnp.ones(n_half), n_images, n_trans, (4, 4), (4, 4, 4))
+    residual = scoring._e_step_block_scores(shifted, ctf2, proj_w, proj_abs2, n_images, n_trans)
     assert np.array_equal(np.asarray(residual), np.asarray(-0.5 * (cross + norms[..., None])))
     cc = scoring._e_step_block_scores_normalized_cc(shifted, jnp.zeros(n_images), ctf2, proj_w, proj_abs2, n_images, n_trans, (4, 4), (4, 4, 4))
     denom = jnp.sqrt(jnp.maximum(norms, jnp.asarray(1e-30, dtype=norms.dtype)))
