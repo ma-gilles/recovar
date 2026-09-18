@@ -2845,6 +2845,15 @@ def run_local_bucket_big_jit(
         direct_candidate_mask = rotation_mask[:, :, None]
         if sample_mask is not None:
             direct_candidate_mask = direct_candidate_mask & sample_mask
+        else:
+            # ``None`` is the engine's compact representation of full
+            # per-translation support (RELION's full-parent local pass 2 and
+            # the local-search parent probe carry no sample mask). The common
+            # fine-minimum reduction requires one mask entry per
+            # (image, rotation, translation) candidate, so materialize it.
+            direct_candidate_mask = jnp.broadcast_to(
+                direct_candidate_mask, direct_diff2.shape
+            )
         direct_scores = _relion_cuda_fine_diff2_to_scores(
             direct_diff2,
             rotation_log_prior[:, :, None],

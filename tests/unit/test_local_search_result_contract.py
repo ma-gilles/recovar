@@ -323,3 +323,49 @@ def test_half_scoring_owns_no_shape_stable_kwargs_at_either_call_site():
     for call in (parent_call, fine_call):
         for name in (*_SHAPE_STABLE_ALWAYS, "relion_wavg_sequential_cuda"):
             assert name not in call
+
+
+def test_exact_fine_diff2_candidate_mask_covers_translations_without_sample_mask():
+    """Full-support local layouts carry no sample mask; the mask must still span T.
+
+    RELION's full-parent local pass 2 and the local-search parent probe both
+    reach ``run_local_bucket_big_jit`` with ``sample_mask=None``. The exact
+    fine-diff2 common-minimum reduction requires one mask entry per
+    (image, rotation, translation) candidate, so the rotation mask is
+    broadcast rather than left with a singleton translation axis.
+    """
+    import inspect
+
+    from recovar.em.local import local_big_jit
+
+    source = inspect.getsource(local_big_jit.run_local_bucket_big_jit)
+    start = source.index("direct_candidate_mask = rotation_mask[:, :, None]")
+    block = source[start:source.index("direct_scores = _relion_cuda_fine_diff2_to_scores", start)]
+    assert "jnp.broadcast_to(" in block
+    assert "direct_diff2.shape" in block
+
+
+def test_broadcast_candidate_mask_scores_match_materialized_full_mask():
+    """A broadcast rotation mask scores exactly like an explicit all-true mask."""
+    import jax.numpy as jnp
+
+    from recovar.em.sparse_pass2 import sparse_pass2_scoring as scoring
+
+    rng = np.random.default_rng(0)
+    n_image, n_rot, n_trans = 3, 4, 5
+    diff2 = jnp.asarray(rng.normal(1e3, 5.0, size=(n_image, n_rot, n_trans)), dtype=jnp.float32)
+    rot_prior = jnp.asarray(rng.normal(size=(n_image, n_rot, 1)), dtype=jnp.float32)
+    trans_prior = jnp.asarray(rng.normal(size=(n_image, 1, n_trans)), dtype=jnp.float32)
+    rotation_mask = jnp.asarray(
+        np.array([[True, True, True, False], [True, True, False, False], [True] * 4]),
+    )
+    broadcast_mask = jnp.broadcast_to(rotation_mask[:, :, None], diff2.shape)
+    materialized = jnp.asarray(np.repeat(np.asarray(rotation_mask)[:, :, None], n_trans, axis=2))
+
+    broadcast_scores = scoring._relion_cuda_fine_diff2_to_scores(
+        diff2, rot_prior, trans_prior, broadcast_mask,
+    )
+    materialized_scores = scoring._relion_cuda_fine_diff2_to_scores(
+        diff2, rot_prior, trans_prior, materialized,
+    )
+    np.testing.assert_array_equal(np.asarray(broadcast_scores), np.asarray(materialized_scores))
