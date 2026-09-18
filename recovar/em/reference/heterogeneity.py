@@ -42,7 +42,7 @@ def compute_UPLambdainvPU(u_projections, CTF, noise_variance):
     return H
 
 
-def compute_little_H_b(
+def _compute_little_H_b(
     mean_projections,
     u_projections,
     s,
@@ -91,7 +91,7 @@ def compute_bHb_terms(
     process_images,
 ):
 
-    H, b = compute_little_H_b(
+    H, b = _compute_little_H_b(
         mean_projections,
         u_projections,
         s,

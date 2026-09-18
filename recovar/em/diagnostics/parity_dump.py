@@ -75,7 +75,7 @@ def get_iteration_timing(iteration: int) -> tuple[float | None, dict[str, float]
     return wall, stages
 
 
-def reset_iteration_timer(iteration: int) -> None:
+def _reset_iteration_timer(iteration: int) -> None:
     """Drop the timer state for a given iteration (called by ``dump_iteration``)."""
     _ITER_TIMERS.pop(int(iteration), None)
 
@@ -321,7 +321,7 @@ def dump_iteration(
     relion_iter = int(init_relion_iteration) + int(iteration) + 1
     np.savez_compressed(out / f"iter_{relion_iter:03d}.npz", **payload)
     _E_STEP.clear()
-    reset_iteration_timer(iteration)
+    _reset_iteration_timer(iteration)
 
 
 def dump_timing_iteration(
@@ -357,7 +357,7 @@ def dump_timing_iteration(
         payload[f"stage_seconds_{stage_name}"] = np.float64(stage_t)
 
     np.savez_compressed(out / f"iter_{relion_iter:03d}.npz", **payload)
-    reset_iteration_timer(iteration)
+    _reset_iteration_timer(iteration)
 
 
 def _downsample_volume_real(volume_ft_flat, volume_shape) -> np.ndarray:

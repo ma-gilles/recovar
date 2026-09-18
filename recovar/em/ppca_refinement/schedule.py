@@ -39,7 +39,7 @@ class HalfsetResolutionGateDecision:
     W_subspace_agreement: float | None = None
 
 
-def compute_pose_change_fraction(current_best, previous_best) -> float:
+def _compute_pose_change_fraction(current_best, previous_best) -> float:
     """Return the fraction of changed best-pose assignments."""
     if current_best is None or previous_best is None:
         return 1.0
@@ -97,7 +97,7 @@ def evaluate_halfset_resolution_gate(
     means, and halfset mean-resolution support.
     """
     reasons: list[str] = []
-    pose_change = compute_pose_change_fraction(state.best_pose_indices, state.previous_best_pose_indices)
+    pose_change = _compute_pose_change_fraction(state.best_pose_indices, state.previous_best_pose_indices)
     if pose_change > float(pose_stability_threshold):
         reasons.append("best poses changed")
     if not bool(state.kclass_schedule_allows):

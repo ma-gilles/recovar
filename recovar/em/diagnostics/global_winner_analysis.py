@@ -392,7 +392,7 @@ def load_relion_summary(
         higher_is_better=False,
     )
 
-    star_identity, star_class = read_relion_identity_classes(data_star)
+    star_identity, star_class = _read_relion_identity_classes(data_star)
     star_part_ids = {part for part, _original, _class_index in star_identity.values()}
     if star_part_ids != set(part_id.tolist()):
         raise ValueError("RELION summary and data STAR do not contain the same internal identities")
@@ -402,8 +402,8 @@ def load_relion_summary(
     expected_winner = np.asarray([star_class_by_part[int(value)] for value in part_id], dtype=np.int32)
     if not np.array_equal(expected_winner, winner):
         raise ValueError("RELION summary winners disagree with run_it001_data.star")
-    dispatch_records = read_dispatch_records(dispatch_log, iteration=int(row_iteration[0]))
-    schedule_records = read_dispatch_schedule_records(dispatch_schedule, iteration=int(row_iteration[0]))
+    dispatch_records = _read_dispatch_records(dispatch_log, iteration=int(row_iteration[0]))
+    schedule_records = _read_dispatch_schedule_records(dispatch_schedule, iteration=int(row_iteration[0]))
     if dispatch_records.keys() != schedule_records.keys() or any(
         dispatch_records[part][1] != schedule_records[part][1] for part in dispatch_records
     ):
@@ -534,7 +534,7 @@ def _validate_within_class_runner_up(
         raise ValueError("within-class pose margins must be non-negative")
 
 
-def read_relion_identity_classes(path: str | Path) -> tuple[dict[str, tuple[int, int, int]], np.ndarray]:
+def _read_relion_identity_classes(path: str | Path) -> tuple[dict[str, tuple[int, int, int]], np.ndarray]:
     """Return image-name -> (internal ID, original stack ID, zero-based class)."""
 
     loops = _read_star_loops(path)
@@ -587,7 +587,7 @@ def _read_star_loops(path: str | Path) -> list[tuple[list[str], list[list[str]]]
     return loops
 
 
-def read_dispatch_records(path: str | Path, *, iteration: int) -> dict[int, tuple[int, int]]:
+def _read_dispatch_records(path: str | Path, *, iteration: int) -> dict[int, tuple[int, int]]:
     """Return internal particle ID -> (one-based rank, sorted position)."""
 
     records = {}
@@ -615,7 +615,7 @@ def read_dispatch_records(path: str | Path, *, iteration: int) -> dict[int, tupl
 
 
 
-def read_dispatch_schedule_records(path: str | Path, *, iteration: int) -> dict[int, tuple[int, int]]:
+def _read_dispatch_schedule_records(path: str | Path, *, iteration: int) -> dict[int, tuple[int, int]]:
     with np.load(path, allow_pickle=False) as payload:
         required = {
             "relion_iterations",

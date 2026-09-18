@@ -1297,7 +1297,7 @@ class LocalBucketSequence(Sequence):
     def __getitem__(self, index):
         if isinstance(index, slice):
             return LocalBucketSequence(self.layout, self.plans[index])
-        return materialize_local_bucket(self.layout, self.plans[index])
+        return _materialize_local_bucket(self.layout, self.plans[index])
 
 
 def plan_local_hypothesis_buckets(
@@ -1420,7 +1420,7 @@ def plan_local_hypothesis_buckets(
     ]
 
 
-def materialize_local_bucket(layout: LocalHypothesisLayout, plan: LocalBucketPlan) -> LocalBucketSpec:
+def _materialize_local_bucket(layout: LocalHypothesisLayout, plan: LocalBucketPlan) -> LocalBucketSpec:
     """Construct one bucket with the layout dtypes and planned physical order."""
 
     image_indices = plan.image_indices
@@ -1528,7 +1528,7 @@ def bucket_local_hypothesis_layout(
         exact_local_bucket_radix=exact_local_bucket_radix,
         consecutive_mixed_bucket_size=consecutive_mixed_bucket_size,
     )
-    return [materialize_local_bucket(layout, plan) for plan in plans]
+    return [_materialize_local_bucket(layout, plan) for plan in plans]
 
 
 def _plan_local_bucket_groups(
