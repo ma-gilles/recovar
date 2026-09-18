@@ -242,7 +242,10 @@ from recovar.em.sparse_pass2.sparse_pass2_posterior import (
     _winner_take_all_bucket_probs,
     _winner_take_all_bucket_probs_from_global_argmax,
     _winner_take_all_pair_probs,
+    cuda_fused_pass2_posterior,
+    cuda_logsumexp_pass2_bucket_score_only,
     relion_x_half_f32_fine_posterior_enabled,
+    sparse_pass2_cuda_posterior_enabled,
 )
 from recovar.em.sparse_pass2.sparse_pass2_projection_blocks import (
     _compute_sparse_pass2_projections_block,
@@ -686,6 +689,28 @@ def compute_pass2_stats_sparse_bucketed(
         )
     )
     use_half_volume_mstep = bool(relion_half_volume_mstep) or use_relion_x_half_mstep
+    # Fused CUDA posterior (default off): one runtime-shaped FFI call replaces
+    # the per-shape XLA log-Z / normalization / float32 fine-posterior glue.
+    use_cuda_posterior = bool(
+        sparse_pass2_cuda_posterior_enabled()
+        and not use_float64_scoring
+        and jax.default_backend() == "gpu"
+    )
+    if use_cuda_posterior:
+        from recovar import cuda_backproject as _cuda_backproject_for_posterior
+
+        use_cuda_posterior = _cuda_backproject_for_posterior.custom_cuda_requested()
+    use_cuda_fused_posterior = bool(
+        use_cuda_posterior
+        and use_relion_f32_fine_posterior
+        and use_relion_fine_mstep_prune
+        and not score_only
+    )
+    if use_cuda_posterior:
+        logger.info(
+            "Sparse pass-2 posterior: fused CUDA log-Z%s enabled via RECOVAR_SPARSE_PASS2_CUDA_POSTERIOR",
+            " and fused normalization/float32 fine posterior" if use_cuda_fused_posterior else "",
+        )
     reuse_coarse_normalization = relion_f32_normalization_sum_weight is not None
     retain_coarse_winner = relion_coarse_hard_assignment is not None
     if retain_coarse_winner != (relion_coarse_max_posterior is not None) or (
@@ -3527,8 +3552,12 @@ def compute_pass2_stats_sparse_bucketed(
             else -0.5 * jnp.squeeze(batch_norm, axis=1).astype(jnp.float64)
         )
         probs = None
+        fused_posterior = None
         if return_score_log_z_only:
-            log_Z = _logsumexp_pass2_bucket_score_only(scores)
+            if use_cuda_posterior:
+                log_Z = cuda_logsumexp_pass2_bucket_score_only(scores)
+            else:
+                log_Z = _logsumexp_pass2_bucket_score_only(scores)
             log_score_offset = np.asarray(score_log_offset_jax, dtype=np.float64)
             log_Z_np = np.asarray(log_Z, dtype=np.float64)
             for row, image_idx in enumerate(image_indices.tolist()):
@@ -3545,6 +3574,7 @@ def compute_pass2_stats_sparse_bucketed(
             _mark_bucket_group_chunk_done(bucket_size, batch)
             continue
         local_score_log_z = None
+        bucket_log_z = None
         if (
             score_only
             and normalization_log_z_np is None
@@ -3563,11 +3593,11 @@ def compute_pass2_stats_sparse_bucketed(
             )
             if use_exact_relion_gaussian:
                 bucket_log_z = bucket_log_z - score_log_offset_jax
-            log_Z, probs, best_log_score_bucket, best_argmax, max_posterior_bucket = (
-                _normalize_pass2_bucket_with_log_z(scores, bucket_log_z)
-            )
         else:
-            local_score_log_z = _logsumexp_pass2_bucket_score_only(scores)
+            if use_cuda_posterior:
+                local_score_log_z = cuda_logsumexp_pass2_bucket_score_only(scores)
+            else:
+                local_score_log_z = _logsumexp_pass2_bucket_score_only(scores)
             bucket_other_log_z = jnp.asarray(
                 normalization_other_score_log_z_np[image_indices],
                 dtype=local_score_log_z.dtype,
@@ -3580,9 +3610,30 @@ def compute_pass2_stats_sparse_bucketed(
                     bucket_other_log_z,
                 )
                 bucket_log_z = bucket_log_z_absolute - score_log_offset_jax
-            log_Z, probs, best_log_score_bucket, best_argmax, max_posterior_bucket = (
-                _normalize_pass2_bucket_with_log_z(scores, bucket_log_z)
-            )
+        if bucket_log_z is not None:
+            if (
+                use_cuda_fused_posterior
+                and not winner_take_all
+                and not bucket_contribution_diagnostics_active
+            ):
+                fused_posterior = cuda_fused_pass2_posterior(
+                    scores,
+                    bucket_log_z,
+                    adaptive_fraction=float(adaptive_fraction),
+                    normalization_sum_weight=(
+                        None if coarse_sum_weight_np is None else coarse_sum_weight_np[image_indices]
+                    ),
+                    keep_all=reuse_coarse_normalization,
+                )
+                log_Z = fused_posterior.log_z
+                probs = fused_posterior.probs
+                best_log_score_bucket = fused_posterior.best_log_score
+                best_argmax = fused_posterior.best_argmax
+                max_posterior_bucket = fused_posterior.max_posterior
+            else:
+                log_Z, probs, best_log_score_bucket, best_argmax, max_posterior_bucket = (
+                    _normalize_pass2_bucket_with_log_z(scores, bucket_log_z)
+                )
         if winner_take_all:
             if probs is not None:
                 probs = _winner_take_all_bucket_probs(scores, best_argmax, best_log_score_bucket)
@@ -3599,7 +3650,13 @@ def compute_pass2_stats_sparse_bucketed(
         reconstruction_n_significant = None
         reconstruction_sum_weight = None
         reconstruction_threshold = None
-        if probs is not None and use_relion_fine_mstep_prune and not score_only:
+        if fused_posterior is not None:
+            # The fused CUDA call already produced the RELION float32 pruned
+            # reconstruction weights and their maximum (the reported Pmax).
+            reconstruction_probs = fused_posterior.reconstruction_probs
+            reconstruction_mask = fused_posterior.mask
+            reconstruction_n_significant = fused_posterior.n_significant
+        elif probs is not None and use_relion_fine_mstep_prune and not score_only:
             reconstruction_probs, reconstruction_mask, reconstruction_n_significant = (
                 _relion_pass2_reconstruction_probs_for_mstep(
                     scores,
