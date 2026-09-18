@@ -62,7 +62,6 @@ PPCA_LOCAL_IMAGE_BATCH_FLOOR = 1
 # ~3-5× that). At 8 we comfortably fit in ~10 GiB; 16 needs ~20 GiB. Bump
 # only when the GPU has plenty of free memory.
 PPCA_LOCAL_IMAGE_BATCH_CEIL = int(os.environ.get("RECOVAR_PPCA_LOCAL_IMAGE_BATCH_CEIL", "8"))
-PPCA_LOCAL_AUTO_DISABLE_ENV = "RECOVAR_PPCA_LOCAL_AUTO_SIZING_DISABLE"
 
 
 def _ppca_local_smart_max_hypotheses_per_microbatch(default: int | None, n_windowed: int, q: int) -> int:
@@ -74,8 +73,6 @@ def _ppca_local_smart_max_hypotheses_per_microbatch(default: int | None, n_windo
         if value <= 0:
             raise ValueError("max_hypotheses_per_microbatch must be positive")
         return value
-    if os.environ.get(PPCA_LOCAL_AUTO_DISABLE_ENV, "0") == "1":
-        return 32_768  # legacy default
     target_row_pixels = int(os.environ.get(PPCA_LOCAL_TARGET_ROW_PIXELS_ENV, PPCA_LOCAL_TARGET_ROW_PIXELS))
     if target_row_pixels <= 0:
         raise ValueError(f"{PPCA_LOCAL_TARGET_ROW_PIXELS_ENV} must be positive")
@@ -98,8 +95,6 @@ def _ppca_local_smart_image_batch_size(
     respected so explicit user choices win."""
     if default is not None and int(default) not in (0, 2):
         return int(default)
-    if os.environ.get(PPCA_LOCAL_AUTO_DISABLE_ENV, "0") == "1":
-        return 2 if default is None else int(default)
     bucket = max(1, int(mean_bucket_size))
     cap = max(1, int(max_hypotheses_per_microbatch) // bucket)
     return int(max(PPCA_LOCAL_IMAGE_BATCH_FLOOR, min(PPCA_LOCAL_IMAGE_BATCH_CEIL, cap)))
