@@ -175,3 +175,31 @@ def test_candidate_density_logging_is_default_off(monkeypatch):
     monkeypatch.setenv(bucketed._CANDIDATE_DENSITY_LOG_ENV, "1")
     assert bucketed._candidate_density_logging_enabled() is True
     assert bucketed._CANDIDATE_DENSITY_LOG_ENV == "RECOVAR_SPARSE_PASS2_LOG_CANDIDATE_DENSITY"
+
+
+def test_texture_projector_fallback_is_reported_once_per_reason(monkeypatch, caplog):
+    """A silent fallback to the vmapped JAX projector costs pass-2 host time."""
+    import logging
+
+    import jax.numpy as jnp
+
+    from recovar.em.helpers import projection
+
+    monkeypatch.setattr(projection, "_cuda_projection_available", lambda: True)
+    projection._TEXTURE_FALLBACK_REPORTED.clear()
+    good = jnp.zeros((187, 187, 94), jnp.complex64)
+    assert projection._relion_projector_texture_enabled(good, r_max=46, padding_factor=2) is True
+
+    wrong_dtype = jnp.zeros((187, 187, 94), jnp.complex128)
+    with caplog.at_level(logging.WARNING, logger=projection.logger.name):
+        assert (
+            projection._relion_projector_texture_enabled(wrong_dtype, r_max=46, padding_factor=2)
+            is False
+        )
+        assert (
+            projection._relion_projector_texture_enabled(wrong_dtype, r_max=46, padding_factor=2)
+            is False
+        )
+    messages = [r.message for r in caplog.records if "texture projector unavailable" in r.message]
+    assert len(messages) == 1, messages
+    assert "complex128" in messages[0] and "want complex64" in messages[0]

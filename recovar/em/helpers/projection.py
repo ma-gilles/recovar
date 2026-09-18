@@ -14,6 +14,9 @@ from recovar.cuda_backproject import cuda_available as _cuda_projection_availabl
 from recovar.cuda_backproject import project_indexed
 from recovar.em.helpers.env_flags import parse_env_strict_flag
 from recovar.em.helpers.half_spectrum import bin_shell_values_jax
+import logging
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_PROJECTION_MAX_R = object()
 _RELION_PROJECTOR_TEXTURE_ENV = "RECOVAR_RELION_PROJECTOR_TEXTURE_INTERP"
@@ -232,6 +235,9 @@ def relion_projector_half_to_texture_full(volume_relion_half: jax.Array) -> jax.
     return full.at[center:, :, :].set(jnp.transpose(volume_relion_half, (2, 1, 0)))
 
 
+_TEXTURE_FALLBACK_REPORTED: set[str] = set()
+
+
 def _relion_projector_texture_enabled(
     volume_relion_half,
     *,
@@ -246,12 +252,27 @@ def _relion_projector_texture_enabled(
         return False
     shape = tuple(int(value) for value in volume_relion_half.shape)
     expected_pad = 2 * (int(float(padding_factor) * float(r_max) + 0.5) + 1) + 1
-    return (
-        _cuda_projection_available()
-        and jnp.dtype(volume_relion_half.dtype) == jnp.dtype(jnp.complex64)
-        and len(shape) == 3
-        and shape == (expected_pad, expected_pad, expected_pad // 2 + 1)
-    )
+    cuda_ok = _cuda_projection_available()
+    dtype_ok = jnp.dtype(volume_relion_half.dtype) == jnp.dtype(jnp.complex64)
+    shape_ok = len(shape) == 3 and shape == (expected_pad, expected_pad, expected_pad // 2 + 1)
+    enabled_now = cuda_ok and dtype_ok and shape_ok
+    if not enabled_now:
+        # Falling back here replaces one texture-projector call with a vmapped
+        # JAX projection whose per-row dispatch dominates pass-2 host time, so
+        # report the reason once per distinct cause instead of failing silent.
+        reason = (
+            f"cuda={cuda_ok} dtype={volume_relion_half.dtype} (want complex64) "
+            f"shape={shape} (want {(expected_pad, expected_pad, expected_pad // 2 + 1)}) "
+            f"r_max={int(r_max)} padding_factor={int(padding_factor)}"
+        )
+        if reason not in _TEXTURE_FALLBACK_REPORTED:
+            _TEXTURE_FALLBACK_REPORTED.add(reason)
+            logger.warning(
+                "RELION texture projector unavailable; using the vmapped JAX "
+                "projection fallback: %s",
+                reason,
+            )
+    return enabled_now
 
 
 def prepare_relion_projector_capacity(volume_relion_half, *, r_max, physical_size, padding_factor):
