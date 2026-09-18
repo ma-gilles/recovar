@@ -10,6 +10,7 @@ import numpy as np
 import recovar.core.fourier_transform_utils as ftu
 from recovar import core, utils
 from recovar.core import linalg
+from recovar.ppca.triangular import _tri_size, unpack_tri_to_full
 
 logger = logging.getLogger(__name__)
 
@@ -75,11 +76,6 @@ def check_imaginary_part(x, image_shape, name, skip_ft=False):
 batch_over_vol_adjoint_slice_volume = jax.vmap(
     core.adjoint_slice_volume, in_axes=(-1, None, None, None, None), out_axes=-1
 )
-
-
-def _tri_size(q):
-    """Number of upper-triangular entries (including diagonal) in a q×q matrix."""
-    return (q * (q + 1)) // 2
 
 
 _half_slice_volume = functools.partial(core.slice_volume, half_volume=True, half_image=True)
@@ -385,20 +381,6 @@ def E_M_step_batch_half(
         residual_power_half,
         n_images_batch,
     )
-
-
-def unpack_tri_to_full(lhs_tri, basis_size):
-    """Unpack upper-triangular ``(…, tri_size)`` to symmetric ``(…, q, q)``.
-
-    Useful for converting the output of :func:`E_M_step_batch_half` back to the
-    full matrix format expected by downstream solvers.
-    """
-    tri_i, tri_j = np.triu_indices(basis_size)
-    shape = lhs_tri.shape[:-1] + (basis_size, basis_size)
-    out = jnp.zeros(shape, dtype=lhs_tri.dtype)
-    out = out.at[..., tri_i, tri_j].set(lhs_tri)
-    out = out.at[..., tri_j, tri_i].set(lhs_tri)
-    return out
 
 
 batch1_symmetrize_ft_volume = jax.vmap(utils.symmetrize_ft_volume, in_axes=(1, None), out_axes=1)
