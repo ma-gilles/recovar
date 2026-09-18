@@ -101,7 +101,7 @@ def test_builder_preserves_first_rotation_for_id_and_chunk_arguments(monkeypatch
     # The id map is an identity over the compact cache rows; buckets translate their
     # global rotation ids to rows on the host through rows_for_bucket, so the cache
     # no longer grows with the largest global id (int64 ids at high sampling orders).
-    assert result.enabled and result.row_count == 3 and result.id_map_row_count == result.row_count
+    assert result.enabled and result.row_count == 3
     assert result.projections.shape == (4, 3) and result.projections.dtype == np.complex64
     np.testing.assert_array_equal(np.asarray(result.id_map), [0, 1, 2])
     np.testing.assert_array_equal(cache.rows_for_bucket(result, [[2, 5, 8], [8, -1, 2]]), [[0, 1, 2], [2, 0, 0]])
