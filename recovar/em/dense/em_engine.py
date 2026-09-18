@@ -467,9 +467,6 @@ def _dense_mstep_block(
                 jnp.zeros(1, dtype=ctf2_over_nv_windowed_mstep.dtype),
                 batch_size,
                 n_trans,
-                n_recon_windowed,
-                image_shape,
-                volume_shape,
             )
     else:
         if relion_firstiter_winner_take_all:

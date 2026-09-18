@@ -802,9 +802,6 @@ class TestWindowedMStepRoundtrip:
             Ft_ctf,
             n_images,
             n_trans,
-            n_windowed,
-            IMAGE_SHAPE,
-            VOLUME_SHAPE,
         )
 
         # Scatter back to full half-spectrum
