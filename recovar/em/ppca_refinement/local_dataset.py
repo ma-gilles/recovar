@@ -509,7 +509,7 @@ def _score_local_pose_ppca_bucket_rotation_chunked(
         "top_pose_count",
     ),
 )
-def score_local_pose_ppca_bucket_with_moments(
+def _score_local_pose_ppca_bucket_with_moments(
     Y1,
     proj_aug,
     ctf2_over_noise,
@@ -564,7 +564,7 @@ def score_local_pose_ppca_bucket_with_moments(
         "volume_shape",
     ),
 )
-def accumulate_local_pose_ppca_bucket_cached(
+def _accumulate_local_pose_ppca_bucket_cached(
     score,
     alpha,
     G_tri,
@@ -658,7 +658,7 @@ def accumulate_local_pose_ppca_bucket_cached(
         "top_k_mstep",
     ),
 )
-def accumulate_local_pose_ppca_bucket_topk_cached(
+def _accumulate_local_pose_ppca_bucket_topk_cached(
     score,
     alpha,
     G_tri,
@@ -767,7 +767,7 @@ def accumulate_local_pose_ppca_bucket_topk_cached(
         "top_pose_count",
     ),
 )
-def fused_local_pose_ppca_bucket(
+def _fused_local_pose_ppca_bucket(
     Y1,
     proj_aug,
     ctf2_over_noise,
@@ -885,7 +885,7 @@ def fused_local_pose_ppca_bucket(
     return rhs_volume, lhs_tri_volume, diagnostics
 
 
-def iter_local_ppca_dataset_bucket_blocks(
+def _iter_local_ppca_dataset_bucket_blocks(
     experiment_dataset,
     mu,
     W=None,
@@ -1113,7 +1113,7 @@ def _accumulate_local_ppca_fused_stats(
     local_mstep_exact_buckets = 0
     local_mstep_retained_mass_values = []
 
-    for block in iter_local_ppca_dataset_bucket_blocks(
+    for block in _iter_local_ppca_dataset_bucket_blocks(
         experiment_dataset,
         mu,
         W,
@@ -1138,7 +1138,7 @@ def _accumulate_local_ppca_fused_stats(
         candidate_count = int(block.rotations.shape[1]) * int(local_layout.translation_grid.shape[0])
         raw_top_pose_count = top_pose_candidate_count(pose_selection, candidate_count)
         if local_topk_mstep > 0:
-            score_result = score_local_pose_ppca_bucket_with_moments(
+            score_result = _score_local_pose_ppca_bucket_with_moments(
                 block.Y1,
                 block.proj_aug,
                 block.ctf2_over_noise,
@@ -1150,7 +1150,7 @@ def _accumulate_local_ppca_fused_stats(
             pmax_np = np.asarray(jax.block_until_ready(posterior.pmax), dtype=np.float32)
             use_topk_mstep = bool(pmax_np.size) and float(np.min(pmax_np)) >= local_topk_min_pmax
             if use_topk_mstep:
-                rhs_volume, lhs_tri_volume, retained_mass = accumulate_local_pose_ppca_bucket_topk_cached(
+                rhs_volume, lhs_tri_volume, retained_mass = _accumulate_local_pose_ppca_bucket_topk_cached(
                     score_result.score,
                     score_result.alpha,
                     score_result.G_tri,
@@ -1170,7 +1170,7 @@ def _accumulate_local_ppca_fused_stats(
                 )
                 local_mstep_topk_buckets += 1
             else:
-                rhs_volume, lhs_tri_volume, retained_mass = accumulate_local_pose_ppca_bucket_cached(
+                rhs_volume, lhs_tri_volume, retained_mass = _accumulate_local_pose_ppca_bucket_cached(
                     score_result.score,
                     score_result.alpha,
                     score_result.G_tri,
@@ -1190,7 +1190,7 @@ def _accumulate_local_ppca_fused_stats(
                 local_mstep_exact_buckets += 1
             local_mstep_retained_mass_values.append(jnp.asarray(retained_mass, dtype=jnp.float32))
         else:
-            rhs_volume, lhs_tri_volume, posterior = fused_local_pose_ppca_bucket(
+            rhs_volume, lhs_tri_volume, posterior = _fused_local_pose_ppca_bucket(
                 block.Y1,
                 block.proj_aug,
                 block.ctf2_over_noise,
@@ -1386,7 +1386,7 @@ def _score_local_ppca_pose_diagnostics(
     top_posterior_values = []
     output_image_indices = []
 
-    for block in iter_local_ppca_dataset_bucket_blocks(
+    for block in _iter_local_ppca_dataset_bucket_blocks(
         experiment_dataset,
         mu,
         W,

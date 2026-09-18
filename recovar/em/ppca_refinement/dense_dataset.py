@@ -523,7 +523,7 @@ def iter_dense_ppca_dataset_blocks(
         batch_start += batch_count
 
 
-def iter_dense_ppca_dataset_block_groups(
+def _iter_dense_ppca_dataset_block_groups(
     experiment_dataset,
     mu,
     W=None,
@@ -804,7 +804,7 @@ def run_dense_ppca_fused_em_iteration(
     )
     top_pose_count = int(pose_selection.top_p_poses)
 
-    block_groups = iter_dense_ppca_dataset_block_groups(
+    block_groups = _iter_dense_ppca_dataset_block_groups(
         experiment_dataset,
         mu,
         W,

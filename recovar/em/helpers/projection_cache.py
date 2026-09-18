@@ -104,7 +104,7 @@ def array_nbytes(shape: Iterable[int], dtype) -> int:
     return element_count * _normalize_dtype(dtype).itemsize
 
 
-def aligned_projection_cache_chunk_rows(
+def _aligned_projection_cache_chunk_rows(
     row_count: int,
     requested_max_chunk_rows: int,
     *,
@@ -178,7 +178,7 @@ def plan_projection_cache(
     if not isinstance(destination_alias_proven, (bool, np.bool_)):
         raise TypeError("projection-cache destination_alias_proven must be boolean")
 
-    chunk_rows = aligned_projection_cache_chunk_rows(rows, requested, row_alignment=alignment)
+    chunk_rows = _aligned_projection_cache_chunk_rows(rows, requested, row_alignment=alignment)
     table_bytes = array_nbytes((rows, pixels), dtype)
     retained_bytes = tables * table_bytes
     projection_block_bytes = array_nbytes((chunk_rows, pixels), dtype)

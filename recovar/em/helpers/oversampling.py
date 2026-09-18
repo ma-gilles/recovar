@@ -340,7 +340,7 @@ def relion_cuda_f32_coarse_posterior(
     return probabilities, mask, n_significant, cutoff_count, sum_weight, threshold
 
 
-def map_translation_log_prior_to_fine_grid(
+def _map_translation_log_prior_to_fine_grid(
     translation_log_prior,
     fine_translation_parent,
 ):
@@ -1004,7 +1004,7 @@ def _compute_pass2_stats_sparse_perimage_reference(
     fine_translations = np.asarray(fine_translations, dtype=score_dtype)
     fine_translation_parent = np.asarray(fine_translation_parent, dtype=np.int32)
     n_fine_trans = fine_translations.shape[0]
-    fine_translation_prior = map_translation_log_prior_to_fine_grid(
+    fine_translation_prior = _map_translation_log_prior_to_fine_grid(
         translation_log_prior,
         fine_translation_parent,
     )

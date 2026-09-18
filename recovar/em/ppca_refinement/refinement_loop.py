@@ -47,7 +47,7 @@ class PPCARefinementIterationRecord:
     diagnostics: dict = field(default_factory=dict)
 
 
-def propose_next_current_size(current_size: int, *, max_current_size: int, growth_factor: float = 2.0) -> int:
+def _propose_next_current_size(current_size: int, *, max_current_size: int, growth_factor: float = 2.0) -> int:
     """Conservative even current-size proposal used behind the PPCA gate."""
 
     current = int(current_size)
@@ -268,7 +268,7 @@ def run_dense_ppca_refinement_loop(
     for iteration in range(int(n_iterations)):
         schedule_state = state.schedule_state
         current_size = int(schedule_state.current_size)
-        proposed_size = propose_next_current_size(
+        proposed_size = _propose_next_current_size(
             current_size,
             max_current_size=max_current_size,
             growth_factor=current_size_growth_factor,

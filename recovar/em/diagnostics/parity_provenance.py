@@ -161,7 +161,7 @@ def _git_ancestor_of_head(sha: str) -> bool:
         return False
 
 
-def missing_parity_ancestors() -> list[tuple[str, str]]:
+def _missing_parity_ancestors() -> list[tuple[str, str]]:
     """Return the (sha, description) pairs for required commits not in HEAD's ancestry."""
     return [(sha, desc) for sha, desc in REQUIRED_PARITY_ANCESTORS if not _git_ancestor_of_head(sha)]
 
@@ -185,7 +185,7 @@ def print_provenance_banner(stream=sys.stdout) -> dict[str, str | int]:
 
 def assert_parity_ancestors() -> None:
     """Raise ParityAncestryError if any required parity-fix commit is missing."""
-    missing = missing_parity_ancestors()
+    missing = _missing_parity_ancestors()
     if missing:
         head = git_head_or_none() or "<unknown>"
         details = "\n".join(f"  - {sha} ({desc}) NOT in ancestry of {head[:8]}" for sha, desc in missing)
@@ -205,7 +205,7 @@ def assert_parity_ancestors_or_exit(exit_status: int = 2) -> None:
     from "real regression".
     """
     print_provenance_banner()
-    missing = missing_parity_ancestors()
+    missing = _missing_parity_ancestors()
     if missing:
         head = git_head_or_none() or "<unknown>"
         print("=" * 72, flush=True)

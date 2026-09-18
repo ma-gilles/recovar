@@ -28,7 +28,7 @@ def _env_enabled(name: str, *, default: bool) -> bool:
     return raw.strip().lower() not in {"", "0", "false", "no", "off"}
 
 
-def relion_x_half_mstep_double_enabled() -> bool:
+def _relion_x_half_mstep_double_enabled() -> bool:
     """Return whether RELION x-half M-step accumulates with double precision.
 
     RELION stores its ``BackProjector`` accumulators in single precision.
@@ -44,7 +44,7 @@ def relion_x_half_mstep_accumulator_dtypes(dataset_dtype, *, use_relion_x_half_m
 
     base_dtype = np.dtype(dataset_dtype)
     if use_relion_x_half_mstep:
-        if relion_x_half_mstep_double_enabled():
+        if _relion_x_half_mstep_double_enabled():
             return np.dtype(np.complex128), np.dtype(np.float64)
         return np.dtype(np.complex64), np.dtype(np.float32)
     return base_dtype, base_dtype
@@ -104,7 +104,7 @@ def half_volume_accumulator_shape(recon_volume_shape):
     return fourier_transform_utils.volume_shape_to_half_volume_shape(recon_volume_shape)
 
 
-def relion_backprojector_r_max(volume_shape, current_size=None):
+def _relion_backprojector_r_max(volume_shape, current_size=None):
     """Return RELION ``BackProjector`` support radius for ``initZeros``."""
 
     volume_shape = tuple(int(v) for v in volume_shape)
@@ -124,7 +124,7 @@ def relion_backprojector_volume_shape(volume_shape, padding_factor, current_size
     padding_factor = float(padding_factor)
     if padding_factor <= 0:
         raise ValueError(f"padding_factor must be positive, got {padding_factor!r}")
-    r_max = relion_backprojector_r_max(volume_shape, current_size=current_size)
+    r_max = _relion_backprojector_r_max(volume_shape, current_size=current_size)
     pad_size = 2 * (int(padding_factor * float(r_max) + 0.5) + 1) + 1
     return (int(pad_size), int(pad_size), int(pad_size))
 

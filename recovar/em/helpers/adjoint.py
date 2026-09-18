@@ -42,7 +42,7 @@ def adjoint_slice_volume_windowed(
 
 
 @partial(jax.jit, static_argnums=(4, 5, 6, 7, 8, 9, 10))
-def batch_adjoint_slice_volume_windowed(
+def _batch_adjoint_slice_volume_windowed(
     windowed_halves,
     window_indices,
     rotations_block,
@@ -139,7 +139,7 @@ def batch_adjoint_slice_volume_maybe_windowed(
         if window_indices is None:
             n_half = int(image_shape[0]) * (int(image_shape[1]) // 2 + 1)
             window_indices = jnp.arange(n_half, dtype=jnp.int32)
-        return batch_adjoint_slice_volume_windowed(
+        return _batch_adjoint_slice_volume_windowed(
             half_blocks,
             window_indices,
             rotations_block,

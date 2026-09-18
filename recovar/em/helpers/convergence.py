@@ -268,7 +268,7 @@ def resolution_required_angular_sampling(
     return 360.0 / float(nr_ang_steps)
 
 
-def fine_enough_angular_accuracy(state: "RefinementState") -> float:
+def _fine_enough_angular_accuracy(state: "RefinementState") -> float:
     """Return RELION's measured accuracy for the fine-enough check.
 
     The resolution-implied angular step is a separate trigger for entering
@@ -279,13 +279,13 @@ def fine_enough_angular_accuracy(state: "RefinementState") -> float:
     return float(state.acc_rot)
 
 
-def convergence_sampling_diagnostics(state: "RefinementState") -> dict[str, float | bool]:
+def _convergence_sampling_diagnostics(state: "RefinementState") -> dict[str, float | bool]:
     """Return scalar diagnostics for RELION auto-sampling decisions."""
     resolution_required = resolution_required_angular_sampling(
         state.current_resolution,
         state.particle_diameter_angstrom,
     )
-    angular_accuracy = fine_enough_angular_accuracy(state)
+    angular_accuracy = _fine_enough_angular_accuracy(state)
     return {
         "effective_step": float(state.effective_step),
         "acc_rot": float(state.acc_rot),
@@ -660,7 +660,7 @@ def compute_translation_changes(
     return rms
 
 
-def relion_angular_distance_per_particle(M_current: np.ndarray, M_previous: np.ndarray) -> np.ndarray:
+def _relion_angular_distance_per_particle(M_current: np.ndarray, M_previous: np.ndarray) -> np.ndarray:
     """Per-particle RELION-style angular distance between two rotation matrices.
 
     Implements ``HealpixSampling::calculateAngularDistance`` (see
@@ -730,7 +730,7 @@ def compute_relion_orientation_changes(
         return float("inf")
     if current_rotations.size == 0:
         return 0.0
-    per_particle = relion_angular_distance_per_particle(current_rotations, previous_rotations)
+    per_particle = _relion_angular_distance_per_particle(current_rotations, previous_rotations)
     return float(np.mean(per_particle))
 
 
@@ -933,7 +933,7 @@ def _angular_sampling_update_is_ready(state: RefinementState) -> bool:
 
 def _angular_sampling_is_fine_enough_now(state: RefinementState) -> bool:
     """Evaluate RELION's strict old-step versus measured-accuracy test."""
-    angular_accuracy = fine_enough_angular_accuracy(state)
+    angular_accuracy = _fine_enough_angular_accuracy(state)
     return bool(
         np.isfinite(angular_accuracy)
         and state.effective_step < 0.75 * angular_accuracy
@@ -956,7 +956,7 @@ def update_angular_sampling(state: RefinementState) -> RefinementState:
             "Angular step %.2f deg < 75%% of angular accuracy %.2f deg; "
             "latching fine-enough sampling",
             state.effective_step,
-            fine_enough_angular_accuracy(state),
+            _fine_enough_angular_accuracy(state),
         )
         return replace(state, has_fine_enough_angular_sampling=True)
     if state.healpix_order >= state.max_healpix_order:
@@ -1497,7 +1497,7 @@ def update_refinement_state(
         current_changes_classes if np.isfinite(current_changes_classes) else float("nan"),
         )
 
-    diag = convergence_sampling_diagnostics(updated)
+    diag = _convergence_sampling_diagnostics(updated)
     logger.info(
         "Sampling decision: effective_step=%.3f deg, acc_rot=%.3f deg, "
         "resolution_required=%.3f deg, angular_accuracy=%.3f deg, "
