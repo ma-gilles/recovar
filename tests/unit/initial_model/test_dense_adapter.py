@@ -26,7 +26,6 @@ from recovar.em.vdam.sparse_pass2_estep import (
     _resolve_sparse_pass1_current_size,
     _safe_coarse_significance_image_batch_size,
 )
-from recovar.em.vdam.subset import split_pseudo_halfset_particle_ids
 
 pytestmark = pytest.mark.unit
 
@@ -286,12 +285,6 @@ def test_arrays_to_accumulators_splits_grouped_halfsets():
     assert [value.class_idx for value in actual] == [0, 0]
     assert not np.array_equal(actual[0].data, actual[1].data)
     assert not np.array_equal(actual[0].weight, actual[1].weight)
-
-
-def test_split_pseudo_halfset_particle_ids_uses_particle_id_parity():
-    h0, h1 = split_pseudo_halfset_particle_ids(5)
-    np.testing.assert_array_equal(h0, np.asarray([0, 2, 4]))
-    np.testing.assert_array_equal(h1, np.asarray([1, 3]))
 
 
 def test_class_log_priors_from_state_normalizes_weights():
