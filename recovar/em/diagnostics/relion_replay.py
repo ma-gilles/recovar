@@ -17,7 +17,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from recovar.em.helpers.convergence import healpix_angular_step
-from recovar.em.helpers.env_flags import parse_env_flag_or_false, parse_env_true_flag
+from recovar.em.helpers.env_flags import parse_env_flag_or_false
 from recovar.em.helpers.orientation_priors import (
     class_weights_from_direction_prior,
     infer_direction_prior_healpix_order,
@@ -38,10 +38,6 @@ from recovar.em.refinement.noise_updates import (
     _normalize_noise_variance_per_half,
 )
 from recovar.em.refinement.refinement_options import RefinementOptions
-from recovar.em.sampling import (
-    _translation_grid_for_class_count,
-    relion_sampling_perturbation_for_iteration,
-)
 from recovar.em.relion.relion_metadata import (
     read_relion_direction_prior,
     read_relion_direction_priors,
@@ -49,13 +45,12 @@ from recovar.em.relion.relion_metadata import (
     read_relion_optimiser_metadata,
     read_relion_sampling_metadata,
 )
+from recovar.em.sampling import (
+    _translation_grid_for_class_count,
+    relion_sampling_perturbation_for_iteration,
+)
 
 logger = logging.getLogger(__name__)
-
-
-_DEBUG_REPLAY_RELION_REFERENCES_ENV = "RECOVAR_DEBUG_REPLAY_RELION_REFERENCES"
-_DEBUG_REPLAY_RELION_REFERENCES_ITERATION_ENV = "RECOVAR_DEBUG_REPLAY_RELION_REFERENCES_ITERATION"
-
 
 _KCLASS_REPLAY_TAU2_ENV = "RECOVAR_KCLASS_REPLAY_TAU2"
 
@@ -323,26 +318,6 @@ def _validate_bpref_particle_order_scope(
         raise ValueError("RELION BPref particle-order preservation cannot be applied to a sealed boundary")
 
 
-def _debug_replay_relion_references_enabled(iteration_number: int) -> bool:
-    """Return whether this scoring iteration should use RELION half-map references."""
-
-    if not parse_env_true_flag(_DEBUG_REPLAY_RELION_REFERENCES_ENV):
-        return False
-    requested = os.environ.get(_DEBUG_REPLAY_RELION_REFERENCES_ITERATION_ENV)
-    if requested is None or requested.strip() == "":
-        return True
-    try:
-        requested_iterations = {int(token) for token in requested.replace(",", " ").replace(";", " ").split()}
-    except ValueError:
-        logger.warning(
-            "Ignoring invalid %s=%r; RELION reference replay disabled",
-            _DEBUG_REPLAY_RELION_REFERENCES_ITERATION_ENV,
-            requested,
-        )
-        return False
-    return int(iteration_number) in requested_iterations
-
-
 def _maybe_debug_replay_relion_references(
     *,
     means,
@@ -354,15 +329,15 @@ def _maybe_debug_replay_relion_references(
     n_classes: int,
     force: bool = False,
 ):
-    """Debug hook: replace current scoring references with RELION maps."""
+    """Replace scoring references with RELION maps for a state-swap probe."""
 
     iteration_number = int(iteration) + 1
-    if not force and not _debug_replay_relion_references_enabled(iteration_number):
+    if not force:
         return means
     if perturb_replay_relion_dir is None:
         logger.warning(
-            "%s requested at iteration %d but perturb_replay_relion_dir is unset; keeping RECOVAR references",
-            _DEBUG_REPLAY_RELION_REFERENCES_ENV,
+            "RELION reference replay requested at iteration %d but perturb_replay_relion_dir is unset; "
+            "keeping RECOVAR references",
             iteration_number,
         )
         return means
@@ -390,7 +365,7 @@ def _maybe_debug_replay_relion_references(
                     map_path = shared_path
             if not map_path.exists():
                 raise FileNotFoundError(
-                    f"{_DEBUG_REPLAY_RELION_REFERENCES_ENV}=1 requested RELION reference "
+                    "State-swap probe requested RELION reference "
                     f"for scoring iteration {iteration_number}, half {half_idx + 1}, "
                     f"class {class_number}, but {map_path} is missing"
                 )
