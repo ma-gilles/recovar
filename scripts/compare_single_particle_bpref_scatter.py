@@ -77,40 +77,17 @@ def _summary(actual: np.ndarray, expected: np.ndarray, *, complex_values: bool) 
 
 
 def _active_mstep_rows(dump: Any) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    if "active_summed" in dump:
-        return (
-            np.asarray(dump["active_summed"]),
-            np.asarray(dump["active_ctf_probs"]),
-            np.asarray(dump["active_rotations"], dtype=np.float64),
-        )
-    probs = np.asarray(
-        dump["reconstruction_probs"] if "reconstruction_probs" in dump else dump["probs"],
-        dtype=np.float64,
+    return (
+        np.asarray(dump["active_summed"]),
+        np.asarray(dump["active_ctf_probs"]),
+        np.asarray(dump["active_rotations"], dtype=np.float64),
     )
-    shifted = np.asarray(dump["shifted_recon"])
-    ctf2 = np.asarray(dump["ctf2_over_nv_recon"], dtype=np.float64)
-    summed = probs @ shifted
-    ctf_probs = probs.sum(axis=1)[:, None] * ctf2[None, :]
-    active = (np.sum(np.abs(summed), axis=1) > 0.0) | (np.sum(np.abs(ctf_probs), axis=1) > 0.0)
-    rotations = np.asarray(dump["rotations"], dtype=np.float64)[active]
-    return summed[active], ctf_probs[active], rotations
 
 
-def _fftw_indices(dump: Any, *, ori_size: int) -> np.ndarray:
-    """Resolve legacy centered dumps and contribution-row FFTW indices."""
+def _fftw_indices(dump: Any) -> np.ndarray:
+    """Return the contribution rows' FFTW half-image indices."""
 
-    if "active_summed" in dump:
-        return np.asarray(dump["window_indices"], dtype=np.int32)
-
-    from recovar.em.helpers.fourier_window import centered_half_indices_to_fftw_half_indices
-
-    centered_indices = np.asarray(dump["recon_window_indices"], dtype=np.int32)
-    return np.asarray(
-        centered_half_indices_to_fftw_half_indices(
-            (ori_size, ori_size), centered_indices
-        ),
-        dtype=np.int32,
-    )
+    return np.asarray(dump["window_indices"], dtype=np.int32)
 
 
 def _dense_half_images(
@@ -143,7 +120,7 @@ def main() -> int:
         contribution_rows = "active_summed" in dump
         index_key = "window_indices" if contribution_rows else "recon_window_indices"
         input_indices = np.asarray(dump[index_key], dtype=np.int32)
-        fftw_indices = _fftw_indices(dump, ori_size=args.ori_size)
+        fftw_indices = _fftw_indices(dump)
         summed, ctf_probs, rotations = _active_mstep_rows(dump)
     real_dtype = np.float64 if args.dtype == "float64" else np.float32
     complex_dtype = np.complex128 if args.dtype == "float64" else np.complex64
