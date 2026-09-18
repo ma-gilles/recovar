@@ -28,8 +28,6 @@ _LOCAL_ADAPTIVE_PASS2_DENOMINATOR_SUPPORT_ENV = "RECOVAR_LOCAL_ADAPTIVE_PASS2_DE
 _K1_SKIP_SIGNIFICANCE_PRUNING_ENV = "RECOVAR_K1_SKIP_SIGNIFICANCE_PRUNING"
 _K1_RELION_X_HALF_MSTEP_ENV = "RECOVAR_K1_RELION_X_HALF_MSTEP"
 _K_CLASS_RELION_X_HALF_MSTEP_ENV = "RECOVAR_K_CLASS_RELION_X_HALF_MSTEP"
-_K_CLASS_FULL_VOLUME_MSTEP_ENV = "RECOVAR_K_CLASS_FULL_VOLUME_MSTEP"
-_K_CLASS_HALF_VOLUME_MSTEP_ENV = "RECOVAR_K_CLASS_HALF_VOLUME_MSTEP"
 _TRUE_ENV_VALUES = {"1", "true", "yes", "on"}
 
 _FALSE_ENV_VALUES = {"0", "false", "no", "off"}
@@ -86,37 +84,6 @@ RELION_ACC_DOUBLE_FLOORF_QUIRK = parse_env_true_flag(
 )
 
 
-def _k_class_relion_half_volume_mstep_enabled() -> bool:
-    """Return whether K-class should use the old native half-volume M-step."""
-
-    half_value = os.environ.get(_K_CLASS_HALF_VOLUME_MSTEP_ENV)
-    if half_value is not None and half_value.strip() != "":
-        normalized = half_value.strip().lower()
-        if normalized in _TRUE_ENV_VALUES:
-            return True
-        if normalized not in _FALSE_ENV_VALUES:
-            logger.warning(
-                "Ignoring invalid %s=%r; using K-class full-volume M-step default",
-                _K_CLASS_HALF_VOLUME_MSTEP_ENV,
-                half_value,
-            )
-
-    full_value = os.environ.get(_K_CLASS_FULL_VOLUME_MSTEP_ENV)
-    if full_value is not None and full_value.strip() != "":
-        normalized = full_value.strip().lower()
-        if normalized in _FALSE_ENV_VALUES:
-            return True
-        if normalized in _TRUE_ENV_VALUES:
-            return False
-        logger.warning(
-            "Ignoring invalid %s=%r; using K-class full-volume M-step default",
-            _K_CLASS_FULL_VOLUME_MSTEP_ENV,
-            full_value,
-        )
-
-    return False
-
-
 def _k_class_relion_x_half_mstep_enabled() -> bool:
     """Return whether K-class should use RELION x-half BPref M-step accumulators."""
 
@@ -132,33 +99,6 @@ def _k_class_relion_x_half_mstep_enabled() -> bool:
             _K_CLASS_RELION_X_HALF_MSTEP_ENV,
             value,
         )
-
-    # Preserve the legacy diagnostics as explicit overrides.  ``FULL=1`` means
-    # reproduce the old full-volume path; ``FULL=0`` or ``HALF=1`` mean use the
-    # native half-volume path.  With neither set, default to the RELION x-half
-    # BPref layout used by the K=1 parity path.
-    full_value = os.environ.get(_K_CLASS_FULL_VOLUME_MSTEP_ENV)
-    if full_value is not None and full_value.strip() != "":
-        normalized = full_value.strip().lower()
-        if normalized in _TRUE_ENV_VALUES or normalized in _FALSE_ENV_VALUES:
-            return False
-        logger.warning(
-            "Ignoring invalid %s=%r while resolving K-class RELION x-half M-step default",
-            _K_CLASS_FULL_VOLUME_MSTEP_ENV,
-            full_value,
-        )
-
-    half_value = os.environ.get(_K_CLASS_HALF_VOLUME_MSTEP_ENV)
-    if half_value is not None and half_value.strip() != "":
-        normalized = half_value.strip().lower()
-        if normalized in _TRUE_ENV_VALUES:
-            return False
-        if normalized not in _FALSE_ENV_VALUES:
-            logger.warning(
-                "Ignoring invalid %s=%r while resolving K-class RELION x-half M-step default",
-                _K_CLASS_HALF_VOLUME_MSTEP_ENV,
-                half_value,
-            )
 
     return True
 

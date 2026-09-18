@@ -44,7 +44,6 @@ from recovar.em.dense.scoring_policy import (
     _dense_global_scoring_dtype,
     _k1_relion_x_half_mstep_enabled,
     _k1_skip_significance_pruning_enabled,
-    _k_class_relion_half_volume_mstep_enabled,
     _k_class_relion_x_half_mstep_enabled,
     _local_adaptive_pass2_denominator_support_mode,
     _local_adaptive_pass2_full_parent_enabled,
@@ -406,17 +405,12 @@ def _score_half_dense(
     if k_class_enabled:
         if disable_adjoint_y or disable_adjoint_ctf:
             raise NotImplementedError("K-class refine does not support adjoint ablation flags")
-        # K-class should use RELION's x-half BackProjector accumulator layout,
-        # matching the K=1 parity path.  The old full-volume and native
-        # half-volume paths remain available as diagnostics via
-        # RECOVAR_K_CLASS_RELION_X_HALF_MSTEP=0 together with the legacy
-        # RECOVAR_K_CLASS_FULL_VOLUME_MSTEP / RECOVAR_K_CLASS_HALF_VOLUME_MSTEP
-        # switches.
+        # K-class uses RELION's x-half BackProjector accumulator layout by
+        # default, matching the K=1 parity path. The explicit selector can
+        # still choose the dense full-volume path.
         k_class_relion_x_half_mstep = _k_class_relion_x_half_mstep_enabled()
         em_kwargs["mstep_relion_x_half"] = bool(k_class_relion_x_half_mstep)
-        em_kwargs["relion_half_volume_mstep"] = (
-            False if k_class_relion_x_half_mstep else _k_class_relion_half_volume_mstep_enabled()
-        )
+        em_kwargs["relion_half_volume_mstep"] = False
         k_class_mstep_full_half_axis_this_score = None
         rot_pmap_for_collapse = None
         trans_pmap_for_collapse = None
