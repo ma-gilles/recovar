@@ -1731,7 +1731,14 @@ def bucket_class_local_hypothesis_layouts(
         if bool(unify_bucket_sizes):
             raise ValueError("consecutive mixed buckets cannot use run-global bucket unification")
     if segment_sizes.size and bool(unify_bucket_sizes):
-        segment_sizes = np.full_like(segment_sizes, int(segment_sizes.max()))
+        unified_segment = int(segment_sizes.max())
+        # Count the rows unification adds across every class segment, so the bound
+        # means the same thing here as on the single-class path.
+        added_rows = n_classes * (
+            unified_segment * int(segment_sizes.size) - int(segment_sizes.sum(dtype=np.int64))
+        )
+        if added_rows <= _exact_local_unify_max_padded_rows():
+            segment_sizes = np.full_like(segment_sizes, unified_segment)
     total_sizes = (segment_sizes.astype(np.int64) * n_classes).astype(np.int32)
 
     bucket_specs: list[LocalBucketSpec] = []
