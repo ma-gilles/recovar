@@ -449,7 +449,7 @@ def test_prepare_ppca_init_from_pipeline_output_documented_npz_keys_present():
 
 
 # ---------------------------------------------------------------------------
-# 6. Refinement-script regression: --prior-from-init dispatch handles all options
+# 5. Refinement-script regression: --prior-from-init dispatch handles all options
 # ---------------------------------------------------------------------------
 
 

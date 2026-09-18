@@ -47,18 +47,18 @@ from recovar.utils.json_utils import to_jsonable
 # Resume the same pipeline with its unchanged pose-layout and summary helpers.
 from scripts.run_ppca_dense_os_local_from_init_npz import (
     _build_top_p_layout_from_arrays,
+    _image_ordered_pose_arrays,
     _layout_summary,
     _save_pose_npz,
     _top_p_subset_summary,
+    _translations_from_source,
 )
-from scripts.run_ppca_local_from_init_npz import (
+from scripts.run_ppca_dense_from_init_npz import (
     _half_size,
-    _image_ordered_pose_arrays,
     _load_init,
     _load_noise_variance,
     _load_simulation_info,
     _regularization_penalty,
-    _translations_from_source,
 )
 
 
