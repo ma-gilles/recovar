@@ -41,7 +41,6 @@ class LocalRelionProjectionCache:
     id_map: jnp.ndarray
     enabled: bool
     row_count: int = 0
-    id_map_row_count: int = 0
     # Sorted global rotation ids (int64) of the cached rows.  Buckets translate
     # their ids to rows with ``rows_for_bucket`` on the host, so ids beyond the
     # int32 range never reach the device and the map does not scale with the id
@@ -292,7 +291,6 @@ def build_cache(
             "internal projection-cache planner error: group has "
             f"{row_count} rows but capacity is {int(cache_row_capacity)}"
         )
-    id_map_row_count = row_count
     estimated_gb = float(cache_row_capacity * n_projection_pixels * np.dtype(np.complex64).itemsize / 1e9)
 
     cache_t0 = time.time()
@@ -310,7 +308,7 @@ def build_cache(
         int(n_groups),
         row_count,
         int(cache_row_capacity),
-        id_map_row_count,
+        row_count,
         n_projection_pixels,
         estimated_gb,
         int(chunk_rows),
@@ -351,7 +349,7 @@ def build_cache(
         int(n_groups),
         row_count,
         int(cache_row_capacity),
-        id_map_row_count,
+        row_count,
         n_projection_pixels,
         estimated_gb,
         build_s,
@@ -361,7 +359,6 @@ def build_cache(
         id_map=id_map_jnp,
         enabled=True,
         row_count=row_count,
-        id_map_row_count=id_map_row_count,
         unique_ids=np.asarray(unique_ids, dtype=np.int64),
         estimated_gb=estimated_gb,
         build_s=build_s,

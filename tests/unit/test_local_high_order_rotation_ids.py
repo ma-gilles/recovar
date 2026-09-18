@@ -40,7 +40,6 @@ def test_projection_cache_rows_map_large_ids_and_padding():
         id_map=None,
         enabled=True,
         row_count=3,
-        id_map_row_count=3,
         unique_ids=np.array([5, 2**31 + 7, 2**33], dtype=np.int64),
     )
     ids = np.array([[2**33, 5, -1], [2**31 + 7, -1, -1]], dtype=np.int64)
