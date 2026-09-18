@@ -81,8 +81,6 @@ def _run_local_search_iteration(
     relion_exact_score_translation=False,
     projection_relion_texture_interp=False,
     projection_relion_acc_double_floorf_quirk=False,
-    projection_force_jax=False,
-    projection_mask_current_image_disk=True,
     relion_projector_half=None,
     relion_projector_r_max=None,
     image_corrections=None,
@@ -91,9 +89,7 @@ def _run_local_search_iteration(
     scale_correction_group_count=None,
     scale_correction_data_vs_prior=None,
     image_pre_shifts=None,
-    mstep_subtract_ctf_projection=False,
     mstep_relion_x_half=False,
-    return_half_volume_accumulators=False,
     score_with_masked_images=True,
     return_profile=False,
     disable_adjoint_y=False,
@@ -106,7 +102,6 @@ def _run_local_search_iteration(
     debug_pass_label=None,
     pass2_layout=None,
     return_best_pose_details=False,
-    normalization_log_z=None,
     normalization_log_evidence=None,
     translation_prior_centers=None,
     rotation_log_prior=None,
@@ -285,12 +280,8 @@ def _run_local_search_iteration(
             raise NotImplementedError("K-class local search does not yet emit local profile summaries")
         if disable_adjoint_y or disable_adjoint_ctf:
             raise NotImplementedError("K-class local search does not support adjoint ablation flags")
-        if normalization_log_z is not None:
-            raise NotImplementedError("K-class local search requires evidence-space normalization, not pass-2 log_z")
         if normalization_log_evidence is not None:
             raise NotImplementedError("K-class local search does not support external evidence normalization")
-        if projection_force_jax:
-            raise NotImplementedError("K-class local search does not yet plumb projection_force_jax")
         k_class_result = run_local_k_class_em(
             experiment_dataset,
             mean,
@@ -372,8 +363,6 @@ def _run_local_search_iteration(
             relion_exact_score_translation=relion_exact_score_translation,
             projection_relion_texture_interp=projection_relion_texture_interp,
             projection_relion_acc_double_floorf_quirk=projection_relion_acc_double_floorf_quirk,
-            projection_force_jax=projection_force_jax,
-            projection_mask_current_image_disk=projection_mask_current_image_disk,
             relion_projector_half=relion_projector_half,
             relion_projector_r_max=relion_projector_r_max,
             use_float64_scoring=use_float64_scoring,
@@ -391,9 +380,7 @@ def _run_local_search_iteration(
             scale_correction_group_count=scale_correction_group_count,
             scale_correction_data_vs_prior=scale_correction_data_vs_prior,
             image_pre_shifts=image_pre_shifts,
-            mstep_subtract_ctf_projection=mstep_subtract_ctf_projection,
             mstep_relion_x_half=mstep_relion_x_half,
-            return_half_volume_accumulators=return_half_volume_accumulators,
             return_profile=return_profile,
             disable_adjoint_y=disable_adjoint_y,
             disable_adjoint_ctf=disable_adjoint_ctf,
@@ -406,7 +393,6 @@ def _run_local_search_iteration(
             debug_iteration=debug_iteration,
             debug_pass_label=debug_pass_label,
             return_best_pose_details=return_best_pose_details,
-            normalization_log_z=normalization_log_z,
             normalization_log_evidence=normalization_log_evidence,
             translation_prior_centers=translation_prior_centers,
             return_reconstruction_sample_indices=return_reconstruction_sample_indices,
