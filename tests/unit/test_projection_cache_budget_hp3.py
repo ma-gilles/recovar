@@ -203,3 +203,35 @@ def test_texture_projector_fallback_is_reported_once_per_reason(monkeypatch, cap
     messages = [r.message for r in caplog.records if "texture projector unavailable" in r.message]
     assert len(messages) == 1, messages
     assert "complex128" in messages[0] and "want complex64" in messages[0]
+
+
+def test_pass2_projector_complex64_knob_is_default_off(monkeypatch):
+    """Narrowing the pass-2 projector changes projection arithmetic: opt-in."""
+    from recovar.em.sparse_pass2 import sparse_pass2_bucketed as bucketed
+
+    monkeypatch.delenv(bucketed._PASS2_PROJECTOR_COMPLEX64_ENV, raising=False)
+    assert bucketed._pass2_projector_complex64_enabled() is False
+    monkeypatch.setenv(bucketed._PASS2_PROJECTOR_COMPLEX64_ENV, "1")
+    assert bucketed._pass2_projector_complex64_enabled() is True
+    assert (
+        bucketed._PASS2_PROJECTOR_COMPLEX64_ENV
+        == "RECOVAR_SPARSE_PASS2_PROJECTOR_COMPLEX64"
+    )
+
+
+def test_pass2_projector_cast_unblocks_the_texture_projector(monkeypatch):
+    """complex128 is exactly what makes the texture path reject the slab."""
+    import jax.numpy as jnp
+
+    from recovar.em.helpers import projection
+
+    monkeypatch.setattr(projection, "_cuda_projection_available", lambda: True)
+    projection._TEXTURE_FALLBACK_REPORTED.clear()
+    slab = jnp.zeros((187, 187, 94), jnp.complex128)
+    assert projection._relion_projector_texture_enabled(slab, r_max=46, padding_factor=2) is False
+    assert (
+        projection._relion_projector_texture_enabled(
+            slab.astype(jnp.complex64), r_max=46, padding_factor=2
+        )
+        is True
+    )
