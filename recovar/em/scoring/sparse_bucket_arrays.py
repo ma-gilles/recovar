@@ -343,19 +343,6 @@ def _coalesce_tail_bucket_sizes(
     return assigned_sizes[inverse]
 
 
-def _compact_pair_counts_from_inputs(compact_inputs_by_class):
-    pair_counts_by_class = []
-    n_images = None
-    for compact_inputs in compact_inputs_by_class:
-        pair_counts = np.asarray(compact_inputs["pair_counts"], dtype=np.int64)
-        if n_images is None:
-            n_images = int(pair_counts.shape[0])
-        elif pair_counts.shape[0] != n_images:
-            raise ValueError("All classes must have the same image count for compact sparse pass-2")
-        pair_counts_by_class.append(pair_counts)
-    return tuple(pair_counts_by_class)
-
-
 def _compact_pair_fused_bucket_sizes(pair_counts_by_class, *, pair_block_size_for_quantization=5000):
     if not pair_counts_by_class:
         return np.zeros(0, dtype=np.int64), np.zeros(0, dtype=np.int64)

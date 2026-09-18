@@ -74,7 +74,6 @@ from recovar.em.scoring.sparse_bucket_arrays import (
     _build_compact_pair_bucket_arrays_from_per_image_inputs,
     _build_k_class_bucket_arrays,
     _coalesce_tail_bucket_sizes,
-    _compact_pair_counts_from_inputs,
     _compact_pair_image_mask_for_threshold,
     _prepare_per_image_compact_candidate_pairs,
     _prepare_per_image_pass2_inputs,
@@ -5239,7 +5238,7 @@ def test_compact_pair_plan_reports_late_iter_candidate_reduction(monkeypatch):
         for per_image_inputs in per_image_inputs_by_class
     ]
     compact_buckets = _bucket_sparse_k_class_compact_pair_counts(
-        _compact_pair_counts_from_inputs(compact_inputs_by_class),
+        tuple(inputs["pair_counts"] for inputs in compact_inputs_by_class),
         max_pair_candidates_per_microbatch=10**12,
         max_images_per_microbatch=1000,
     )
@@ -5294,12 +5293,12 @@ def test_compact_pair_bucketing_can_coalesce_high_pair_tail(monkeypatch):
     )
 
     baseline = _bucket_sparse_k_class_compact_pair_counts(
-        _compact_pair_counts_from_inputs(compact_inputs_by_class),
+        tuple(inputs["pair_counts"] for inputs in compact_inputs_by_class),
         max_pair_candidates_per_microbatch=10**12,
         max_images_per_microbatch=1000,
     )
     coalesced = _bucket_sparse_k_class_compact_pair_counts(
-        _compact_pair_counts_from_inputs(compact_inputs_by_class),
+        tuple(inputs["pair_counts"] for inputs in compact_inputs_by_class),
         max_pair_candidates_per_microbatch=10**12,
         max_images_per_microbatch=1000,
         tail_bucket_coalesce_max_images=8,
@@ -5348,12 +5347,12 @@ def test_compact_pair_tail_coalescing_keeps_executed_chunks_under_hypothesis_cap
     )
 
     baseline = _bucket_sparse_k_class_compact_pair_counts(
-        _compact_pair_counts_from_inputs(compact_inputs_by_class),
+        tuple(inputs["pair_counts"] for inputs in compact_inputs_by_class),
         max_pair_candidates_per_microbatch=max_hypotheses,
         max_images_per_microbatch=19,
     )
     coalesced = _bucket_sparse_k_class_compact_pair_counts(
-        _compact_pair_counts_from_inputs(compact_inputs_by_class),
+        tuple(inputs["pair_counts"] for inputs in compact_inputs_by_class),
         max_pair_candidates_per_microbatch=max_hypotheses,
         max_images_per_microbatch=19,
         tail_bucket_coalesce_max_images=19,
