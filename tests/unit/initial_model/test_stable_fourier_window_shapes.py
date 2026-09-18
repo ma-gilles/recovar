@@ -604,12 +604,12 @@ def test_packed_physical_spec_keeps_every_logical_stream_as_its_prefix():
             getattr(plan.logical_spec, f"{name}_indices_np"),
         )
     np.testing.assert_array_equal(
-        packed.score_projection_take_np[: plan.logical_score_pixels],
-        plan.logical_spec.score_projection_take_np,
+        np.asarray(packed.score_projection_take[: plan.logical_score_pixels]),
+        np.asarray(plan.logical_spec.score_projection_take),
     )
     np.testing.assert_array_equal(
-        packed.recon_projection_take_np[: plan.logical_reconstruction_pixels],
-        plan.logical_spec.recon_projection_take_np,
+        np.asarray(packed.recon_projection_take[: plan.logical_reconstruction_pixels]),
+        np.asarray(plan.logical_spec.recon_projection_take),
     )
 
 
