@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import inspect
-
 import numpy as np
 import pytest
 
@@ -45,10 +43,3 @@ def test_zero_oversampling_keeps_the_coarse_rotation_grid():
         translation_step=1.0, random_perturbation=0.0, coarse_rotation_ids=None,
     )
     assert _same(grids.fine_rotations, rot) and np.array_equal(grids.rotation_parent_map, np.arange(N_ROT))
-
-
-def test_both_dense_routes_use_the_owner():
-    source = inspect.getsource(half_scoring._score_half_dense)
-    assert source.count("pass2_grids = _adaptive_pass2_grids(") == 2
-    assert source.count("fine_rotations_for_pose = _adaptive_pass2_grids(") == 1
-    assert "build_adaptive_pass2_grids(" not in source

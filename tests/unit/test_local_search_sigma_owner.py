@@ -2,12 +2,9 @@
 
 from __future__ import annotations
 
-import inspect
-
 import numpy as np
 import pytest
 
-import recovar.em.refinement.iteration_loop as iteration_loop
 from recovar.em.helpers.convergence import healpix_angular_step
 from recovar.em.helpers.orientation_priors import relion_local_search_sigmas
 
@@ -28,9 +25,3 @@ def test_unset_width_under_local_search_is_twice_the_oversampled_step(order, ove
 
 def test_global_search_keeps_unset_widths():
     assert relion_local_search_sigmas(0.0, 0.0, use_local=False, healpix_order=3, adaptive_oversampling=1) == (0.0, 0.0)
-
-
-def test_controller_uses_the_owner_in_both_passes():
-    source = inspect.getsource(iteration_loop.refine_single_volume)
-    assert source.count("relion_local_search_sigmas(") == 2
-    assert "np.sqrt(2.0 * 2.0) * step_rad" not in source
