@@ -53,13 +53,59 @@ def test_masked_fine_diff2_is_optional_ffi_target():
     assert target not in dict(cuda_backproject._FFI_REGISTRATIONS)
 
 
-def test_fine_diff2_masked_knob_default_off(monkeypatch):
+def test_fine_diff2_masked_knob_defaults_on_and_is_disableable(monkeypatch):
+    """Default on after the matched hp3 pair (job 14082785); still switchable."""
     from recovar.em.sparse_pass2 import sparse_pass2_scoring as scoring
 
     monkeypatch.delenv(scoring._RELION_FINE_DIFF2_MASKED_ENV, raising=False)
-    assert scoring._fine_diff2_masked_enabled() is False
-    monkeypatch.setenv(scoring._RELION_FINE_DIFF2_MASKED_ENV, "1")
     assert scoring._fine_diff2_masked_enabled() is True
+    monkeypatch.setenv(scoring._RELION_FINE_DIFF2_MASKED_ENV, "0")
+    assert scoring._fine_diff2_masked_enabled() is False
+
+
+def test_masked_fine_diff2_falls_back_when_library_lacks_the_target(monkeypatch):
+    """A library without the optional symbol must not break the default path."""
+    import numpy as np
+
+    from recovar import cuda_backproject
+    from recovar.em.sparse_pass2 import sparse_pass2_scoring as scoring
+
+    monkeypatch.setattr(
+        cuda_backproject, "relion_fine_diff2_rectangular_masked_supported", lambda: False
+    )
+    called = {}
+
+    def _unmasked(*args, **kwargs):
+        called["unmasked"] = True
+        return jnp.zeros((args[0].shape[0], args[0].shape[1], args[1].shape[1]), jnp.float32)
+
+    def _masked(*args, **kwargs):  # pragma: no cover - must not be reached
+        raise AssertionError("masked target used although the library lacks it")
+
+    monkeypatch.setattr(cuda_backproject, "relion_fine_diff2_rectangular_f32", _unmasked)
+    monkeypatch.setattr(
+        cuda_backproject, "relion_fine_diff2_rectangular_masked_f32", _masked
+    )
+    rng = np.random.default_rng(5)
+    reference, shifted, weight, _initial, lookup = _operands(rng, 2, 3, 4, 17, 21)
+    scoring._relion_cuda_fine_diff2_sum(
+        jnp.asarray(reference)[:, :, None, :],
+        jnp.asarray(shifted)[:, None, :, :],
+        jnp.asarray(weight)[:, None, None, :],
+        jnp.asarray(lookup),
+        use_fused_ffi=True,
+        candidate_mask=jnp.asarray(rng.uniform(size=(2, 3, 4)) < 0.5),
+    )
+    assert called.get("unmasked") is True
+
+
+def test_masked_support_probe_reports_false_without_a_library(monkeypatch):
+    from recovar import cuda_backproject
+
+    monkeypatch.setattr(
+        cuda_backproject, "_ensure_ffi", lambda: (_ for _ in ()).throw(RuntimeError("no lib"))
+    )
+    assert cuda_backproject.relion_fine_diff2_rectangular_masked_supported() is False
 
 
 def test_fine_diff2_sum_jax_path_ignores_candidate_mask(monkeypatch):

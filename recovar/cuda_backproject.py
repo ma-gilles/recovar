@@ -4393,6 +4393,23 @@ def relion_fine_diff2_rectangular_f32(
     )(reference, shifted_image, weight, initial_diff2, full_to_compact)
 
 
+def relion_fine_diff2_rectangular_masked_supported() -> bool:
+    """Return whether the loaded library exports the masked fine diff2 target.
+
+    The masked kernel is an optional ABI, so a library built before it exists
+    stays loadable; callers fall back to the unmasked rectangular kernel.
+    """
+
+    try:
+        _ensure_ffi()
+        symbol_name = _OPTIONAL_FFI_REGISTRATIONS[
+            _TARGET_RELION_FINE_DIFF2_RECTANGULAR_MASKED_F32
+        ][0]
+        return getattr(_get_lib(), symbol_name, None) is not None
+    except Exception:
+        return False
+
+
 @jax.jit
 def relion_fine_diff2_rectangular_masked_f32(
     reference: jax.Array,

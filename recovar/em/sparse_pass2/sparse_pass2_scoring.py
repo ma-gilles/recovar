@@ -198,7 +198,7 @@ def _relion_cuda_fine_full_to_compact_lookup(image_shape, current_size, compact_
 
 
 _RELION_FINE_DIFF2_MASKED_ENV = "RECOVAR_RELION_FINE_DIFF2_MASKED"
-_DEFAULT_RELION_FINE_DIFF2_MASKED = False
+_DEFAULT_RELION_FINE_DIFF2_MASKED = True
 
 
 def _fine_diff2_masked_enabled() -> bool:
@@ -207,7 +207,11 @@ def _fine_diff2_masked_enabled() -> bool:
     RELION's fine pass evaluates only significant (orientation, translation)
     pairs; the rectangular K=1 scorer evaluates every cell of the padded bucket
     (all translations for every row), most of which the candidate mask then
-    discards.  Opt-in until the matched hp3 pair qualifies it.
+    discards.  At the matched hp3 regime only 5.7-7.6% of the cells are
+    admitted, and the matched pair (job 14082785) measured warm iteration 2 at
+    67.4/67.4 s masked off versus 65.2/64.6 s masked on, with every numerical
+    delta inside the same-source band, so this is on by default.  A library
+    without the optional target falls back to the unmasked kernel.
     """
 
     return parse_env_flag(
@@ -281,7 +285,11 @@ def _relion_cuda_fine_diff2_sum(
                     "fused rectangular fine diff2 received unsupported broadcast shapes: "
                     f"{reference.shape}, {shifted_image.shape}, {pixel_weight.shape}"
                 )
-            if candidate_mask is not None and real_dtype == jnp.float32:
+            if (
+                candidate_mask is not None
+                and real_dtype == jnp.float32
+                and cuda_backproject.relion_fine_diff2_rectangular_masked_supported()
+            ):
                 # RELION-style pair pruning: skip (row, translation) cells the
                 # candidate mask excludes.  Valid cells stay bitwise identical.
                 return cuda_backproject.relion_fine_diff2_rectangular_masked_f32(
