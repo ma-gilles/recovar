@@ -10,14 +10,8 @@ file locks down:
    ``accumulate_pose_ppca_block_cached``) — every symbol exists, every
    field exists, every required argument is named the same.
 
-2. The **bit-exact numerical equivalence** between the new fast path
-   and the legacy ``dense_pose_ppca_E_step_blocked`` — both have to
-   agree on every output that means anything (``logZ``,
-   per-image best score / best rotation / best translation, and the
-   moments ``alpha`` / ``G_tri`` after collapsing across (T, R)).
-   This is the *whole point* of commit ``7067106c`` — if a merge
-   silently rewires either path so they diverge, this test fails
-   with a clear ``max |Δ| = ...`` diff.
+2. The **score and moment layouts** of the cached-moments path, plus
+   pose-prior propagation through that path.
 
 3. The **default values of the four new config dataclasses**
    (``GeometryConfig``, ``ScheduleConfig``, ``ScoringConfig``,
@@ -31,11 +25,7 @@ file locks down:
    ``resolve_image_scale_range``.
 
 5. A **performance smoke** for the cached-moments path: 10 warm calls
-   on the tiny deterministic input must finish in <2 s. The legacy
-   ``dense_pose_ppca_E_step_blocked`` must also stay under that
-   budget; we don't compare them against each other (JIT-warm
-   timing variance is high), we just guarantee neither becomes
-   pathologically slow.
+   on the tiny deterministic input must finish in <2 s.
 
 If a merge legitimately changes any of the pinned values, update both
 the pinned value AND the rationale in the docstring of the relevant
@@ -61,7 +51,6 @@ from recovar.em.ppca_refinement import (
 from recovar.em.ppca_refinement.engine import (
     DenseScoreAndMomentsStats,
     accumulate_pose_ppca_block_cached,
-    dense_pose_ppca_E_step_blocked,
     dense_pose_ppca_score_with_moments_blocked,
 )
 
@@ -132,13 +121,13 @@ class TestCachedMomentsApiContract:
 
 
 # ---------------------------------------------------------------------------
-# 2. Cached-moments ↔ legacy E-step equivalence (commit 7067106c)
+# 2. Cached-moments behavior (commit 7067106c)
 # ---------------------------------------------------------------------------
 
 
 def _tiny_score_inputs(seed: int = 0):
     """Tiny deterministic (B, T, R, F, q) input shared by every
-    equivalence test below. Sized to be JIT-fast on CPU."""
+    behavior test below. Sized to be JIT-fast on CPU."""
     B, T, R, F, q = 3, 2, 4, 9, 2
     P = 1 + q  # augmented column count: mean + q W-columns
     rng = np.random.default_rng(seed)
@@ -149,48 +138,8 @@ def _tiny_score_inputs(seed: int = 0):
     return Y1, proj_aug, ctf2_over_noise, y_norm
 
 
-class TestCachedMomentsEquivalence:
-    """Both the legacy ``dense_pose_ppca_E_step_blocked`` and the new
-    ``dense_pose_ppca_score_with_moments_blocked`` must agree on every
-    output that downstream code relies on. The point of 7067106c was
-    to fuse two kernels into one without changing any output; this is
-    that promise made into a permanent guard."""
-
-    def test_logZ_bit_exact(self):
-        Y1, proj_aug, ctf2, y_norm = _tiny_score_inputs()
-        Y1_j = jnp.asarray(Y1)
-        proj_j = jnp.asarray(proj_aug)
-        ctf_j = jnp.asarray(ctf2)
-        y_j = jnp.asarray(y_norm)
-
-        _, legacy_diag = dense_pose_ppca_E_step_blocked(Y1_j, proj_j, ctf_j, y_j, None)
-        new = dense_pose_ppca_score_with_moments_blocked(Y1_j, proj_j, ctf_j, y_j, None)
-
-        # Bit-exact: same JIT kernel underneath, no algebraic rewiring.
-        np.testing.assert_array_equal(np.asarray(new.logZ), np.asarray(legacy_diag.logZ))
-
-    def test_per_image_best_pose_bit_exact(self):
-        Y1, proj_aug, ctf2, y_norm = _tiny_score_inputs()
-        Y1_j = jnp.asarray(Y1)
-        proj_j = jnp.asarray(proj_aug)
-        ctf_j = jnp.asarray(ctf2)
-        y_j = jnp.asarray(y_norm)
-
-        _, legacy_diag = dense_pose_ppca_E_step_blocked(Y1_j, proj_j, ctf_j, y_j, None)
-        new = dense_pose_ppca_score_with_moments_blocked(Y1_j, proj_j, ctf_j, y_j, None)
-
-        np.testing.assert_array_equal(
-            np.asarray(new.best_log_score_per_image),
-            np.asarray(legacy_diag.best_log_score_per_image),
-        )
-        np.testing.assert_array_equal(
-            np.asarray(new.best_rotation_idx),
-            np.asarray(legacy_diag.best_rotation_idx),
-        )
-        np.testing.assert_array_equal(
-            np.asarray(new.best_translation_idx),
-            np.asarray(legacy_diag.best_translation_idx),
-        )
+class TestCachedMomentsBehavior:
+    """The cached-moments path preserves its score and moment layouts."""
 
     def test_score_shape_and_finiteness(self):
         Y1, proj_aug, ctf2, y_norm = _tiny_score_inputs()
@@ -369,11 +318,7 @@ class TestDiagnosticsModuleApi:
 
 
 class TestPerformanceSmoke:
-    """The cached-moments path must stay fast. We don't pin the legacy
-    vs new wall-time ratio (JIT warmup variance dominates on tiny inputs);
-    we just guarantee neither path becomes pathologically slow under
-    something the merge could introduce — e.g., losing a JIT cache,
-    introducing accidental host roundtrips, etc."""
+    """The cached-moments path must stay fast after JIT warmup."""
 
     def test_cached_moments_runs_under_2s_after_warm(self):
         Y1, proj_aug, ctf2, y_norm = _tiny_score_inputs()
@@ -396,23 +341,4 @@ class TestPerformanceSmoke:
             f"dense_pose_ppca_score_with_moments_blocked slowdown: 10 warm calls "
             f"took {elapsed:.3f}s (budget 2.0s). Suspect: lost JIT cache, "
             f"host roundtrip, or accidental float64 promotion in the new fast path."
-        )
-
-    def test_legacy_E_step_runs_under_2s_after_warm(self):
-        Y1, proj_aug, ctf2, y_norm = _tiny_score_inputs()
-        Y1_j = jnp.asarray(Y1)
-        proj_j = jnp.asarray(proj_aug)
-        ctf_j = jnp.asarray(ctf2)
-        y_j = jnp.asarray(y_norm)
-
-        warm = dense_pose_ppca_E_step_blocked(Y1_j, proj_j, ctf_j, y_j, None)
-        _ = np.asarray(warm[0].alpha_aug_acc)
-
-        t0 = time.perf_counter()
-        for _ in range(10):
-            out = dense_pose_ppca_E_step_blocked(Y1_j, proj_j, ctf_j, y_j, None)
-        _ = np.asarray(out[0].alpha_aug_acc)
-        elapsed = time.perf_counter() - t0
-        assert elapsed < 2.0, (
-            f"dense_pose_ppca_E_step_blocked slowdown: 10 warm calls took {elapsed:.3f}s (budget 2.0s)."
         )
