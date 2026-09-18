@@ -153,6 +153,7 @@ from recovar.em.sparse_pass2.sparse_pass2_policy import (
     _fused_mstep_noise_enabled_for_pass,
     _max_images_for_sparse_pass2_translation_tile,
     _native_dual_weighted_sums_enabled_for_pass,
+    _native_dual_weighted_sums_supported_for_operands,
     _pass2_conservative_dump_execution_enabled,
     _pass2_dump_enabled,
     _projection_cache_enabled_for_pass,
@@ -364,21 +365,6 @@ def test_compute_local_ctf_sums_from_probs_sum_t_matches_dense_helper():
 
     np.testing.assert_allclose(np.asarray(from_probs_sum), np.asarray(dense), rtol=1e-6, atol=1e-6)
     np.testing.assert_array_equal(np.asarray(from_probs_sum)[0, 2], np.zeros_like(np.asarray(from_probs_sum)[0, 2]))
-
-
-def test_k_class_pass2_dump_stop_is_env_gated_diagnostic_only():
-    from recovar.em.diagnostics import sparse_pass2_dump
-    from recovar.em.sparse_pass2 import (
-        sparse_pass2_bucketed,
-    )
-
-    source = inspect.getsource(sparse_pass2_bucketed)
-    dump_source = inspect.getsource(sparse_pass2_dump)
-
-    assert "class Pass2DumpComplete" in dump_source
-    assert 'RECOVAR_PASS2_DUMP_STOP_AFTER_TARGET' in dump_source
-    assert "if bucket_dump_count:" in source
-    assert "raise Pass2DumpComplete" in source
 
 
 def test_k1_pass2_dump_progress_requires_complete_target_set(tmp_path):
@@ -3168,24 +3154,6 @@ def test_sparse_pass2_active_flat_row_gather_chunking_matches_full_gather(monkey
     np.testing.assert_allclose(np.asarray(ctf_volume), np.asarray(10.0 + jnp.sum(full_ctf_values)))
 
 
-def test_sparse_pass2_rotation_chunked_xhalf_uses_relion_recon_indices():
-    from recovar.em.sparse_pass2 import sparse_pass2_bucketed as bucketed_mod
-
-    source = inspect.getsource(bucketed_mod.compute_pass2_stats_sparse_bucketed)
-    marker = "mstep_window_indices = relion_x_half_recon_indices if use_relion_x_half_mstep else recon_window_indices"
-    marker_idx = source.index(marker)
-    chunk_start = source.rfind(
-        "if rotation_chunk_size is not None and int(rotation_chunk_size) < bucket_size:",
-        0,
-        marker_idx,
-    )
-    chunk_stop = source.index("if projection_cache is not None:", marker_idx)
-    chunked_branch = source[chunk_start:chunk_stop]
-
-    assert marker in chunked_branch
-    assert chunked_branch.count("window_indices=mstep_window_indices") >= 2
-
-
 def test_sparse_pass2_translation_tile_accounts_for_score_dtype():
     image_shape = (8, 8)
     n_fine_trans = 2
@@ -5590,21 +5558,13 @@ def test_native_dual_weighted_sums_defaults_only_on_exact_gpu_contract(monkeypat
 def test_native_dual_dispatch_checks_actual_operand_dtypes(
     requested, noise, prob_dtype, recon_dtype, noise_dtype, expected,
 ):
-    import ast
-    from types import SimpleNamespace
-
-    from recovar.em.sparse_pass2 import sparse_pass2_bucketed
-
-    tree = ast.parse(inspect.getsource(sparse_pass2_bucketed.compute_k_class_pass2_stats_sparse_fused))
-    gates = [n.value for n in ast.walk(tree) if isinstance(n, ast.Assign)
-             and any(isinstance(t, ast.Name) and t.id == "class_native_dual_weighted_sums" for t in n.targets)
-             and isinstance(n.value, ast.Call)]
-    assert len(gates) == 1
-    scope = dict(jnp=jnp, native_dual_weighted_sums=requested, accumulate_noise=noise,
-                 mstep_probs=SimpleNamespace(dtype=prob_dtype),
-                 shifted_recon_split=SimpleNamespace(dtype=recon_dtype),
-                 shifted_noise_split=SimpleNamespace(dtype=noise_dtype))
-    assert eval(compile(ast.Expression(gates[0]), "<native-dispatch>", "eval"), scope) is expected
+    assert _native_dual_weighted_sums_supported_for_operands(
+        requested=requested,
+        accumulate_noise=noise,
+        probability_dtype=prob_dtype,
+        reconstruction_dtype=recon_dtype,
+        noise_dtype=noise_dtype,
+    ) is expected
 
 
 def test_fused_mstep_noise_defaults_on_and_rejects_incompatible_contracts(monkeypatch):

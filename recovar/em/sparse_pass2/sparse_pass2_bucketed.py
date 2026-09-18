@@ -203,6 +203,7 @@ from recovar.em.sparse_pass2.sparse_pass2_policy import (
     _fused_mstep_noise_enabled_for_pass,
     _max_images_for_sparse_pass2_translation_tile,
     _native_dual_weighted_sums_enabled_for_pass,
+    _native_dual_weighted_sums_supported_for_operands,
     _pass2_conservative_dump_execution_enabled,
     _pass2_dump_enabled,
     _projection_cache_enabled_for_pass,
@@ -6890,14 +6891,14 @@ def compute_k_class_pass2_stats_sparse_fused(
                 else:
                     reconstruction_probs = None
                     mstep_probs = pair_probs
-                # The native primitive accepts only F32 probabilities and C64 images.
-                # Exact Gaussian scoring can still produce an F64 posterior.
-                class_native_dual_weighted_sums = bool(
-                    native_dual_weighted_sums
-                    and mstep_probs.dtype == jnp.float32
-                    and shifted_recon_split.dtype == jnp.complex64
-                    and accumulate_noise
-                    and shifted_noise_split.dtype == jnp.complex64
+                class_native_dual_weighted_sums = (
+                    _native_dual_weighted_sums_supported_for_operands(
+                        requested=native_dual_weighted_sums,
+                        accumulate_noise=accumulate_noise,
+                        probability_dtype=mstep_probs.dtype,
+                        reconstruction_dtype=shifted_recon_split.dtype,
+                        noise_dtype=shifted_noise_split.dtype,
+                    )
                 )
                 pass2_diagnostics._maybe_dump_k_class_pass2_bucket(
                     experiment_dataset=experiment_dataset,
