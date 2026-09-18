@@ -723,14 +723,10 @@ def _write_coarse_gaussian_gemm_diagnostic(
     np.savez_compressed(output_path, **payload)
 
 
-def _significance_debug_dump_enabled() -> bool:
-    return bool(os.environ.get("RECOVAR_SIGNIFICANCE_DUMP_DIR"))
-
-
 def _significance_debug_dump_matches(*, current_size, debug_iteration) -> bool:
     """Return whether significance capture applies at this scoring boundary."""
 
-    if not _significance_debug_dump_enabled():
+    if not os.environ.get("RECOVAR_SIGNIFICANCE_DUMP_DIR"):
         return False
     if not parse_env_int_set("RECOVAR_SIGNIFICANCE_DUMP_ORIGINAL_INDICES"):
         return False

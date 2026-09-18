@@ -98,10 +98,6 @@ def timing_dir() -> Path | None:
     return p
 
 
-def reset_iteration() -> None:
-    _E_STEP.clear()
-
-
 def collect_e_step(
     *,
     half: int,
@@ -324,7 +320,7 @@ def dump_iteration(
 
     relion_iter = int(init_relion_iteration) + int(iteration) + 1
     np.savez_compressed(out / f"iter_{relion_iter:03d}.npz", **payload)
-    reset_iteration()
+    _E_STEP.clear()
     reset_iteration_timer(iteration)
 
 
