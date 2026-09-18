@@ -267,11 +267,6 @@ projects one rotation block through RELION's Projector onto the clamped `2 r_max
 requested) square with the scorer rotations transposed at the handoff; the centered-row
 projector reorders its rows and the indexed projector gathers its pixels from that block
 ([`test_projector_fftw_block_owner.py`](../../tests/unit/test_projector_fftw_block_owner.py)).
-In [`em_engine.run_em`](../../recovar/em/dense/em_engine.py) the per-batch scoring
-operands (windowed shifted images and weights, batch norm, half weights, batch and
-translation counts, shapes, score mode and precision policy) are bound once per batch as
-`score_block_kwargs`; the pass-1 and pass-2 rotation-block scorers add only their block's
-projections ([`test_em_engine_score_block_kwargs.py`](../../tests/unit/test_em_engine_score_block_kwargs.py)).
 [`pass2_diagnostics._optional_operand_row_fields`](../../recovar/em/diagnostics/pass2.py)
 captures one image's optional RELION score operands for the K=1 pass-2 dump, recording
 operands the caller did not supply as absent (empty arrays of the capture dtype, or NaN for
