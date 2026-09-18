@@ -16,6 +16,7 @@ import numpy as np
 
 from recovar.em.classification.k_class import run_local_k_class_em
 from recovar.em.helpers.batch_planning import _estimate_relion_em_batch_sizes
+from recovar.em.helpers.env_flags import parse_env_strict_flag
 from recovar.em.helpers.types import LocalEMResult, NoiseStats, RelionStats
 from recovar.em.local.local_em_engine import run_local_em_exact
 from recovar.em.local.local_layout import _local_search_engine_rotation_block_size, build_local_hypothesis_layout
@@ -27,6 +28,72 @@ logger = logging.getLogger(__name__)
 # Mirror iteration_loop's constant locally so the helper has a stable home.
 EXACT_LOCAL_PRECOMPUTE_FINE_GRID_MAX_ROTATIONS = 3_000_000
 EXACT_LOCAL_XHALF_BATCH_GUARD_ENV = "RECOVAR_LOCAL_XHALF_BATCH_GUARD"
+
+# Opt-in shape-stable local-engine modes for the auto-refine local-search route.
+# The InitialModel K=1 driver already runs these modes; auto-refine's local
+# iterations recompile the per-bucket big-JIT programs at every new local shape.
+# The master switch is off by default: the flag set selects RELION's exact
+# operand/fine-diff2 topology, which is a numerical change, not a pure layout
+# change. Per-flag switches exist so a single rejected mode can be dropped
+# without editing this module.
+LOCAL_SEARCH_SHAPE_STABLE_ENV = "RECOVAR_LOCAL_SEARCH_SHAPE_STABLE"
+_LOCAL_SEARCH_STABLE_FLAT_ROWS_ENV = "RECOVAR_LOCAL_SEARCH_STABLE_FLAT_ROWS"
+_LOCAL_SEARCH_STABLE_ROW_CAPACITY_ENV = "RECOVAR_LOCAL_SEARCH_STABLE_ROW_CAPACITY"
+_LOCAL_SEARCH_STABLE_PACKED_PROJECTION_ENV = "RECOVAR_LOCAL_SEARCH_STABLE_PACKED_PROJECTION"
+_LOCAL_SEARCH_STABLE_UNIFY_BUCKETS_ENV = "RECOVAR_LOCAL_SEARCH_STABLE_UNIFY_BUCKET_SIZES"
+_LOCAL_SEARCH_STABLE_WAVG_CUDA_ENV = "RECOVAR_LOCAL_SEARCH_STABLE_WAVG_CUDA"
+
+
+def local_search_shape_stable_enabled() -> bool:
+    """Return whether the opt-in shape-stable local-search modes are requested."""
+    return parse_env_strict_flag(LOCAL_SEARCH_SHAPE_STABLE_ENV, default=False)
+
+
+def local_search_shape_stable_engine_flags(
+    *,
+    score_only: bool,
+    relion_exact_score_translation: bool,
+) -> dict:
+    """Return the shape-stable ``run_local_em_exact`` modes, or ``{}`` when off.
+
+    Both local-search call sites (pass-1 score-only parent probe and pass-2
+    fine scoring plus M-step) receive the same modes, so one iteration keeps
+    one set of compiled bucket programs. ``relion_wavg_sequential_cuda`` is a
+    reconstruction-side reducer and is requested for the pass-2 call only;
+    ``score_only`` calls leave the engine's existing policy untouched.
+
+    ``preserve_bpref_particle_order`` and ``stable_fourier_window_shapes`` are
+    deliberately absent: both require the InitialModel residual M-step route,
+    which the auto-refine local M-step does not take.
+    """
+    if not local_search_shape_stable_enabled():
+        return {}
+    if not relion_exact_score_translation:
+        raise ValueError(
+            f"{LOCAL_SEARCH_SHAPE_STABLE_ENV}=1 requires exact RELION score translation; "
+            "the local-search caller disables it under float64 scoring or with the "
+            "exact fine Gaussian off"
+        )
+    flat_rows = parse_env_strict_flag(_LOCAL_SEARCH_STABLE_FLAT_ROWS_ENV, default=True)
+    flags = {
+        "relion_exact_bpref_operands": True,
+        "relion_exact_fine_diff2": True,
+        "_flat_local_rows_enabled": flat_rows,
+        "_stable_flat_row_capacity_enabled": flat_rows
+        and parse_env_strict_flag(_LOCAL_SEARCH_STABLE_ROW_CAPACITY_ENV, default=True),
+        "_packed_local_projection_enabled": flat_rows
+        and parse_env_strict_flag(_LOCAL_SEARCH_STABLE_PACKED_PROJECTION_ENV, default=True),
+        # Local supports are near-uniform, so one run-global bucket size costs
+        # little padding here, unlike the heavy-tailed global-search supports.
+        "unify_local_bucket_sizes": parse_env_strict_flag(
+            _LOCAL_SEARCH_STABLE_UNIFY_BUCKETS_ENV, default=True
+        ),
+    }
+    if not score_only:
+        flags["relion_wavg_sequential_cuda"] = parse_env_strict_flag(
+            _LOCAL_SEARCH_STABLE_WAVG_CUDA_ENV, default=True
+        )
+    return flags
 
 
 def _precompute_exact_local_fine_grid_enabled(healpix_order: int) -> bool:
@@ -280,6 +347,11 @@ def _run_local_search_iteration(
     rotation_block_size = local_batch_plan.rotation_block_size
 
     if class_log_priors is not None:
+        if local_search_shape_stable_enabled():
+            raise NotImplementedError(
+                f"{LOCAL_SEARCH_SHAPE_STABLE_ENV} selects K=1-only exact-local modes; "
+                "K-class local search does not accept them"
+            )
         if return_reconstruction_sample_indices:
             raise NotImplementedError("K-class local search does not return reconstruction sample indices")
         if return_significant_counts:
@@ -360,6 +432,17 @@ def _run_local_search_iteration(
         )
     else:
         class_details = None
+        shape_stable_flags = local_search_shape_stable_engine_flags(
+            score_only=bool(score_only),
+            relion_exact_score_translation=bool(relion_exact_score_translation),
+        )
+        if shape_stable_flags:
+            logger.info(
+                "Local search shape-stable engine modes (%s=1, pass=%s): %s",
+                LOCAL_SEARCH_SHAPE_STABLE_ENV,
+                "score_only" if score_only else "full",
+                {key.lstrip("_"): value for key, value in shape_stable_flags.items()},
+            )
         engine_outputs = run_local_em_exact(
             experiment_dataset,
             mean,
@@ -420,6 +503,7 @@ def _run_local_search_iteration(
             stats_use_reconstruction_probs=stats_use_reconstruction_probs,
             score_only=score_only,
             source_faithful_spectrum_norm=source_faithful_spectrum_norm,
+            **shape_stable_flags,
         )
 
     if class_details is None:
