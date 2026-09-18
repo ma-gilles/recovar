@@ -42,7 +42,8 @@ from recovar.em.ppca_refinement.pose_selection import (
 )
 from recovar.em.ppca_refinement.postprocess import PostprocessConfig, postprocess_ppca_half_volumes
 from recovar.em.ppca_refinement.state import PoseMarginalPPCAEMState
-from recovar.ppca import AugmentedPPCAStats, augmented_ppca_mstep_objective, solve_augmented_ppca_mstep
+from recovar.ppca.augmented_mstep import augmented_ppca_mstep_objective, solve_augmented_ppca_mstep
+from recovar.ppca.pose_accumulators import AugmentedPPCAStats
 from recovar.ppca.pose_marginal import compute_ppca_pose_scores_and_moments_no_contrast
 from recovar.ppca.triangular import _tri_size
 from recovar.reconstruction import noise as noise_utils
