@@ -235,3 +235,16 @@ def test_pass2_projector_cast_unblocks_the_texture_projector(monkeypatch):
         )
         is True
     )
+
+
+def test_projector_build_log_reports_the_slab_dtype():
+    """The slab dtype decides texture versus JAX-fallback projection; log it."""
+    from pathlib import Path
+
+    source = Path("recovar/em/refinement/iteration_loop.py").read_text()
+    anchor = 'built exact Projector::data for scoring at current_size=%s r_max=%s '
+    assert anchor in source
+    start = source.index(anchor)
+    call = source[start : start + 600]
+    assert '"dtype=%s in %.2fs"' in call
+    assert 'getattr(relion_projector_half_by_half[0], "dtype", None)' in call
