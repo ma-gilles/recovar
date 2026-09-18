@@ -88,7 +88,7 @@ switch from single-set to halfset).
 | `local_dataset.py` | Dataset-facing exact-local-flavor iteration (`run_local_ppca_fused_em_iteration`) + halfset wrapper + the per-image bucket iterator. |
 | `refinement_loop.py` | `run_dense_ppca_refinement_loop` — the maintained dense multi-iteration driver and shared resolution gate. |
 | `fixture_validation.py` | Test fixtures shared with `tests/unit/ppca_refinement/`. |
-| `highres_refinement.py` | Adaptive halfset refinement and top-p local hypothesis layouts used by the dense-to-local workflow. |
+| `highres_refinement.py` | Top-p local hypothesis layout construction used by the dense-to-local workflow. |
 | `pose_selection.py` | Top-p pose diagnostics: `TopPoseSelection`, pose-id packing, distinct top-pose selection, per-block top-p scores. |
 
 ---
