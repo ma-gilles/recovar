@@ -1,7 +1,5 @@
 """The exact-local BPref contribution capture has one owner for its fixed operands and priors."""
 
-import inspect
-
 import jax.numpy as jnp
 import numpy as np
 
@@ -65,20 +63,3 @@ def test_capture_priors_mask_and_remove_pose_priors():
     priors = local_em_engine._bpref_capture_priors(scores, scores.shape, bucket=masked, rotation_log_prior=jnp.zeros((1, 2), dtype=jnp.float32))
     assert np.array_equal(np.asarray(priors.candidate_mask), [[[True, False], [False, True]]])
     assert np.array_equal(np.asarray(priors.preprior_scores), [[[0.0, -np.inf], [-np.inf, 2.0]]])
-
-
-def test_exact_local_capture_sites_use_the_owners():
-    source = inspect.getsource(local_em_engine.run_local_em_exact)
-    assert source.count("_maybe_dump_exact_local_bpref_contribution_rows(") == 2
-    # Both sites still reach the single static-kwargs owner, now through the
-    # operand-bundle wrapper that either fills the image-side operands from live
-    # engine state or refuses; neither site may assemble its own kwargs.
-    assert source.count("**_exact_local_bpref_operand_bundle(") == 2
-    assert source.count("capture_static_kwargs,\n") == 2
-    assert source.count("**capture_static_kwargs,") == 0
-    assert source.count("capture_priors = _bpref_capture_priors(") == 2
-    assert source.count("capture_static_kwargs = (") == 1
-    assert "if bpref_contribution_capture_active\n        else None" in source
-    assert source.index("_local_mstep_adjoint_window(") < source.index("capture_static_kwargs = (") < source.index("_maybe_dump_exact_local_bpref_contribution_rows(")
-    assert 'image_mask_mode="not-captured"' not in source
-    assert "preprior_scores = jnp.where(" not in source

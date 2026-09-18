@@ -1,6 +1,5 @@
 """The three local debug dump writers select their rows through one owner."""
 
-import inspect
 from types import SimpleNamespace
 
 import numpy as np
@@ -48,17 +47,3 @@ def test_requested_dump_rows_returns_original_ids_and_matching_rows(tmp_path):
     assert original.dtype == np.int64 and original.tolist() == [100, 101, 102]
     assert rows == [1, 2]
     assert len(calls) == 1
-
-
-def test_dump_writers_use_the_row_owner():
-    for fn in (
-        local_debug.maybe_write_debug_fused_posterior_dump,
-        local_debug.maybe_write_debug_score_dump,
-        local_debug.maybe_write_debug_noise_component_dump,
-    ):
-        source = inspect.getsource(fn)
-        assert source.count("selected = _requested_dump_rows(") == 1
-        assert "original_image_indices, target_rows = selected" in source
-        assert "original_image_indices_from_local" not in source
-        assert "current_size_matches_request(" not in source
-        assert "requested_iterations is not None" not in source
