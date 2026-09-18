@@ -663,8 +663,6 @@ _TARGET_RELION_CUB_SORT_SCAN_BATCHED_F32 = "cuda_relion_cub_sort_scan_batched_f3
 _TARGET_RELION_CUB_POSITIVE_SORT_SCAN_F32 = (
     "cuda_relion_cub_positive_sort_scan_f32"
 )
-_TARGET_RELION_WAVG_ROTATION_ATOMIC_F32 = "cuda_relion_wavg_rotation_atomic_f32"
-_TARGET_RELION_WAVG_ROTATION_ATOMIC_ADD_F32 = "cuda_relion_wavg_rotation_atomic_add_f32"
 _TARGET_RELION_WAVG_ROTATION_ATOMIC_TRIPLET_ADD_F32 = (
     "cuda_relion_wavg_rotation_atomic_triplet_add_f32"
 )
@@ -844,14 +842,6 @@ _FFI_REGISTRATIONS: tuple[tuple[str, str], ...] = (
     (
         _TARGET_RELION_CUB_POSITIVE_SORT_SCAN_F32,
         "RelionCubPositiveSortScanF32",
-    ),
-    (
-        _TARGET_RELION_WAVG_ROTATION_ATOMIC_F32,
-        "RelionWavgRotationAtomicF32",
-    ),
-    (
-        _TARGET_RELION_WAVG_ROTATION_ATOMIC_ADD_F32,
-        "RelionWavgRotationAtomicAddF32",
     ),
     (
         _TARGET_RELION_WAVG_ROTATION_ATOMIC_TRIPLET_ADD_F32,
@@ -6300,54 +6290,6 @@ def project(
         max_r,
         relion_texture_interp,
     )
-
-
-@jax.jit
-def relion_wavg_rotation_atomic_f32(terms: jax.Array) -> jax.Array:
-    """Reduce ``[batch, rotation, pixel]`` terms with RELION Wavg atomics."""
-
-    _ensure_ffi()
-    terms = jnp.asarray(terms)
-    if terms.dtype != jnp.float32 or terms.ndim != 3:
-        raise ValueError(
-            "relion_wavg_rotation_atomic_f32 expects a float32 [batch, rotation, pixel] array"
-        )
-    output_type = jax.ShapeDtypeStruct((terms.shape[0], terms.shape[2]), jnp.float32)
-    return jax.ffi.ffi_call(
-        _TARGET_RELION_WAVG_ROTATION_ATOMIC_F32,
-        output_type,
-        vmap_method="sequential",
-    )(terms)
-
-
-@jax.jit
-def relion_wavg_rotation_atomic_add_f32(
-    terms: jax.Array,
-    accumulator: jax.Array,
-) -> jax.Array:
-    """Atomically add ``[batch, rotation, pixel]`` terms into ``[batch, pixel]``."""
-
-    _ensure_ffi()
-    terms = jnp.asarray(terms)
-    accumulator = jnp.asarray(accumulator)
-    if terms.dtype != jnp.float32 or terms.ndim != 3:
-        raise ValueError(
-            "relion_wavg_rotation_atomic_add_f32 expects float32 [batch, rotation, pixel] terms"
-        )
-    if accumulator.dtype != jnp.float32 or accumulator.shape != (
-        terms.shape[0],
-        terms.shape[2],
-    ):
-        raise ValueError(
-            "relion_wavg_rotation_atomic_add_f32 expects a matching float32 [batch, pixel] accumulator"
-        )
-    output_type = jax.ShapeDtypeStruct(accumulator.shape, jnp.float32)
-    return jax.ffi.ffi_call(
-        _TARGET_RELION_WAVG_ROTATION_ATOMIC_ADD_F32,
-        output_type,
-        input_output_aliases={1: 0},
-        vmap_method="sequential",
-    )(terms, accumulator)
 
 
 @jax.jit
