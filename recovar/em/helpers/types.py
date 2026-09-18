@@ -199,8 +199,6 @@ class EMProfileStats(NamedTuple):
     n_images: int
     n_trans: int
     n_rot: int
-    n_rot_padded: int
-    n_blocks: int
     n_windowed: int
     use_window: bool
     sparse_pass2_total_blocks: int

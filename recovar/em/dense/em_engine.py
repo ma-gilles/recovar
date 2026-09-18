@@ -1382,8 +1382,8 @@ def run_em(
             score_mode=relion_firstiter_score_mode,
             precision_policy=precision_policy,
         )
-        batch_score_constraint_blocks = (
-            lambda r0, r1, start, end, batch_count, _rows=batch_rows_np: _dense_score_constraint_blocks(
+        def batch_score_constraint_blocks(r0, r1, start, end, batch_count, _rows=batch_rows_np):
+            return _dense_score_constraint_blocks(
                 r0,
                 r1,
                 start,
@@ -1391,7 +1391,7 @@ def run_em(
                 batch_count,
                 rows=_rows,
             )
-        )
+
         dense_big_jit_runner = _DenseBigJitBatchRunner(
             shifted_score_half=shifted_score_half,
             batch_norm=batch_norm,
@@ -2161,8 +2161,6 @@ def run_em(
             n_images=int(n_images),
             n_trans=int(n_trans),
             n_rot=int(n_rot),
-            n_rot_padded=int(n_rot_padded),
-            n_blocks=int(n_blocks),
             n_windowed=int(n_windowed),
             use_window=bool(use_window),
             **sparse_profile.profile_kwargs(),
