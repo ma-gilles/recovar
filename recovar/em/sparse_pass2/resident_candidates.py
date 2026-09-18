@@ -51,6 +51,7 @@ __all__ = [
     "CapacityChunk",
     "ResidentCandidateTables",
     "build_resident_candidate_tables",
+    "expand_chunk_mask_jnp",
     "expand_mask_jnp",
     "expand_mask_rows",
     "materialize_chunk",
@@ -364,6 +365,46 @@ def expand_mask_jnp(tables: ResidentCandidateTables, image: int, fine_translatio
     row_parent = jnp.asarray(tables.row_parent_local[start:stop], dtype=jnp.int32)
     row_bits = bits[row_parent]
     return (((row_bits[:, None] >> fine_translation_parent[None, :]) & jnp.uint32(1)) != 0)
+
+
+def expand_chunk_mask_jnp(row_mask_bits, row_mask_mode, fine_translation_parent):
+    """Dense candidate mask of one padded chunk, from its per-row mask fields.
+
+    ``jax.numpy`` twin of :func:`expand_mask_rows` evaluated for a whole
+    :func:`materialize_chunk` output at once, so a jitted device program can
+    rebuild the ``bool[row_capacity, n_fine_trans]`` mask without any host
+    array. Inputs are the chunk fields ``row_mask_bits`` (uint32
+    ``[row_capacity]``) and ``row_mask_mode`` (int8 ``[row_capacity]``), plus
+    the iteration-global ``fine_translation_parent`` (int32
+    ``[n_fine_trans]``).
+
+    Mask modes follow the module vocabulary: ``0`` accepts every translation,
+    ``1`` tests bit ``fine_translation_parent[t]`` of that row's bitset and
+    ``2`` rejects every translation. Padded rows carry mode ``2``, so they are
+    all-false whatever their other fields hold.
+    """
+
+    import jax.numpy as jnp
+
+    row_mask_bits = jnp.asarray(row_mask_bits, dtype=jnp.uint32)
+    row_mask_mode = jnp.asarray(row_mask_mode, dtype=jnp.int8)
+    fine_translation_parent = jnp.asarray(fine_translation_parent, dtype=jnp.uint32)
+    if row_mask_bits.ndim != 1 or row_mask_mode.shape != row_mask_bits.shape:
+        raise ValueError(
+            "row_mask_bits and row_mask_mode must be 1-D arrays of equal length, got "
+            f"{row_mask_bits.shape} and {row_mask_mode.shape}",
+        )
+    if fine_translation_parent.ndim != 1:
+        raise ValueError(
+            f"fine_translation_parent must be 1-D, got {fine_translation_parent.shape}",
+        )
+
+    bitset = (
+        (row_mask_bits[:, None] >> fine_translation_parent[None, :]) & jnp.uint32(1)
+    ) != 0
+    is_full = (row_mask_mode == _MASK_MODE_FULL)[:, None]
+    is_empty = (row_mask_mode == _MASK_MODE_EMPTY)[:, None]
+    return jnp.where(is_full, True, jnp.where(is_empty, False, bitset))
 
 
 def _smallest_fit(ladder: tuple[int, ...], value: int) -> int | None:

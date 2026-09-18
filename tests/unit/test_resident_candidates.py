@@ -15,6 +15,7 @@ from recovar.em.scoring.sparse_bucket_arrays import _prepare_per_image_pass2_inp
 from recovar.em.sparse_pass2.resident_candidates import (
     ResidentCandidateTables,
     build_resident_candidate_tables,
+    expand_chunk_mask_jnp,
     expand_mask_jnp,
     expand_mask_rows,
     materialize_chunk,
@@ -315,3 +316,39 @@ def test_heavy_tailed_image_yields_a_one_image_chunk_padded_to_largest_class():
     for c in chunks:
         covered_images.update(range(c.image_start, c.image_stop))
     assert covered_images == set(range(tables.n_images))
+
+
+# --- Chunk-shaped device mask expander (T6 addendum) ------------------------
+
+
+def test_expand_chunk_mask_jnp_matches_materialize_chunk_row_by_row(fixture_tables):
+    """The chunk twin equals ``materialize_chunk`` + ``expand_mask_rows`` per row.
+
+    This is the form a jitted scoring program evaluates: one padded chunk of
+    rows at once, from the per-row bitset and mode alone, with no per-image
+    Python dispatch. Padded rows must come back all-false.
+    """
+
+    tables = fixture_tables
+    chunks = plan_capacity_chunks(
+        tables, row_capacity_ladder=(4, 8, 16), image_capacity_ladder=(1, 2, 4)
+    )
+    assert chunks, "the fixture must produce at least one chunk"
+
+    for chunk in chunks:
+        materialized = materialize_chunk(tables, chunk)
+        chunk_mask = np.asarray(
+            expand_chunk_mask_jnp(
+                materialized["row_mask_bits"],
+                materialized["row_mask_mode"],
+                FINE_TRANS_PARENT,
+            )
+        )
+        assert chunk_mask.shape == (chunk.row_capacity, N_FINE_TRANS)
+        assert not chunk_mask[chunk.n_valid_rows :].any(), "padded rows must be all-false"
+
+        for image in range(chunk.image_start, chunk.image_stop):
+            start = int(tables.row_offsets[image]) - chunk.row_start
+            stop = int(tables.row_offsets[image + 1]) - chunk.row_start
+            expected = expand_mask_rows(tables, image, FINE_TRANS_PARENT)
+            np.testing.assert_array_equal(chunk_mask[start:stop], expected)
