@@ -191,7 +191,6 @@ class _DenseTiming(TimingAccumulator):
 class _SparsePass2Profile:
     """Sparse pass-2 counters for profiling and log summaries."""
 
-    log_threshold: float = float(np.log(1e-6))
     total_blocks: int = 0
     skipped_blocks: int = 0
     omitted_mass_upper_sum: float = 0.0
@@ -1657,7 +1656,7 @@ def run_em(
                 - log_Z[None, :].astype(precision_policy.normalization_real_dtype),
                 jnp.inf,
             )
-            skip_candidate = (log_omitted_mass_upper < sparse_profile.log_threshold) | (~valid_image_mask[None, :])
+            skip_candidate = (log_omitted_mass_upper < float(np.log(1e-6))) | (~valid_image_mask[None, :])
             skip_pass2_block = np.asarray(
                 jnp.all(skip_candidate, axis=1),
                 dtype=bool,
