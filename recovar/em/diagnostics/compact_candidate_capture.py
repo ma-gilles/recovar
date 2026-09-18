@@ -483,12 +483,6 @@ def _capture_requested(iteration: int) -> Path | None:
     return Path(raw)
 
 
-def compact_capture_requested(iteration: int) -> bool:
-    """Return whether the diagnostic capture gate targets this iteration."""
-
-    return _capture_requested(int(iteration)) is not None
-
-
 def _target_rows(original_indices: np.ndarray) -> np.ndarray:
     """Return rows selected by the optional immutable-original-ID filter."""
 
@@ -923,7 +917,7 @@ def maybe_capture_k1_production_bucket_chunked(
     them only after the production loop, with a fail-closed input-size bound.
     """
 
-    if not compact_capture_requested(int(iteration)):
+    if _capture_requested(int(iteration)) is None:
         return 0
     all_original_indices = np.asarray(original_indices, dtype=np.int64)
     rows = _target_rows(all_original_indices)
