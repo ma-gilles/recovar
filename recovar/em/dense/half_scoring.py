@@ -1401,7 +1401,6 @@ def _score_half_local(
     ha_k = local_outputs.hard_assignment
     best_rots_k = local_outputs.best_pose_rotations
     best_trans_k = local_outputs.best_pose_translations
-    _best_rot_ids_k = local_outputs.best_pose_rotation_ids
     em_stats_k = local_outputs.relion_stats
     noise_stats_k = local_outputs.noise_stats
     if collect_local_search_profile:

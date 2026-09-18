@@ -29,7 +29,6 @@ def test_kclass_optional_outputs_preserve_statistics(
         pose_assignments=assignments,
         best_pose_rotations=rotations if return_best_pose_details else None,
         best_pose_translations=translations if return_best_pose_details else None,
-        best_pose_rotation_ids=assignments if return_best_pose_details else None,
         stats=stats,
         aggregate_noise_stats=noise if accumulate_noise else None,
         class_assignments=assignments,
@@ -72,7 +71,6 @@ def test_kclass_optional_outputs_preserve_statistics(
     np.testing.assert_array_equal(result.hard_assignment, assignments)
     assert result.best_pose_rotations is engine_result.best_pose_rotations
     assert result.best_pose_translations is engine_result.best_pose_translations
-    assert result.best_pose_rotation_ids is engine_result.best_pose_rotation_ids
     assert result.profile_summary is None
     assert result.significant_counts is None
     if return_class_details:

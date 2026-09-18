@@ -1235,14 +1235,13 @@ def _mock_local_search_result(
     n_units,
     best_pose_details=(),
 ):
-    best_rotations, best_translations, best_rotation_ids = best_pose_details or (None, None, None)
+    best_rotations, best_translations = best_pose_details or (None, None)
     return _LocalSearchIterationResult(
         Ft_y=base_outputs[0],
         Ft_ctf=base_outputs[1],
         hard_assignment=base_outputs[2],
         best_pose_rotations=best_rotations,
         best_pose_translations=best_translations,
-        best_pose_rotation_ids=best_rotation_ids,
         relion_stats=relion_stats,
         noise_stats=noise_stats if kwargs.get("accumulate_noise", False) else None,
         profile_summary=(
@@ -4203,7 +4202,6 @@ def test_run_local_search_iteration_exact_engine_uses_model_sigma_for_translatio
     assert outputs.profile_summary is None
     assert outputs.best_pose_rotations is None
     assert outputs.best_pose_translations is None
-    assert outputs.best_pose_rotation_ids is None
     assert outputs.class_assignments is None
     assert outputs.class_posterior_sums is None
     assert outputs.class_full_posterior_sums is None
@@ -4366,7 +4364,6 @@ def test_run_local_search_iteration_clamps_highres_local_batches(monkeypatch):
     assert outputs.significant_counts is None
     assert outputs.best_pose_rotations is None
     assert outputs.best_pose_translations is None
-    assert outputs.best_pose_rotation_ids is None
     assert outputs.class_assignments is None
     assert outputs.class_posterior_sums is None
     assert outputs.class_full_posterior_sums is None
@@ -4624,7 +4621,6 @@ def test_run_local_search_iteration_plumbs_normalization_log_evidence(monkeypatc
     assert outputs.significant_counts is None
     assert outputs.best_pose_rotations is None
     assert outputs.best_pose_translations is None
-    assert outputs.best_pose_rotation_ids is None
     assert outputs.class_assignments is None
     assert outputs.class_posterior_sums is None
     assert outputs.class_full_posterior_sums is None
@@ -4694,7 +4690,6 @@ def test_run_local_search_iteration_plumbs_stats_use_reconstruction_probs(monkey
     assert outputs.significant_counts is None
     assert outputs.best_pose_rotations is None
     assert outputs.best_pose_translations is None
-    assert outputs.best_pose_rotation_ids is None
     assert outputs.class_assignments is None
     assert outputs.class_posterior_sums is None
     assert outputs.class_full_posterior_sums is None
@@ -4868,7 +4863,6 @@ def test_run_local_search_iteration_exact_engine_uses_factorized_prior_metadata_
     assert outputs.significant_counts is None
     assert outputs.best_pose_rotations is None
     assert outputs.best_pose_translations is None
-    assert outputs.best_pose_rotation_ids is None
     assert outputs.class_assignments is None
     assert outputs.class_posterior_sums is None
     assert outputs.class_full_posterior_sums is None
@@ -6204,7 +6198,6 @@ def test_local_search_iteration_k_class_returns_class_details(rng):
     hard_assignment = outputs.hard_assignment
     best_rotations = outputs.best_pose_rotations
     best_translations = outputs.best_pose_translations
-    best_rotation_ids = outputs.best_pose_rotation_ids
     stats = outputs.relion_stats
     noise_stats = outputs.noise_stats
     class_assignments_out = outputs.class_assignments
@@ -6215,7 +6208,6 @@ def test_local_search_iteration_k_class_returns_class_details(rng):
     assert np.asarray(hard_assignment).shape == (2,)
     assert np.asarray(best_rotations).shape == (2, 3, 3)
     assert np.asarray(best_translations).shape == (2, 2)
-    assert np.asarray(best_rotation_ids).shape == (2,)
     assert np.asarray(stats.log_evidence_per_image).shape == (2,)
     assert noise_stats is not None
     assert np.asarray(noise_stats.wsum_scale_correction_xa).shape == (5,)
@@ -9905,7 +9897,6 @@ class TestRelionModeSmokeTest:
             best_pose_details = (
                 np.repeat(np.eye(3, dtype=np.float32)[None, :, :], experiment_dataset.n_units, axis=0),
                 np.zeros((experiment_dataset.n_units, 2), dtype=np.float32),
-                np.zeros(experiment_dataset.n_units, dtype=np.int64),
             )
             relion_stats = RelionStats(
                 log_evidence_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
@@ -13182,8 +13173,7 @@ def test_local_search_uses_lazy_parent_expanded_fine_rotation_grid_when_oversamp
         if kwargs.get("return_best_pose_details"):
             best_rots = np.repeat(np.eye(3, dtype=np.float32)[None, :, :], experiment_dataset.n_units, axis=0)
             best_trans = np.zeros((experiment_dataset.n_units, 2), dtype=np.float32)
-            best_ids = np.zeros(experiment_dataset.n_units, dtype=np.int32)
-            best_pose_details = (best_rots, best_trans, best_ids)
+            best_pose_details = (best_rots, best_trans)
         return _mock_local_search_result(
             base_outputs, relion_stats, noise_stats, kwargs,
             experiment_dataset.n_units, best_pose_details,
@@ -13363,8 +13353,7 @@ def test_local_search_applies_perturbation_to_generated_fine_rotation_grid(
         if kwargs.get("return_best_pose_details"):
             best_rots = np.repeat(np.eye(3, dtype=np.float32)[None, :, :], half_datasets[0].n_units, axis=0)
             best_trans = np.zeros((half_datasets[0].n_units, 2), dtype=np.float32)
-            best_ids = np.zeros(half_datasets[0].n_units, dtype=np.int32)
-            best_pose_details = (best_rots, best_trans, best_ids)
+            best_pose_details = (best_rots, best_trans)
         return _mock_local_search_result(
             base_outputs,
             relion_stats,
@@ -13510,8 +13499,7 @@ def test_local_search_uses_negative_previous_offsets_for_translation_prior(
         if kwargs.get("return_best_pose_details"):
             best_rots = np.repeat(np.eye(3, dtype=np.float32)[None, :, :], experiment_dataset.n_units, axis=0)
             best_trans = np.zeros((experiment_dataset.n_units, 2), dtype=np.float32)
-            best_ids = np.zeros(experiment_dataset.n_units, dtype=np.int32)
-            best_pose_details = (best_rots, best_trans, best_ids)
+            best_pose_details = (best_rots, best_trans)
         return _mock_local_search_result(
             base_outputs,
             relion_stats,
@@ -13644,8 +13632,7 @@ def test_local_search_coarse_translation_prior_mode_uses_unperturbed_base_grid(
         if kwargs.get("return_best_pose_details"):
             best_rots = np.repeat(np.eye(3, dtype=np.float32)[None, :, :], experiment_dataset.n_units, axis=0)
             best_trans = np.zeros((experiment_dataset.n_units, 2), dtype=np.float32)
-            best_ids = np.zeros(experiment_dataset.n_units, dtype=np.int32)
-            best_pose_details = (best_rots, best_trans, best_ids)
+            best_pose_details = (best_rots, best_trans)
         return _mock_local_search_result(
             base_outputs, relion_stats, noise_stats, kwargs,
             experiment_dataset.n_units, best_pose_details,
@@ -13734,7 +13721,6 @@ def test_local_search_os0_keeps_full_local_support_for_mstep(
             hard_assignment=np.zeros(experiment_dataset.n_units, dtype=np.int32),
             best_pose_rotations=np.tile(np.eye(3, dtype=np.float32)[None, :, :], (experiment_dataset.n_units, 1, 1)),
             best_pose_translations=np.zeros((experiment_dataset.n_units, 2), dtype=np.float32),
-            best_pose_rotation_ids=np.zeros(experiment_dataset.n_units, dtype=np.int64),
             relion_stats=RelionStats(
                 log_evidence_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
                 best_log_score_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
@@ -13818,7 +13804,6 @@ def _run_refine_with_stubbed_exact_local_batch_sizes(
             hard_assignment=np.zeros(experiment_dataset.n_units, dtype=np.int32),
             best_pose_rotations=np.tile(np.eye(3, dtype=np.float32)[None, :, :], (experiment_dataset.n_units, 1, 1)),
             best_pose_translations=np.zeros((experiment_dataset.n_units, 2), dtype=np.float32),
-            best_pose_rotation_ids=np.zeros(experiment_dataset.n_units, dtype=np.int64),
             relion_stats=RelionStats(
                 log_evidence_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
                 best_log_score_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
@@ -13962,8 +13947,7 @@ def test_local_search_coarse_translation_prior_mode_uses_replay_sampling_grid_wh
         if kwargs.get("return_best_pose_details"):
             best_rots = np.repeat(np.eye(3, dtype=np.float32)[None, :, :], experiment_dataset.n_units, axis=0)
             best_trans = np.zeros((experiment_dataset.n_units, 2), dtype=np.float32)
-            best_ids = np.zeros(experiment_dataset.n_units, dtype=np.int32)
-            best_pose_details = (best_rots, best_trans, best_ids)
+            best_pose_details = (best_rots, best_trans)
         return _mock_local_search_result(
             base_outputs, relion_stats, noise_stats, kwargs,
             experiment_dataset.n_units, best_pose_details,
@@ -14135,8 +14119,7 @@ def test_previous_best_rotations_skip_first_local_dense_bootstrap(
         if kwargs.get("return_best_pose_details"):
             best_rots = np.repeat(np.eye(3, dtype=np.float32)[None, :, :], experiment_dataset.n_units, axis=0)
             best_trans = np.zeros((experiment_dataset.n_units, 2), dtype=np.float32)
-            best_ids = np.zeros(experiment_dataset.n_units, dtype=np.int32)
-            best_pose_details = (best_rots, best_trans, best_ids)
+            best_pose_details = (best_rots, best_trans)
         return _mock_local_search_result(
             base_outputs,
             relion_stats,
@@ -14729,8 +14712,7 @@ def test_local_search_decodes_hard_assignments_on_fine_grid(
             best_trans = np.repeat(
                 np.asarray(translations)[trans_idx : trans_idx + 1], experiment_dataset.n_units, axis=0
             )
-            best_ids = np.full(experiment_dataset.n_units, fine_idx, dtype=np.int32)
-            best_pose_details = (best_rots, best_trans, best_ids)
+            best_pose_details = (best_rots, best_trans)
         return _mock_local_search_result(
             base_outputs,
             relion_stats,
