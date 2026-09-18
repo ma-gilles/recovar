@@ -13,6 +13,10 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+from recovar.em.classification.k1_local_pass2 import (
+    k1_local_pass2_engine_selected,
+    run_k1_local_adaptive_pass2,
+)
 from recovar.em.classification.k_class_inputs import (
     _as_class_means,
     _class_local_layouts,
@@ -848,6 +852,44 @@ def _run_sparse_k_class_adaptive_pass2(
 
     common["return_source_eulers"] = bool(return_best_pose_details)
     common["fine_source_eulers_override"] = base_engine_kwargs.get("fine_source_eulers_override")
+    if n_classes == 1 and k1_local_pass2_engine_selected():
+        route_common = dict(common)
+        route_common["rotation_log_prior"] = _class_rotation_prior(0)
+        route_common["relion_projector_half"] = _select_projector_half_for_class(
+            relion_projector_half_by_class, 0, n_classes
+        )
+        route_common["relion_projector_r_max"] = relion_projector_r_max
+        route_t0 = time.time()
+        result = run_k1_local_adaptive_pass2(
+            experiment_dataset,
+            means_array[0],
+            _select_class_value(noise_variance, 0, n_classes),
+            coarse_translations_np,
+            sig_sample_indices_by_class[0],
+            disc_type,
+            n_rot_coarse=n_rot_coarse,
+            healpix_order=healpix_order,
+            oversampling_order=int(oversampling_order),
+            random_perturbation=float(random_perturbation),
+            fine_rotations_np=fine_rotations_np,
+            fine_mstep_rotations_np=fine_mstep_rotations_np,
+            rot_parent_map_np=rot_parent_map_np,
+            fine_translations_np=fine_translations_np,
+            trans_parent_map_np=trans_parent_map_np,
+            fine_source_eulers=common["fine_source_eulers_override"],
+            class_log_prior=float(class_log_priors[0]),
+            common=route_common,
+            engine_kwargs=base_engine_kwargs,
+            accumulate_noise=accumulate_noise,
+            return_best_pose_details=return_best_pose_details,
+            mstep_accumulator_shape=mstep_accumulator_shape,
+        )
+        logger.info(
+            "Sparse adaptive K=1 pass2 profile (local engine): images=%d total=%.1fs",
+            _dataset_image_count(experiment_dataset),
+            time.time() - route_t0,
+        )
+        return result
 
     def _common_for_class(class_index: int) -> dict:
         class_common = dict(common)
