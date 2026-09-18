@@ -52,7 +52,6 @@ NVTX_DOMAIN_EM = "recovar_em"
 _RUN_EM_ALLOWED_KWARGS = frozenset(inspect.signature(run_em).parameters)
 _SPARSE_KCLASS_RELION_FINE_MSTEP_PRUNE_ENV = "RECOVAR_SPARSE_KCLASS_RELION_FINE_MSTEP_PRUNE"
 _RELION_X_HALF_BP_FUSED_ATOMICS_ENV = "RECOVAR_RELION_X_HALF_BP_FUSED_ATOMICS"
-_DIAGNOSTIC_FIRSTITER_CLASS_OVERRIDES_ENV = "RECOVAR_DIAGNOSTIC_FIRSTITER_CLASS_OVERRIDES"
 _LOCAL_HOST_RESULT_PUBLICATION_ENV = "RECOVAR_EXACT_LOCAL_HOST_RESULT_PUBLICATION"
 
 
@@ -197,79 +196,6 @@ def _sparse_pass2_selected(env_name: str) -> bool:
     """
 
     return os.environ.get(env_name, "0").strip().lower() not in {"1", "true", "yes", "on"}
-
-
-def _parse_diagnostic_firstiter_class_overrides(value: str, *, n_classes: int) -> dict[int, int]:
-    """Parse ``original_image_index:zero_based_class`` diagnostic overrides."""
-
-    overrides: dict[int, int] = {}
-    for token in value.split(","):
-        token = token.strip()
-        fields = token.split(":")
-        if len(fields) != 2 or not fields[0].strip() or not fields[1].strip():
-            raise ValueError(
-                f"Invalid {_DIAGNOSTIC_FIRSTITER_CLASS_OVERRIDES_ENV} entry {token!r}; "
-                "expected original_image_index:zero_based_class"
-            )
-        try:
-            original_index = int(fields[0])
-            class_index = int(fields[1])
-        except ValueError as error:
-            raise ValueError(
-                f"Invalid {_DIAGNOSTIC_FIRSTITER_CLASS_OVERRIDES_ENV} entry {token!r}; "
-                "both fields must be integers"
-            ) from error
-        if original_index < 0:
-            raise ValueError("diagnostic firstiter original image indices must be non-negative")
-        if not 0 <= class_index < int(n_classes):
-            raise ValueError(
-                f"diagnostic firstiter class {class_index} is outside [0, {int(n_classes)})"
-            )
-        if original_index in overrides:
-            raise ValueError(f"duplicate diagnostic firstiter override for original image {original_index}")
-        overrides[original_index] = class_index
-    return overrides
-
-
-def _diagnostic_firstiter_class_assignments(
-    experiment_dataset,
-    class_assignments: np.ndarray,
-    *,
-    n_classes: int,
-) -> np.ndarray:
-    """Copy and override routing assignments when the explicit diagnostic is active."""
-
-    value = _env_value_or_none(_DIAGNOSTIC_FIRSTITER_CLASS_OVERRIDES_ENV)
-    if value is None:
-        return class_assignments
-    overrides = _parse_diagnostic_firstiter_class_overrides(value, n_classes=n_classes)
-    local_indices = np.arange(class_assignments.size, dtype=np.int64)
-    resolver = getattr(experiment_dataset, "original_image_indices_from_local", None)
-    if resolver is None:
-        raise ValueError(
-            f"{_DIAGNOSTIC_FIRSTITER_CLASS_OVERRIDES_ENV} requires "
-            "experiment_dataset.original_image_indices_from_local"
-        )
-    original_indices = np.asarray(resolver(local_indices), dtype=np.int64)
-    if original_indices.shape != local_indices.shape:
-        raise ValueError(
-            "original_image_indices_from_local returned an invalid shape for diagnostic firstiter overrides"
-        )
-    result = np.asarray(class_assignments, dtype=np.int32).copy()
-    observed: set[int] = set()
-    for row, original_index in enumerate(original_indices.tolist()):
-        if original_index in overrides:
-            result[row] = overrides[original_index]
-            observed.add(original_index)
-    missing = sorted(set(overrides) - observed)
-    if missing:
-        raise ValueError(f"diagnostic firstiter override image indices are absent from this dataset: {missing}")
-    logger.warning(
-        "Applied %d diagnostic firstiter class-routing override(s) from %s; score evidence is unchanged",
-        len(observed),
-        _DIAGNOSTIC_FIRSTITER_CLASS_OVERRIDES_ENV,
-    )
-    return result
 
 
 def _use_fused_sparse_k_class_pass2(n_classes: int) -> bool:
@@ -2613,7 +2539,7 @@ def run_dense_k_class_em_adaptive(
         coarse_class_rotation_log_prior if coarse_class_rotation_log_prior is not None else coarse_rotation_log_prior
     )
 
-    coarse_class_assignments_for_override = None
+    coarse_class_assignments = None
     reuse_zero_oversampling_coarse_state = bool(
         n_classes == 1
         and _resolved_oversampling_order() == 0
@@ -2682,14 +2608,9 @@ def run_dense_k_class_em_adaptive(
         # to that single pose's children.
         coarse_per_class_assn = np.asarray(coarse_result.per_class_hard_assignments, dtype=np.int64)
         # Preserve the K-class assignment from the coarse diagnostic probe.
-        coarse_class_assignments_for_override = np.asarray(
+        coarse_class_assignments = np.asarray(
             coarse_result.class_assignments,
             dtype=np.int32,
-        )
-        coarse_class_assignments_for_override = _diagnostic_firstiter_class_assignments(
-            experiment_dataset,
-            coarse_class_assignments_for_override,
-            n_classes=n_classes,
         )
         sig_sample_indices_by_class = [
             [np.array([int(coarse_per_class_assn[k, i])], dtype=np.int32) for i in range(n_images)]
@@ -2848,7 +2769,7 @@ def run_dense_k_class_em_adaptive(
     firstiter_fused_atomic_supported = (
         sparse_pass2_requested
         and firstiter_cc_pass2_only_best_coarse
-        and coarse_class_assignments_for_override is not None
+        and coarse_class_assignments is not None
         and hasattr(experiment_dataset, "subset")
     )
     later_soft_particle_fused_supported = (
@@ -2888,7 +2809,7 @@ def run_dense_k_class_em_adaptive(
     if (
         sparse_pass2_requested
         and firstiter_cc_pass2_only_best_coarse
-        and coarse_class_assignments_for_override is not None
+        and coarse_class_assignments is not None
         and hasattr(experiment_dataset, "subset")
     ):
         pass2_t0 = time.time()
@@ -2906,7 +2827,7 @@ def run_dense_k_class_em_adaptive(
             sig_sample_indices_by_class,
             disc_type,
             coarse_result=coarse_result,
-            coarse_class_assignments=coarse_class_assignments_for_override,
+            coarse_class_assignments=coarse_class_assignments,
             n_rot_coarse=n_rot_coarse,
             n_fine_trans=n_trans_fine,
             healpix_order=_resolved_coarse_healpix_order(),
@@ -3151,10 +3072,10 @@ def run_dense_k_class_em_adaptive(
             pass2_kwargs["translation_log_prior"] = prior_np[:, trans_parent_map_np]
 
     global_winner = None
-    if coarse_class_assignments_for_override is not None:
+    if coarse_class_assignments is not None:
         # RELION firstiter_cc path: force pass-2 through the single coarse
         # class/pose winner selected by the joint coarse probe.
-        global_winner = np.asarray(coarse_class_assignments_for_override, dtype=np.int64)
+        global_winner = np.asarray(coarse_class_assignments, dtype=np.int64)
     if global_winner is not None and hasattr(experiment_dataset, "subset"):
         with score_dump_label("fine"):
             with nvtx.annotate("kclass.adaptive.fine_subset_em", color="green", domain=NVTX_DOMAIN_EM):
@@ -3236,7 +3157,7 @@ def run_dense_k_class_em_adaptive(
                 **pass2_kwargs,
             )
             pass2_s = time.time() - pass2_t0
-    if coarse_class_assignments_for_override is not None:
+    if coarse_class_assignments is not None:
         # RELION binarization picks the global-best (class, pose) at the
         # COARSE grid; the fine refinement only repositions the pose within
         # the winning class. Reflect this by replacing the K-class
@@ -3245,7 +3166,7 @@ def run_dense_k_class_em_adaptive(
         # pose, so reconstruction quality is preserved.
         result = _override_class_assignments_with_coarse_winner(
             result,
-            coarse_class_assignments_for_override,
+            coarse_class_assignments,
             return_best_pose_details=return_best_pose_details,
             fine_rotations_np=fine_rotations_np,
             fine_translations_np=fine_translations_np,
