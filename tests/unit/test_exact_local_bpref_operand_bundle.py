@@ -96,7 +96,7 @@ CTF_EVAL = _CtfEvaluator()
 
 def _bundle(**over):
     kw = dict(
-        experiment_dataset=_FakeDataset(), image_shape=IMAGE_SHAPE,
+        experiment_dataset=_FakeDataset(),
         preprocess_path="split_exact", exact_source_star_ctf=True,
         applied_image_mask=MASK, applied_image_mask_mode="relion_background_fill",
         raw_batch_data=RAW,

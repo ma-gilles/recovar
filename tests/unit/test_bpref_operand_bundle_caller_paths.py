@@ -229,7 +229,7 @@ def test_k4_production_configuration_gets_a_masked_non_exact_big_jit_capture(tmp
 
     with mock.patch.dict(os.environ, {BUNDLE_ENV: "1"}, clear=False):
         bundle = local_bpref_capture._exact_local_bpref_operand_bundle(
-            _static(), experiment_dataset=_DS(), image_shape=SHAPE,
+            _static(), experiment_dataset=_DS(),
             preprocess_path="big_jit_jax", exact_source_star_ctf=exact,
             production_ctf=_production_ctf_evaluator(),
             relion_preprocess_normalization=NORM,
@@ -332,7 +332,7 @@ def _dump(tmp_path, bundle):
 def _cuda_bundle():
     with mock.patch.dict(os.environ, {BUNDLE_ENV: "1"}, clear=False):
         return local_bpref_capture._exact_local_bpref_operand_bundle(
-            _static(), experiment_dataset=_DS(), image_shape=SHAPE,
+            _static(), experiment_dataset=_DS(),
             preprocess_path="big_jit_relion_cuda", exact_source_star_ctf=True,
             relion_preprocess_normalization=NORM,
             relion_cuda_preprocess_radius=RADIUS,
@@ -374,7 +374,7 @@ def test_cuda_path_without_the_mask_scalars_is_refused():
     with mock.patch.dict(os.environ, {BUNDLE_ENV: "1"}, clear=False):
         with pytest.raises(RuntimeError, match="mask radius and cosine width"):
             local_bpref_capture._exact_local_bpref_operand_bundle(
-                _static(), experiment_dataset=_DS(), image_shape=SHAPE,
+                _static(), experiment_dataset=_DS(),
                 preprocess_path="big_jit_relion_cuda", exact_source_star_ctf=True,
                 relion_preprocess_normalization=NORM,
                 applied_image_mask=None, applied_image_mask_mode=None,

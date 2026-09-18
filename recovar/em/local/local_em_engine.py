@@ -2907,7 +2907,6 @@ def run_local_em_exact(
                         **_exact_local_bpref_operand_bundle(
                             capture_static_kwargs,
                             experiment_dataset=experiment_dataset,
-                            image_shape=image_shape,
                             # local_big_jit.py:2195 gates relion_preprocess_real_f32 on
                             # exact operands AND a positive mask radius, so this site can run
                             # real RELION CUDA preprocessing. It must not share the split
@@ -5129,7 +5128,6 @@ def run_local_em_exact(
                     **_exact_local_bpref_operand_bundle(
                         capture_static_kwargs,
                         experiment_dataset=experiment_dataset,
-                        image_shape=image_shape,
                         # local_preprocessing._process_half: the exact flag selects
                         # _big_jit_preprocess_half, which bypasses backend preprocessing.
                         preprocess_path=(

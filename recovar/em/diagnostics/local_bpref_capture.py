@@ -143,7 +143,6 @@ def _exact_local_bpref_operand_bundle(
     static_kwargs: dict,
     *,
     experiment_dataset,
-    image_shape,
     preprocess_path: str,
     exact_source_star_ctf: bool,
     production_ctf=None,
