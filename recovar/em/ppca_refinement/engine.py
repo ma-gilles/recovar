@@ -333,23 +333,6 @@ def dense_pose_ppca_score_tensor_stats_blocked(
     )
 
 
-def dense_pose_ppca_logZ_blocked(
-    Y1,
-    proj_aug,
-    ctf2_over_noise,
-    y_norm,
-    pose_log_prior=None,
-):
-    """Return block log normalizers without materializing PPCA moments."""
-    return dense_pose_ppca_score_stats_blocked(
-        Y1,
-        proj_aug,
-        ctf2_over_noise,
-        y_norm,
-        pose_log_prior,
-    ).logZ
-
-
 def _score_gamma_and_moments(
     Y1,
     proj_aug,
