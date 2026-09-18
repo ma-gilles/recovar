@@ -6181,7 +6181,6 @@ def test_local_search_iteration_k_class_returns_class_details(rng):
         pass2_layout=local_layout,
         return_best_pose_details=True,
         class_log_priors=np.log(np.array([0.5, 0.5], dtype=np.float64)),
-        return_class_details=True,
     )
 
     Ft_y = outputs.Ft_y
@@ -6288,7 +6287,6 @@ def test_local_search_iteration_k_class_keeps_mstep_and_full_class_mass_separate
         reconstruct_significant_only=True,
         stats_use_reconstruction_probs=True,
         class_log_priors=np.log(np.array([0.5, 0.5], dtype=np.float64)),
-        return_class_details=True,
     )
 
     assert captured["class_posterior_sums_from_noise"] is True

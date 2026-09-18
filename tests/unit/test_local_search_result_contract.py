@@ -14,9 +14,8 @@ pytestmark = pytest.mark.unit
 @pytest.mark.parametrize("n_classes", [2, 4])
 @pytest.mark.parametrize("return_best_pose_details", [False, True])
 @pytest.mark.parametrize("accumulate_noise", [False, True])
-@pytest.mark.parametrize("return_class_details", [False, True])
 def test_kclass_optional_outputs_preserve_statistics(
-    monkeypatch, n_classes, return_best_pose_details, accumulate_noise, return_class_details
+    monkeypatch, n_classes, return_best_pose_details, accumulate_noise
 ):
     stats, noise = object(), object()
     rotations = np.repeat(np.eye(3, dtype=np.float32)[None], 2, axis=0)
@@ -61,7 +60,6 @@ def test_kclass_optional_outputs_preserve_statistics(
         class_log_priors=np.full(n_classes, -np.log(n_classes)),
         accumulate_noise=accumulate_noise,
         return_best_pose_details=return_best_pose_details,
-        return_class_details=return_class_details,
     )
 
     assert result.relion_stats is stats
@@ -72,14 +70,9 @@ def test_kclass_optional_outputs_preserve_statistics(
     assert result.best_pose_rotations is engine_result.best_pose_rotations
     assert result.best_pose_translations is engine_result.best_pose_translations
     assert result.profile_summary is None
-    if return_class_details:
-        np.testing.assert_array_equal(result.class_assignments, assignments)
-        np.testing.assert_array_equal(result.class_posterior_sums, class_sums)
-        np.testing.assert_array_equal(result.class_full_posterior_sums, class_sums)
-    else:
-        assert result.class_assignments is None
-        assert result.class_posterior_sums is None
-        assert result.class_full_posterior_sums is None
+    np.testing.assert_array_equal(result.class_assignments, assignments)
+    np.testing.assert_array_equal(result.class_posterior_sums, class_sums)
+    np.testing.assert_array_equal(result.class_full_posterior_sums, class_sums)
 
 
 @pytest.mark.parametrize("return_profile", [False, True])
