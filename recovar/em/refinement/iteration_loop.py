@@ -3343,13 +3343,7 @@ def refine_single_volume(
                 iter_sig_counts,
                 n_translations=n_trans_current,
             )
-            approx_for_convergence, approx_convergence_reason = _approx_acc_rot_policy_for_convergence(
-                logger=logger,
-                state=state,
-                iteration_number=iteration + 1,
-                ave_pmax=ave_pmax,
-                new_resolution_angstrom=new_res_angstrom,
-            )
+            approx_for_convergence, approx_convergence_reason = _approx_acc_rot_policy_for_convergence()
             if approx_for_convergence and exact_acc_rot_this_iter is None:
                 convergence_acc_rot = approx_acc_rot
             logger.info(
