@@ -120,74 +120,25 @@ def _native_significant_count(factor, candidate_count: int) -> int:
 
 
 def load_recovar_candidate_table(path: Path) -> dict[str, np.ndarray]:
-    """Normalize either the legacy pass-2 dump or one production raw shard."""
+    """Normalize one production raw-capture shard."""
 
     path = Path(path)
     with np.load(path, allow_pickle=False) as archive:
         schema = str(np.asarray(archive["schema"]).item()) if "schema" in archive.files else ""
-        if schema == PRODUCTION_CAPTURE_SCHEMA:
-            required = {
-                "schema", "original_indices", "candidate_offset", "rotation_offset",
-                "candidate_local_rotation", "candidate_translation", "raw_combined_score",
-                "posterior", "significant", "rotation_log_prior", "translation_log_prior",
-                "rotation_matrix", "rotation_global_index", "rotation_parent_global",
-                "fine_translations",
-            }
-        else:
-            required = {
-                "original_index", "rotations", "fine_translations", "candidate_mask", "probs",
-            }
-            if "reconstruction_mask" in archive.files:
-                required.add("reconstruction_mask")
-            legacy_production = {
-                "scores_with_prior",
-                "rotation_log_prior",
-                "translation_log_prior",
-                "reconstruction_mask",
-                "oversampled_rot_indices",
-                "parent_map",
-            }
-            if legacy_production <= set(archive.files):
-                required.update(legacy_production)
+        _require(schema == PRODUCTION_CAPTURE_SCHEMA, f"unsupported RECOVAR capture schema {schema!r}")
+        required = {
+            "schema", "original_indices", "candidate_offset", "rotation_offset",
+            "candidate_local_rotation", "candidate_translation", "raw_combined_score",
+            "posterior", "significant", "rotation_log_prior", "translation_log_prior",
+            "rotation_matrix", "rotation_global_index", "rotation_parent_global",
+            "fine_translations",
+        }
         missing = required - set(archive.files)
         _require(not missing, f"RECOVAR capture is missing {sorted(missing)}")
         # Full pass-2 diagnostics can contain multi-gigabyte projected-reference
         # and pixel-operand arrays.  Candidate topology analysis must not load
         # fields it never reads.
         recovar = {name: np.asarray(archive[name]) for name in required}
-    if schema != PRODUCTION_CAPTURE_SCHEMA:
-        candidate_mask = np.asarray(recovar["candidate_mask"], dtype=bool)
-        normalized = {
-            **recovar,
-            "candidate_sequence": np.argwhere(candidate_mask).astype(np.int64, copy=False),
-            "capture_schema": np.asarray(schema),
-        }
-        if "scores_with_prior" in recovar:
-            shape = candidate_mask.shape
-            rotation_prior = np.broadcast_to(
-                np.asarray(recovar["rotation_log_prior"], dtype=np.float32)[:, None],
-                shape,
-            )
-            translation_prior = np.broadcast_to(
-                np.asarray(recovar["translation_log_prior"], dtype=np.float32)[None, :],
-                shape,
-            )
-            normalized.update(
-                production_combined_score=np.asarray(
-                    recovar["scores_with_prior"], dtype=np.float32
-                ),
-                production_rotation_log_prior=rotation_prior,
-                production_translation_log_prior=translation_prior,
-                production_significant=np.asarray(
-                    recovar["reconstruction_mask"], dtype=bool
-                ),
-                rotation_global_index=np.asarray(
-                    recovar["oversampled_rot_indices"], dtype=np.int64
-                ),
-                rotation_parent_global=np.asarray(recovar["parent_map"], dtype=np.int64),
-            )
-        return normalized
-
     inventory = validate_raw_capture_shard(path)
     _require(inventory["particle_count"] == 1, "production shard must contain one particle")
     _require(len(inventory["fragments"]) == 1, "production shard must contain one fragment")
