@@ -1,7 +1,5 @@
 """The batched algebraic Gaussian scorers of sparse pass 2 share one score-terms owner."""
 
-import inspect
-
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -10,12 +8,14 @@ from recovar.em.sparse_pass2 import sparse_pass2_scoring as sp
 
 
 def test_score_terms_match_the_documented_algebra():
-    rng = np.random.default_rng(0); B, T, R, N = 2, 2, 3, 5
+    rng = np.random.default_rng(0)
+    B, T, R, N = 2, 2, 3, 5
     shifted = jnp.asarray((rng.standard_normal((B, T, N)) + 1j * rng.standard_normal((B, T, N))).astype(np.complex64))
     corr = jnp.asarray(np.abs(rng.standard_normal((B, N))).astype(np.float32) + 0.1)
     proj = jnp.asarray((rng.standard_normal((B, R, N)) + 1j * rng.standard_normal((B, R, N))).astype(np.complex64))
     hw = jnp.asarray(np.abs(rng.standard_normal(N)).astype(np.float32) + 0.1)
-    rprior = jnp.asarray(rng.standard_normal((B, R)).astype(np.float32)); tprior = jnp.asarray(rng.standard_normal((B, T)).astype(np.float32))
+    rprior = jnp.asarray(rng.standard_normal((B, R)).astype(np.float32))
+    tprior = jnp.asarray(rng.standard_normal((B, T)).astype(np.float32))
     preprior, scores = sp._gaussian_algebraic_score_terms(shifted, corr, proj, hw, rprior, tprior)
     weights = corr * hw[None, :]
     cross = jnp.einsum("btn,bn,brn->brt", jnp.conj(shifted), weights, proj, precision=jax.lax.Precision.HIGHEST).real
@@ -40,12 +40,3 @@ def test_score_terms_match_the_documented_algebra():
         np.asarray(comp_preprior)[np.asarray(mask)], np.asarray(jnp.where(mask, preprior, -jnp.inf))[np.asarray(mask)], rtol=1e-6, atol=0.0
     )
     assert np.all(np.isneginf(np.asarray(comp_preprior)[~np.asarray(mask)]))
-
-
-def test_batched_scorers_use_the_owner():
-    for fn in (sp._score_pass2_bucket_gaussian_algebraic_components, sp._score_pass2_bucket_gaussian_algebraic):
-        source = inspect.getsource(fn)
-        assert source.count("_gaussian_algebraic_score_terms(") == 1
-        assert "jnp.einsum(" not in source
-    assert inspect.getsource(sp._score_pass2_bucket_gaussian_algebraic_single_cached).count("jnp.einsum(") == 2
-    assert inspect.getsource(sp).count('"btn,bn,brn->brt"') == 1

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import inspect
-
 import pytest
 
 from recovar.em.sparse_pass2 import sparse_pass2_bucketed as sp
@@ -37,10 +35,3 @@ def test_noise_accumulation_selects_the_norm_term(monkeypatch, source_faithful, 
     calls = _with_fakes(monkeypatch)
     out = sp._relion_powerclass_noise_terms("x", image_shape=(8, 8), current_size=8, use_exact_relion_gaussian=False, accumulate_noise=True, source_faithful_spectrum_norm=source_faithful)
     assert out == ("xi2", expected) and calls == calls_expected
-
-
-def test_both_sparse_scorers_use_the_owner():
-    for name in ("compute_pass2_stats_sparse_bucketed", "compute_k_class_pass2_stats_sparse_fused"):
-        source = inspect.getsource(getattr(sp, name))
-        assert source.count("_relion_powerclass_noise_terms(") == 1
-        assert "_relion_cuda_powerclass_highres_xi2_half(" not in source

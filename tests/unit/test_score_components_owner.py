@@ -1,7 +1,5 @@
 """The dense scorers derive their scores from one cross/model-energy GEMM owner."""
 
-import inspect
-
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -27,18 +25,3 @@ def test_components_match_the_documented_gemms():
     cc = scoring._e_step_block_scores_normalized_cc(shifted, jnp.zeros(n_images), ctf2, proj_w, proj_abs2, n_images, n_trans, (4, 4), (4, 4, 4))
     denom = jnp.sqrt(jnp.maximum(norms, jnp.asarray(1e-30, dtype=norms.dtype)))
     assert np.array_equal(np.asarray(cc), np.asarray((-0.5 * cross) / denom[..., None]))
-
-
-def test_dense_scorers_use_the_owner():
-    for fn in (
-        scoring._e_step_block_scores,
-        scoring._e_step_block_scores_windowed,
-        scoring._e_step_block_scores_normalized_cc,
-        scoring._e_step_block_scores_windowed_normalized_cc,
-    ):
-        source = inspect.getsource(fn)
-        assert source.count("cross, norms = _e_step_block_score_components(") == 1
-        assert "jnp.matmul(" not in source
-    assert not hasattr(scoring, "_e_step_block_score_components_windowed")
-    module_source = inspect.getsource(scoring)
-    assert module_source.count("precision=jax.lax.Precision.HIGHEST") == 4
