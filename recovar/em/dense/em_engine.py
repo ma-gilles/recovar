@@ -429,9 +429,6 @@ def _dense_mstep_block(
     ctf2_over_nv_windowed_mstep,
     shifted_recon_half,
     ctf2_over_nv_half_with_dc,
-    n_recon_windowed: int,
-    image_shape,
-    volume_shape,
 ) -> _DenseMstepBlock:
     # When best_score is -inf (e.g., K-class adaptive 2-pass with all poses
     # masked out for the losing class on this image), winner-take-all weights
@@ -1826,9 +1823,6 @@ def run_em(
                 ctf2_over_nv_windowed_mstep=ctf2_over_nv_windowed_mstep,
                 shifted_recon_half=shifted_recon_half,
                 ctf2_over_nv_half_with_dc=ctf2_over_nv_half_with_dc,
-                n_recon_windowed=n_recon_windowed,
-                image_shape=image_shape,
-                volume_shape=volume_shape,
             )
             probs = mstep_block.probs
             block_best = mstep_block.block_best
