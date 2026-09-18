@@ -4576,36 +4576,6 @@ def refine_single_volume(
             finalization_policy._FINAL_ALL_DATA_GRID_CORRECT_ENV,
         )
 
-    _final_bpref_accum_dir = os.environ.get("RECOVAR_FINAL_BPREF_ACCUM_DUMP_DIR")
-    if _final_bpref_accum_dir:
-        reconstruction_diagnostics.write_final_bpref_accumulators(
-            PADDING_FACTOR=PADDING_FACTOR,
-            PROJECTION_PADDING_FACTOR=PROJECTION_PADDING_FACTOR,
-            output_dir=_final_bpref_accum_dir,
-            voxel_size=cryo.voxel_size,
-            final_Ft_ctf_0=final_Ft_ctf_0,
-            final_Ft_ctf_1=final_Ft_ctf_1,
-            final_Ft_y_0=final_Ft_y_0,
-            final_Ft_y_1=final_Ft_y_1,
-            final_current_size=final_current_size,
-            final_ft_ctf=final_ft_ctf,
-            final_ft_y=final_ft_y,
-            final_grid_correct=final_grid_correct,
-            final_iter_fsc=final_iter_fsc,
-            final_mstep_accumulator_shape=final_mstep_accumulator_shape,
-            final_mstep_full_half_axis=final_mstep_full_half_axis,
-            final_tau2_update_details=final_tau2_update_details,
-            final_unfiltered_Ft_ctf_0=final_unfiltered_Ft_ctf_0,
-            final_unfiltered_Ft_ctf_1=final_unfiltered_Ft_ctf_1,
-            final_unfiltered_Ft_y_0=final_unfiltered_Ft_y_0,
-            final_unfiltered_Ft_y_1=final_unfiltered_Ft_y_1,
-            grid_size=grid_size,
-            k_class_enabled=k_class_enabled,
-            tau2_fudge=tau2_fudge,
-            volume_shape=volume_shape,
-            logger=logger,
-        )
-
     # Reconstruct the final volume from the COMBINED Ft_y/Ft_ctf accumulators
     # at the full Nyquist resolution. Skip the join_halves step (we're already
     # combining the two halves into one dataset for this final iter).

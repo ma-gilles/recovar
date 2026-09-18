@@ -559,28 +559,6 @@ def test_case_jobs_build_cuda_lib_atomically_under_lock(tmp_path):
     assert 'mv -f "${CUDA_LIB_TMP}" "${RECOVAR_CUDA_LIB}"' in text
 
 
-def test_final_bpref_accumulator_dump_dir_is_case_scoped(tmp_path):
-    dump_root = tmp_path / "bpref_dumps"
-    proc, scratch = _dry_run_launcher(
-        tmp_path,
-        case="28",
-        extra_env={"RECOVAR_FINAL_BPREF_ACCUM_DUMP_DIR": str(dump_root)},
-    )
-
-    assert proc.returncode == 0, proc.stdout
-    scripts = list((scratch / "jobs").glob("em_k1_matrix_28_*.sh"))
-    assert len(scripts) == 1
-    text = scripts[0].read_text()
-    assert f"export RECOVAR_FINAL_BPREF_ACCUM_DUMP_DIR={dump_root}" in text
-    assert (
-        'export RECOVAR_FINAL_BPREF_ACCUM_DUMP_DIR="${RECOVAR_FINAL_BPREF_ACCUM_DUMP_DIR%/}/'
-        '28_small_kent_extra_offset_3k_g128_noise3_bf80"'
-    ) in text
-    assert 'mkdir -p "${RECOVAR_FINAL_BPREF_ACCUM_DUMP_DIR}"' in text
-    submission = (scratch / "submission.env").read_text()
-    assert f"RECOVAR_FINAL_BPREF_ACCUM_DUMP_DIR={dump_root}" in submission
-
-
 def test_bpref_and_relion_mstep_diagnostic_dump_dirs_are_case_scoped(tmp_path):
     bpref_root = tmp_path / "bpref_iter"
     pass2_root = tmp_path / "pass2"
