@@ -48,17 +48,58 @@ from recovar.em.ppca_refinement.mean_regularization import (
     relion_style_mean_precision_from_stats,
 )
 from recovar.em.ppca_refinement.postprocess import PostprocessConfig
-from recovar.em.sampling import get_relion_rotation_grid
+from recovar.em.sampling import get_relion_rotation_grid, get_translation_grid
 from recovar.utils.json_utils import to_jsonable
-from scripts.run_ppca_local_from_init_npz import (
+from scripts.run_ppca_dense_from_init_npz import (
     _half_size,
-    _image_ordered_pose_arrays,
     _load_init,
     _load_noise_variance,
     _load_simulation_info,
     _regularization_penalty,
-    _translations_from_source,
 )
+
+
+def _translations_from_source(args, simulation_info, n_images: int):
+    if args.translation_source == "simulation-info-unique":
+        if simulation_info is None:
+            raise ValueError("--translation-source=simulation-info-unique requires --simulation-info")
+        translations = np.unique(np.asarray(simulation_info["trans"], dtype=np.float32)[:n_images], axis=0)
+    else:
+        translations = np.asarray(
+            get_translation_grid(float(args.offset_range_px), float(args.offset_step_px)), dtype=np.float32
+        )
+        if args.max_translations is not None:
+            translations = translations[: int(args.max_translations)]
+    return translations
+
+
+def _image_ordered_pose_arrays(diagnostics: dict) -> tuple[dict[str, np.ndarray], np.ndarray]:
+    """Return per-image pose diagnostics sorted back to dataset image order."""
+
+    image_indices = np.asarray(diagnostics["image_indices"], dtype=np.int64)
+    order = np.argsort(image_indices).astype(np.int64)
+    arrays = {
+        "best_rotation_idx": np.asarray(diagnostics["best_rotation_idx"])[order],
+        "best_rotation_id": np.asarray(diagnostics["best_rotation_id"])[order],
+        "best_rotation_matrix": np.asarray(diagnostics["best_rotation_matrix"], dtype=np.float32)[order],
+        "best_translation_idx": np.asarray(diagnostics["best_translation_idx"])[order],
+        "best_translation": np.asarray(diagnostics["best_translation"], dtype=np.float32)[order],
+    }
+    for key in (
+        "top_rotation_idx",
+        "top_rotation_id",
+        "top_rotation_matrix",
+        "top_translation_idx",
+        "top_log_score",
+        "top_log_score_per_image",
+        "top_posterior",
+        "top_posterior_per_image",
+        "max_posterior_per_image",
+        "n_significant_per_image",
+    ):
+        if key in diagnostics:
+            arrays[key] = np.asarray(diagnostics[key])[order]
+    return arrays, image_indices[order]
 
 
 def _parse_args() -> argparse.Namespace:
