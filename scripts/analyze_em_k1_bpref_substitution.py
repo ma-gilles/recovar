@@ -20,13 +20,13 @@ from typing import Any
 
 import numpy as np
 
-from scripts.analyze_em_k1_tau2_substitution import (
-    _general,
-    _model,
-    _reconstruct_and_flatten,
-    _relion_tau2,
-    map_metrics,
+import starfile
+
+from scripts.analyze_em_k1_map_amplitude_trajectory import (
+    centered_fourier,
+    summarize_fourier_pair,
 )
+from scripts.fsc_metrics import normalized_fsc_auc, shell_fsc
 from scripts.compare_iter1_bpref_accum import (
     _apply_recovar_frame,
     downsample_recovar_accumulator,
@@ -40,6 +40,112 @@ OUTPUT_SCHEMA = "recovar.em_k1_bpref_substitution.v1"
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise ValueError(message)
+
+
+def normalized_l2(value: np.ndarray, target: np.ndarray) -> float:
+    value = np.asarray(value, dtype=np.float64)
+    target = np.asarray(target, dtype=np.float64)
+    _require(value.shape == target.shape, "normalized L2 inputs differ in shape")
+    target_norm = float(np.linalg.norm(target))
+    _require(target_norm > 0.0, "normalized L2 target has zero energy")
+    return float(np.linalg.norm(value - target) / target_norm)
+
+
+def map_metrics(value: np.ndarray, target: np.ndarray) -> dict[str, Any]:
+    curve = np.asarray(shell_fsc(value, target), dtype=np.float64)
+    _require(
+        curve.size > 1 and np.any(np.isfinite(curve[1:])),
+        "map pair has no finite non-DC FSC shells",
+    )
+    amplitude = summarize_fourier_pair(
+        centered_fourier(value),
+        centered_fourier(target),
+    )
+    return {
+        "fsc_auc": float(normalized_fsc_auc(curve)),
+        "n_fsc_shells": int(curve.size),
+        "relative_l2": normalized_l2(value, target),
+        "amplitude": {
+            key: amplitude[key]
+            for key in (
+                "global_scale_recovar_to_relion",
+                "shell_scale_min",
+                "shell_scale_median",
+                "shell_scale_max",
+                "relative_l2_after_shell_scale",
+                "shell_scale_explained_fraction",
+            )
+        },
+    }
+
+
+def _model(path: Path) -> dict[str, Any]:
+    _require(path.is_file(), f"missing RELION model: {path}")
+    value = starfile.read(path)
+    _require(isinstance(value, dict), f"RELION model is not multi-block: {path}")
+    return value
+
+
+def _general(model: dict[str, Any]) -> dict[str, Any]:
+    block = model["model_general"]
+    return dict(block.iloc[0]) if hasattr(block, "iloc") else dict(block)
+
+
+def _relion_tau2(model: dict[str, Any], n4: float) -> np.ndarray:
+    table = model["model_class_1"]
+    _require("rlnReferenceTau2" in table, "RELION model has no rlnReferenceTau2")
+    value = np.asarray(table["rlnReferenceTau2"], dtype=np.float64) * n4
+    _require(
+        value.ndim == 1 and value.size > 0 and np.all(np.isfinite(value)),
+        "RELION tau2 is empty or non-finite",
+    )
+    return value
+
+
+def _reconstruct_and_flatten(
+    weight: np.ndarray,
+    numerator: np.ndarray,
+    tau2: np.ndarray,
+    *,
+    volume_shape: tuple[int, int, int],
+    accumulator_shape: tuple[int, int, int],
+    padding_factor: int,
+    projection_padding_factor: int,
+    current_size: int,
+    minres_map: int,
+    voxel_size: float,
+    particle_diameter_angstrom: float,
+) -> np.ndarray:
+    from recovar.core import fourier_transform_utils, mask
+    from recovar.em.refinement.mean_helpers import _reconstruct_volume_eager
+
+    reconstructed = _reconstruct_volume_eager(
+        weight,
+        numerator,
+        volume_shape,
+        padding_factor,
+        tau=tau2,
+        tau2_fudge=1.0,
+        projection_padding_factor=projection_padding_factor,
+        minres_map=minres_map,
+        current_size=current_size,
+        accumulator_volume_shape=accumulator_shape,
+    )
+    real = np.asarray(
+        fourier_transform_utils.get_idft3(
+            np.asarray(reconstructed).reshape(volume_shape)
+        )
+    ).real
+    radius = particle_diameter_angstrom / (2.0 * voxel_size)
+    solvent_mask = np.asarray(
+        mask.raised_cosine_mask(
+            volume_shape,
+            radius=radius,
+            radius_p=radius + 5.0,
+            offset=np.zeros(3),
+        )
+    )
+    return np.asarray(real * solvent_mask, dtype=np.float64)
 
 
 def load_relion_raw(path: Path, *, value_dtype: np.dtype) -> tuple[np.ndarray, np.ndarray]:
