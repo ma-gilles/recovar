@@ -93,13 +93,6 @@ def _relion_image_correction_factors(batch_corr, batch_scale):
     return batch_corr, batch_corr / batch_scale
 
 
-def _noise_split_diagnostics_requested() -> bool:
-    """Return whether per-shell A2/XA noise split diagnostics are needed."""
-    return bool(
-        os.environ.get("RECOVAR_NOISE_DEBUG_DUMP_DIR") or os.environ.get("RECOVAR_DENSE_NOISE_COMPONENT_DUMP_DIR")
-    )
-
-
 def _dense_big_jit_disabled_reason(
     *,
     accumulate_noise: bool,
@@ -242,7 +235,10 @@ class _DenseDebugOptions:
             noise_component_dump_targets=frozenset(dump_targets),
             noise_component_dump_enabled=bool(dump_enabled),
             per_pose_score_dump=parse_dense_per_pose_score_dump_request(),
-            return_noise_split=_noise_split_diagnostics_requested(),
+            return_noise_split=bool(
+                os.environ.get("RECOVAR_NOISE_DEBUG_DUMP_DIR")
+                or os.environ.get("RECOVAR_DENSE_NOISE_COMPONENT_DUMP_DIR")
+            ),
         )
 
 
