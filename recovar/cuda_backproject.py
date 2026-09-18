@@ -148,6 +148,17 @@ def bpref_device_signature_scope(active: bool):
         _bpref_device_signature_scope.reset(token)
 
 
+def backproject_skip_zero_requested() -> bool:
+    """Return whether indexed backprojection skips exactly-zero pixels.
+
+    Opt-in (``RECOVAR_BACKPROJECT_SKIP_ZERO=1``). Sparse pass-2 M-step rows are
+    padded to bucket size and pruned rows are entirely zero; scattering them
+    only adds ``+0.0`` to every touched voxel. Skipping removes those atomics.
+    """
+
+    return _env_flag(_BACKPROJECT_SKIP_ZERO_ENV)
+
+
 def custom_cuda_requested() -> bool:
     """Return True unless the user explicitly disables custom CUDA.
 
@@ -543,6 +554,8 @@ _ffi_lock = threading.Lock()
 # FFI target name constants
 _TARGET_BACKPROJECT = "cuda_backproject"
 _TARGET_BACKPROJECT_INDEXED = "cuda_backproject_indexed"
+_TARGET_BACKPROJECT_INDEXED_SKIP_ZERO = "cuda_backproject_indexed_skip_zero"
+_BACKPROJECT_SKIP_ZERO_ENV = "RECOVAR_BACKPROJECT_SKIP_ZERO"
 _TARGET_BACKPROJECT_INDEXED_SIGNATURE = "cuda_backproject_indexed_signature"
 _TARGET_PROJECT = "cuda_project"
 _TARGET_PROJECT_RELION_HALF_RUNTIME = "cuda_project_relion_half_runtime"
@@ -1145,6 +1158,10 @@ _OPTIONAL_FFI_REGISTRATIONS = {
     _TARGET_SPARSE_PASS2_POSTERIOR_F32: (
         "SparsePass2PosteriorF32",
         "The fused sparse pass-2 posterior requires an explicit CUDA build with SparsePass2PosteriorF32",
+    ),
+    _TARGET_BACKPROJECT_INDEXED_SKIP_ZERO: (
+        "BackprojectIndexedSkipZero",
+        "RECOVAR_BACKPROJECT_SKIP_ZERO requires an explicit CUDA build with BackprojectIndexedSkipZero",
     ),
 }
 
@@ -5554,6 +5571,24 @@ def relion_preprocess_real_f32(
     )
 
 
+def _backproject_indexed_target(use_relion_block_topology: bool) -> str:
+    """Pick the indexed-backprojection FFI target for the current gate.
+
+    The zero-skipping variant is opt-in and is unavailable under the RELION
+    block topology, which re-expands operands onto the dense FFTW rectangle.
+
+    ``backproject_indexed`` is jitted, so this runs at trace time and the
+    chosen target is baked into the cached executable. Changing
+    ``RECOVAR_BACKPROJECT_SKIP_ZERO`` part-way through a process therefore has
+    no effect on already-traced shapes; set it before the first call.
+    """
+
+    if backproject_skip_zero_requested() and not use_relion_block_topology:
+        _ensure_optional_ffi(_TARGET_BACKPROJECT_INDEXED_SKIP_ZERO)
+        return _TARGET_BACKPROJECT_INDEXED_SKIP_ZERO
+    return _TARGET_BACKPROJECT_INDEXED
+
+
 @functools.partial(jax.jit, static_argnums=(4, 5, 6, 7, 8, 9, 10))
 def backproject_indexed(
     volume: jax.Array,
@@ -5599,8 +5634,9 @@ def backproject_indexed(
     rot6 = _rot_to_compact(rotation_matrices, _volume_real_dtype(volume))
     out_type = jax.ShapeDtypeStruct(volume.shape, volume.dtype)
 
+    target = _backproject_indexed_target(use_relion_block_topology)
     return jax.ffi.ffi_call(
-        _TARGET_BACKPROJECT_INDEXED,
+        target,
         out_type,
         input_output_aliases={3: 0},
         vmap_method="sequential",
