@@ -607,10 +607,8 @@ def refine_single_volume(
     # History tracking: one RefinementHistory instance accumulates every
     # per-iteration trajectory (see helpers/iteration_history.py).
     history = RefinementHistory()
-    per_half = PerHalfOutputs()
-    hard_assignments = per_half.hard_assignments
     previous_assignments = [None, None]
-    class_assignments = per_half.class_assignments
+    class_assignments = [None, None]
     previous_class_assignments = [None, None]
     previous_best_rotations = [None, None]
     relion_half_inputs = HalfInputState.from_initial_values(
@@ -621,9 +619,6 @@ def refine_single_volume(
         group_ids=replay.init_group_ids,
         group_count=replay.init_group_count,
     )
-    max_posterior_per_half = per_half.max_posterior
-    rotation_posterior_per_half = per_half.rotation_posterior
-    class_rotation_posterior_per_half = per_half.class_rotation_posterior
     previous_data_vs_prior_for_scheduling = None
     tau2_update_details = None
     tau2_update_details_per_half = None
@@ -1727,7 +1722,6 @@ def refine_single_volume(
         # Coarse-grid assignments for local search tracking (always indexed
         # into effective_rotations, even when adaptive oversampling is used).
         coarse_ha = per_half.coarse_ha
-        class_posterior_per_half = per_half.class_posterior
 
         if use_adaptive:
             # --- TWO-PASS ADAPTIVE OVERSAMPLING (RELION parity) ---
