@@ -127,3 +127,43 @@ def test_packed_mask_preserves_boolean_rows_and_bucket_padding(n_translations):
             count = stop - start
             np.testing.assert_array_equal(bucket.local_sample_mask[row, :count], mask[start:stop])
             assert not bucket.local_sample_mask[row, count:].any()
+
+
+def _unequal_support_layout():
+    """A layout whose images have deliberately unequal local supports."""
+    n = sampling.rotation_grid_size(0)
+    return local_layout.build_pass2_hypothesis_layout(
+        [np.arange(1), np.arange(3), np.arange(n)],
+        n_coarse_rotations=n,
+        n_coarse_translations=1,
+        nside_level=0,
+        translations=np.zeros((1, 2), dtype=np.float32),
+        translation_step=1.0,
+        oversampling_order=1,
+    )
+
+
+def test_bucket_unification_applies_while_the_padding_it_adds_is_bounded(monkeypatch):
+    monkeypatch.setenv(local_layout.EXACT_LOCAL_UNIFY_MAX_PADDED_ROWS_ENV, str(10**9))
+    layout = _unequal_support_layout()
+
+    plans = local_layout.plan_local_hypothesis_buckets(layout, 2, 32, unify_bucket_sizes=True)
+
+    assert len({plan.bucket_rotation_count for plan in plans}) == 1
+
+
+def test_bucket_unification_is_dropped_when_it_would_add_too_many_rows(monkeypatch):
+    """Unification pads every image to the largest neighborhood; past a bound that costs
+    more than the extra compiled shapes it avoids. Measured on K=4 100k/256, where it
+    turned 54.1 M padded rows into 204.8 M and doubled pass-2 time at the all-data
+    iteration."""
+    monkeypatch.setenv(local_layout.EXACT_LOCAL_UNIFY_MAX_PADDED_ROWS_ENV, "0")
+    layout = _unequal_support_layout()
+
+    plans = local_layout.plan_local_hypothesis_buckets(layout, 2, 32, unify_bucket_sizes=True)
+
+    sizes = {plan.bucket_rotation_count for plan in plans}
+    assert len(sizes) > 1
+    # Never below the true per-image neighborhood cardinality.
+    for plan in plans:
+        assert plan.bucket_rotation_count >= int(np.max(plan.actual_rotation_counts))

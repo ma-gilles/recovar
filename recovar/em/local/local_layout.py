@@ -30,6 +30,22 @@ from recovar.em.sampling import (
 from recovar.em.scoring.significant_samples import significant_sample_ids
 
 EXACT_LOCAL_BUCKET_QUANTUM_ENV = "RECOVAR_EXACT_LOCAL_BUCKET_QUANTUM"
+
+# Global bucket-size unification pads every image to the halfset's largest local
+# neighborhood. That buys one compiled shape per layout, which is worth a lot while
+# the subsets are small, and costs a lot once the subset is the whole dataset.
+#
+# Measured on K=4 100k/256 InitialModel (H100, seed 29, exclusive nodes,
+# em_work/codex/vdam_k4_unify_20260918): at the final all-data iteration unification
+# turned 54.1 M real padded rows into 204.8 M and pass 2 took 799.7 s instead of
+# 384.0 s. Over the cheap subset iterations the same setting was worth ~250 s the
+# other way, because each extra bucket shape is another XLA program. Unifying only
+# while the padding it adds stays bounded keeps both ends.
+#
+# The bound is on rows the unification would add. 15.4 M was neutral in that run and
+# 150.7 M was a large loss, so the default sits between them with margin.
+EXACT_LOCAL_UNIFY_MAX_PADDED_ROWS = 32_000_000
+EXACT_LOCAL_UNIFY_MAX_PADDED_ROWS_ENV = "RECOVAR_EXACT_LOCAL_UNIFY_MAX_PADDED_ROWS"
 EXACT_LOCAL_BUCKET_RADIX_ENV = "RECOVAR_EXACT_LOCAL_BUCKET_RADIX"
 EXACT_LOCAL_BUCKET_MIN_QUANTUM = 256
 
@@ -110,6 +126,21 @@ def _exact_bucket_rotation_size(
             minimum=16,
         ),
     )
+
+
+def _exact_local_unify_max_padded_rows() -> int:
+    """Rows that global bucket-size unification may add before it is dropped.
+
+    See ``EXACT_LOCAL_UNIFY_MAX_PADDED_ROWS`` for the measurement behind the default.
+    """
+
+    raw = os.environ.get(EXACT_LOCAL_UNIFY_MAX_PADDED_ROWS_ENV, "").strip()
+    if not raw:
+        return int(EXACT_LOCAL_UNIFY_MAX_PADDED_ROWS)
+    value = int(raw)
+    if value < 0:
+        raise ValueError(f"{EXACT_LOCAL_UNIFY_MAX_PADDED_ROWS_ENV} must be non-negative")
+    return value
 
 
 def _exact_local_large_bucket_quantum(rotation_block_size: int, explicit: int | None = None) -> int:
@@ -1357,7 +1388,12 @@ def plan_local_hypothesis_buckets(
         if bool(unify_bucket_sizes):
             raise ValueError("consecutive mixed buckets cannot use run-global bucket unification")
     if bucket_sizes.size and bool(unify_bucket_sizes):
-        bucket_sizes = np.full_like(bucket_sizes, int(bucket_sizes.max()))
+        unified_size = int(bucket_sizes.max())
+        added_rows = unified_size * int(bucket_sizes.size) - int(bucket_sizes.sum(dtype=np.int64))
+        if added_rows <= _exact_local_unify_max_padded_rows():
+            bucket_sizes = np.full_like(bucket_sizes, unified_size)
+        # Otherwise keep each image's own size: past this point the rows unification
+        # would add cost more than the extra compiled shapes it avoids.
     processing_order = (
         np.arange(layout.n_images, dtype=np.int32)
         if preserve_image_order
