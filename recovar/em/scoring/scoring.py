@@ -1180,7 +1180,7 @@ def _winner_take_all_probs_for_block(best_argmax, r0, actual_rot, rotation_block
     return probs * in_block[:, None, None]
 
 
-@partial(jax.jit, static_argnums=(7, 8, 9, 10, 11))
+@partial(jax.jit, static_argnums=(7, 8))
 def _m_step_block_windowed(
     shifted_windowed,
     scores_block,
@@ -1191,9 +1191,6 @@ def _m_step_block_windowed(
     Ft_ctf,
     n_images,
     n_trans,
-    n_windowed,
-    image_shape,
-    volume_shape,
 ):
     """Normalize scores to probabilities and compute one windowed M-step block.
 
