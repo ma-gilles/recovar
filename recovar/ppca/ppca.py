@@ -59,20 +59,6 @@ def compute_Cz_from_second_moments(second_moment_zs):
 batch_over_vol_slice_volume = jax.vmap(core.slice_volume, in_axes=(1, None, None, None, None), out_axes=1)
 
 
-def check_imaginary_part(x, image_shape, name, skip_ft=False):
-    if not skip_ft:
-        if len(image_shape) == 2:
-            y = ftu.get_idft2(x.reshape(-1, *image_shape))
-        else:
-            y = ftu.get_idft3(x.reshape(-1, *image_shape))
-    else:
-        y = x
-    imag_norm = np.linalg.norm(y.imag)
-    ratio = np.inf if imag_norm == 0 else np.linalg.norm(y.real) / imag_norm
-    print("imaginary part ratio", name, ratio)
-    return ratio
-
-
 batch_over_vol_adjoint_slice_volume = jax.vmap(
     core.adjoint_slice_volume, in_axes=(-1, None, None, None, None), out_axes=-1
 )

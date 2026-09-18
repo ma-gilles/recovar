@@ -677,7 +677,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--gt-w-prior-divide-by-q-total",
         action="store_true",
-        help="Divide GT shell row-norm-squared W prior by q, matching make_shell_w_prior's per-component convention.",
+        help="Divide GT shell row-norm-squared W prior by q to obtain a per-component prior.",
     )
     parser.add_argument(
         "--save-mrc", action="store_true", help="Write final mean and PC maps in RECOVAR MRC convention"
