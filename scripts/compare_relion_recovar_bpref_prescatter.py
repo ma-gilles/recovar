@@ -132,78 +132,60 @@ def _load_device_support(
     records: dict[int, np.ndarray] = {}
     qualified_shadow_stacks: set[int] = set()
     paths = sorted(Path(geometry_directory).glob("*.device.npz"))
-    if not paths:
-        paths = sorted(Path(geometry_directory).glob("*.npz"))
     _require(bool(paths), f"no RECOVAR device geometry shards: {geometry_directory}")
     for path in paths:
         with np.load(path, allow_pickle=False) as geometry:
             companion = Path(str(geometry["companion_contribution_path"]))
-            legacy_schema = "signature_particle_rows" in geometry
-            if legacy_schema:
-                particle_rows = np.asarray(geometry["signature_particle_rows"], dtype=np.int64)
-                pixels = np.asarray(geometry["signature_pixel_indices"], dtype=np.int32)
-                flags = np.asarray(geometry["signature_row_flags"], dtype=np.uint32)
-            else:
+            _require(
+                str(geometry["schema"]) == "recovar-device-scatter-signature-v1",
+                f"unknown RECOVAR device signature schema: {path}",
+            )
+            for gate in (
+                "signature_inertness_gate_passed",
+                "signature_accumulator_shadow_bitwise_equal",
+                "signature_prepared_operands_bitwise_equal",
+            ):
                 _require(
-                    str(geometry["schema"]) == "recovar-device-scatter-signature-v1",
-                    f"unknown RECOVAR device signature schema: {path}",
+                    bool(geometry[gate]),
+                    f"RECOVAR device signature gate failed ({gate}): {path}",
                 )
-                for gate in (
-                    "signature_inertness_gate_passed",
-                    "signature_accumulator_shadow_bitwise_equal",
-                    "signature_prepared_operands_bitwise_equal",
-                ):
-                    _require(
-                        bool(geometry[gate]),
-                        f"RECOVAR device signature gate failed ({gate}): {path}",
-                    )
-                particle_rows = np.asarray(geometry["particle_local_row"], dtype=np.int64)
-                particle_original_indices = np.asarray(
-                    geometry["particle_original_indices"], dtype=np.int64
-                )
-                canonical_pixels = np.asarray(
-                    geometry["canonical_pixel_indices"], dtype=np.int32
-                )
-                image_shape = np.asarray(geometry["image_shape"], dtype=np.int64)
-                current_size = int(np.asarray(geometry["current_size"]).item())
-                _require(
-                    image_shape.shape == (2,)
-                    and image_shape[0] == image_shape[1]
-                    and current_size > 0,
-                    f"device signature image geometry changed: {path}",
-                )
-                current_half_width = current_size // 2 + 1
-                current_rows = canonical_pixels // current_half_width
-                columns = canonical_pixels % current_half_width
-                signed_rows = np.where(
-                    current_rows <= current_size // 2,
-                    current_rows,
-                    current_rows - current_size,
-                )
-                pixels = (
-                    np.mod(signed_rows, int(image_shape[0]))
-                    * (int(image_shape[1]) // 2 + 1)
-                    + columns
-                ).astype(np.int32)
-                flags = np.asarray(geometry["row_flags"], dtype=np.uint32)
+            particle_original_indices = np.asarray(
+                geometry["particle_original_indices"], dtype=np.int64
+            )
+            canonical_pixels = np.asarray(
+                geometry["canonical_pixel_indices"], dtype=np.int32
+            )
+            image_shape = np.asarray(geometry["image_shape"], dtype=np.int64)
+            current_size = int(np.asarray(geometry["current_size"]).item())
+            _require(
+                image_shape.shape == (2,)
+                and image_shape[0] == image_shape[1]
+                and current_size > 0,
+                f"device signature image geometry changed: {path}",
+            )
+            current_half_width = current_size // 2 + 1
+            current_rows = canonical_pixels // current_half_width
+            columns = canonical_pixels % current_half_width
+            signed_rows = np.where(
+                current_rows <= current_size // 2,
+                current_rows,
+                current_rows - current_size,
+            )
+            pixels = (
+                np.mod(signed_rows, int(image_shape[0]))
+                * (int(image_shape[1]) // 2 + 1)
+                + columns
+            ).astype(np.int32)
+            flags = np.asarray(geometry["row_flags"], dtype=np.uint32)
         with np.load(companion, allow_pickle=False) as contribution:
             companion_stacks = np.asarray(contribution["stack_indices_1based"], dtype=np.int64)
-            companion_original_indices = (
-                None
-                if legacy_schema
-                else np.asarray(contribution["original_indices"], dtype=np.int64)
-            )
-        if legacy_schema:
-            selected_stacks = companion_stacks[particle_rows]
-        else:
-            assert companion_original_indices is not None
-            _require(
-                np.array_equal(particle_original_indices, companion_original_indices),
-                f"device/contribution original identities differ: {path}",
-            )
-            selected_stacks = companion_stacks
-        if not legacy_schema:
-            qualified_shadow_stacks.update(int(stack) for stack in selected_stacks)
+            companion_original_indices = np.asarray(contribution["original_indices"], dtype=np.int64)
+        _require(
+            np.array_equal(particle_original_indices, companion_original_indices),
+            f"device/contribution original identities differ: {path}",
+        )
+        selected_stacks = companion_stacks
+        qualified_shadow_stacks.update(int(stack) for stack in selected_stacks)
         _require(
             pixels.ndim == 2
             and flags.shape == pixels.shape
