@@ -141,9 +141,6 @@ _COARSE_SIGNIFICANCE_SUPPORT_AUDIT_IDS_ENV = (
 _K1_COARSE_GAUSSIAN_NATIVE_TEXTURE_ENV = (
     "RECOVAR_K1_COARSE_GAUSSIAN_NATIVE_TEXTURE"
 )
-_SIGNIFICANCE_DUMP_PASSIVE_CACHE_ENV = (
-    "RECOVAR_SIGNIFICANCE_DUMP_PASSIVE_CACHE"
-)
 NVTX_DOMAIN_EM = "recovar_em"
 logger = logging.getLogger(__name__)
 
@@ -3132,13 +3129,6 @@ def _compute_k_class_significance_batched(
         dump_target_with_prior_blocks_per_class = (
             [[] for _ in range(n_classes)] if dump_target_local_positions is not None else None
         )
-        passive_score_dump = bool(
-            dump_target_local_positions is not None
-            and os.environ.get(_SIGNIFICANCE_DUMP_PASSIVE_CACHE_ENV) == "1"
-        )
-        passive_raw_score_blocks_per_class = (
-            [[] for _ in range(n_classes)] if passive_score_dump else None
-        )
         coarse_gemm_macro_pre_prior_blocks = (
             [[] for _ in range(n_classes)]
             if coarse_gemm_diagnostic_positions is not None
@@ -3159,14 +3149,6 @@ def _compute_k_class_significance_batched(
             if coarse_gemm_diagnostic_positions is not None
             else None
         )
-        if passive_score_dump:
-            # Do not materialize score blocks while production support is
-            # being computed. Near an atomic cutoff that observation can
-            # perturb the execution under diagnosis. Retain device buffers
-            # and write them only after cached-score support selection.
-            dump_target_pre_prior_blocks_per_class = None
-            dump_target_with_prior_blocks_per_class = None
-
         if coarse_gaussian_gemm_hybrid_requested:
             if coarse_gaussian_gemm_compact_posterior_requested and debug_dump_enabled:
                 raise ValueError(
@@ -3474,12 +3456,6 @@ def _compute_k_class_significance_batched(
             )
         )
         cached_class_score_blocks = [] if cache_score_blocks else None
-        if passive_score_dump and cached_class_score_blocks is None:
-            raise RuntimeError(
-                f"{_SIGNIFICANCE_DUMP_PASSIVE_CACHE_ENV}=1 requires the "
-                "production significance score cache"
-            )
-
         # ``RECOVAR_PASS1_FUSED=1`` swaps the per-block 4-5 separate JIT
         # dispatches (project/score, padding-mask, add-priors, 2× logsumexp)
         # for one fused @jit call. Bit-identical when active; disabled if any
@@ -3492,11 +3468,6 @@ def _compute_k_class_significance_batched(
             and dump_target_pre_prior_blocks_per_class is None
             and dump_target_with_prior_blocks_per_class is None
         )
-        if passive_score_dump and use_fused_pass1:
-            raise RuntimeError(
-                f"{_SIGNIFICANCE_DUMP_PASSIVE_CACHE_ENV}=1 does not support "
-                "the fused pass-1 diagnostic path"
-            )
         if relion_f32_coarse_support_enabled and use_fused_pass1:
             raise RuntimeError(
                 "RELION float32 coarse support requires access to pre-prior "
@@ -3609,8 +3580,6 @@ def _compute_k_class_significance_batched(
                                 direct_scores_for_diagnostic,
                                 -jnp.inf,
                             )
-                    if passive_raw_score_blocks_per_class is not None:
-                        passive_raw_score_blocks_per_class[class_index].append(scores)
                     if (
                         relion_raw_score_max is not None
                         and coarse_gaussian_gemm_hybrid_batch_result is None
@@ -4370,42 +4339,7 @@ def _compute_k_class_significance_batched(
             target_scores_with_prior_per_class = None
             target_local_positions_for_dump = None
             score_capture_mode = "intrusive_per_block_host_materialization"
-            if passive_raw_score_blocks_per_class is not None:
-                if cached_class_score_blocks is None:
-                    raise RuntimeError("passive significance dump lost cached scores")
-                target_scores_pre_prior_per_class = []
-                target_scores_with_prior_per_class = []
-                for class_index in range(n_classes):
-                    raw_blocks = []
-                    with_prior_blocks = []
-                    for block_index in range(n_blocks):
-                        r0 = block_index * rotation_block_size
-                        actual_rot = min(rotation_block_size, n_rot - r0)
-                        raw_blocks.append(
-                            np.asarray(
-                                passive_raw_score_blocks_per_class[class_index][block_index][
-                                    dump_target_local_positions, :actual_rot, :
-                                ],
-                                dtype=np.float64,
-                            )
-                        )
-                        with_prior_blocks.append(
-                            np.asarray(
-                                cached_class_score_blocks[class_index][block_index][
-                                    dump_target_local_positions, :actual_rot, :
-                                ],
-                                dtype=np.float64,
-                            )
-                        )
-                    target_scores_pre_prior_per_class.append(
-                        np.concatenate(raw_blocks, axis=1)
-                    )
-                    target_scores_with_prior_per_class.append(
-                        np.concatenate(with_prior_blocks, axis=1)
-                    )
-                target_local_positions_for_dump = dump_target_local_positions
-                score_capture_mode = "passive_cached_after_support"
-            elif dump_target_pre_prior_blocks_per_class is not None:
+            if dump_target_pre_prior_blocks_per_class is not None:
                 target_scores_pre_prior_per_class = [
                     np.concatenate(blocks, axis=1) if blocks else None
                     for blocks in dump_target_pre_prior_blocks_per_class
