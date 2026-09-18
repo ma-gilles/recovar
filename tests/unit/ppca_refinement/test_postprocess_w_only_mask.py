@@ -83,6 +83,29 @@ def test_w_only_mask_with_zero_q_returns_inputs_unchanged():
     assert result.W_half.shape == W.shape
 
 
+def test_w_only_all_ones_mask_preserves_real_volume_loadings():
+    volume_shape = (8, 8, 8)
+    rng = np.random.default_rng(22)
+    W = jnp.stack(
+        [ftu.get_dft3_real(jnp.asarray(rng.standard_normal(volume_shape), dtype=jnp.float32)).reshape(-1) for _ in range(2)],
+        axis=1,
+    )
+    mu = ftu.get_dft3_real(jnp.asarray(rng.standard_normal(volume_shape), dtype=jnp.float32)).reshape(-1)
+
+    result = postprocess_ppca_half_volumes(
+        mu,
+        W,
+        volume_shape,
+        config=PostprocessConfig(
+            strategy="w_only_mask",
+            external_mask_volume=np.ones(volume_shape, dtype=np.float32),
+            grid_correct=False,
+        ),
+    )
+
+    np.testing.assert_allclose(np.asarray(result.W_half), np.asarray(W), rtol=1e-4, atol=1e-4)
+
+
 def test_mean_and_w_mask_still_masks_both():
     volume_shape = (16, 16, 16)
     q = 2
