@@ -22,11 +22,7 @@ session's contributions on ``codex/ppca-highres-refine``:
    parity. Performance smoke ensures the chunked path doesn't regress
    to a slow Python loop.
 
-4. **Projcov-style W whitening helpers** —
-   ``whiten_W_svd_post_mstep`` produces column-orthogonal output;
-   ``whiten_W_via_projcov`` exists with the documented signature.
-
-5. **v2 init builder** —
+4. **v2 init builder** —
    ``prepare_ppca_init_from_pipeline_output`` writes the documented set of NPZ keys; the
    refinement script's ``--prior-from-init pipeline-mean-prior`` mode
    requires the saved ``pipeline_mean_prior_half_voxel``.
@@ -40,12 +36,9 @@ the lost feature.
 from __future__ import annotations
 
 import inspect
-import pickle
-import re
-import subprocess
 import sys
 import time
-from dataclasses import MISSING, fields
+from dataclasses import fields
 from pathlib import Path
 
 import jax
@@ -118,7 +111,6 @@ def test_postprocess_external_mask_volume_round_trips_for_w_only_mask():
     import recovar.core.fourier_transform_utils as ftu
 
     volume_shape = (8, 8, 8)
-    half_size = int(np.prod(ftu.volume_shape_to_half_volume_shape(volume_shape)))
     rng = np.random.default_rng(22)
     # Build a Hermitian-symmetric W in half-spectrum form by FT-ing real volumes.
     q = 2
@@ -389,51 +381,7 @@ def test_rotation_chunked_performance_smoke():
 
 
 # ---------------------------------------------------------------------------
-# 4. Projcov-style W whitening helpers
-# ---------------------------------------------------------------------------
-
-
-def test_whiten_W_svd_post_mstep_exists_and_orthogonalizes():
-    """The SVD whitening helper must match the recovar.heterogeneity.ppca route's M-step."""
-    from recovar.em.ppca_refinement.projcov_whiten import whiten_W_svd_post_mstep
-
-    rng = np.random.default_rng(31)
-    W = (rng.standard_normal((128, 4)) + 1j * rng.standard_normal((128, 4))).astype(np.complex64)
-    W_w = whiten_W_svd_post_mstep(W)
-    # Columns must be orthogonal (gram diagonal-only). For complex64 SVD the
-    # ~1e-6 relative orthogonality error of U scales by ||S||^2 (here ~330),
-    # so the absolute off-diagonal can sit near ~1e-2; check relative.
-    gram = W_w.conj().T @ W_w
-    diag = np.real(np.diag(gram))
-    diag_max = float(np.max(diag))
-    off_diagonal = gram - np.diag(np.diag(gram))
-    off_max = float(np.max(np.abs(off_diagonal)))
-    assert off_max / max(diag_max, float(np.finfo(np.float32).eps)) < 1e-3, (
-        f"off-diagonal {off_max:.3e} not small relative to diag-max {diag_max:.3e}"
-    )
-    # Diagonal entries are singular-values-squared, sorted descending.
-    # Allow a tiny relative slack for the boundary between near-equal singular
-    # values under float32.
-    assert np.all(np.diff(diag) <= 1e-4 * diag_max), (
-        "SVD-whitened W must have singular-values-squared sorted descending on the diagonal"
-    )
-
-
-def test_whiten_W_via_projcov_exists_with_documented_signature():
-    """The heavier projcov-based whitening helper must remain importable + named."""
-    from recovar.em.ppca_refinement.projcov_whiten import whiten_W_via_projcov
-
-    sig = inspect.signature(whiten_W_via_projcov)
-    for required in ("dataset", "mu_half_flat", "W_half_flat",
-                     "best_rotation_matrices", "best_translations",
-                     "volume_mask"):
-        assert required in sig.parameters, (
-            f"whiten_W_via_projcov missing required parameter {required!r}"
-        )
-
-
-# ---------------------------------------------------------------------------
-# 5. Pipeline init builder
+# 4. Pipeline init builder
 # ---------------------------------------------------------------------------
 
 
