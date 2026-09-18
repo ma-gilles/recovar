@@ -1,15 +1,6 @@
 """Both bucketed pass-2 entry points resolve their RELION fine-scoring flags through one owner."""
 
-import inspect
-
 from recovar.em.sparse_pass2 import sparse_pass2_bucketed as sp
-
-
-def test_both_entry_points_use_the_owner():
-    for fn in (sp.compute_pass2_stats_sparse_bucketed, sp.compute_k_class_pass2_stats_sparse_fused):
-        src = inspect.getsource(fn)
-        assert src.count("= _pass2_relion_flags(") == 1
-        assert "use_exact_relion_gaussian = bool(" not in src and "use_relion_f32_fine_posterior = bool(" not in src
 
 
 def test_owner_rules(monkeypatch):

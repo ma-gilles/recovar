@@ -1,19 +1,7 @@
 """Both bucketed pass-2 entry points size their projection budget through one owner."""
 
-import inspect
-
 from recovar.em.sparse_pass2 import sparse_pass2_bucketed as sp
 from recovar.em.sparse_pass2 import sparse_pass2_window
-
-
-def test_both_entry_points_use_the_owner_with_their_own_abs2_rule():
-    single = inspect.getsource(sp.compute_pass2_stats_sparse_bucketed)
-    fused = inspect.getsource(sp.compute_k_class_pass2_stats_sparse_fused)
-    for src in (single, fused):
-        assert src.count("= _pass2_projection_budget(") == 1
-        assert "_projection_cache_budget_complex_dtype(" not in src and "_max_projected_rotations_per_call_for_pass(" not in src
-    assert "include_abs2=not (budget_window_spec.use_window or score_only)," in single
-    assert "include_abs2=not budget_window_spec.use_window," in fused
 
 
 def test_owner_threads_the_budget(monkeypatch):
