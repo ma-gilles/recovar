@@ -945,7 +945,6 @@ def _score_half_local(
     # PRIOR_ROTTILT_PSI and score the local direction/psi priors in the
     # hypothesis layout, so adding the learned global direction prior here
     # biases both support selection and final weights.
-    relion_local_rotation_log_prior_k = None
     if diagnostic_score_only and k_class_enabled:
         raise NotImplementedError("score-only local-search diagnostics are currently K=1-only")
     if source_faithful_spectrum_norm and k_class_enabled:
@@ -1073,7 +1072,6 @@ def _score_half_local(
         "scale_correction_group_count": group_count_k,
         "scale_correction_data_vs_prior": scale_correction_data_vs_prior,
         "image_pre_shifts": translation_search_base,
-        "score_with_masked_images": True,
         "adaptive_fraction": RELION_ADAPTIVE_FRACTION,
         "max_significants": max_significants,
         "translation_prior_reference_translations": translation_prior_reference_translations,
@@ -1116,7 +1114,7 @@ def _score_half_local(
             experiment_dataset.voxel_size,
             grid_metadata=parent_grid_metadata,
             translation_prior_reference_translations=translation_prior_reference_translations,
-            rotation_log_prior=relion_local_rotation_log_prior_k,
+            rotation_log_prior=None,
             rotation_grid_random_perturbation=local_search_random_perturbation,
             rotation_grid_angular_sampling_deg=relion_angular_sampling_deg(parent_order, adaptive_oversampling=0),
             dtype=parent_local_layout_dtype,
@@ -1171,7 +1169,6 @@ def _score_half_local(
             debug_pass_label="pass1_parent",
             pass2_layout=parent_layout,
             return_best_pose_details=False,
-            rotation_log_prior=relion_local_rotation_log_prior_k,
             return_reconstruction_sample_indices=True,
             apply_max_significants_to_support=True,
             score_only=True,
@@ -1385,7 +1382,6 @@ def _score_half_local(
         rotation_grid_random_perturbation=local_search_random_perturbation,
         rotation_grid_angular_sampling_deg=local_search_angular_sampling_deg,
         local_parent_oversampling_order=local_parent_oversampling_order,
-        rotation_log_prior=None if pass2_layout is not None else relion_local_rotation_log_prior_k,
         class_log_priors=class_log_priors if k_class_enabled else None,
         return_class_details=k_class_enabled,
         score_only=diagnostic_score_only,
