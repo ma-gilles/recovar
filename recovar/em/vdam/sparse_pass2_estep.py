@@ -734,13 +734,6 @@ def _run_sparse_pass2_initial_model_estep(
         # RELION reuses the coarse pass-1 pdf_offset for all oversampled pass-2 children.
         pass2_translation_log_prior = pass1_translation_log_prior
 
-
-        local_layout = None
-        fine_source_eulers = None
-        fine_rotations = None
-        fine_rotation_parent = None
-        fine_translations = None
-        fine_translation_parent = None
         local_layouts = []
         for class_index in range(state.K):
             class_layout = build_pass2_hypothesis_layout(
