@@ -223,10 +223,6 @@ def _write_projection_cache_rows(cache, projection_block, table_index, row_start
     )
 
 
-def _allocate_projection_cache(plan: ProjectionCachePlan):
-    return jnp.zeros(plan.cache_shape, dtype=plan.cache_dtype)
-
-
 def build_projection_cache(
     plan: ProjectionCachePlan,
     project_block: Callable[[int, int, int], object],
@@ -253,7 +249,7 @@ def build_projection_cache(
             f"to {canonical_dtype}; enable the required precision before building",
         )
 
-    cache = _allocate_projection_cache(plan)
+    cache = jnp.zeros(plan.cache_shape, dtype=plan.cache_dtype)
     cache.block_until_ready()
     for table_index in range(plan.table_count):
         for start in range(0, plan.row_count, plan.chunk_rows):
