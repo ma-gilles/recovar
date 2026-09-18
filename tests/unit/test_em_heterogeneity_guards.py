@@ -5,7 +5,7 @@ import jax.numpy as jnp
 pytest.importorskip("jax")
 pytest.importorskip("healpy")
 
-import recovar.em.heterogeneity as hetero
+import recovar.em.reference.heterogeneity as hetero
 
 pytestmark = pytest.mark.unit
 
@@ -64,7 +64,6 @@ def test_compute_H_B_rejects_empty_rotations_or_translations():
             rotations=np.zeros((0, 3, 3), dtype=np.float32),
             translations=np.zeros((1, 2), dtype=np.float32),
             noise_variance=noise,
-            volume_mask=None,
             picked_frequency_indices=picked,
             image_indices=np.array([0], dtype=np.int32),
             mean_disc="linear_interp",
@@ -78,7 +77,6 @@ def test_compute_H_B_rejects_empty_rotations_or_translations():
             rotations=np.zeros((1, 3, 3), dtype=np.float32),
             translations=np.zeros((0, 2), dtype=np.float32),
             noise_variance=noise,
-            volume_mask=None,
             picked_frequency_indices=picked,
             image_indices=np.array([0], dtype=np.int32),
             mean_disc="linear_interp",
@@ -124,7 +122,7 @@ def test_compute_H_B_small_rotation_count_avoids_zero_internal_batches(monkeypat
     )
     monkeypatch.setattr(
         hetero,
-        "sum_up_images_fixed_rots_covariance_precompute_eqx",
+        "prepare_fixed_rotation_covariance",
         lambda _config, _images, _translations, ctf_params: (
             jnp.zeros((len(ctf_params), 2, 4), dtype=jnp.complex64),
             jnp.ones((len(ctf_params), 4), dtype=jnp.float32),
@@ -132,7 +130,7 @@ def test_compute_H_B_small_rotation_count_avoids_zero_internal_batches(monkeypat
     )
     monkeypatch.setattr(
         hetero,
-        "sum_up_images_fixed_rots_covariance_with_precompute_eqx",
+        "accumulate_fixed_rotation_covariance",
         lambda _config, _shifted, _mean_proj, _ctf, _grid, _prob, _rots, _noise, _picked, H=0, B=0, **_k: (
             H + jnp.ones_like(H),
             B + (1.0 + 0j) * jnp.ones_like(B),
@@ -146,7 +144,6 @@ def test_compute_H_B_small_rotation_count_avoids_zero_internal_batches(monkeypat
         rotations=rotations,
         translations=translations,
         noise_variance=noise,
-        volume_mask=None,
         picked_frequency_indices=picked,
         image_indices=np.array([0], dtype=np.int32),
         mean_disc="linear_interp",
@@ -175,7 +172,6 @@ def test_compute_projected_covariance_rhs_lhs_rejects_empty_rotations_or_transla
             rotations=np.zeros((0, 3, 3), dtype=np.float32),
             translations=np.zeros((1, 2), dtype=np.float32),
             probabilities=probs,
-            volume_mask=None,
             noise_variance=noise,
             disc_type_mean="linear_interp",
             disc_type_u="linear_interp",
@@ -190,7 +186,6 @@ def test_compute_projected_covariance_rhs_lhs_rejects_empty_rotations_or_transla
             rotations=np.zeros((1, 3, 3), dtype=np.float32),
             translations=np.zeros((0, 2), dtype=np.float32),
             probabilities=probs,
-            volume_mask=None,
             noise_variance=noise,
             disc_type_mean="linear_interp",
             disc_type_u="linear_interp",
@@ -234,7 +229,7 @@ def test_compute_projected_covariance_rhs_lhs_small_rotation_count_avoids_zero_b
     )
     monkeypatch.setattr(
         hetero,
-        "reduce_covariance_est_inner_eqx",
+        "reduce_covariance_normal_equations",
         lambda _config, _mean_proj, _u_proj, _prob, _batch, _translations, _ctf_params, _noise: (
             jnp.eye(2, dtype=jnp.float32),
             jnp.ones((2, 2), dtype=jnp.float32),
@@ -248,7 +243,6 @@ def test_compute_projected_covariance_rhs_lhs_small_rotation_count_avoids_zero_b
         rotations=rotations,
         translations=translations,
         probabilities=probs,
-        volume_mask=None,
         noise_variance=noise,
         disc_type_mean="linear_interp",
         disc_type_u="linear_interp",
@@ -284,7 +278,6 @@ def test_compute_H_B_rejects_empty_rotations_gpu(gpu_device):
                 rotations=jax.device_put(jnp.zeros((0, 3, 3), dtype=jnp.float32), gpu_device),
                 translations=jnp.zeros((1, 2), dtype=jnp.float32),
                 noise_variance=noise_arr,
-                volume_mask=None,
                 picked_frequency_indices=picked,
                 image_indices=np.array([0], dtype=np.int32),
                 mean_disc="linear_interp",
@@ -298,7 +291,6 @@ def test_compute_H_B_rejects_empty_rotations_gpu(gpu_device):
                 rotations=jnp.zeros((1, 3, 3), dtype=jnp.float32),
                 translations=jax.device_put(jnp.zeros((0, 2), dtype=jnp.float32), gpu_device),
                 noise_variance=noise_arr,
-                volume_mask=None,
                 picked_frequency_indices=picked,
                 image_indices=np.array([0], dtype=np.int32),
                 mean_disc="linear_interp",
@@ -323,7 +315,6 @@ def test_compute_projected_covariance_rhs_lhs_rejects_empty_gpu(gpu_device):
                 rotations=jax.device_put(jnp.zeros((0, 3, 3), dtype=jnp.float32), gpu_device),
                 translations=jnp.zeros((1, 2), dtype=jnp.float32),
                 probabilities=probs,
-                volume_mask=None,
                 noise_variance=noise_arr,
                 disc_type_mean="linear_interp",
                 disc_type_u="linear_interp",
@@ -338,7 +329,6 @@ def test_compute_projected_covariance_rhs_lhs_rejects_empty_gpu(gpu_device):
                 rotations=jnp.zeros((1, 3, 3), dtype=jnp.float32),
                 translations=jax.device_put(jnp.zeros((0, 2), dtype=jnp.float32), gpu_device),
                 probabilities=probs,
-                volume_mask=None,
                 noise_variance=noise_arr,
                 disc_type_mean="linear_interp",
                 disc_type_u="linear_interp",

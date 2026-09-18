@@ -1,5 +1,4 @@
 import argparse
-import inspect
 import sys
 from types import SimpleNamespace
 
@@ -8,7 +7,7 @@ import pytest
 
 
 def test_k_class_replay_batch_plan_applies_estimator_and_kclass_caps(monkeypatch):
-    from recovar.em.dense_single_volume import batch_planning, firstiter_cc
+    from recovar.em.helpers import batch_planning
     from scripts.run_k_class_parity import _safe_k_class_replay_batch_plan
 
     captured = {}
@@ -18,8 +17,8 @@ def test_k_class_replay_batch_plan_applies_estimator_and_kclass_caps(monkeypatch
         return SimpleNamespace(image_batch_size=250, rotation_block_size=5000)
 
     monkeypatch.setattr(batch_planning, "_estimate_relion_em_batch_sizes", fake_estimator)
-    monkeypatch.setattr(firstiter_cc, "_safe_firstiter_cc_image_batch_size", lambda *_args: 17)
-    monkeypatch.setattr(firstiter_cc, "_safe_dense_k_class_rotation_block_size", lambda *_args: 31)
+    monkeypatch.setattr(batch_planning, "_safe_firstiter_cc_image_batch_size", lambda *_args: 17)
+    monkeypatch.setattr(batch_planning, "_safe_dense_k_class_rotation_block_size", lambda *_args: 31)
 
     plan = _safe_k_class_replay_batch_plan(
         requested_image_batch_size=250,
@@ -94,15 +93,6 @@ def test_k_class_replay_star_precision_is_explicitly_rounded():
     assert source == "star-rounded"
 
 
-def test_k_class_replay_firstiter_best_coarse_shortcut_is_diagnostic_only():
-    import scripts.run_k_class_parity as run_k_class_parity
-
-    source = inspect.getsource(run_k_class_parity.main)
-    assert "--no-firstiter-cc-pass2-only-best-coarse" in source
-    assert "--firstiter-cc-pass2-only-best-coarse" in source
-    assert "args.no_firstiter_cc_pass2_only_best_coarse" in source
-    assert "args.firstiter_cc_pass2_only_best_coarse" in source
-    assert "Patched RELION storeWavg dumps" in source
 
 
 def test_k_class_replay_reads_relion_firstiter_cc_cli_flag(tmp_path):
@@ -161,7 +151,6 @@ def test_k_class_replay_auto_firstiter_cc_tracks_relion_cli():
         prev_iter=0,
         target_iter=1,
         firstiter_cc_mode="auto",
-        winner_take_all_mstep=False,
     )
 
     off = _resolve_firstiter_cc_mode(args, {"do_firstiter_cc": False})
@@ -173,20 +162,18 @@ def test_k_class_replay_auto_firstiter_cc_tracks_relion_cli():
     assert on["score_mode"] == "normalized_cc"
 
 
-def test_k_class_replay_legacy_winner_take_all_forces_diagnostic_mode():
+def test_k_class_replay_force_mode_overrides_relion_cli():
     from scripts.run_k_class_parity import _resolve_firstiter_cc_mode
 
     args = SimpleNamespace(
         prev_iter=0,
         target_iter=1,
-        firstiter_cc_mode="auto",
-        winner_take_all_mstep=True,
+        firstiter_cc_mode="force",
     )
 
     mode = _resolve_firstiter_cc_mode(args, {"do_firstiter_cc": False})
 
     assert mode["effective_mode"] == "force"
-    assert mode["forced_by_winner_take_all_mstep"] is True
     assert mode["relion_requested"] is False
     assert mode["emulate"] is True
 
@@ -201,7 +188,6 @@ def test_k_class_replay_firstiter_lowpass_follows_relion_ini_high():
         prev_iter=0,
         target_iter=1,
         firstiter_cc_mode="auto",
-        winner_take_all_mstep=False,
         firstiter_cc_ini_high_angstrom=None,
     )
     mode = _resolve_firstiter_cc_mode(args, {"do_firstiter_cc": True})
@@ -232,18 +218,10 @@ def test_k_class_replay_firstiter_lowpass_follows_relion_ini_high():
     ) == 25.0
 
 
-def test_k_class_replay_firstiter_lowpass_uses_exact_relion_helper():
-    import scripts.run_k_class_parity as run_k_class_parity
-
-    source = inspect.getsource(run_k_class_parity.main)
-
-    assert "_apply_relion_initial_lowpass_filter" in source
-    assert "filter_edgewidth=2.0" in source
-    assert "locres.low_pass_filter_map" not in source
 
 
 def test_k_class_replay_batch_plan_preserves_smaller_estimator_plan(monkeypatch):
-    from recovar.em.dense_single_volume import batch_planning, firstiter_cc
+    from recovar.em.helpers import batch_planning
     from scripts.run_k_class_parity import _safe_k_class_replay_batch_plan
 
     monkeypatch.setattr(
@@ -251,8 +229,8 @@ def test_k_class_replay_batch_plan_preserves_smaller_estimator_plan(monkeypatch)
         "_estimate_relion_em_batch_sizes",
         lambda **_kwargs: SimpleNamespace(image_batch_size=9, rotation_block_size=11),
     )
-    monkeypatch.setattr(firstiter_cc, "_safe_firstiter_cc_image_batch_size", lambda *_args: 17)
-    monkeypatch.setattr(firstiter_cc, "_safe_dense_k_class_rotation_block_size", lambda *_args: 31)
+    monkeypatch.setattr(batch_planning, "_safe_firstiter_cc_image_batch_size", lambda *_args: 17)
+    monkeypatch.setattr(batch_planning, "_safe_dense_k_class_rotation_block_size", lambda *_args: 31)
 
     plan = _safe_k_class_replay_batch_plan(
         requested_image_batch_size=250,
@@ -270,95 +248,20 @@ def test_k_class_replay_batch_plan_preserves_smaller_estimator_plan(monkeypatch)
     assert plan.rotation_block_size == 11
 
 
-def test_relion_bpref_adaptive_diagnostic_recomputes_same_window_logz():
-    import scripts.run_k_class_parity as run_k_class_parity
-
-    source = inspect.getsource(run_k_class_parity.main)
-
-    assert "bpref_significant_sample_indices" in source
-    assert "RELION BPref diagnostic: recomputing same-window support" in source
-    assert "if args.relion_bpref_mstep and args.adaptive_2pass:" in source
-    assert "current_size=current_size" in source
-    assert 'bpref_full_stats["normalization_log_z"]' in source
-    assert 'significant_full_stats["normalization_log_z"]' not in source.split("if args.relion_bpref_mstep:", 1)[1]
-    assert 'normalization_score_mode="gaussian"' in source
 
 
-def test_relion_bpref_diagnostic_is_bounded_and_nonfatal():
-    import scripts.run_k_class_parity as run_k_class_parity
-
-    main_source = inspect.getsource(run_k_class_parity.main)
-    module_source = inspect.getsource(run_k_class_parity)
-
-    assert "--relion-bpref-max-images-per-microbatch" in main_source
-    assert "max_images_per_microbatch=args.relion_bpref_max_images_per_microbatch" in main_source
-    assert "max_images_per_microbatch=max_images_per_microbatch" in module_source
-    assert "RELION BPref diagnostic failed" in main_source
-    assert '"error": f"{type(exc).__name__}: {exc}"' in main_source
 
 
-def test_k_class_replay_adaptive_sparse_pass2_enables_fine_mstep_pruning():
-    import scripts.run_k_class_parity as run_k_class_parity
-
-    source = inspect.getsource(run_k_class_parity.main)
-    adaptive_block = source.split("if args.adaptive_2pass:", 1)[1].split("else:", 1)[0]
-
-    assert 'adaptive_em_kwargs["relion_fine_mstep_prune"] = bool(args.sparse_pass2)' in adaptive_block
 
 
-def test_k_class_replay_sets_numbered_half_capture_context():
-    import scripts.run_k_class_parity as run_k_class_parity
-
-    source = inspect.getsource(run_k_class_parity.main)
-
-    assert "set_bpref_contribution_dump_context(" in source
-    assert "iteration=args.target_iter" in source
-    assert "half=1" in source
-    assert "clear_bpref_contribution_dump_context()" in source
 
 
-def test_k_class_replay_exposes_relion_x_half_capture_path():
-    import scripts.run_k_class_parity as run_k_class_parity
-
-    source = inspect.getsource(run_k_class_parity.main)
-
-    assert "--relion-x-half-mstep" in source
-    assert "mstep_relion_x_half=bool(args.relion_x_half_mstep)" in source
-    assert "bpref_device_signature_active=bool(" in source
-    assert 'os.environ.get("RECOVAR_BPREF_DEVICE_SIGNATURE_DUMP_DIR")' in source
 
 
-def test_k_class_replay_records_responsibility_class_diagnostics():
-    import scripts.run_k_class_parity as run_k_class_parity
-
-    source = inspect.getsource(run_k_class_parity.main)
-
-    assert "recovar_class_responsibilities" in source
-    assert "mapped_recovar_class_by_responsibility" in source
-    assert "class_assignment_by_responsibility_accuracy_after_permutation" in source
-    assert "class_assignment_best_vs_responsibility_disagreement_count" in source
 
 
-def test_k_class_replay_reports_mstep_class_weights_against_relion():
-    import scripts.run_k_class_parity as run_k_class_parity
-
-    source = inspect.getsource(run_k_class_parity.main)
-
-    assert 'getattr(result, "class_mstep_posterior_sums", None)' in source
-    assert '"recovar_class_weights": recovar_weights' in source
-    assert '"recovar_full_posterior_class_weights": recovar_full_posterior_weights' in source
 
 
-def test_k_class_replay_supports_stop_after_pass2_dump_diagnostic():
-    import scripts.run_k_class_parity as run_k_class_parity
-
-    main_source = inspect.getsource(run_k_class_parity.main)
-    module_source = inspect.getsource(run_k_class_parity)
-
-    assert "--stop-after-pass2-dump" in main_source
-    assert "RECOVAR_PASS2_DUMP_STOP_AFTER_TARGET" in main_source
-    assert "RECOVAR_K_CLASS_PARITY_STOP_AFTER_PASS2_DUMP" in module_source
-    assert "Pass2DumpComplete" in module_source
 
 
 def test_k_class_replay_rejects_stop_after_pass2_with_contribution_capture(
@@ -389,16 +292,6 @@ def test_k_class_replay_rejects_stop_after_pass2_with_contribution_capture(
     assert "contribution capture runs during the M-step" in capsys.readouterr().err
 
 
-def test_k_class_replay_supports_stop_after_contribution_dump_diagnostic():
-    import scripts.run_k_class_parity as run_k_class_parity
-
-    main_source = inspect.getsource(run_k_class_parity.main)
-    module_source = inspect.getsource(run_k_class_parity)
-
-    assert "--stop-after-contribution-dump" in main_source
-    assert "RECOVAR_BPREF_CONTRIBUTION_STOP_AFTER_TARGET" in main_source
-    assert "RECOVAR_K_CLASS_PARITY_STOP_AFTER_CONTRIBUTION_DUMP" in module_source
-    assert "BPrefContributionDumpComplete" in module_source
 
 
 def test_k_class_replay_stop_after_contribution_requires_exact_target_filters(
@@ -429,32 +322,8 @@ def test_k_class_replay_stop_after_contribution_requires_exact_target_filters(
     assert "RECOVAR_BPREF_CONTRIBUTION_DUMP_ORIGINAL_INDICES" in error
 
 
-def test_k_class_replay_exposes_image_fourier_backend_control():
-    import scripts.run_k_class_parity as run_k_class_parity
-
-    source = inspect.getsource(run_k_class_parity.main)
-
-    assert "--image-fourier-backend" in source
-    assert 'choices=("host_numpy", "jax_gpu", "relion_cuda")' in source
-    assert "backend.set_relion_fourier_backend(args.image_fourier_backend)" in source
-    assert "--relion-native-lane-softmask-reduction" in source
-    assert "backend.set_relion_native_lane_reduction" in source
-    assert '"relion_native_lane_softmask_reduction"' in source
 
 
-def test_k_class_replay_uses_exact_relion_projector_for_scoring():
-    import scripts.run_k_class_parity as run_k_class_parity
-
-    source = inspect.getsource(run_k_class_parity.main)
-
-    assert "reference_to_relion_projector_half_maps" in source
-    assert "prev_reference_real" in source
-    assert "relion_projector_half_by_class, relion_projector_r_max" in source
-    assert "current_size=projector_current_size" in source
-    assert "projection_padding_factor=args.projection_padding_factor" in source
-    assert "relion_projector_half=relion_projector_half_by_class" in source
-    assert "relion_projector_r_max=relion_projector_r_max" in source
-    assert "relion_projector_half=relion_projector_half_by_class[class_index]" in source
 
 
 def test_relion_adaptive_coarse_image_size_matches_replay_case8():

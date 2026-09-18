@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import re
 import struct
@@ -13,13 +12,9 @@ from pathlib import Path
 
 import numpy as np
 
-if __package__:
-    from .validate_relion_bpref_prescatter import ROTATION_DTYPE, ROW_DTYPE
-else:
-    from validate_relion_bpref_prescatter import (  # type: ignore[no-redef]
-        ROTATION_DTYPE,
-        ROW_DTYPE,
-    )
+from scripts.file_hash import fnv1a64
+from scripts.file_hash import sha256_file as _sha256
+from scripts.validate_relion_bpref_prescatter import ROTATION_DTYPE, ROW_DTYPE
 
 HEADER_MAGIC = b"RLNBPRF2HEADER\0\0"
 FOOTER_MAGIC = b"RLNBPRF2FOOTER\0\0"
@@ -145,24 +140,10 @@ def _selection_records(selection: dict[str, object]) -> list[dict[str, object]]:
     return normalized
 
 
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(8 * 1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def _float32_from_bits(value: int) -> np.float32:
     return np.float32(struct.unpack("<f", struct.pack("<I", value & 0xFFFFFFFF))[0])
-
-
-def fnv1a64(text: str) -> int:
-    value = 14695981039346656037
-    for byte in text.encode():
-        value ^= byte
-        value = (value * 1099511628211) & 0xFFFFFFFFFFFFFFFF
-    return value
 
 
 def _read_array(payload: bytes, dtype: np.dtype, count: int, offset: int) -> tuple[np.ndarray, int]:

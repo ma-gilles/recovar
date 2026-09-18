@@ -1,5 +1,5 @@
 """
-Unit tests for recovar.em.core.
+Unit tests for recovar.em.reference.core.
 
 Covers:
   crosscorr_from_ft  – output shape and self-correlation peak at (0,0)
@@ -14,7 +14,7 @@ import pytest
 pytest.importorskip("jax")
 
 import jax.numpy as jnp
-from recovar.em import core as em_core
+from recovar.em.reference import core as em_core
 
 pytestmark = pytest.mark.unit
 

@@ -1,0 +1,92 @@
+{
+  "schema": "recovar.vdam_relion_parity_suite.v1",
+  "suite_id": "vdam-k1-robustness-v1",
+  "description": "Default-GUI K=1 InitialModel robustness trajectories reusing immutable EM fixtures that are not in the fixed-12 scorecard. Every cell runs a complete eight-iteration RELION/RECOVAR pair on one physical GPU.",
+  "source_fixture_manifest": {
+    "path": "docs/math/em_relion_parity_fixture_manifest_v2.json",
+    "sha256": "422a79a0a7703d92f9777266e8c34ccd3a7cf5963b354e57a7d9a18f227babee"
+  },
+  "acceptance_contract": {
+    "cross_engine_fsc_auc_min": 0.999,
+    "recovar_minus_relion_gt_fsc_auc_min": -0.002,
+    "required_checkpoints": [0, 1, 2, 4, 8],
+    "exact_schedule": true,
+    "exact_artifact_topology": true,
+    "same_physical_gpu_per_pair": true,
+    "correlation_used": false
+  },
+  "cases": [
+    {
+      "id": "vdam-b01",
+      "name": "outliers_20pct_white_uniform",
+      "coverage": ["outliers", "white_noise", "uniform_poses"],
+      "definition": {"source_em_case_id": "k1-15", "nr_classes": 1, "nr_iter": 8, "random_seed": 0, "tau2_fudge": 4, "healpix_order": 1, "oversampling": 1, "offset_range_px": 6, "offset_step_px": 2, "padding_factor": 1, "symmetry": "C1", "particle_diameter_angstrom": 200}
+    },
+    {
+      "id": "vdam-b02",
+      "name": "outliers_25pct_anisotropic_high_noise",
+      "coverage": ["outliers", "anisotropic_poses", "high_noise"],
+      "definition": {"source_em_case_id": "k1-16", "nr_classes": 1, "nr_iter": 8, "random_seed": 0, "tau2_fudge": 4, "healpix_order": 1, "oversampling": 1, "offset_range_px": 6, "offset_step_px": 2, "padding_factor": 1, "symmetry": "C1", "particle_diameter_angstrom": 200}
+    },
+    {
+      "id": "vdam-b03",
+      "name": "extra_particles_white_uniform",
+      "coverage": ["junk_particles", "white_noise", "uniform_poses"],
+      "definition": {"source_em_case_id": "k1-17", "nr_classes": 1, "nr_iter": 8, "random_seed": 0, "tau2_fudge": 4, "healpix_order": 1, "oversampling": 1, "offset_range_px": 6, "offset_step_px": 2, "padding_factor": 1, "symmetry": "C1", "particle_diameter_angstrom": 200}
+    },
+    {
+      "id": "vdam-b04",
+      "name": "kent_preferred_poses_high_noise",
+      "coverage": ["kent_poses", "high_noise"],
+      "definition": {"source_em_case_id": "k1-21", "nr_classes": 1, "nr_iter": 8, "random_seed": 0, "tau2_fudge": 4, "healpix_order": 1, "oversampling": 1, "offset_range_px": 6, "offset_step_px": 2, "padding_factor": 1, "symmetry": "C1", "particle_diameter_angstrom": 200}
+    },
+    {
+      "id": "vdam-b05",
+      "name": "noctf_radial_noise",
+      "coverage": ["no_ctf", "radial_noise"],
+      "definition": {"source_em_case_id": "k1-23", "nr_classes": 1, "nr_iter": 8, "random_seed": 0, "tau2_fudge": 4, "healpix_order": 1, "oversampling": 1, "offset_range_px": 6, "offset_step_px": 2, "padding_factor": 1, "symmetry": "C1", "particle_diameter_angstrom": 200}
+    },
+    {
+      "id": "vdam-b06",
+      "name": "kent_poses_outliers_20pct",
+      "coverage": ["kent_poses", "outliers", "high_noise"],
+      "definition": {"source_em_case_id": "k1-24", "nr_classes": 1, "nr_iter": 8, "random_seed": 0, "tau2_fudge": 4, "healpix_order": 1, "oversampling": 1, "offset_range_px": 6, "offset_step_px": 2, "padding_factor": 1, "symmetry": "C1", "particle_diameter_angstrom": 200}
+    },
+    {
+      "id": "vdam-b07",
+      "name": "tiny_severe_radial_anisotropic_outliers_30pct",
+      "coverage": ["small_n", "radial_noise", "anisotropic_poses", "outliers", "contrast_noise_scale", "translations"],
+      "definition": {"source_em_case_id": "k1-26", "nr_classes": 1, "nr_iter": 8, "random_seed": 0, "tau2_fudge": 4, "healpix_order": 1, "oversampling": 1, "offset_range_px": 6, "offset_step_px": 2, "padding_factor": 1, "symmetry": "C1", "particle_diameter_angstrom": 200}
+    },
+    {
+      "id": "vdam-b08",
+      "name": "extreme_outliers_70pct",
+      "coverage": ["extreme_outliers", "white_noise", "uniform_poses"],
+      "definition": {"source_em_case_id": "k1-27", "nr_classes": 1, "nr_iter": 8, "random_seed": 0, "tau2_fudge": 4, "healpix_order": 1, "oversampling": 1, "offset_range_px": 6, "offset_step_px": 2, "padding_factor": 1, "symmetry": "C1", "particle_diameter_angstrom": 200}
+    },
+    {
+      "id": "vdam-b09",
+      "name": "kent_extra_particles_contrast_offset",
+      "coverage": ["kent_poses", "junk_particles", "contrast_noise_scale", "translations"],
+      "definition": {"source_em_case_id": "k1-28", "nr_classes": 1, "nr_iter": 8, "random_seed": 0, "tau2_fudge": 4, "healpix_order": 1, "oversampling": 1, "offset_range_px": 6, "offset_step_px": 2, "padding_factor": 1, "symmetry": "C1", "particle_diameter_angstrom": 200}
+    },
+    {
+      "id": "vdam-b10",
+      "name": "low_noise_uniform_poses",
+      "coverage": ["low_noise", "uniform_poses"],
+      "definition": {"source_em_case_id": "k1-29", "nr_classes": 1, "nr_iter": 8, "random_seed": 0, "tau2_fudge": 4, "healpix_order": 1, "oversampling": 1, "offset_range_px": 6, "offset_step_px": 2, "padding_factor": 1, "symmetry": "C1", "particle_diameter_angstrom": 200}
+    },
+    {
+      "id": "vdam-b11",
+      "name": "low_noise_kent_poses",
+      "coverage": ["low_noise", "kent_poses"],
+      "definition": {"source_em_case_id": "k1-30", "nr_classes": 1, "nr_iter": 8, "random_seed": 0, "tau2_fudge": 4, "healpix_order": 1, "oversampling": 1, "offset_range_px": 6, "offset_step_px": 2, "padding_factor": 1, "symmetry": "C1", "particle_diameter_angstrom": 200}
+    },
+    {
+      "id": "vdam-b12",
+      "name": "midscale_kent_radial_noise",
+      "coverage": ["midscale", "kent_poses", "radial_noise"],
+      "definition": {"source_em_case_id": "k1-32", "nr_classes": 1, "nr_iter": 8, "random_seed": 0, "tau2_fudge": 4, "healpix_order": 1, "oversampling": 1, "offset_range_px": 6, "offset_step_px": 2, "padding_factor": 1, "symmetry": "C1", "particle_diameter_angstrom": 200}
+    }
+  ]
+}

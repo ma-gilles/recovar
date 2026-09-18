@@ -32,16 +32,19 @@ def test_image_fourier_backend_cli_preserves_host_default_and_typed_choices():
 
 
 def test_image_fourier_backend_cli_is_forwarded_to_refinement():
-    refine_calls = [
+    # image_fourier_backend is forwarded via the RelionParityOptions group
+    # inside refine_single_volume's options= bundle (commit cd6661f2), not as
+    # a top-level refine_single_volume keyword.
+    parity_calls = [
         node
         for node in ast.walk(_runner_tree())
         if isinstance(node, ast.Call)
         and isinstance(node.func, ast.Name)
-        and node.func.id == "refine_single_volume"
+        and node.func.id == "RelionParityOptions"
     ]
-    assert len(refine_calls) == 1
+    assert len(parity_calls) == 1
 
-    keywords = {keyword.arg: keyword.value for keyword in refine_calls[0].keywords}
+    keywords = {keyword.arg: keyword.value for keyword in parity_calls[0].keywords}
     forwarded = keywords["image_fourier_backend"]
     assert isinstance(forwarded, ast.Attribute)
     assert isinstance(forwarded.value, ast.Name)

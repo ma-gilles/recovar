@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -12,6 +11,7 @@ from typing import Any
 import numpy as np
 
 from scripts.analyze_k1_bpref_contributor_membership import match_rotations
+from scripts.file_hash import sha256_file as _sha256
 from scripts.validate_relion_bpref_membership import (
     INVALID_WEIGHT_SENTINEL,
     MembershipArtifact,
@@ -35,14 +35,6 @@ ROTATION_TOLERANCE = 1.0e-6
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise ValueError(message)
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(8 * 1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def _relative_l2(lhs: np.ndarray, rhs: np.ndarray) -> float | None:

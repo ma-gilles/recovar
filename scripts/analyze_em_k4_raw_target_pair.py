@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -25,6 +24,7 @@ from scripts.analyze_em_k4_raw_diff2_parity import (
     PASS_SCORE_CLASSIFICATION,
 )
 from scripts.analyze_em_k4_raw_diff2_parity import SCHEMA as RAW_SCHEMA
+from scripts.file_hash import sha256_file as _sha256
 
 SCHEMA = "relion-k4-it2-raw-target-pair-v1"
 OPERAND_SCHEMA = "relion-k4-it2-native-target-operand-audit-v1"
@@ -37,14 +37,6 @@ SHARED_INPUTS = ("factor", "fine_score", "recovar_pass2", "native_completion")
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise ValueError(message)
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(8 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def classify_raw_target_pair(

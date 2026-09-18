@@ -5,10 +5,44 @@ import pytest
 
 pytest.importorskip("jax")
 
-from recovar.output import output
-from recovar.output import plot_utils
+from recovar.output import output, plot_utils
 
 pytestmark = pytest.mark.unit
+
+
+def _minimal_params_dict(*, mean_prior=None):
+    noise = np.ones(1, dtype=np.float32)
+    return output.build_params_dict(
+        volume_shape=(1, 1, 1),
+        voxel_size=1.0,
+        s_rescaled=noise,
+        noise_var_from_hf=noise,
+        noise_var_from_het_residual=None,
+        noise_var_used=noise,
+        noise_result={
+            "radial_noise_var_outside_mask": noise,
+            "radial_ub_noise_var": noise,
+            "white_noise_var_outside_mask": np.float32(1.0),
+            "image_PS": noise,
+            "masked_image_PS": noise,
+        },
+        ub_noise_var_by_var_est=noise,
+        variance_est={"combined": noise},
+        variance_fsc=noise,
+        noise_p_variance_est=noise,
+        covariance_options={},
+        column_fscs=noise,
+        picked_frequencies=np.zeros(1, dtype=np.int32),
+        input_args={},
+        mean_prior=mean_prior,
+    )
+
+
+def test_build_params_dict_preserves_optional_mean_prior():
+    mean_prior = np.asarray([2.5], dtype=np.float32)
+
+    np.testing.assert_array_equal(_minimal_params_dict(mean_prior=mean_prior)["mean_prior"], mean_prior)
+    assert _minimal_params_dict()["mean_prior"] is None
 
 
 def test_get_resampled_distances_and_resample_trajectory():

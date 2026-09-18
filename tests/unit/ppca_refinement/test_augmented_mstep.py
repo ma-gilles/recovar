@@ -3,14 +3,10 @@ import pytest
 
 from recovar.core import fourier_transform_utils as ftu
 from recovar.em.ppca_refinement.mean_regularization import relion_style_mean_precision_from_filter
-from recovar.ppca import (
-    AugmentedPPCAStats,
-    augmented_ppca_mstep_objective,
-    pack_upper_tri,
-    solve_augmented_ppca_mstep,
-)
+from recovar.ppca.augmented_mstep import augmented_ppca_mstep_objective, solve_augmented_ppca_mstep
+from recovar.ppca.pose_accumulators import AugmentedPPCAStats
+from recovar.ppca.triangular import pack_upper_tri
 from recovar.reconstruction import relion_functions
-
 
 pytestmark = pytest.mark.unit
 

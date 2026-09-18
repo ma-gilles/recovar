@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import re
 import struct
@@ -13,6 +12,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
+
+from scripts.file_hash import sha256_file as _sha256
 
 HEADER_MAGIC = b"RLNBPREV1HEADER\0"
 FOOTER_MAGIC = b"RLNBPREV1FOOTER\0"
@@ -94,12 +95,6 @@ class CaptureArtifact:
         return self.header[10]
 
 
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(8 * 1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def _float32_from_bits(value: int) -> float:

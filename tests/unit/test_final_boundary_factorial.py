@@ -1,11 +1,10 @@
+import dataclasses
 import inspect
 
 import pytest
 
-from recovar.em.dense_single_volume.iteration_loop import (
-    _run_relion_iteration_loop,
-    refine_single_volume,
-)
+from recovar.em.refinement.iteration_loop import refine_single_volume
+from recovar.em.refinement.refinement_options import RelionParityOptions, ReplayState
 from scripts.run_full_refinement import (
     _complete_relion_numbered_state_iterations,
     _resolve_final_replay_source_iteration,
@@ -116,13 +115,16 @@ def test_final_replay_group_selection_fails_closed(value):
         _select_final_replay_override(_source_override(), value)
 
 
-def test_final_only_options_reach_both_iteration_loop_boundaries():
-    for function in (refine_single_volume, _run_relion_iteration_loop):
-        parameters = inspect.signature(function).parameters
-        assert "final_replay_override" in parameters
-        assert "final_replay_reference_maps" in parameters
-        assert "final_replay_source_iteration" in parameters
-        assert "final_sampling_replay_relion_dir" in parameters
+def test_final_only_options_reach_refinement_entry():
+    assert "options" in inspect.signature(refine_single_volume).parameters
+
+    replay_fields = {field.name for field in dataclasses.fields(ReplayState)}
+    assert "final_replay_override" in replay_fields
+    assert "final_replay_reference_maps" in replay_fields
+    assert "final_replay_source_iteration" in replay_fields
+
+    parity_fields = {field.name for field in dataclasses.fields(RelionParityOptions)}
+    assert "final_sampling_replay_relion_dir" in parity_fields
 
 
 def test_max_iter_999_binds_latest_finite_complete_oracle(tmp_path):

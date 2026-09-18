@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -15,6 +14,7 @@ from scripts.analyze_em_k1_coarse_pass1_boundary import (
     _map_relion_table,
     _translation_permutation,
 )
+from scripts.file_hash import sha256_file as _sha256
 from scripts.validate_relion_coarse_operand_capture import (
     load_artifact as load_operand_artifact,
 )
@@ -30,14 +30,6 @@ from scripts.validate_relion_coarse_pass1_components import (
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise ValueError(message)
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(8 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def _center(values: np.ndarray) -> np.ndarray:

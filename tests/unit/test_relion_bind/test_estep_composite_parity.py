@@ -9,7 +9,7 @@ Convention bridge (the critical insight):
   With Hermitian weights (w=2 for interior): the half-spectrum sum recovers
   the FULL-spectrum inner product, which is ~2x the half-complex sum.
   This makes the posterior exponentially more peaked — wrong for RELION parity.
-  _run_relion_iteration_loop correctly uses half_spectrum_scoring=True.
+  refine_single_volume correctly uses half_spectrum_scoring=True.
 
 Exact parity required: rel_err < 1e-10.
 """
@@ -300,7 +300,7 @@ class TestPosteriorParity:
         jax.config.update("jax_enable_x64", True)
         import jax.numpy as jnp
 
-        from recovar.em.dense_single_volume.helpers.scoring import _e_step_block_scores
+        from recovar.em.scoring.scoring import _e_step_block_scores
 
         s = _setup_scenario()
         N = s["N"]
@@ -352,15 +352,11 @@ class TestPosteriorParity:
         scores = np.asarray(
             _e_step_block_scores(
                 shifted_jax,
-                batch_norm_jax,
                 ctf2_nv_half,
                 proj_half * hw,
                 proj_abs2 * hw,
-                hw,
                 1,
                 s["n_trans"],
-                image_shape,
-                volume_shape,
             )
         )[0]
 
@@ -517,7 +513,7 @@ class TestWindowingDivergence:
         relion_pixels = current_size * (current_size // 2 + 1)
 
         # recovar: radial mask on (N, N//2+1) half-spectrum
-        from recovar.em.dense_single_volume.helpers.fourier_window import make_fourier_window_indices_np
+        from recovar.em.helpers.fourier_window import make_fourier_window_indices_np
 
         _, n_windowed = make_fourier_window_indices_np((N, N), current_size)
 

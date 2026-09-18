@@ -12,39 +12,22 @@ large for the case-22 iteration-2 surface.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
-if __package__:
-    from .analyze_k1_fine_score_boundary import (
-        _first_mismatch_record,
-        _geometry_only_significant_count,
-        _metric,
-        _rotation_map,
-        _translation_map,
-    )
-    from .validate_relion_bpref_factor_capture import load_factor_capture
-    from .validate_relion_fine_score_capture import ACTIVE, load_fine_score_capture
-else:
-    from analyze_k1_fine_score_boundary import (  # type: ignore[no-redef]
-        _first_mismatch_record,
-        _geometry_only_significant_count,
-        _metric,
-        _rotation_map,
-        _translation_map,
-    )
-    from validate_relion_bpref_factor_capture import (  # type: ignore[no-redef]
-        load_factor_capture,
-    )
-    from validate_relion_fine_score_capture import (  # type: ignore[no-redef]
-        ACTIVE,
-        load_fine_score_capture,
-    )
-
+from scripts.analyze_k1_fine_score_boundary import (
+    _first_mismatch_record,
+    _geometry_only_significant_count,
+    _metric,
+    _rotation_map,
+    _translation_map,
+)
+from scripts.file_hash import sha256_file as _sha256
+from scripts.validate_relion_bpref_factor_capture import load_factor_capture
+from scripts.validate_relion_fine_score_capture import ACTIVE, load_fine_score_capture
 
 REPORT_SCHEMA = "recovar.em.k1_fine_score_stages.v1"
 STAGES = (
@@ -63,14 +46,6 @@ STAGES = (
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise ValueError(message)
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(8 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def _center(values: np.ndarray) -> np.ndarray:
@@ -211,16 +186,10 @@ def analyze(
     with np.load(recovar_capture, allow_pickle=False) as archive:
         rotations = archive["rotations"]
         translations = archive["fine_translations"]
-        oversampled_rotation_ids = (
-            np.asarray(archive["oversampled_rot_indices"], dtype=np.int64)
-            if "oversampled_rot_indices" in archive.files
-            else np.arange(rotations.shape[0], dtype=np.int64)
+        oversampled_rotation_ids = np.asarray(
+            archive["oversampled_rot_indices"], dtype=np.int64
         )
-        parent_map = (
-            np.asarray(archive["parent_map"], dtype=np.int64)
-            if "parent_map" in archive.files
-            else np.full(rotations.shape[0], -1, dtype=np.int64)
-        )
+        parent_map = np.asarray(archive["parent_map"], dtype=np.int64)
     rotation_map, rotation_error = _rotation_map(factor.rotations, rotations)
     translation_map, translation_error = _translation_map(
         factor.translations,

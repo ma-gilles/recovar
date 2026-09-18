@@ -4,16 +4,13 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-if __package__:
-    from .compare_k4_relion_recovar_fine_operands import compare
-else:
-    from compare_k4_relion_recovar_fine_operands import compare  # type: ignore[no-redef]
+from scripts.compare_k4_relion_recovar_fine_operands import compare
+from scripts.file_hash import sha256_file as _sha256
 
 SCHEMA = "recovar.em_k4_admitted_fine_operand_comparison.v3"
 NATIVE_SCHEMA = "recovar.em_k4_native_class1_fine_operand_admission.v1"
@@ -30,14 +27,6 @@ EXPECTED_CANDIDATES = 96
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise ValueError(message)
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(8 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def _load_json(path: Path) -> dict[str, Any]:

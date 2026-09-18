@@ -97,15 +97,14 @@ def get_default_covariance_computation_options(grid_size=None, adaptive_n_pcs=Fa
     depend on hardware).
 
     Args:
-        grid_size: Side length of the 3-D reconstruction grid. Used for
+        grid_size (int | None): Side length of the 3-D reconstruction grid. Used for
             memory estimation and adaptive PC count.
-        adaptive_n_pcs: If True, reduce the number of PCs to fit in GPU
+        adaptive_n_pcs (bool): If True, reduce the number of PCs to fit in GPU
             memory. Default False (always use 200 PCs).
 
     Returns:
-        Dictionary with keys ``reg_fn``, ``left_kernel``,
-        ``right_kernel``, ``column_sampling_scheme``,
-        ``n_pcs_to_compute``, among others.
+        options (dict[str, object]): Covariance kernel, column-sampling,
+            regularization and principal-component settings.
     """
 
     gpu_memory = utils.get_gpu_memory_total()
@@ -417,22 +416,27 @@ def compute_regularized_covariance_columns_in_batch(
     and concatenates the results.
 
     Args:
-        dataset: A ``CryoEMDataset`` with ``halfset_indices`` set.
-        means: Dict with keys ``'combined'``, ``'prior'``, ``'lhs'``.
-        mean_prior: Prior mean volume (Fourier coefficients).
-        volume_mask: Binary mask selecting valid voxels.
-        dilated_volume_mask: Dilated version of *volume_mask*.
-        valid_idx: Indices of valid Fourier frequencies.
-        gpu_memory: Available GPU memory in GB.
-        options: Pipeline options namespace.
-        picked_frequencies: 1-D array of frequency indices to compute.
-        use_multi_gpu: Distribute across multiple GPUs.
-        n_gpus: Number of GPUs (``None`` = auto-detect).
+        dataset (CryoEMDataset): A ``CryoEMDataset`` with ``halfset_indices`` set.
+        means (recovar.reconstruction.homogeneous.MeanEstimate): Structured mean reconstruction
+            estimates.
+        mean_prior (numpy.ndarray | jax.Array): Spectral variance prior on the flattened Fourier
+            volume grid.
+        volume_mask (numpy.ndarray | jax.Array): Binary mask selecting valid voxels.
+        dilated_volume_mask (numpy.ndarray | jax.Array): Dilated version of *volume_mask*.
+        valid_idx (numpy.ndarray | jax.Array): Legacy flattened frequency mask, forwarded but
+            currently unused.
+        gpu_memory (float): Available GPU memory in GB.
+        options (dict[str, object]): Covariance computation settings dictionary.
+        picked_frequencies (numpy.ndarray | jax.Array): 1-D array of frequency indices to compute.
+        use_multi_gpu (bool): Distribute across multiple GPUs.
+        n_gpus (int | None): Number of GPUs (``None`` = auto-detect).
 
     Returns:
-        Tuple ``(covariance_cols, picked_frequencies, fscs)`` where
-        *covariance_cols* is a dict with key ``'est_mask'`` and *fscs*
-        contains per-column FSC curves.
+        covariance_cols (dict[str, numpy.ndarray]): ``est_mask`` contains the
+            regularized columns, shape ``(volume_size, n_columns)``.
+        picked_frequencies (numpy.ndarray | jax.Array): The supplied flat
+            frequency indices, in the same order.
+        fscs (numpy.ndarray): Per-column FSC curves, shape ``(n_columns, n_shells)``.
     """
     frequency_batch = _column_batch_size_for_options(dataset.grid_size, gpu_memory, options)
 
@@ -977,30 +981,6 @@ def preprocess_covariance_batch(
         tilt_labels = jnp.broadcast_to(tilt_labels, (images.shape[0],))
 
     return images, ctf_on_grid, plane_coords, image_mask, tilt_labels
-
-
-def _batched_stack_transfer(H, B, H_out, B_out, freq_offset, volume_size, n_items):
-    """Stack JAX arrays in GPU batches and transfer to pre-allocated CPU arrays.
-
-    Avoids OOM from stacking all columns at once and minimizes the number
-    of individual DtoH transfers.
-    """
-    batch_size = 50
-    element_bytes = volume_size * 8  # complex64
-    gpu_mem_total = utils.get_gpu_memory_total()
-    if 2 * batch_size * element_bytes > 0.10 * gpu_mem_total * 1e9:
-        gpu_mem_bytes = gpu_mem_total * 1e9
-        batch_size = max(1, int(0.10 * gpu_mem_bytes / (2 * element_bytes)))
-
-    for batch_start in range(0, n_items, batch_size):
-        batch_end = min(batch_start + batch_size, n_items)
-        H_batch_jax = jnp.stack(H[batch_start:batch_end], axis=1)
-        B_batch_jax = jnp.stack(B[batch_start:batch_end], axis=1)
-        col_start = freq_offset + batch_start
-        col_end = freq_offset + batch_end
-        H_out[:, col_start:col_end] = _to_cpu(H_batch_jax)
-        B_out[:, col_start:col_end] = _to_cpu(B_batch_jax)
-        del H_batch_jax, B_batch_jax
 
 
 def _iter_column_batch_ranges(n_cols, batch_size):
@@ -1881,12 +1861,13 @@ def group_sum_by_labels(array, tilt_labels, max_groups):
     This is JIT-compatible and assumes tilt_labels are consecutive indices (0, 1, 2, ...).
 
     Args:
-        array: Array to sum, shape (n_images, n_features)
-        tilt_labels: Group labels, shape (n_images,)
-        max_groups: Maximum number of groups (should be >= max(tilt_labels) + 1)
+        array (numpy.ndarray | jax.Array): Array to sum, shape (n_images, n_features)
+        tilt_labels (numpy.ndarray | jax.Array): Group labels, shape (n_images,)
+        max_groups (int): Maximum number of groups (should be >= max(tilt_labels) + 1)
 
     Returns:
-        Array with same shape as input, where each element is replaced by the sum of its group
+        grouped (jax.Array): Same shape as ``array``; each row contains its
+            group's sum, repeated at all original positions for that group.
     """
     # Sum within each tilt label group using scatter-add
     summed_by_label = jnp.zeros((max_groups, *array.shape[1:]), dtype=array.dtype)
@@ -2049,11 +2030,12 @@ def preprocess_tilt_labels_for_batch(tilt_labels):
     This should be called outside JIT to handle arbitrary tilt label values.
 
     Args:
-        tilt_labels: Array of arbitrary tilt label values
+        tilt_labels (numpy.ndarray | jax.Array | None): Array of arbitrary tilt label values
 
     Returns:
-        Array of consecutive indices ``0, 1, 2, ...`` with the same grouping
-        structure as the input labels.
+        labels (jax.Array | tuple[None, None]): Consecutive group indices with
+            the input's grouping structure. A ``None`` input returns the legacy
+            pair ``(None, None)`` instead of an array.
     """
     if tilt_labels is None:
         return None, None

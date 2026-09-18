@@ -232,6 +232,7 @@ export function Sidebar({ projectId, onProjectCreated, onProjectNotFound }: Side
 
   const knownTypes = ["Pipeline", "Analyze", "ComputeState", "ReconstructState", "StableStates", "ComputeTrajectory", "ReconstructTrajectory", "Density"];
   const pipelineJobs = project?.jobs.filter((j) => j.type === "Pipeline") ?? [];
+  const initialModelJobs = project?.jobs.filter((j) => j.type === "InitialModel") ?? [];
   const analyzeJobs = project?.jobs.filter((j) => j.type === "Analyze") ?? [];
   const computeStateJobs = project?.jobs.filter((j) => j.type === "ComputeState" || j.type === "ReconstructState" || j.type === "StableStates") ?? [];
   const trajectoryJobs = project?.jobs.filter((j) => j.type === "ComputeTrajectory" || j.type === "ReconstructTrajectory") ?? [];
@@ -383,6 +384,7 @@ export function Sidebar({ projectId, onProjectCreated, onProjectNotFound }: Side
                 </div>
                 <div className="border-t border-zinc-800 pt-1">
                   <JobSection title="Pipeline" jobs={pipelineJobs} alwaysShow />
+                  <JobSection title="Initial Model" jobs={initialModelJobs} defaultOpen={false} alwaysShow />
                   <JobSection title="Analyze" jobs={analyzeJobs} alwaysShow />
                   <JobSection title="Compute State" jobs={computeStateJobs} defaultOpen={false} alwaysShow />
                   <JobSection title="Trajectory" jobs={trajectoryJobs} defaultOpen={false} alwaysShow />

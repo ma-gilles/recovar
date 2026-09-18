@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -17,6 +16,7 @@ from scripts.analyze_em_k4_authoritative_native_scores import (
     _rotation_permutation,
 )
 from scripts.analyze_em_k4_raw_diff2_parity import SCHEMA as RAW_REPORT_SCHEMA
+from scripts.file_hash import sha256_file as _sha256
 from scripts.validate_relion_bpref_factor_capture import load_factor_capture
 from scripts.validate_relion_fine_score_capture import (
     ACTIVE,
@@ -33,14 +33,6 @@ MISMATCH_CLASSIFICATION = (
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise ValueError(message)
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(8 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def _quantiles(values: np.ndarray) -> dict[str, float]:

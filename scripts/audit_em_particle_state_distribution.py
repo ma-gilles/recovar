@@ -28,6 +28,8 @@ import numpy as np
 import pandas as pd
 from scipy.optimize import linear_sum_assignment
 
+from scripts.relion_reference import euler_matrices
+
 SCHEMA = "em_particle_state_distribution_audit_v1"
 ARRAY_SCHEMA = "em_particle_state_distribution_arrays_v1"
 STAR_ITERATION_RE = re.compile(r"(?:^|_)it(\d+)(?:_|$)")
@@ -124,10 +126,12 @@ def _particle_table(path: Path):
     return table
 
 
-def _identity_array(table, *, source: Path) -> np.ndarray:
+def _identity_array(table, *, source: Path | str) -> np.ndarray:
     values = _column(table, "rlnImageName")
     if values is None:
         raise AuditError(f"{source} is missing required rlnImageName identities")
+    if values.isna().any():
+        raise AuditError(f"{source} contains missing rlnImageName identities")
     identities = np.asarray(values.astype(str).to_numpy(), dtype=str)
     if identities.size == 0 or np.any(np.char.str_len(np.char.strip(identities)) == 0):
         raise AuditError(f"{source} contains empty rlnImageName identities")
@@ -221,33 +225,13 @@ def _difference_summary(lhs: np.ndarray, rhs: np.ndarray) -> dict[str, Any]:
     }
 
 
-def _relion_euler_matrices(eulers_deg: np.ndarray) -> np.ndarray:
-    """Vectorized RELION ``Euler_angles2matrix`` for a dependency-light CLI."""
-    eulers = np.asarray(eulers_deg, dtype=np.float64).reshape(-1, 3)
-    alpha, beta, gamma = np.deg2rad(eulers).T
-    ca, cb, cg = np.cos(alpha), np.cos(beta), np.cos(gamma)
-    sa, sb, sg = np.sin(alpha), np.sin(beta), np.sin(gamma)
-    cc, cs, sc, ss = cb * ca, cb * sa, sb * ca, sb * sa
-    matrices = np.empty((eulers.shape[0], 3, 3), dtype=np.float64)
-    matrices[:, 0, 0] = cg * cc - sg * sa
-    matrices[:, 0, 1] = cg * cs + sg * ca
-    matrices[:, 0, 2] = -cg * sb
-    matrices[:, 1, 0] = -sg * cc - cg * sa
-    matrices[:, 1, 1] = -sg * cs + cg * ca
-    matrices[:, 1, 2] = sg * sb
-    matrices[:, 2, 0] = sc
-    matrices[:, 2, 1] = ss
-    matrices[:, 2, 2] = cb
-    return matrices
-
-
 def _angular_error_deg(lhs_eulers: np.ndarray, rhs_eulers: np.ndarray) -> np.ndarray:
     # Angular distance is unchanged by the transpose that converts RELION's
     # projector matrix into RECOVAR's rotation-frame representation.
     lhs_eulers = np.asarray(lhs_eulers, dtype=np.float64).reshape(-1, 3)
     rhs_eulers = np.asarray(rhs_eulers, dtype=np.float64).reshape(-1, 3)
-    lhs = _relion_euler_matrices(lhs_eulers)
-    rhs = _relion_euler_matrices(rhs_eulers)
+    lhs = euler_matrices(lhs_eulers)
+    rhs = euler_matrices(rhs_eulers)
     relative = np.einsum("nij,nkj->nik", lhs, rhs)
     cosine = np.clip((np.trace(relative, axis1=1, axis2=2) - 1.0) * 0.5, -1.0, 1.0)
     skew = np.stack(
@@ -272,8 +256,8 @@ def _normalize_rows(vectors: np.ndarray) -> np.ndarray:
 
 def _view_inplane_error_deg(lhs_eulers: np.ndarray, rhs_eulers: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """Return view-direction and in-plane errors using RELION matrix rows."""
-    lhs = _relion_euler_matrices(lhs_eulers)
-    rhs = _relion_euler_matrices(rhs_eulers)
+    lhs = euler_matrices(lhs_eulers)
+    rhs = euler_matrices(rhs_eulers)
     lhs_view = _normalize_rows(lhs[:, 2, :])
     rhs_view = _normalize_rows(rhs[:, 2, :])
     view = np.degrees(np.arccos(np.clip(np.sum(lhs_view * rhs_view, axis=1), -1.0, 1.0)))

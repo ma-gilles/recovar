@@ -1,7 +1,7 @@
 """Prerequisite test P1 for the PPCA-ab-initio v0 plan.
 
-Verifies that recovar.em.heterogeneity.compute_bHb_terms — the
-low-rank score correction used inside E_with_precompute — actually
+Verifies that recovar.em.reference.heterogeneity.compute_bHb_terms — the
+low-rank score correction used inside compute_pose_probabilities — actually
 computes the formula it claims to compute.
 
 Per the audit in docs/math/plan_ppca_abinitio_v0.md (Section "Audit
@@ -18,7 +18,7 @@ H = diag(1/s) + U^H Σ^{-1} U,  the function must return
 
     bHb_correction[i, r, t] = b^H H^{-1} b - log det H
 
-up to floating-point error. The caller (E_with_precompute) subtracts
+up to floating-point error. The caller (compute_pose_probabilities) subtracts
 this from the homogeneous squared residual (y-μ_g)^H Σ^{-1} (y-μ_g)
 to obtain -2 log p_het(y | g) up to a g-independent constant.
 
@@ -51,7 +51,7 @@ import pytest
 pytest.importorskip("jax")
 import jax.numpy as jnp
 
-import recovar.em.heterogeneity as hetero
+import recovar.em.reference.heterogeneity as hetero
 
 pytestmark = pytest.mark.unit
 

@@ -4,12 +4,13 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
+
+from scripts.file_hash import sha256_file as _sha256
 
 MAGIC = b"RLNSIGMAV1"
 MAGIC_SIZE = 16
@@ -22,12 +23,6 @@ def _require(condition: bool, message: str) -> None:
         raise ValueError(message)
 
 
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(8 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 @dataclass(frozen=True)

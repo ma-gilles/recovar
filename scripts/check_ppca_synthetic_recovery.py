@@ -17,20 +17,7 @@ from recovar.core import fourier_transform_utils as ftu
 from recovar.em.sampling import get_rotation_grid_at_order, get_translation_grid
 from recovar.simulation import synthetic_dataset
 from recovar.utils import helpers
-
-
-def _jsonable(value: Any):
-    if isinstance(value, dict):
-        return {str(k): _jsonable(v) for k, v in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_jsonable(v) for v in value]
-    if isinstance(value, np.ndarray):
-        return _jsonable(value.tolist())
-    if isinstance(value, np.generic):
-        return value.item()
-    if isinstance(value, Path):
-        return str(value)
-    return value
+from recovar.utils.json_utils import to_jsonable
 
 
 def _load_mrc(path: Path) -> np.ndarray:
@@ -323,8 +310,8 @@ def run_checks(
         "embedding_dataset_metadata": _assignment_and_contrast_checks(embedding_z, simulation_info),
     }
     output_path = run_dir / "synthetic_recovery_checks.json"
-    output_path.write_text(json.dumps(_jsonable(checks), indent=2, sort_keys=True) + "\n")
-    return _jsonable(checks)
+    output_path.write_text(json.dumps(to_jsonable(checks), indent=2, sort_keys=True) + "\n")
+    return to_jsonable(checks)
 
 
 def _parse_args():

@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 import time
 from pathlib import Path
 
@@ -23,13 +22,8 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
-
 from recovar.data_io.cryoem_dataset import load_dataset
-from recovar.em.dense_single_volume.local_layout import build_pass2_hypothesis_layout
-from recovar.em.sampling import get_relion_rotation_grid
+from recovar.em.local.local_layout import build_pass2_hypothesis_layout
 from recovar.em.ppca_refinement.config import (
     GeometryConfig,
     PoseSelectionConfig,
@@ -39,6 +33,11 @@ from recovar.em.ppca_refinement.config import (
 )
 from recovar.em.ppca_refinement.dense_dataset import compute_dense_ppca_adaptive_significance
 from recovar.em.ppca_refinement.highres_refinement import build_top_p_local_hypothesis_layout
+from recovar.em.ppca_refinement.initialization import (
+    loading_row_norm_variance_prior,
+    pipeline_variance_W_prior,
+    volume_power_variance_prior,
+)
 from recovar.em.ppca_refinement.local_dataset import (
     run_local_ppca_fused_em_iteration,
     run_local_ppca_pose_scoring_iteration,
@@ -49,21 +48,58 @@ from recovar.em.ppca_refinement.mean_regularization import (
     relion_style_mean_precision_from_stats,
 )
 from recovar.em.ppca_refinement.postprocess import PostprocessConfig
-from recovar.em.ppca_refinement.initialization import (
-    loading_row_norm_variance_prior,
-    pipeline_variance_W_prior,
-    volume_power_variance_prior,
-)
-from scripts.run_ppca_local_from_init_npz import (
+from recovar.em.sampling import get_relion_rotation_grid, get_translation_grid
+from recovar.utils.json_utils import to_jsonable
+from scripts.run_ppca_dense_from_init_npz import (
     _half_size,
-    _image_ordered_pose_arrays,
-    _jsonable,
     _load_init,
     _load_noise_variance,
     _load_simulation_info,
     _regularization_penalty,
-    _translations_from_source,
 )
+
+
+def _translations_from_source(args, simulation_info, n_images: int):
+    if args.translation_source == "simulation-info-unique":
+        if simulation_info is None:
+            raise ValueError("--translation-source=simulation-info-unique requires --simulation-info")
+        translations = np.unique(np.asarray(simulation_info["trans"], dtype=np.float32)[:n_images], axis=0)
+    else:
+        translations = np.asarray(
+            get_translation_grid(float(args.offset_range_px), float(args.offset_step_px)), dtype=np.float32
+        )
+        if args.max_translations is not None:
+            translations = translations[: int(args.max_translations)]
+    return translations
+
+
+def _image_ordered_pose_arrays(diagnostics: dict) -> tuple[dict[str, np.ndarray], np.ndarray]:
+    """Return per-image pose diagnostics sorted back to dataset image order."""
+
+    image_indices = np.asarray(diagnostics["image_indices"], dtype=np.int64)
+    order = np.argsort(image_indices).astype(np.int64)
+    arrays = {
+        "best_rotation_idx": np.asarray(diagnostics["best_rotation_idx"])[order],
+        "best_rotation_id": np.asarray(diagnostics["best_rotation_id"])[order],
+        "best_rotation_matrix": np.asarray(diagnostics["best_rotation_matrix"], dtype=np.float32)[order],
+        "best_translation_idx": np.asarray(diagnostics["best_translation_idx"])[order],
+        "best_translation": np.asarray(diagnostics["best_translation"], dtype=np.float32)[order],
+    }
+    for key in (
+        "top_rotation_idx",
+        "top_rotation_id",
+        "top_rotation_matrix",
+        "top_translation_idx",
+        "top_log_score",
+        "top_log_score_per_image",
+        "top_posterior",
+        "top_posterior_per_image",
+        "max_posterior_per_image",
+        "n_significant_per_image",
+    ):
+        if key in diagnostics:
+            arrays[key] = np.asarray(diagnostics[key])[order]
+    return arrays, image_indices[order]
 
 
 def _parse_args() -> argparse.Namespace:
@@ -133,7 +169,7 @@ def _parse_args() -> argparse.Namespace:
         help=(
             "Prior source. 'pipeline-mean-prior' replicates the pipeline's "
             "covariance Wiener form: prior_W = mean_prior * REG_INIT_MULTIPLIER "
-            "/ noise / n_pcs. Requires init built with prepare_ppca_init_from_pipeline_output_v2.py."
+            "/ noise / n_pcs. Requires init built with prepare_ppca_init_from_pipeline_output.py."
         ),
     )
     parser.add_argument("--gt-prior-box-power", type=float, default=0.0)
@@ -354,7 +390,7 @@ def main() -> None:
             if field not in z.files:
                 raise ValueError(
                     f"--prior-from-init {args.prior_from_init} requires '{field}' in {prior_init_npz}; "
-                    "rebuild with prepare_ppca_init_from_pipeline_output_v2.py"
+                    "rebuild with prepare_ppca_init_from_pipeline_output.py"
                 )
             variance_array = np.asarray(z[field], dtype=np.float64)
         if variance_array.shape != (half_size,):
@@ -399,7 +435,7 @@ def main() -> None:
             if "pipeline_mean_prior_half_voxel" not in z.files:
                 raise ValueError(
                     f"--prior-from-init pipeline-mean-prior requires 'pipeline_mean_prior_half_voxel' "
-                    f"in {prior_init_npz}; rebuild with prepare_ppca_init_from_pipeline_output_v2.py "
+                    f"in {prior_init_npz}; rebuild with prepare_ppca_init_from_pipeline_output.py "
                     "(it recomputes mean_prior from saved half-maps if pipeline didn't save it)"
                 )
             mean_prior_half = np.asarray(z["pipeline_mean_prior_half_voxel"], dtype=np.float64).reshape(-1)
@@ -434,7 +470,7 @@ def main() -> None:
             if mask_field not in z.files:
                 raise ValueError(
                     f"--postprocess-mask-source {args.postprocess_mask_source} requires '{mask_field}' "
-                    f"in {mask_npz}; rebuild with prepare_ppca_init_from_pipeline_output_v2.py"
+                    f"in {mask_npz}; rebuild with prepare_ppca_init_from_pipeline_output.py"
                 )
             external_mask_volume = np.asarray(z[mask_field], dtype=np.float32)
         if external_mask_volume.shape != tuple(dataset.volume_shape):
@@ -509,7 +545,7 @@ def main() -> None:
         **_top_p_subset_summary(dense_pose, report_widths),
     }
     summary["stages"].append(dense_stage)
-    print(json.dumps(_jsonable(dense_stage), indent=2, sort_keys=True), flush=True)
+    print(json.dumps(to_jsonable(dense_stage), indent=2, sort_keys=True), flush=True)
 
     os_layout = build_pass2_hypothesis_layout(
         dense_sig.significant_sample_indices,
@@ -562,7 +598,7 @@ def main() -> None:
         **_top_p_subset_summary(os_pose, report_widths),
     }
     summary["stages"].append(os_stage)
-    print(json.dumps(_jsonable(os_stage), indent=2, sort_keys=True), flush=True)
+    print(json.dumps(to_jsonable(os_stage), indent=2, sort_keys=True), flush=True)
 
     current_mu = np.asarray(mu)
     current_W = np.asarray(W)
@@ -624,7 +660,7 @@ def main() -> None:
             **_top_p_subset_summary(current_pose, report_widths),
         }
         summary["stages"].append(final_pose_stage)
-        print(json.dumps(_jsonable(final_pose_stage), indent=2, sort_keys=True), flush=True)
+        print(json.dumps(to_jsonable(final_pose_stage), indent=2, sort_keys=True), flush=True)
         current_center_grid = final_grid
         current_translations = final_translations
     else:
@@ -743,7 +779,7 @@ def main() -> None:
         }
         em_results.append(em_stage)
         summary["stages"].append(em_stage)
-        print(json.dumps(_jsonable(em_stage), indent=2, sort_keys=True), flush=True)
+        print(json.dumps(to_jsonable(em_stage), indent=2, sort_keys=True), flush=True)
 
     final_npz = output_dir / "final_ppca_dense_os_local.npz"
     _save_pose_npz(
@@ -759,8 +795,8 @@ def main() -> None:
     summary["em_iters_completed"] = int(len(em_results))
     summary["passed"] = bool(np.all(np.isfinite(current_mu)) and np.all(np.isfinite(current_W)))
     summary_path = output_dir / "summary.json"
-    summary_path.write_text(json.dumps(_jsonable(summary), indent=2, sort_keys=True) + "\n")
-    print(json.dumps(_jsonable({"summary": summary_path, "final_npz": final_npz, "passed": summary["passed"]}), indent=2))
+    summary_path.write_text(json.dumps(to_jsonable(summary), indent=2, sort_keys=True) + "\n")
+    print(json.dumps(to_jsonable({"summary": summary_path, "final_npz": final_npz, "passed": summary["passed"]}), indent=2))
 
 
 if __name__ == "__main__":

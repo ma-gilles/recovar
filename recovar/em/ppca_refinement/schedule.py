@@ -13,18 +13,14 @@ class PPCARefinementScheduleState:
 
     current_size: int
     healpix_order: int
-    translation_stage: int = 0
     best_pose_indices: np.ndarray | None = None
     previous_best_pose_indices: np.ndarray | None = None
     pose_change_fraction: float = 1.0
-    halfset_mean_fsc: np.ndarray | None = None
     halfset_means_aligned: bool = False
     halfset_resolution_supports: bool = False
     no_halfset_drift: bool = True
     kclass_schedule_allows: bool = False
     pmax_mean: float = 0.0
-    logZ_mean: float = float("-inf")
-    nsig_mean: float = 0.0
     W_subspace_agreement: float | None = None
     q: int = 0
     diagnostics: dict = field(default_factory=dict)
@@ -43,7 +39,7 @@ class HalfsetResolutionGateDecision:
     W_subspace_agreement: float | None = None
 
 
-def compute_pose_change_fraction(current_best, previous_best) -> float:
+def _compute_pose_change_fraction(current_best, previous_best) -> float:
     """Return the fraction of changed best-pose assignments."""
     if current_best is None or previous_best is None:
         return 1.0
@@ -101,7 +97,7 @@ def evaluate_halfset_resolution_gate(
     means, and halfset mean-resolution support.
     """
     reasons: list[str] = []
-    pose_change = compute_pose_change_fraction(state.best_pose_indices, state.previous_best_pose_indices)
+    pose_change = _compute_pose_change_fraction(state.best_pose_indices, state.previous_best_pose_indices)
     if pose_change > float(pose_stability_threshold):
         reasons.append("best poses changed")
     if not bool(state.kclass_schedule_allows):

@@ -4,27 +4,27 @@ import numpy as np
 import pytest
 
 import recovar.core.fourier_transform_utils as ftu
-from recovar.em.dense_single_volume.helpers.half_spectrum import make_half_image_weights
-from recovar.em.dense_single_volume.helpers.scoring import _e_step_block_scores
-from recovar.em.dense_single_volume.iteration_loop import run_dense_ppca_refinement_with_kclass_schedule
-from recovar.em.dense_single_volume.local_layout import LocalHypothesisLayout
-from recovar.em.ppca_refinement import (
-    HalfsetMeanComparison,
-    PoseMarginalPPCAEMState,
-    dense_pose_ppca_E_step_blocked,
-    iter_dense_ppca_dataset_blocks,
-    run_dense_ppca_fused_em_iteration,
-    run_dense_ppca_halfset_fused_em_iteration,
-    run_dense_ppca_refinement_loop,
-    run_local_ppca_fused_em_iteration,
-    run_local_ppca_refinement_loop,
-)
+from recovar.em.helpers.half_spectrum import make_half_image_weights
+from recovar.em.local.local_layout import LocalHypothesisLayout
 from recovar.em.ppca_refinement.config import (
     GeometryConfig,
     ScheduleConfig,
     ScoringConfig,
     SparsePass2Config,
 )
+from recovar.em.ppca_refinement.dense_dataset import (
+    iter_dense_ppca_dataset_blocks,
+    run_dense_ppca_fused_em_iteration,
+    run_dense_ppca_halfset_fused_em_iteration,
+)
+from recovar.em.ppca_refinement.engine import dense_pose_ppca_score_stats_blocked
+from recovar.em.ppca_refinement.local_dataset import run_local_ppca_fused_em_iteration
+from recovar.em.ppca_refinement.refinement_loop import (
+    HalfsetMeanComparison,
+    run_dense_ppca_refinement_loop,
+)
+from recovar.em.ppca_refinement.state import PoseMarginalPPCAEMState
+from recovar.em.scoring.scoring import _e_step_block_scores
 
 pytestmark = pytest.mark.unit
 
@@ -133,7 +133,7 @@ def test_dataset_blocks_match_homogeneous_dense_q0_score_convention(tiny_inputs)
         )
     )
 
-    _stats, diag = dense_pose_ppca_E_step_blocked(
+    score_stats = dense_pose_ppca_score_stats_blocked(
         block.Y1,
         block.proj_aug,
         block.ctf2_over_noise,
@@ -144,15 +144,11 @@ def test_dataset_blocks_match_homogeneous_dense_q0_score_convention(tiny_inputs)
     proj = block.proj_aug[:, 0, :]
     dense_scores = _e_step_block_scores(
         block.Y1_recon.reshape(block.Y1_recon.shape[0] * block.Y1_recon.shape[1], -1),
-        block.y_norm[:, None],
         block.ctf2_over_noise_recon,
         proj * half_weights[None, :],
         (jnp.abs(proj) ** 2) * half_weights[None, :],
-        half_weights,
         block.Y1_recon.shape[0],
         block.Y1_recon.shape[1],
-        IMAGE_SHAPE,
-        VOLUME_SHAPE,
     )
     expected_logz = (
         jax.scipy.special.logsumexp(
@@ -161,7 +157,7 @@ def test_dataset_blocks_match_homogeneous_dense_q0_score_convention(tiny_inputs)
         )
         - 0.5 * block.y_norm
     )
-    np.testing.assert_allclose(np.asarray(diag.logZ), np.asarray(expected_logz), rtol=5e-4, atol=5e-2)
+    np.testing.assert_allclose(np.asarray(score_stats.logZ), np.asarray(expected_logz), rtol=5e-4, atol=5e-2)
 
 
 def test_dataset_blocks_apply_known_image_scale_corrections(tiny_inputs):
@@ -229,6 +225,7 @@ def test_dataset_backed_dense_ppca_iteration_returns_finite_update(tiny_inputs):
     assert np.all(np.isfinite(np.asarray(result.mu_half)))
     assert np.all(np.isfinite(np.asarray(result.W_half)))
     assert result.diagnostics["mstep_objective_solved_delta"] >= -1e-5
+    assert result.diagnostics["mstep_objective_solved_delta_per_image"] >= -1e-5
     assert result.diagnostics["mstep_objective_scope"] == "fixed_e_step_augmented_quadratic_without_constants"
 
 
@@ -441,7 +438,6 @@ def test_halfset_dense_ppca_iteration_updates_scoring_state(tiny_inputs):
         W_prior=jnp.ones((HALF_VOL, 1), dtype=jnp.float32) * 5.0,
         mean_prior=jnp.ones((HALF_VOL,), dtype=jnp.float32) * 10.0,
         noise_variance=jnp.ones((N_HALF,), dtype=jnp.float32),
-        z_prior_precision_diag=jnp.ones((1,), dtype=jnp.float32),
         schedule_state=None,
     )
 
@@ -470,7 +466,6 @@ def test_dense_ppca_refinement_loop_advances_current_size_when_gates_pass(tiny_i
         W_prior=jnp.ones((HALF_VOL, 1), dtype=jnp.float32) * 5.0,
         mean_prior=jnp.ones((HALF_VOL,), dtype=jnp.float32) * 10.0,
         noise_variance=jnp.ones((N_HALF,), dtype=jnp.float32),
-        z_prior_precision_diag=jnp.ones((1,), dtype=jnp.float32),
         schedule_state=None,
     )
 
@@ -479,7 +474,6 @@ def test_dense_ppca_refinement_loop_advances_current_size_when_gates_pass(tiny_i
             means_aligned=True,
             resolution_supports=True,
             no_halfset_drift=True,
-            fsc=np.ones((proposed_current_size // 2,), dtype=np.float32),
         )
 
     final_state, records = run_dense_ppca_refinement_loop(
@@ -513,7 +507,6 @@ def test_dense_ppca_refinement_loop_blocks_on_halfset_gate(tiny_inputs):
         W_prior=jnp.ones((HALF_VOL, 1), dtype=jnp.float32) * 5.0,
         mean_prior=jnp.ones((HALF_VOL,), dtype=jnp.float32) * 10.0,
         noise_variance=jnp.ones((N_HALF,), dtype=jnp.float32),
-        z_prior_precision_diag=jnp.ones((1,), dtype=jnp.float32),
         schedule_state=None,
     )
 
@@ -522,7 +515,6 @@ def test_dense_ppca_refinement_loop_blocks_on_halfset_gate(tiny_inputs):
             means_aligned=True,
             resolution_supports=False,
             no_halfset_drift=True,
-            fsc=np.zeros((proposed_current_size // 2,), dtype=np.float32),
         )
 
     final_state, records = run_dense_ppca_refinement_loop(
@@ -605,6 +597,8 @@ def test_exact_local_all_retained_support_matches_dense(tiny_inputs):
         np.asarray(dense.diagnostics["best_rotation_idx"]),
     )
     assert local.diagnostics["uses_image_scale_corrections"] is True
+    assert (dense.diagnostics["image_scale_min"], dense.diagnostics["image_scale_max"]) == pytest.approx((0.5, 1.7))
+    assert (local.diagnostics["image_scale_min"], local.diagnostics["image_scale_max"]) == pytest.approx((0.5, 1.7))
     assert local.diagnostics["local_bucketed"] is True
 
 
@@ -649,6 +643,8 @@ def test_exact_local_subset_layout_matches_dense_subset(tiny_inputs):
     np.testing.assert_allclose(np.asarray(local.mu_half), np.asarray(dense.mu_half), rtol=5e-4, atol=1e-4)
     np.testing.assert_allclose(np.asarray(local.W_half), np.asarray(dense.W_half), rtol=5e-4, atol=1e-4)
     np.testing.assert_array_equal(np.asarray(local.diagnostics["image_indices"]), image_indices)
+    assert (dense.diagnostics["image_scale_min"], dense.diagnostics["image_scale_max"]) == pytest.approx((0.5, 0.9))
+    assert (local.diagnostics["image_scale_min"], local.diagnostics["image_scale_max"]) == pytest.approx((0.5, 0.9))
 
 
 def test_exact_local_image_sharded_accumulation_matches_monolithic(tiny_inputs):
@@ -721,7 +717,9 @@ def test_exact_local_topk_mstep_falls_back_when_posteriors_not_peaked(tiny_input
     )
 
     np.testing.assert_allclose(np.asarray(fallback.stats.rhs), np.asarray(exact.stats.rhs), rtol=2e-5, atol=2e-5)
-    np.testing.assert_allclose(np.asarray(fallback.stats.lhs_tri), np.asarray(exact.stats.lhs_tri), rtol=2e-5, atol=2e-5)
+    np.testing.assert_allclose(
+        np.asarray(fallback.stats.lhs_tri), np.asarray(exact.stats.lhs_tri), rtol=2e-5, atol=2e-5
+    )
     assert fallback.diagnostics["local_mstep_topk_buckets"] == 0
     assert fallback.diagnostics["local_mstep_exact_buckets"] > 0
 
@@ -748,90 +746,3 @@ def test_exact_local_topk_mstep_records_retained_mass(tiny_inputs):
     assert retained.shape == (dataset.n_images,)
     assert np.all(retained > 0)
     assert np.all(retained <= 1.0 + 1e-6)
-
-
-def test_exact_local_refinement_loop_uses_same_resolution_gate(tiny_inputs):
-    dataset, mu, W, rotations, translations = tiny_inputs
-    halfsets = (dataset.get_halfset(0), dataset.get_halfset(1))
-    layouts = tuple(_all_retained_local_layout(ds, rotations, translations) for ds in halfsets)
-    state = PoseMarginalPPCAEMState(
-        mu_half=(jnp.asarray(mu), jnp.asarray(mu)),
-        W_half=(jnp.asarray(W), jnp.asarray(W)),
-        mu_score=jnp.asarray(mu),
-        W_score=jnp.asarray(W),
-        W_prior=jnp.ones((HALF_VOL, 1), dtype=jnp.float32) * 5.0,
-        mean_prior=jnp.ones((HALF_VOL,), dtype=jnp.float32) * 10.0,
-        noise_variance=jnp.ones((N_HALF,), dtype=jnp.float32),
-        z_prior_precision_diag=jnp.ones((1,), dtype=jnp.float32),
-        schedule_state=None,
-    )
-
-    def comparator(_state, proposed_current_size):
-        return HalfsetMeanComparison(
-            means_aligned=True,
-            resolution_supports=True,
-            no_halfset_drift=True,
-            fsc=np.ones((proposed_current_size // 2,), dtype=np.float32),
-        )
-
-    final_state, records = run_local_ppca_refinement_loop(
-        state,
-        halfsets,
-        layouts,
-        n_iterations=1,
-        init_current_size=2,
-        max_current_size=4,
-        halfset_comparator=comparator,
-        pose_stability_threshold=1.0,
-        mstep_chunk_size=8,
-    )
-
-    assert final_state.schedule_state.current_size == 4
-    assert records[0].resolution_decision.allow_increase
-    assert records[0].diagnostics["path"] == "exact_local"
-
-
-def test_dense_ppca_wrapper_uses_production_kclass_schedule_bridge(tiny_inputs):
-    dataset, mu, W, rotations, translations = tiny_inputs
-    state = PoseMarginalPPCAEMState(
-        mu_half=(jnp.asarray(mu), jnp.asarray(mu)),
-        W_half=(jnp.asarray(W), jnp.asarray(W)),
-        mu_score=jnp.asarray(mu),
-        W_score=jnp.asarray(W),
-        W_prior=jnp.ones((HALF_VOL, 1), dtype=jnp.float32) * 5.0,
-        mean_prior=jnp.ones((HALF_VOL,), dtype=jnp.float32) * 10.0,
-        noise_variance=jnp.ones((N_HALF,), dtype=jnp.float32),
-        z_prior_precision_diag=jnp.ones((1,), dtype=jnp.float32),
-        schedule_state=None,
-    )
-
-    def comparator(_state, proposed_current_size):
-        return HalfsetMeanComparison(
-            means_aligned=True,
-            resolution_supports=True,
-            no_halfset_drift=True,
-            fsc=np.ones((proposed_current_size // 2,), dtype=np.float32),
-        )
-
-    final_state, records, bridge = run_dense_ppca_refinement_with_kclass_schedule(
-        state,
-        dataset,
-        rotations=rotations,
-        translations=translations,
-        n_iterations=1,
-        image_batch_size=2,
-        rotation_block_size=1,
-        init_current_size=2,
-        max_current_size=4,
-        halfset_comparator=comparator,
-        pose_stability_threshold=1.0,
-        mstep_chunk_size=8,
-        init_healpix_order=2,
-        max_healpix_order=3,
-    )
-
-    assert final_state.schedule_state.current_size == 4
-    assert records[0].resolution_decision.allow_increase
-    assert len(bridge.history) == 1
-    assert bridge.history[0]["allowed"]
-    assert bridge.state.iteration == 1

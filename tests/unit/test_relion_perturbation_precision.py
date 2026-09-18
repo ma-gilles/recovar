@@ -2,8 +2,8 @@ from pathlib import Path
 
 import pytest
 
-from recovar.em.dense_single_volume.iteration_loop import _resolve_replay_random_perturbation
-from recovar.em.sampling import read_relion_optimiser_metadata
+from recovar.em.diagnostics.relion_replay import _resolve_replay_random_perturbation
+from recovar.em.relion.relion_metadata import read_relion_optimiser_metadata
 
 
 def _write_optimizer(path: Path, seed: int) -> None:

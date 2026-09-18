@@ -13,7 +13,6 @@ GUI-style Class3D defaults, evaluates both against GT, and writes artifacts that
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import re
@@ -22,6 +21,8 @@ import subprocess
 import time
 from dataclasses import dataclass, replace
 from pathlib import Path
+
+from scripts.file_hash import sha256_file as _sha256_file
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_RIBO_PDB_DIR = Path("/home/mg6942/mytigress/cryobench2/Ribosembly/pdbs")
@@ -465,14 +466,6 @@ DEFAULT_CASES: tuple[Case, ...] = (
 
 def q(value: str | Path) -> str:
     return shlex.quote(str(value))
-
-
-def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def _file_contains_marker(path: Path, marker: bytes) -> bool:

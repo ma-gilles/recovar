@@ -4,13 +4,14 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
-import subprocess
 import sys
 from pathlib import Path
 
 import numpy as np
+
+from scripts.analyzer_provenance import clean_repo_head
+from scripts.file_hash import sha256_file as _sha256
 
 ACTIVE = np.uint32(8)
 PANEL_SCHEMA = "recovar.k4_iter10_class2_residual_target_panel.v1"
@@ -20,14 +21,6 @@ REPORT_SCHEMA = "relion.k4_iter10_panel12_capture_repeatability.v1"
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise ValueError(message)
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(8 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def _center(values: np.ndarray) -> np.ndarray:
@@ -225,13 +218,6 @@ def analyze(
     }
 
 
-def _clean_repo_head(repo: Path) -> str:
-    head = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"], text=True).strip()
-    status = subprocess.check_output(["git", "-C", str(repo), "status", "--porcelain=v1"], text=True)
-    _require(not status, "analyzer repository is dirty")
-    return head
-
-
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", required=True, type=Path)
@@ -252,7 +238,7 @@ def main() -> None:
         capture_a=args.capture_a,
         capture_b=args.capture_b,
     )
-    report["inputs"]["analyzer_repo_head"] = _clean_repo_head(args.repo)
+    report["inputs"]["analyzer_repo_head"] = clean_repo_head(args.repo)
     args.output_json.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
     print(json.dumps({"classification": report["classification"], **report["scope"]}, indent=2))
 

@@ -11,18 +11,16 @@ expectation.  Correlation is not computed.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
+from scripts.file_hash import sha256_file as _sha256
+
 SCHEMA = "em-k1-final-grid-fsc-deficit-v2"
-TRAJECTORY_SCHEMAS = {
-    "em_k1_fsc_trajectory_audit_v2",
-    "em_k1_fsc_trajectory_audit_v3",
-}
+TRAJECTORY_SCHEMA = "em_k1_fsc_trajectory_audit_v3"
 OUTSIDE_DEFICIT_FRACTION_GATE = 0.95
 DEFICIT_AMPLIFICATION_GATE = 250.0
 ACTIVE_RADIUS_FSC_AUC_MIN = 0.995
@@ -35,14 +33,6 @@ CLASSIFICATION = (
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise ValueError(message)
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def normalized_non_dc_fsc_auc(curve: np.ndarray) -> float:
@@ -111,7 +101,7 @@ def build_report(
     _require(trajectory_json.is_file(), f"missing trajectory JSON: {trajectory_json}")
     _require(shellwise_npz.is_file(), f"missing shellwise NPZ: {shellwise_npz}")
     trajectory = json.loads(trajectory_json.read_text())
-    _require(trajectory.get("schema") in TRAJECTORY_SCHEMAS, "wrong trajectory schema")
+    _require(trajectory.get("schema") == TRAJECTORY_SCHEMA, "wrong trajectory schema")
     _require(last_numbered_current_size > 0 and last_numbered_current_size % 2 == 0, "current size must be positive and even")
     last_numbered_radius = last_numbered_current_size // 2
 

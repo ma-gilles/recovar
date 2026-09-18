@@ -21,15 +21,6 @@ class TopPoseSelection:
     posterior: np.ndarray
 
 
-def pack_pose_ids(rotation_ids, translation_ids, n_translations: int) -> np.ndarray:
-    """Pack poses in the K-class convention ``rotation_id * n_trans + trans``."""
-
-    return np.asarray(rotation_ids, dtype=np.int64) * int(n_translations) + np.asarray(
-        translation_ids,
-        dtype=np.int64,
-    )
-
-
 def top_pose_candidate_count(config: PoseSelectionConfig, n_candidates: int) -> int:
     """Number of raw candidates to retain before CPU-side distinct filtering."""
 
@@ -58,38 +49,7 @@ def top_p_from_score_block(score, *, rotation_offset: int = 0, candidate_count: 
     return top_scores.astype(jnp.float32), top_rot, top_trans
 
 
-def pad_top_pose_arrays(
-    scores: np.ndarray,
-    rotations: np.ndarray,
-    translations: np.ndarray,
-    *,
-    top_p: int,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Pad or trim per-image top-p arrays to exactly ``top_p`` columns."""
-
-    scores = np.asarray(scores, dtype=np.float32)
-    rotations = np.asarray(rotations, dtype=np.int32)
-    translations = np.asarray(translations, dtype=np.int32)
-    top_p = int(top_p)
-    if scores.ndim == 1:
-        scores = scores[:, None]
-    if rotations.ndim == 1:
-        rotations = rotations[:, None]
-    if translations.ndim == 1:
-        translations = translations[:, None]
-    n_images = int(scores.shape[0])
-    out_scores = np.full((n_images, top_p), -np.inf, dtype=np.float32)
-    out_rot = np.full((n_images, top_p), -1, dtype=np.int32)
-    out_trans = np.full((n_images, top_p), -1, dtype=np.int32)
-    width = min(top_p, int(scores.shape[1]))
-    if width:
-        out_scores[:, :width] = scores[:, :width]
-        out_rot[:, :width] = rotations[:, :width]
-        out_trans[:, :width] = translations[:, :width]
-    return out_scores, out_rot, out_trans
-
-
-def _rotation_angle_deg(a: np.ndarray, b: np.ndarray) -> float:
+def _rotation_angle_degrees(a: np.ndarray, b: np.ndarray) -> float:
     rel = np.asarray(a, dtype=np.float64).T @ np.asarray(b, dtype=np.float64)
     cos_angle = (float(np.trace(rel)) - 1.0) * 0.5
     return float(np.rad2deg(np.arccos(np.clip(cos_angle, -1.0, 1.0))))
@@ -109,7 +69,7 @@ def _is_pose_distinct(
         if rotations is None or rot_id < 0 or accepted_rot < 0:
             rotation_far = int(rot_id) != int(accepted_rot)
         else:
-            rotation_far = _rotation_angle_deg(rotations[int(rot_id)], rotations[int(accepted_rot)]) >= min_angle_deg
+            rotation_far = _rotation_angle_degrees(rotations[int(rot_id)], rotations[int(accepted_rot)]) >= min_angle_deg
         if translations is None or trans_id < 0 or accepted_trans < 0:
             translation_far = int(trans_id) != int(accepted_trans)
         else:
@@ -202,7 +162,7 @@ def select_distinct_top_poses(
                     candidate_mat = candidate_mats[image_idx, int(candidate_idx)]
                     distinct = True
                     for accepted_idx, (_accepted_rot, accepted_trans) in enumerate(accepted):
-                        rotation_far = _rotation_angle_deg(candidate_mat, accepted_mats[accepted_idx]) >= min_angle
+                        rotation_far = _rotation_angle_degrees(candidate_mat, accepted_mats[accepted_idx]) >= min_angle
                         if translations is None or trans_id < 0 or accepted_trans < 0:
                             translation_far = int(trans_id) != int(accepted_trans)
                         else:

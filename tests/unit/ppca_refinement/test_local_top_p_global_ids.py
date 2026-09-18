@@ -3,7 +3,7 @@ import numpy as np
 import pytest
 
 import recovar.core.fourier_transform_utils as ftu
-from recovar.em.dense_single_volume.local_layout import LocalHypothesisLayout
+from recovar.em.local.local_layout import LocalHypothesisLayout
 from recovar.em.ppca_refinement.config import GeometryConfig, PoseSelectionConfig, ScheduleConfig
 from recovar.em.ppca_refinement.local_dataset import (
     run_local_ppca_fused_em_iteration,

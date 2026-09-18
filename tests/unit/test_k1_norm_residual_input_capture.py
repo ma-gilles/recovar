@@ -4,7 +4,9 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as sparse
+from recovar.em.diagnostics import bpref_diagnostics
+from recovar.em.diagnostics import norm_scale as norm_scale_diagnostics
+from recovar.em.sparse_pass2 import sparse_pass2_bucketed as sparse
 
 
 def test_norm_residual_only_mode_does_not_enable_full_pass2_dump(tmp_path, monkeypatch):
@@ -28,8 +30,8 @@ def test_norm_residual_input_capture_preserves_exact_target_arrays(
     monkeypatch.setenv("RECOVAR_PASS2_DUMP_CURRENT_SIZE", "56")
     monkeypatch.setenv("RECOVAR_PASS2_DUMP_ITERATION", "1")
     monkeypatch.setenv("RECOVAR_PASS2_DUMP_NORM_RESIDUAL_INPUTS", "1")
-    monkeypatch.setitem(sparse._bpref_contribution_context, "iteration", 1)
-    monkeypatch.setitem(sparse._bpref_contribution_context, "half", 2)
+    monkeypatch.setitem(bpref_diagnostics._bpref_contribution_context, "iteration", 1)
+    monkeypatch.setitem(bpref_diagnostics._bpref_contribution_context, "half", 2)
     proj = jnp.asarray([[[1 + 2j, 3 + 4j]]], dtype=jnp.complex64)
     proj_abs2 = jnp.abs(proj) ** 2
     summed = jnp.asarray([[[5 + 6j, 7 + 8j]]], dtype=jnp.complex64)
@@ -42,7 +44,7 @@ def test_norm_residual_input_capture_preserves_exact_target_arrays(
     high_shell = jnp.asarray([19.0], dtype=jnp.float32)
     weighted_image_power = jnp.asarray([23.0], dtype=jnp.float32)
 
-    count = sparse._maybe_dump_norm_residual_inputs(
+    count = norm_scale_diagnostics._maybe_dump_norm_residual_inputs(
         experiment_dataset=object(),
         image_indices=np.asarray([66], dtype=np.int64),
         current_size=56,
@@ -122,11 +124,13 @@ def test_norm_residual_input_capture_preserves_exact_target_arrays(
         assert capture["raw_translated_wavg"].shape == (0, 0)
 
 
-def test_deterministic_norm_reduction_uses_float64_sum(monkeypatch):
+@pytest.mark.parametrize("input_dtype", [np.complex64, np.complex128])
+def test_deterministic_norm_reduction_uses_float64_sum(monkeypatch, input_dtype):
     monkeypatch.setenv("RECOVAR_K1_RELION_DETERMINISTIC_NORM_REDUCTION", "1")
+    monkeypatch.delenv("RECOVAR_K1_RELION_POWERCLASS_SPECTRUM_NORM", raising=False)
     processed = np.asarray(
-        [[10000 + 0j, 1 + 0j, 1 + 0j, 1 + 0j, 1 + 0j, 1 + 0j, 1 + 0j, 1 + 0j, 1 + 0j]],
-        dtype=np.complex64,
+        [[10000 + 0j, 1 + 0j, 1 + 0j, 1 + 0j, 1 + 0j, 1 + 0j, 1 + 0j, 1 + 0j]],
+        dtype=input_dtype,
     )
     shells = np.zeros(processed.shape[1], dtype=np.int32)
 
@@ -137,9 +141,32 @@ def test_deterministic_norm_reduction_uses_float64_sum(monkeypatch):
         shell_count=1,
     )
 
-    expected = np.float32(np.sum(np.abs(processed[0]) ** 2, dtype=np.float64))
-    assert np.asarray(per_image).dtype == np.float32
-    assert np.float32(per_image[0]) == expected
+    expected = np.sum(np.abs(processed[0]) ** 2, dtype=np.float64)
+    assert np.asarray(per_image).dtype == np.float64
+    assert float(per_image[0]) == expected == 100000007.0
+    # This opt-in diagnostic must retain the reduction's low bits on return.
+    assert float(per_image[0]) != float(np.float32(expected))
+
+
+@pytest.mark.parametrize(
+    ("input_dtype", "output_dtype"),
+    [(np.complex64, np.float32), (np.complex128, np.float64)],
+)
+def test_default_norm_reduction_preserves_input_precision(monkeypatch, input_dtype, output_dtype):
+    monkeypatch.delenv("RECOVAR_K1_RELION_DETERMINISTIC_NORM_REDUCTION", raising=False)
+    monkeypatch.delenv("RECOVAR_K1_RELION_POWERCLASS_SPECTRUM_NORM", raising=False)
+
+    shells, per_image = sparse._weighted_image_power_shells_and_per_image(
+        jnp.asarray([[3 + 0j, 4 + 0j]], dtype=input_dtype),
+        jnp.asarray([0, 1], dtype=jnp.int32),
+        jnp.ones(1, dtype=jnp.float32),
+        shell_count=2,
+    )
+
+    assert np.asarray(shells).dtype == output_dtype
+    assert np.asarray(per_image).dtype == output_dtype
+    np.testing.assert_array_equal(shells, np.asarray([9.0, 16.0], dtype=output_dtype))
+    np.testing.assert_array_equal(per_image, np.asarray([25.0], dtype=output_dtype))
 
 
 def test_powerclass_spectrum_norm_preserves_float64_per_image(monkeypatch):
@@ -167,8 +194,8 @@ def test_norm_capture_slices_and_reshapes_raw_translation_rows(tmp_path, monkeyp
     monkeypatch.setenv("RECOVAR_PASS2_DUMP_CURRENT_SIZE", "56")
     monkeypatch.setenv("RECOVAR_PASS2_DUMP_ITERATION", "1")
     monkeypatch.setenv("RECOVAR_PASS2_DUMP_NORM_RESIDUAL_INPUTS", "1")
-    monkeypatch.setitem(sparse._bpref_contribution_context, "iteration", 1)
-    monkeypatch.setitem(sparse._bpref_contribution_context, "half", 2)
+    monkeypatch.setitem(bpref_diagnostics._bpref_contribution_context, "iteration", 1)
+    monkeypatch.setitem(bpref_diagnostics._bpref_contribution_context, "half", 2)
 
     def fake_translate(images, angles, pixel_indices, image_shape):
         assert angles.shape == (2, 2)
@@ -177,7 +204,7 @@ def test_norm_capture_slices_and_reshapes_raw_translation_rows(tmp_path, monkeyp
         return values.reshape(2, images.shape[1])
 
     monkeypatch.setattr(cuda_backproject, "relion_translate_score_f32", fake_translate)
-    sparse._maybe_dump_norm_residual_inputs(
+    norm_scale_diagnostics._maybe_dump_norm_residual_inputs(
         experiment_dataset=object(),
         image_indices=np.asarray([66], dtype=np.int64),
         current_size=56,

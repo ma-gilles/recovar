@@ -18,17 +18,18 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume.frozen_boundary import (
+from recovar.em.diagnostics.frozen_boundary import (
     FROZEN_BOUNDARY_NUMERICAL_CLASSIFICATION_SCOPE,
     FROZEN_BOUNDARY_PROVENANCE_VERIFICATION_SCOPE,
-)
-from recovar.em.dense_single_volume.iteration_loop import (
     _assert_frozen_scoring_state_unchanged,
     _frozen_scoring_state_arrays,
-    _mean_variance_for_scoring_half,
-    _updated_mean_variance_per_half,
 )
-from recovar.em.initial_model.avg_unaligned import compute_avg_unaligned_and_sigma2
+from recovar.em.refinement.mean_helpers import _mean_variance_for_scoring_half, _updated_mean_variance_per_half
+from recovar.em.relion.initial_noise import (
+    compute_avg_unaligned_and_sigma2,
+    read_relion_single_optics_sigma2_noise,
+    relion_mpi_process_start_scoring_noise_pair,
+)
 from scripts import run_full_refinement
 from scripts.run_full_refinement import (
     _assert_frozen_replay_slots_projector_only,
@@ -43,17 +44,14 @@ from scripts.run_full_refinement import (
     _load_init_noise_radial_npz,
     _load_init_previous_best_poses_npz,
     _load_initial_noise_cache,
-    _load_native_group_ids_per_half,
     _load_relion_it000_model_stars,
     _load_replay_group_particles,
     _make_frozen_boundary_noise_variance,
     _maybe_apply_relion_image_mask,
     _parse_relion_cli_ini_high,
     _parse_relion_tau2_fudge,
-    _read_relion_single_optics_sigma2_noise,
     _relion_fresh_initial_noise_layout,
     _relion_halfset_and_accuracy_layout,
-    _relion_mpi_process_start_scoring_noise_pair,
     _relion_optimiser_star_for_runtime,
     _relion_sigma2_to_native_noise_variance,
     _replay_complete_initial_particle_state,
@@ -93,8 +91,25 @@ def test_full_refinement_supports_stop_after_pass2_operand_dump():
     assert "Pass2DumpComplete" in source
     assert "requested fine-score boundary" in source
 ITERATION_LOOP = (
-    Path(__file__).resolve().parents[2] / "recovar" / "em" / "dense_single_volume" / "iteration_loop.py"
+    Path(__file__).resolve().parents[2] / 'recovar' / 'em' / 'refinement' / 'iteration_loop.py'
 )
+
+
+def _sole_call_keywords(tree: ast.Module, func_name: str) -> dict[str, ast.expr]:
+    """Keyword args of the single top-level call to ``func_name`` in ``tree``.
+
+    refine_single_volume() takes one ``options=RefinementOptions(...)``;
+    most CLI-forwarding knobs now live as keywords on the nested
+    RefinementSchedule/RelionParityOptions/EngineDebugOptions/etc.
+    constructor calls instead of directly on refine_single_volume.
+    """
+    calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == func_name
+    ]
+    assert len(calls) == 1, f"expected exactly one {func_name}(...) call, found {len(calls)}"
+    return {keyword.arg: keyword.value for keyword in calls[0].keywords}
 
 
 def test_complete_initial_particle_state_is_autorefine_only():
@@ -630,15 +645,9 @@ def test_frozen_boundary_source_hashes_bind_live_stars(tmp_path):
 
 def test_frozen_boundary_schedule_is_threaded_exactly_to_refinement_loop():
     tree = ast.parse(RUN_FULL_REFINEMENT.read_text())
-    calls = [
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Name)
-        and node.func.id == "refine_single_volume"
-    ]
-    assert len(calls) == 1
-    keywords = {keyword.arg: keyword.value for keyword in calls[0].keywords}
+    # init_current_size / init_relion_incr_size are forwarded via the
+    # RefinementSchedule group of refine_single_volume's options= bundle.
+    keywords = _sole_call_keywords(tree, "RefinementSchedule")
     assert isinstance(keywords["init_current_size"], ast.Name)
     assert keywords["init_current_size"].id == "init_current_size"
     relion_incr = keywords["init_relion_incr_size"]
@@ -708,7 +717,7 @@ def test_attach_relion_projector_capture_targets_exact_replay_slot(tmp_path, mon
         observed.update(kwargs)
         return expected_state
 
-    monkeypatch.setattr("recovar.em.sampling.read_relion_model_metadata", fake_model_metadata)
+    monkeypatch.setattr("recovar.em.relion.relion_metadata.read_relion_model_metadata", fake_model_metadata)
     monkeypatch.setattr(run_full_refinement, "build_relion_projector_replay_state", fake_build)
     overrides = [{"slot": index} for index in range(4)]
 
@@ -778,7 +787,7 @@ def test_attach_relion_projector_capture_accepts_immediate_validated_frozen_rest
     (relion_dir / "run_it003_half1_model.star").write_text("model\n")
     expected_state = {"source_manifest_sha256": "a" * 64}
     monkeypatch.setattr(
-        "recovar.em.sampling.read_relion_model_metadata",
+        "recovar.em.relion.relion_metadata.read_relion_model_metadata",
         lambda path: {"current_image_size": 42},
     )
     monkeypatch.setattr(
@@ -850,7 +859,7 @@ def test_relion_mpi_autorefine_scoring_noise_uses_rank1_broadcast():
     half1 = np.asarray([1.0, 2.0], dtype=np.float32)
     half2 = np.asarray([3.0, 4.0], dtype=np.float32)
 
-    got = _relion_mpi_process_start_scoring_noise_pair(half1, half2, split_random_halves=True)
+    got = relion_mpi_process_start_scoring_noise_pair(half1, half2, split_random_halves=True)
 
     np.testing.assert_array_equal(got[0], half1)
     np.testing.assert_array_equal(got[1], half1)
@@ -861,7 +870,7 @@ def test_relion_mpi_shared_model_scoring_noise_preserves_second_input():
     half1 = np.asarray([1.0, 2.0], dtype=np.float32)
     half2 = np.asarray([3.0, 4.0], dtype=np.float32)
 
-    got = _relion_mpi_process_start_scoring_noise_pair(half1, half2, split_random_halves=False)
+    got = relion_mpi_process_start_scoring_noise_pair(half1, half2, split_random_halves=False)
 
     np.testing.assert_array_equal(got[0], half1)
     np.testing.assert_array_equal(got[1], half2)
@@ -871,7 +880,7 @@ def test_relion_mpi_scoring_noise_preserves_rfloat_reciprocal_boundary():
     half1 = np.asarray([0.3, 0.7], dtype=np.float64)
     half2 = np.asarray([1.1, 2.3], dtype=np.float64)
 
-    got = _relion_mpi_process_start_scoring_noise_pair(
+    got = relion_mpi_process_start_scoring_noise_pair(
         half1,
         half2,
         split_random_halves=False,
@@ -893,7 +902,7 @@ def test_relion_strict_replay_rejects_multiple_optics_noise_tables():
     }
 
     with pytest.raises(NotImplementedError, match="2 optics-group sigma2_noise tables"):
-        _read_relion_single_optics_sigma2_noise(model, context="unit-test model")
+        read_relion_single_optics_sigma2_noise(model, context="unit-test model")
 
 
 def _read_relion_sigma(model_star: Path) -> float:
@@ -928,13 +937,8 @@ def test_firstiter_cc_passes_relion_cli_ini_high_to_refinement_loop():
     """
 
     tree = ast.parse(RUN_FULL_REFINEMENT.read_text())
-    calls = [
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "refine_single_volume"
-    ]
-    assert len(calls) == 1
-    keywords = {kw.arg: kw.value for kw in calls[0].keywords}
+    # relion_firstiter_ini_high_angstrom is forwarded via RelionParityOptions.
+    keywords = _sole_call_keywords(tree, "RelionParityOptions")
     assert "relion_firstiter_ini_high_angstrom" in keywords
     value = keywords["relion_firstiter_ini_high_angstrom"]
     assert isinstance(value, ast.IfExp)
@@ -1005,13 +1009,8 @@ def test_runner_requires_and_persists_perturbation_restart_provenance():
 
 def test_save_intermediates_skip_unregularized_passes_to_refinement_loop():
     tree = ast.parse(RUN_FULL_REFINEMENT.read_text())
-    calls = [
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "refine_single_volume"
-    ]
-    assert len(calls) == 1
-    keywords = {kw.arg: kw.value for kw in calls[0].keywords}
+    # save_intermediates_skip_unregularized is forwarded via EngineDebugOptions.
+    keywords = _sole_call_keywords(tree, "EngineDebugOptions")
     value = keywords["save_intermediates_skip_unregularized"]
     assert isinstance(value, ast.Call)
     assert isinstance(value.func, ast.Name)
@@ -1023,13 +1022,8 @@ def test_save_intermediates_skip_unregularized_passes_to_refinement_loop():
 def test_stop_after_local_search_passes_to_refinement_loop():
     tree = ast.parse(RUN_FULL_REFINEMENT.read_text())
     assert "--stop_after_local_search" in RUN_FULL_REFINEMENT.read_text()
-    calls = [
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "refine_single_volume"
-    ]
-    assert len(calls) == 1
-    keywords = {kw.arg: kw.value for kw in calls[0].keywords}
+    # stop_after_local_search is forwarded via EngineDebugOptions.
+    keywords = _sole_call_keywords(tree, "EngineDebugOptions")
     value = keywords["stop_after_local_search"]
     assert isinstance(value, ast.Call)
     assert isinstance(value.func, ast.Name)
@@ -1041,13 +1035,8 @@ def test_stop_after_local_search_passes_to_refinement_loop():
 def test_stop_after_local_search_score_only_passes_to_refinement_loop():
     tree = ast.parse(RUN_FULL_REFINEMENT.read_text())
     assert "--stop_after_local_search_score_only" in RUN_FULL_REFINEMENT.read_text()
-    calls = [
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "refine_single_volume"
-    ]
-    assert len(calls) == 1
-    keywords = {kw.arg: kw.value for kw in calls[0].keywords}
+    # stop_after_local_search_score_only is forwarded via EngineDebugOptions.
+    keywords = _sole_call_keywords(tree, "EngineDebugOptions")
     value = keywords["stop_after_local_search_score_only"]
     assert isinstance(value, ast.Call)
     assert isinstance(value.func, ast.Name)
@@ -1058,11 +1047,17 @@ def test_stop_after_local_search_score_only_passes_to_refinement_loop():
 
 def test_stop_after_local_search_score_only_is_diagnostic_score_only_path():
     source = ITERATION_LOOP.read_text()
-    assert "if stop_after_local_search_score_only:\n        stop_after_local_search = True" in source
-    assert "diagnostic_score_only=bool(stop_after_local_search_score_only)" in source
-    assert "score_only=diagnostic_score_only" in source
-    assert "accumulate_noise=local_accumulate_noise" in source
-    assert '"stop_after_local_search_score_only": bool(stop_after_local_search_score_only)' in source
+    half_scoring_source = (ITERATION_LOOP.parent.parent / "dense" / "half_scoring.py").read_text()
+    # stop_after_local_search{,_score_only} are read off the EngineDebugOptions
+    # bundle (`debug.*`) inside the iteration loop now, rather than being bare
+    # locals bound from flat refine_single_volume kwargs.
+    assert "if debug.stop_after_local_search_score_only:\n        stop_after_local_search = True" in source
+    assert "diagnostic_score_only=bool(debug.stop_after_local_search_score_only)" in source
+    assert "_score_half_local_in_bpref_scope(" in source
+    assert "return _score_half_local(**kwargs)" in half_scoring_source
+    assert "score_only=diagnostic_score_only" in half_scoring_source
+    assert "accumulate_noise=local_accumulate_noise" in half_scoring_source
+    assert '"stop_after_local_search_score_only": bool(debug.stop_after_local_search_score_only)' in source
 
 
 def test_diagnostic_single_half_is_guarded_to_local_search_stops():
@@ -1132,33 +1127,6 @@ _rlnDoSplitRandomHalves                                  0
 _rlnTau2FudgeArg                                          4.000000
 """
     assert _parse_relion_tau2_fudge(text) == pytest.approx(4.0)
-
-
-def test_load_native_group_ids_per_half_reads_particles_star(tmp_path):
-    pd = pytest.importorskip("pandas")
-    starfile = pytest.importorskip("starfile")
-
-    starfile.write(
-        {
-            "particles": pd.DataFrame(
-                {
-                    "rlnImageName": ["1@x.mrcs", "2@x.mrcs", "3@x.mrcs", "4@x.mrcs"],
-                    "rlnGroupNumber": [1, 2, 3, 2],
-                },
-            ),
-        },
-        tmp_path / "particles.star",
-    )
-
-    got = _load_native_group_ids_per_half(
-        tmp_path / "particles.star",
-        half1_idx=np.asarray([0, 2], dtype=np.int64),
-        half2_idx=np.asarray([1, 3], dtype=np.int64),
-    )
-
-    assert got is not None
-    np.testing.assert_array_equal(got[0], np.asarray([0, 2], dtype=np.int64))
-    np.testing.assert_array_equal(got[1], np.asarray([1, 1], dtype=np.int64))
 
 
 def test_native_group_layout_prefers_supplied_relion_groups_and_maps_exact_identities():
@@ -1379,11 +1347,10 @@ def test_relion_expected_accuracy_layout_supports_repeated_indices_across_stacks
     np.testing.assert_array_equal(particle_ids, [2, 0, 3])
 
 
-def test_fresh_relion_layout_is_physical_order_with_identity_accuracy_trials():
+@pytest.mark.parametrize("shuffle_algorithm", ["legacy", "mt19937"])
+def test_fresh_relion_layout_is_physical_order_with_identity_accuracy_trials(shuffle_algorithm):
     pd = pytest.importorskip("pandas")
-    from recovar.em.dense_single_volume.helpers.expected_accuracy import (
-        relion_auto_refine_half_orders,
-    )
+    from recovar.em.helpers.expected_accuracy import relion_auto_refine_half_orders
 
     relion_particles = pd.DataFrame(
         {
@@ -1408,6 +1375,7 @@ def test_fresh_relion_layout_is_physical_order_with_identity_accuracy_trials():
         relion_particles["rlnRandomSubset"],
         1711,
         optics_group_ids=relion_particles["rlnOpticsGroup"],
+        shuffle_algorithm=shuffle_algorithm,
     )
     our_row_by_name = {
         name: row
@@ -1421,6 +1389,7 @@ def test_fresh_relion_layout_is_physical_order_with_identity_accuracy_trials():
             our_particles,
             relion_particles,
             random_seed=1711,
+            shuffle_algorithm=shuffle_algorithm,
         )
     )
 
@@ -2209,8 +2178,24 @@ def test_autorefine_continuation_noise_emulates_relion_rank1_broadcast(tmp_path)
     noise_h1, noise_h2 = overrides[0]["noise_variance"]
     np.testing.assert_array_equal(noise_h2, noise_h1)
     assert noise_h1 is not noise_h2
+    assert noise_h1.dtype == np.float32
     assert float(np.min(noise_h2)) == pytest.approx(1.0 * 8**4)
     assert float(np.max(noise_h2)) == pytest.approx(5.0 * 8**4)
+
+    double_overrides = _build_replay_iteration_overrides(
+        tmp_path,
+        half1_idx=np.asarray([0], dtype=np.int64),
+        half2_idx=np.asarray([1], dtype=np.int64),
+        max_iter=0,
+        ds_voxel=2.0,
+        ds_grid=8,
+        include_normcorr=False,
+        init_relion_iteration=1,
+        noise_dtype=np.float64,
+    )
+    double_h1, double_h2 = double_overrides[0]["noise_variance"]
+    assert double_h1.dtype == np.float64
+    assert double_h2.dtype == np.float64
 
     uninterrupted_overrides = _build_replay_iteration_overrides(
         tmp_path,

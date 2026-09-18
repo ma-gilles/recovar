@@ -7,12 +7,12 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume.frozen_boundary import (
+from recovar.em.diagnostics.frozen_boundary import (
     FROZEN_BOUNDARY_FILENAME,
     FROZEN_BOUNDARY_MANIFEST,
     FROZEN_BOUNDARY_SCHEMA,
 )
-from recovar.em.dense_single_volume.frozen_boundary_variant import (
+from recovar.em.diagnostics.frozen_boundary_variant import (
     FROZEN_BOUNDARY_VARIANT_ATTESTATION,
     FROZEN_BOUNDARY_VARIANT_MANIFEST,
     build_frozen_boundary_variant,

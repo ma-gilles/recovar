@@ -1,25 +1,21 @@
-"""Current-size and resolution loop tests for dense single-volume refinement.
-
-Tests:
-1. test_fsc_to_current_size: FSC -> shell -> current_size mapping.
-2. test_oracle_mode_matches_relion_trajectory: Run with RELION's current_sizes.
-3. test_resolution_improves_over_iterations: current_size generally increases.
-4. test_one_iteration_with_windowing: One iteration at current_size=32 is valid.
-"""
+"""Current-size, FSC history and windowing tests for single-volume refinement."""
 
 import numpy as np
 import pytest
 
+import recovar.em.sampling as sampling_module
+
 pytest.importorskip("jax")
 import jax.numpy as jnp
+from helpers.em_arrays import _hermitian_volume
 
-from recovar.em.dense_single_volume.iteration_loop import (
-    refine_single_volume,
-)
-from recovar.em.dense_single_volume import iteration_loop as iteration_loop_module
-from recovar.em.dense_single_volume.helpers.resolution import fsc_to_current_size
-from recovar.em.dense_single_volume.helpers.fourier_window import (
-    quantize_current_size,
+from recovar.em.refinement import iteration_loop as iteration_loop_module
+from recovar.em.refinement.iteration_loop import refine_single_volume
+from recovar.em.refinement.refinement_options import (
+    AdaptiveOptions,
+    RefinementBatching,
+    RefinementOptions,
+    RefinementSchedule,
 )
 
 pytestmark = pytest.mark.unit
@@ -41,7 +37,7 @@ SEED = 42
 
 
 def _assert_relion_hard_assignments_in_range(result, n_translations):
-    """Validate pose IDs against the generated RELION grid, not the compatibility input grid."""
+    """Validate pose IDs against the generated RELION grid."""
     from recovar.em.sampling import rotation_grid_size
 
     final_order = result["healpix_order_trajectory"][-1]
@@ -65,24 +61,6 @@ def _hermitian_image_2d(image_shape, seed=42):
     return jnp.array(ft, dtype=jnp.complex64)
 
 
-def _hermitian_volume(volume_shape, seed=42):
-    rng = np.random.default_rng(seed)
-    real_vol = rng.standard_normal(volume_shape).astype(np.float32)
-    ft = np.fft.fftshift(np.fft.fftn(real_vol))
-    return jnp.array(ft.ravel(), dtype=jnp.complex64)
-
-
-def _make_rotations(n, seed=42):
-    rng = np.random.default_rng(seed)
-    z = rng.standard_normal((n, 3, 3))
-    q, r = np.linalg.qr(z)
-    d = np.sign(np.diagonal(r, axis1=1, axis2=2))
-    q = q * d[:, None, :]
-    det = np.linalg.det(q)
-    q[det < 0] *= -1
-    return q.astype(np.float32)
-
-
 def _identity_ctf(params, image_shape=None, voxel_size=None, *, half_image=False):
     if half_image:
         h, w = image_shape if image_shape is not None else IMAGE_SHAPE
@@ -100,7 +78,7 @@ def _identity_process(batch, apply_image_mask=False):
 def _identity_process_half(batch, apply_image_mask=False):
     """Half-spectrum passthrough: full centered FT → packed Hermitian half.
 
-    Dense-EM's preprocessing (recovar/em/dense_single_volume/helpers/
+    Dense-EM's preprocessing (recovar/em/helpers/
     preprocessing.py:63) reads ``experiment_dataset.process_images_half``
     and expects the packed half-image layout
     ``(batch, H * (W // 2 + 1))``. The mock stores full-spectrum FT images
@@ -133,7 +111,7 @@ class MockDataset:
         self.CTF_params = np.zeros((n_images, 9), dtype=np.float32)
         self.ctf_evaluator = staticmethod(_identity_ctf)
         self.process_images = staticmethod(_identity_process)
-        # Dense-EM preprocessing (recovar/em/dense_single_volume/helpers/
+        # Dense-EM preprocessing (recovar/em/helpers/
         # preprocessing.py:63) now reads ``process_images_half`` rather than
         # ``process_images``. The half-image variant returns the packed
         # half-spectrum layout (H * (W // 2 + 1) pixels per image).
@@ -205,11 +183,6 @@ def init_volume():
 
 
 @pytest.fixture
-def rotations():
-    return _make_rotations(N_ROTATIONS, seed=12)
-
-
-@pytest.fixture
 def translations():
     return jnp.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=jnp.float32)
 
@@ -218,68 +191,18 @@ def translations():
 def generated_relion_rotation_grid(monkeypatch):
     """Keep loop tests independent of the optional compiled RELION binding."""
 
-    def fake_relion_rotation_grid_float32(order):
+    def fake_relion_rotation_grid_float32(order, dtype=None):
+        del dtype
         n_rotations = iteration_loop_module.rotation_grid_size(order)
         rotations = np.repeat(np.eye(3, dtype=np.float32)[None], n_rotations, axis=0)
         eulers = np.zeros((n_rotations, 3), dtype=np.float32)
         return rotations, eulers
 
     monkeypatch.setattr(
-        iteration_loop_module,
+        sampling_module,
         "_relion_rotation_grid_float32",
         fake_relion_rotation_grid_float32,
     )
-
-
-# ===========================================================================
-# Test 1: fsc_to_current_size
-# ===========================================================================
-
-
-class TestFscToCurrentSize:
-    """Verify the FSC -> shell -> current_size mapping."""
-
-    def test_perfect_fsc_gives_max_size(self):
-        """FSC=1 at all shells -> current_size = max allowed."""
-        fsc = jnp.ones(64)
-        cs = fsc_to_current_size(fsc, threshold=1.0 / 7.0)
-        # With FSC=1 everywhere, resolution is at the last shell (63)
-        # current_size = 2 * 63 = 126
-        assert cs >= 100, f"Perfect FSC should give large current_size, got {cs}"
-
-    def test_zero_fsc_gives_min_size(self):
-        """FSC=0 at all shells -> current_size = min_size."""
-        fsc = jnp.zeros(64)
-        cs = fsc_to_current_size(fsc, threshold=1.0 / 7.0, min_size=32)
-        assert cs == 32, f"Zero FSC should give min_size=32, got {cs}"
-
-    def test_partial_fsc_gives_reasonable_size(self):
-        """FSC that drops at shell 20 -> current_size ~ 40."""
-        fsc = jnp.concatenate(
-            [
-                jnp.ones(20),  # high FSC up to shell 19
-                jnp.zeros(44),  # drops to 0 after
-            ]
-        )
-        cs = fsc_to_current_size(fsc, threshold=1.0 / 7.0)
-        # Should be approximately 2 * 20 = 40
-        assert 32 <= cs <= 50, f"Expected ~40, got {cs}"
-
-    def test_gradual_fsc_decay(self):
-        """FSC that gradually decays."""
-        shells = np.arange(64)
-        fsc = jnp.array(np.exp(-shells / 15.0))  # drops below 0.143 around shell 29
-        cs = fsc_to_current_size(fsc, threshold=1.0 / 7.0)
-        assert 40 <= cs <= 70, f"Expected ~58, got {cs}"
-
-    def test_quantize_after_fsc(self):
-        """After fsc_to_current_size, quantize produces a valid even size."""
-        fsc = jnp.concatenate([jnp.ones(20), jnp.zeros(44)])
-        raw_cs = fsc_to_current_size(fsc, threshold=1.0 / 7.0)
-        q_cs = quantize_current_size(raw_cs, ori_size=128)
-        assert q_cs % 2 == 0
-        assert 16 <= q_cs <= 128
-        assert q_cs >= raw_cs
 
 
 # ===========================================================================
@@ -290,7 +213,7 @@ class TestFscToCurrentSize:
 class TestOracleMode:
     """Run refinement with RELION's current_sizes injected."""
 
-    def test_oracle_sizes_are_used(self, half_datasets, init_volume, rotations, translations):
+    def test_oracle_sizes_are_used(self, half_datasets, init_volume, translations):
         """Oracle sizes should be used after quantization/clamping to the box size."""
         oracle_sizes = [32, 32, 64]
 
@@ -299,19 +222,19 @@ class TestOracleMode:
             init_volume,
             jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-            rotations,
             translations,
-            disc_type="linear_interp",
-            max_iter=3,
-            image_batch_size=N_IMAGES,
-            rotation_block_size=N_ROTATIONS,
-            relion_current_sizes=oracle_sizes,
+            options=RefinementOptions(
+                disc_type="linear_interp",
+                schedule=RefinementSchedule(max_iter=3),
+                batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=N_ROTATIONS),
+                adaptive=AdaptiveOptions(relion_current_sizes=oracle_sizes),
+            ),
         )
 
         # On the tiny 8px mock dataset these values all saturate at full resolution.
         assert result["current_sizes"] == [8, 8, 8], f"Oracle sizes not used: {result['current_sizes']}"
 
-    def test_oracle_with_zero_first(self, half_datasets, init_volume, rotations, translations):
+    def test_oracle_with_zero_first(self, half_datasets, init_volume, translations):
         """RELION iteration 0 has current_size=0; should use init_current_size."""
         oracle_sizes = [0, 32, 64]
 
@@ -320,14 +243,13 @@ class TestOracleMode:
             init_volume,
             jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-            rotations,
             translations,
-            disc_type="linear_interp",
-            max_iter=3,
-            image_batch_size=N_IMAGES,
-            rotation_block_size=N_ROTATIONS,
-            relion_current_sizes=oracle_sizes,
-            init_current_size=32,
+            options=RefinementOptions(
+                disc_type="linear_interp",
+                schedule=RefinementSchedule(max_iter=3, init_current_size=32),
+                batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=N_ROTATIONS),
+                adaptive=AdaptiveOptions(relion_current_sizes=oracle_sizes),
+            ),
         )
 
         # On the tiny 8px mock dataset all oracle/full-resolution requests clamp to 8.
@@ -335,7 +257,7 @@ class TestOracleMode:
         assert result["current_sizes"][1] == 8
         assert result["current_sizes"][2] == 8
 
-    def test_oracle_produces_valid_outputs(self, half_datasets, init_volume, rotations, translations):
+    def test_oracle_produces_valid_outputs(self, half_datasets, init_volume, translations):
         """Oracle mode produces finite volumes and valid assignments."""
         oracle_sizes = [32, 64]
 
@@ -344,13 +266,13 @@ class TestOracleMode:
             init_volume,
             jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-            rotations,
             translations,
-            disc_type="linear_interp",
-            max_iter=2,
-            image_batch_size=N_IMAGES,
-            rotation_block_size=N_ROTATIONS,
-            relion_current_sizes=oracle_sizes,
+            options=RefinementOptions(
+                disc_type="linear_interp",
+                schedule=RefinementSchedule(max_iter=2),
+                batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=N_ROTATIONS),
+                adaptive=AdaptiveOptions(relion_current_sizes=oracle_sizes),
+            ),
         )
 
         # Final mean should be finite
@@ -370,20 +292,19 @@ class TestOracleMode:
 class TestResolutionProgression:
     """Run a few iterations without oracle; verify stability."""
 
-    def test_current_size_does_not_collapse(self, half_datasets, init_volume, rotations, translations):
+    def test_current_size_does_not_collapse(self, half_datasets, init_volume, translations):
         """After multiple iterations, current_size should not drop to minimum."""
         result = refine_single_volume(
             half_datasets,
             init_volume,
             jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-            rotations,
             translations,
-            disc_type="linear_interp",
-            max_iter=3,
-            image_batch_size=N_IMAGES,
-            rotation_block_size=N_ROTATIONS,
-            init_current_size=32,
+            options=RefinementOptions(
+                disc_type="linear_interp",
+                schedule=RefinementSchedule(max_iter=3, init_current_size=32),
+                batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=N_ROTATIONS),
+            ),
         )
 
         sizes = result["current_sizes"]
@@ -392,20 +313,19 @@ class TestResolutionProgression:
         # but should not drop below the scaled minimum of 4.
         assert sizes[-1] >= 4, f"Resolution collapsed: sizes={sizes}"
 
-    def test_fsc_history_populated(self, half_datasets, init_volume, rotations, translations):
+    def test_fsc_history_populated(self, half_datasets, init_volume, translations):
         """FSC history has one entry per iteration."""
         result = refine_single_volume(
             half_datasets,
             init_volume,
             jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-            rotations,
             translations,
-            disc_type="linear_interp",
-            max_iter=3,
-            image_batch_size=N_IMAGES,
-            rotation_block_size=N_ROTATIONS,
-            init_current_size=32,
+            options=RefinementOptions(
+                disc_type="linear_interp",
+                schedule=RefinementSchedule(max_iter=3, init_current_size=32),
+                batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=N_ROTATIONS),
+            ),
         )
 
         assert len(result["fsc_history"]) == 3
@@ -416,20 +336,19 @@ class TestResolutionProgression:
         for fsc in result["fsc_history"]:
             assert jnp.all(jnp.isfinite(fsc))
 
-    def test_wall_times_positive(self, half_datasets, init_volume, rotations, translations):
+    def test_wall_times_positive(self, half_datasets, init_volume, translations):
         """Wall times should be positive."""
         result = refine_single_volume(
             half_datasets,
             init_volume,
             jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-            rotations,
             translations,
-            disc_type="linear_interp",
-            max_iter=2,
-            image_batch_size=N_IMAGES,
-            rotation_block_size=N_ROTATIONS,
-            init_current_size=32,
+            options=RefinementOptions(
+                disc_type="linear_interp",
+                schedule=RefinementSchedule(max_iter=2, init_current_size=32),
+                batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=N_ROTATIONS),
+            ),
         )
 
         for t in result["wall_times"]:
@@ -444,7 +363,7 @@ class TestResolutionProgression:
 class TestOneIterationWithWindowing:
     """Run a single iteration at a small current_size."""
 
-    def test_single_iteration_cs_4(self, half_datasets, init_volume, rotations, translations):
+    def test_single_iteration_cs_4(self, half_datasets, init_volume, translations):
         """One EM iteration at current_size=4 (small window) produces valid output."""
         # For 8x8 images, current_size=4 means r_max=2 (very few frequencies)
         result = refine_single_volume(
@@ -452,19 +371,19 @@ class TestOneIterationWithWindowing:
             init_volume,
             jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-            rotations,
             translations,
-            disc_type="linear_interp",
-            max_iter=1,
-            image_batch_size=N_IMAGES,
-            rotation_block_size=N_ROTATIONS,
-            relion_current_sizes=[4],
+            options=RefinementOptions(
+                disc_type="linear_interp",
+                schedule=RefinementSchedule(max_iter=1),
+                batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=N_ROTATIONS),
+                adaptive=AdaptiveOptions(relion_current_sizes=[4]),
+            ),
         )
 
         assert np.all(np.isfinite(np.array(result["mean"])))
         assert result["current_sizes"] == [4]
 
-    def test_single_iteration_no_window(self, half_datasets, init_volume, rotations, translations):
+    def test_single_iteration_no_window(self, half_datasets, init_volume, translations):
         """One EM iteration at current_size=None (full res) produces valid output."""
         # current_size=128 for 8x8 images means no windowing
         result = refine_single_volume(
@@ -472,33 +391,33 @@ class TestOneIterationWithWindowing:
             init_volume,
             jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-            rotations,
             translations,
-            disc_type="linear_interp",
-            max_iter=1,
-            image_batch_size=N_IMAGES,
-            rotation_block_size=N_ROTATIONS,
-            relion_current_sizes=[128],
+            options=RefinementOptions(
+                disc_type="linear_interp",
+                schedule=RefinementSchedule(max_iter=1),
+                batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=N_ROTATIONS),
+                adaptive=AdaptiveOptions(relion_current_sizes=[128]),
+            ),
         )
 
         assert np.all(np.isfinite(np.array(result["mean"])))
         # On the tiny 8px mock dataset, any oversized request clamps to full resolution.
         assert result["current_sizes"] == [8]
 
-    def test_hard_assignments_valid_range(self, half_datasets, init_volume, rotations, translations):
+    def test_hard_assignments_valid_range(self, half_datasets, init_volume, translations):
         """Hard assignments are in valid range after one iteration."""
         result = refine_single_volume(
             half_datasets,
             init_volume,
             jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-            rotations,
             translations,
-            disc_type="linear_interp",
-            max_iter=1,
-            image_batch_size=N_IMAGES,
-            rotation_block_size=N_ROTATIONS,
-            relion_current_sizes=[32],
+            options=RefinementOptions(
+                disc_type="linear_interp",
+                schedule=RefinementSchedule(max_iter=1),
+                batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=N_ROTATIONS),
+                adaptive=AdaptiveOptions(relion_current_sizes=[32]),
+            ),
         )
 
         _assert_relion_hard_assignments_in_range(result, translations.shape[0])

@@ -4,16 +4,18 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import math
 import struct
-import subprocess
 import sys
 from collections import defaultdict
 from pathlib import Path
 
 import numpy as np
+
+from scripts.analyzer_provenance import clean_repo_head
+from scripts.file_hash import fnv1a64 as _fnv1a64
+from scripts.file_hash import sha256_file as _sha256
 
 PHYSICAL_IMAGE_SIZE = 256
 ACTIVE = np.uint32(8)
@@ -41,22 +43,6 @@ ALL_PARTICLE_FIELDS = SCIENCE_PARTICLE_FIELDS + (
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise ValueError(message)
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(8 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
-
-
-def _fnv1a64(text: str) -> int:
-    value = 14695981039346656037
-    for byte in text.encode():
-        value ^= byte
-        value = (value * 1099511628211) & 0xFFFFFFFFFFFFFFFF
-    return value
 
 
 def _float32_from_bits(value: int) -> np.float32:
@@ -538,13 +524,6 @@ def analyze(
     }
 
 
-def _clean_repo_head(repo: Path) -> str:
-    head = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"], text=True).strip()
-    status = subprocess.check_output(["git", "-C", str(repo), "status", "--porcelain=v1"], text=True)
-    _require(not status, "analyzer repository is dirty")
-    return head
-
-
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", required=True, type=Path)
@@ -573,7 +552,7 @@ def main() -> None:
         capture_repeatability_json=args.capture_repeatability_json,
         control_repeatability_json=args.control_repeatability_json,
     )
-    report["inputs"]["analyzer_repo_head"] = _clean_repo_head(args.repo)
+    report["inputs"]["analyzer_repo_head"] = clean_repo_head(args.repo)
     args.output_json.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
     print(json.dumps({"classification": report["classification"], **report["scope"]}, indent=2))
 

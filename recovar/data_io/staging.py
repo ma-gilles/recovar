@@ -36,6 +36,13 @@ To disable staging even when $TMPDIR is set::
 
     export RECOVAR_CACHE_DIR=        # empty string = disabled
 
+The ``$TMPDIR`` fallback stages only when ``$TMPDIR`` is on a node-local
+filesystem. A ``$TMPDIR`` on GPFS, Lustre, NFS or another network filesystem
+would copy the stack from one network filesystem to another, which costs the
+full read, leaves a second copy behind (55.9 TB of such copies were found and
+deleted on this cluster on 2026-09-11) and speeds nothing up. Set
+``RECOVAR_CACHE_DIR`` explicitly to stage there anyway.
+
 Measured speedup (D=256, 300K images, 39 GB, A100-SXM4-80GB)
 -------------------------------------------------------------
 +---------------------------+--------+--------+--------+-----------+
@@ -123,18 +130,86 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
+NETWORK_FILESYSTEM_TYPES = frozenset(
+    {
+        "9p",
+        "afs",
+        "beegfs",
+        "ceph",
+        "cifs",
+        "fuse.sshfs",
+        "gpfs",
+        "lustre",
+        "nfs",
+        "nfs4",
+        "panfs",
+        "smb2",
+        "smb3",
+    }
+)
+
+
+def filesystem_type(path: str) -> Optional[str]:
+    """Return the filesystem type mounted at *path*, or None if it cannot be read.
+
+    The nearest existing ancestor is used, so a directory that a job has not
+    created yet resolves to the filesystem it would be created on.
+    """
+
+    try:
+        with open("/proc/mounts", encoding="utf-8") as handle:
+            mounts = [line.split() for line in handle]
+    except OSError:
+        return None
+    probe = os.path.abspath(path)
+    while not os.path.exists(probe):
+        parent = os.path.dirname(probe)
+        if parent == probe:
+            break
+        probe = parent
+    best_point, best_type = "", None
+    for fields in mounts:
+        if len(fields) < 3:
+            continue
+        point, fs_type = fields[1], fields[2]
+        if (probe == point or probe.startswith(point.rstrip("/") + "/")) and len(point) >= len(best_point):
+            best_point, best_type = point, fs_type
+    return best_type
+
+
+def is_network_filesystem(path: str) -> bool:
+    """Whether *path* lives on a shared network filesystem (GPFS, Lustre, NFS, ...)."""
+
+    fs_type = filesystem_type(path)
+    return fs_type is not None and fs_type.lower() in NETWORK_FILESYSTEM_TYPES
+
+
 def get_cache_dir() -> Optional[str]:
     """Return the configured staging directory, or None if disabled.
 
     Resolution order:
-    1. ``RECOVAR_CACHE_DIR`` env var (empty string -> disabled)
-    2. ``TMPDIR`` env var (standard SLURM/HPC per-job local scratch)
+    1. ``RECOVAR_CACHE_DIR`` env var (empty string -> disabled), honored as given
+    2. ``TMPDIR`` env var, but only when it is on a node-local filesystem:
+       staging from one network filesystem to another buys nothing and leaves a
+       second copy of the stack behind
     3. None (no staging)
     """
     val = os.environ.get("RECOVAR_CACHE_DIR")
     if val is not None:
         return val or None  # '' -> explicitly disabled
-    return os.environ.get("TMPDIR")
+    tmpdir = os.environ.get("TMPDIR")
+    if not tmpdir:
+        return None
+    if is_network_filesystem(tmpdir):
+        logger.info(
+            "Staging disabled: TMPDIR %s is on a %s filesystem, so a staged copy would be "
+            "network-to-network. Set RECOVAR_CACHE_DIR to a node-local path (or to TMPDIR "
+            "itself) to stage anyway.",
+            tmpdir,
+            filesystem_type(tmpdir),
+        )
+        return None
+    return tmpdir
 
 
 def stage_mrc(src_path: str, cache_dir: str) -> str:

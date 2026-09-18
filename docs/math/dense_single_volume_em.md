@@ -3,11 +3,11 @@
 Reviewed against `ma-gilles/recovar`, branch `dev`, on 2026-03-31.
 
 Primary files reviewed:
-- `recovar/em/e_step.py`
-- `recovar/em/m_step.py`
-- `recovar/em/core.py`
-- `recovar/em/iterations.py`
-- `recovar/em/states.py`
+- `recovar/em/reference/e_step.py`
+- `recovar/em/reference/m_step.py`
+- `recovar/em/reference/core.py`
+- `recovar/em/reference/iterations.py`
+- `recovar/em/reference/states.py`
 - `recovar/em/sampling.py`
 - `recovar/core/configs.py`
 - `recovar/core/slicing.py`
@@ -360,9 +360,11 @@ The current `recovar/em` package mixes:
 
 That makes the simplest path look much more complicated than it really is.
 
-### 9.2 The M-step API name is misleading
+### 9.2 The dense reference API states each operation's role
 
-`M_with_precompute` does not actually perform the same style of forward projection precompute as `E_with_precompute`. It is better understood as "accumulate dense homogeneous mean statistics from probabilities".
+`compute_pose_probabilities` precomputes projections for the E-step, while
+`accumulate_mean_statistics` accumulates dense homogeneous mean statistics
+from those probabilities.
 
 ### 9.3 Accumulator lifecycle is not explicit enough
 

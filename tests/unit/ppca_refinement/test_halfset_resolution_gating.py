@@ -3,7 +3,6 @@ import pytest
 
 from recovar.em.ppca_refinement.schedule import PPCARefinementScheduleState, evaluate_halfset_resolution_gate
 
-
 pytestmark = pytest.mark.unit
 
 
@@ -30,7 +29,6 @@ def test_halfset_mean_fsc_without_pose_stability_does_not_increase_resolution():
         healpix_order=2,
         best_pose_indices=np.array([0, 1, 2], dtype=np.int32),
         previous_best_pose_indices=np.array([0, 9, 2], dtype=np.int32),
-        halfset_mean_fsc=np.ones(16, dtype=np.float32),
         halfset_means_aligned=True,
         halfset_resolution_supports=True,
         no_halfset_drift=True,

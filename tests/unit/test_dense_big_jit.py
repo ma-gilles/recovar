@@ -6,25 +6,20 @@ import pytest
 pytest.importorskip("jax")
 import jax.numpy as jnp
 
-from recovar.em.dense_single_volume.dense_big_jit import run_dense_bucket_big_jit
-from recovar.em.dense_single_volume.em_engine import (
+from recovar.em.dense.dense_big_jit import run_dense_bucket_big_jit
+from recovar.em.dense.em_engine import (
     _dense_big_jit_disabled_reason,
     _pad_dense_big_jit_image_axis,
     _relion_image_correction_factors,
 )
-from recovar.em.dense_single_volume.helpers import projection as projection_helpers
-from recovar.em.dense_single_volume.helpers.adjoint import (
-    adjoint_slice_volume_half as _adjoint_slice_volume_half,
-)
-from recovar.em.dense_single_volume.helpers.fourier_window import make_fourier_window_indices_np
-from recovar.em.dense_single_volume.helpers.half_spectrum import make_relion_noise_shell_indices_half
-from recovar.em.dense_single_volume.helpers.projection import (
-    compute_noise_block as _compute_noise_block,
-)
-from recovar.em.dense_single_volume.helpers.projection import (
-    compute_projections_block as _compute_projections_block,
-)
-from recovar.em.dense_single_volume.helpers.scoring import (
+from recovar.em.diagnostics.local_debug import DensePerPoseScoreDumpRequest, maybe_write_dense_per_pose_score_dump
+from recovar.em.helpers import projection as projection_helpers
+from recovar.em.helpers.adjoint import adjoint_slice_volume_half as _adjoint_slice_volume_half
+from recovar.em.helpers.fourier_window import make_fourier_window_indices_np
+from recovar.em.helpers.half_spectrum import make_relion_noise_shell_indices_half
+from recovar.em.helpers.projection import compute_noise_block as _compute_noise_block
+from recovar.em.helpers.projection import compute_projections_block as _compute_projections_block
+from recovar.em.scoring.scoring import (
     _e_step_block_scores,
     _e_step_block_scores_normalized_cc,
     _e_step_block_scores_windowed,
@@ -33,10 +28,6 @@ from recovar.em.dense_single_volume.helpers.scoring import (
     _merge_block_logsumexp,
     _update_logsumexp,
     _winner_take_all_probs_for_block,
-)
-from recovar.em.dense_single_volume.local_debug import (
-    DensePerPoseScoreDumpRequest,
-    maybe_write_dense_per_pose_score_dump,
 )
 
 pytestmark = pytest.mark.unit
@@ -92,7 +83,6 @@ def test_relion_firstiter_cc_keeps_cross_scale_correction():
     score_corr, norm_corr = _relion_image_correction_factors(
         batch_corr,
         batch_scale,
-        score_mode="normalized_cc",
     )
 
     np.testing.assert_allclose(np.asarray(score_corr), np.asarray(batch_corr))
@@ -271,15 +261,11 @@ def _reference_scores(s, *, score_mode="gaussian", use_window=False, current_siz
         else:
             scores = _e_step_block_scores(
                 s["shifted_score_half"],
-                s["batch_norm"],
                 s["score_weight_half"],
                 proj_score * s["half_weights"],
                 proj_abs2_score * s["half_weights"],
-                s["half_weights"],
                 N_IMAGES,
                 N_TRANS,
-                IMAGE_SHAPE,
-                VOLUME_SHAPE,
             )
     if score_mode != "normalized_cc":
         scores = scores + s["rotation_log_prior"][:, :, None]
@@ -380,7 +366,6 @@ def test_dense_big_jit_pass1_matches_dense_primitives():
 def test_dense_big_jit_allows_sparse_pass2_skip_path():
     assert (
         _dense_big_jit_disabled_reason(
-            relion_firstiter_winner_take_all=False,
             accumulate_noise=False,
             noise_split_diagnostics_enabled=False,
             dense_noise_component_dump_enabled=False,
@@ -393,7 +378,6 @@ def test_dense_big_jit_allows_sparse_pass2_skip_path():
 def test_dense_big_jit_allows_noise_accumulation_without_debug_split():
     assert (
         _dense_big_jit_disabled_reason(
-            relion_firstiter_winner_take_all=False,
             accumulate_noise=True,
             noise_split_diagnostics_enabled=False,
             dense_noise_component_dump_enabled=False,
@@ -424,8 +408,6 @@ def test_pad_dense_big_jit_image_axis_preserves_ctf_rows():
 @pytest.mark.parametrize(
     ("kwargs", "reason"),
     [
-        # winner_take_all is supported in big-JIT; it must NOT trigger a bailout.
-        ({"relion_firstiter_winner_take_all": True}, None),
         ({"accumulate_noise": True, "noise_split_diagnostics_enabled": True}, "noise_split_diagnostics"),
         ({"dense_noise_component_dump_enabled": True}, "dense_noise_component_dump"),
         ({"per_pose_debug_dump_enabled": True}, "per_pose_debug_dump"),
@@ -433,7 +415,6 @@ def test_pad_dense_big_jit_image_axis_preserves_ctf_rows():
 )
 def test_dense_big_jit_disabled_reasons(kwargs, reason):
     base = {
-        "relion_firstiter_winner_take_all": False,
         "accumulate_noise": False,
         "noise_split_diagnostics_enabled": False,
         "dense_noise_component_dump_enabled": False,

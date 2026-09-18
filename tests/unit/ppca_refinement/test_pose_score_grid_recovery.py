@@ -4,12 +4,11 @@ import pytest
 
 from recovar.core.configs import ForwardModelConfig
 from recovar.core.ctf import as_ctf_evaluator
+from recovar.em.helpers.preprocessing import half_translation_phase_table, preprocess_batch
 from recovar.em.ppca_refinement.dense_dataset import _project_augmented_half_volumes, iter_dense_ppca_dataset_blocks
-from recovar.em.ppca_refinement.engine import dense_pose_ppca_E_step_blocked, dense_pose_ppca_logZ_blocked
+from recovar.em.ppca_refinement.engine import _score_gamma_and_moments, dense_pose_ppca_score_stats_blocked
 from recovar.em.ppca_refinement.initialization import real_volume_to_centered_fourier_half
-from recovar.em.dense_single_volume.helpers.preprocessing import half_translation_phase_table, preprocess_batch
 from recovar.em.sampling import get_rotation_grid_at_order
-
 
 pytestmark = pytest.mark.unit
 
@@ -32,6 +31,17 @@ def _weighted_score_inputs(raw_shifted_images, raw_image_norms, precision):
 def _pack_upper_tri_numpy(matrix):
     tri_i, tri_j = np.triu_indices(matrix.shape[-1])
     return matrix[..., tri_i, tri_j]
+
+
+def _dense_estep(Y1, proj_aug, ctf2_over_noise, y_norm, pose_log_prior=None):
+    gamma, alpha, G_tri, diagnostics = _score_gamma_and_moments(
+        Y1, proj_aug, ctf2_over_noise, y_norm, pose_log_prior, 1e-3
+    )
+    return (
+        jnp.einsum("btr,btrp->bp", gamma.astype(alpha.dtype), alpha),
+        jnp.einsum("btr,btrk->bk", gamma.astype(G_tri.dtype), G_tri),
+        diagnostics,
+    )
 
 
 def _numpy_ppca_pose_reference(Y1, proj_aug, ctf2_over_noise, y_norm, pose_log_prior=None):
@@ -112,7 +122,7 @@ def test_dense_ppca_score_moments_and_prior_axes_match_numpy_reference():
     y_norm = rng.uniform(1.0, 2.0, size=(n_images,)).astype(np.float32)
     pose_log_prior = rng.normal(scale=0.07, size=(n_images, n_rot, n_trans)).astype(np.float32)
 
-    stats, diagnostics = dense_pose_ppca_E_step_blocked(
+    alpha_aug_acc, G_aug_tri_acc, diagnostics = _dense_estep(
         jnp.asarray(Y1),
         jnp.asarray(proj_aug),
         jnp.asarray(ctf2_over_noise),
@@ -122,13 +132,13 @@ def test_dense_ppca_score_moments_and_prior_axes_match_numpy_reference():
     expected = _numpy_ppca_pose_reference(Y1, proj_aug, ctf2_over_noise, y_norm, pose_log_prior)
 
     np.testing.assert_allclose(np.asarray(diagnostics.logZ), expected["logZ"], rtol=2e-5, atol=2e-5)
-    score_only_logZ = dense_pose_ppca_logZ_blocked(
+    score_only_logZ = dense_pose_ppca_score_stats_blocked(
         jnp.asarray(Y1),
         jnp.asarray(proj_aug),
         jnp.asarray(ctf2_over_noise),
         jnp.asarray(y_norm),
         pose_log_prior=jnp.asarray(pose_log_prior),
-    )
+    ).logZ
     np.testing.assert_allclose(np.asarray(score_only_logZ), expected["logZ"], rtol=2e-5, atol=2e-5)
     np.testing.assert_allclose(np.asarray(diagnostics.pmax), expected["pmax"], rtol=2e-5, atol=2e-5)
     np.testing.assert_array_equal(np.asarray(diagnostics.best_rotation_idx), expected["best_rotation_idx"])
@@ -137,8 +147,8 @@ def test_dense_ppca_score_moments_and_prior_axes_match_numpy_reference():
         np.asarray(diagnostics.n_significant_per_image),
         expected["n_significant_per_image"],
     )
-    np.testing.assert_allclose(np.asarray(stats.alpha_aug_acc), expected["alpha_aug_acc"], rtol=3e-5, atol=3e-5)
-    np.testing.assert_allclose(np.asarray(stats.G_aug_tri_acc), expected["G_aug_tri_acc"], rtol=3e-5, atol=3e-5)
+    np.testing.assert_allclose(np.asarray(alpha_aug_acc), expected["alpha_aug_acc"], rtol=3e-5, atol=3e-5)
+    np.testing.assert_allclose(np.asarray(G_aug_tri_acc), expected["G_aug_tri_acc"], rtol=3e-5, atol=3e-5)
 
 
 def test_dense_ppca_score_recovers_synthetic_rotation_translation_with_high_pmax():
@@ -166,7 +176,7 @@ def test_dense_ppca_score_recovers_synthetic_rotation_translation_with_high_pmax
         raw_norm[b] = np.sum(np.abs(signal) ** 2).real
 
     Y1, ctf2_over_noise, y_norm = _weighted_score_inputs(raw_shifted, raw_norm, precision)
-    _stats, diagnostics = dense_pose_ppca_E_step_blocked(
+    _alpha_aug_acc, _G_aug_tri_acc, diagnostics = _dense_estep(
         Y1,
         jnp.asarray(proj_aug),
         ctf2_over_noise,
@@ -198,7 +208,7 @@ def test_dense_ppca_moments_recover_latent_coordinates_at_identifiable_pose():
         raw_norm[b] = np.sum(np.abs(signal) ** 2).real
 
     Y1, ctf2_over_noise, y_norm = _weighted_score_inputs(raw_shifted, raw_norm, precision)
-    stats, diagnostics = dense_pose_ppca_E_step_blocked(
+    alpha_aug_acc, _G_aug_tri_acc, diagnostics = _dense_estep(
         Y1,
         jnp.asarray(proj_aug),
         ctf2_over_noise,
@@ -209,12 +219,12 @@ def test_dense_ppca_moments_recover_latent_coordinates_at_identifiable_pose():
     assert np.all(np.asarray(diagnostics.pmax) > 0.999)
     expected_posterior_mean = (precision / (1.0 + precision)) * z_true
     np.testing.assert_allclose(
-        np.asarray(stats.alpha_aug_acc[:, 1:]).real,
+        np.asarray(alpha_aug_acc[:, 1:]).real,
         expected_posterior_mean,
         rtol=1e-4,
         atol=1e-4,
     )
-    np.testing.assert_allclose(np.asarray(stats.alpha_aug_acc[:, 1:]).imag, 0.0, atol=1e-6)
+    np.testing.assert_allclose(np.asarray(alpha_aug_acc[:, 1:]).imag, 0.0, atol=1e-6)
 
 
 def test_dense_ppca_complex_fourier_real_latent_posterior_matches_closed_form():
@@ -229,12 +239,12 @@ def test_dense_ppca_complex_fourier_real_latent_posterior_matches_closed_form():
     y_norm = jnp.asarray([precision * np.sum(np.abs(observed) ** 2).real], dtype=jnp.float32)
     proj_aug = jnp.asarray(np.concatenate([mu[None, None, :], W[None, :, :]], axis=1))
 
-    stats, _diagnostics = dense_pose_ppca_E_step_blocked(Y1, proj_aug, ctf2_over_noise, y_norm)
+    alpha_aug_acc, _G_aug_tri_acc, _diagnostics = _dense_estep(Y1, proj_aug, ctf2_over_noise, y_norm)
 
     H = np.einsum("f,qf,pf->qp", np.asarray(ctf2_over_noise[0]), np.conj(W), W).real
     b = np.einsum("qf,f->q", np.conj(W), precision * (observed - mu)).real
     expected_z = np.linalg.solve(np.eye(1, dtype=np.float32) + H, b)
-    np.testing.assert_allclose(np.asarray(stats.alpha_aug_acc[0, 1:]), expected_z, rtol=2e-5, atol=2e-5)
+    np.testing.assert_allclose(np.asarray(alpha_aug_acc[0, 1:]), expected_z, rtol=2e-5, atol=2e-5)
 
 
 def _asymmetric_real_volume_bank(rng, q, volume_shape):
@@ -280,7 +290,7 @@ def test_healpix_grid_projected_q0_score_recovers_exact_grid_rotation():
     raw_norm = np.sum(np.abs(raw) ** 2, axis=1).real.astype(np.float32)
 
     Y1, ctf2_over_noise, y_norm = _weighted_score_inputs(raw_shifted, raw_norm, precision)
-    _stats, diagnostics = dense_pose_ppca_E_step_blocked(Y1, proj_aug, ctf2_over_noise, y_norm)
+    _alpha_aug_acc, _G_aug_tri_acc, diagnostics = _dense_estep(Y1, proj_aug, ctf2_over_noise, y_norm)
 
     np.testing.assert_array_equal(np.asarray(diagnostics.best_rotation_idx), true_rot)
     np.testing.assert_array_equal(np.asarray(diagnostics.best_translation_idx), np.zeros(true_rot.shape, dtype=np.int32))
@@ -315,7 +325,7 @@ def test_healpix_grid_projected_q0_score_recovers_rotation_and_translation_phase
     raw_norm = np.sum(np.abs(proj_true) ** 2, axis=1).real.astype(np.float32)
 
     Y1, ctf2_over_noise, y_norm = _weighted_score_inputs(raw_shifted, raw_norm, precision)
-    _stats, diagnostics = dense_pose_ppca_E_step_blocked(Y1, proj_aug, ctf2_over_noise, y_norm)
+    _alpha_aug_acc, _G_aug_tri_acc, diagnostics = _dense_estep(Y1, proj_aug, ctf2_over_noise, y_norm)
 
     np.testing.assert_array_equal(np.asarray(diagnostics.best_rotation_idx), true_rot)
     np.testing.assert_array_equal(np.asarray(diagnostics.best_translation_idx), true_trans)
@@ -417,7 +427,7 @@ def test_preprocess_batch_identity_ctf_feeds_dense_ppca_translation_score():
         atol=1e-6,
     )
 
-    _stats, diagnostics = dense_pose_ppca_E_step_blocked(
+    _alpha_aug_acc, _G_aug_tri_acc, diagnostics = _dense_estep(
         shifted_half.reshape(true_rot.shape[0], translations.shape[0], proj_true.shape[-1]),
         proj_aug,
         ctf2_over_noise,
@@ -470,7 +480,7 @@ def test_iter_dense_ppca_dataset_blocks_recovers_healpix_pose_on_tiny_fake_datas
     )
     assert len(blocks) == 1
     block = blocks[0]
-    _stats, diagnostics = dense_pose_ppca_E_step_blocked(
+    _alpha_aug_acc, _G_aug_tri_acc, diagnostics = _dense_estep(
         block.Y1,
         block.proj_aug,
         block.ctf2_over_noise,
@@ -516,7 +526,7 @@ def test_healpix_grid_projected_ppca_score_recovers_rotation_with_latent_signal(
     raw_norm = np.sum(np.abs(raw) ** 2, axis=1).real.astype(np.float32)
 
     Y1, ctf2_over_noise, y_norm = _weighted_score_inputs(raw_shifted, raw_norm, precision)
-    _stats, diagnostics = dense_pose_ppca_E_step_blocked(Y1, proj_aug, ctf2_over_noise, y_norm)
+    _alpha_aug_acc, _G_aug_tri_acc, diagnostics = _dense_estep(Y1, proj_aug, ctf2_over_noise, y_norm)
 
     np.testing.assert_array_equal(np.asarray(diagnostics.best_rotation_idx), true_rot)
     np.testing.assert_array_equal(np.asarray(diagnostics.best_translation_idx), np.zeros(true_rot.shape, dtype=np.int32))

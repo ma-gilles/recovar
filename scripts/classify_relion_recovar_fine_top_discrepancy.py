@@ -11,11 +11,12 @@ order; a non-tie in either engine localizes it to fine-score arithmetic.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import math
 from pathlib import Path
 from typing import Any
+
+from scripts.file_hash import sha256_file as _sha256
 
 _INERTNESS_SCHEMA = "em_relion_iteration1_particle_state_inertness_v1"
 _REQUIRED_INERTNESS_FIELDS = (
@@ -28,14 +29,6 @@ _REQUIRED_INERTNESS_FIELDS = (
     "rlnMaxValueProbDistribution",
     "rlnNrOfSignificantSamples",
 )
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(8 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def _candidate_key(value: Any, *, field: str) -> tuple[int, int]:

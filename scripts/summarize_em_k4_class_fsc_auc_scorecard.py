@@ -4,10 +4,14 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import re
 from pathlib import Path
+
+try:
+    from scripts.file_hash import sha256_file as _sha256_file
+except ModuleNotFoundError:
+    from file_hash import sha256_file as _sha256_file  # type: ignore[no-redef]
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_SCORECARD = REPO_ROOT / "docs" / "math" / "em_k4_class_fsc_auc_scorecard_v1.json"
@@ -30,14 +34,6 @@ SHA256_RE = re.compile(r"[0-9a-f]{64}")
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise ValueError(message)
-
-
-def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def load_and_validate(

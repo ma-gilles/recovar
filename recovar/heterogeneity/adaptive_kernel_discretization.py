@@ -25,7 +25,6 @@ from recovar.reconstruction import noise, regularization, relion_functions
 
 logger = logging.getLogger(__name__)
 
-_SENTINEL = object()
 
 
 def _effective_heterogeneity_memory_budget(avail_gb):
@@ -117,43 +116,6 @@ def _pad_heterogeneity_kernel_batch(
         target_batch_size,
     )
     return images, rotation_matrices, translations, ctf_params, noise_variance
-
-
-def _iter_processed_half_batches(experiment_dataset, raw_batches):
-    """Prefetch raw batches and overlap half-spectrum preprocessing with GPU work.
-
-    Keeping preprocessing out of the generic dataset iterator keeps the data IO
-    API clean, but the heterogeneity kernel still needs the old overlap between
-    CPU-side FFT preprocessing and GPU backprojection.
-    """
-    from concurrent.futures import ThreadPoolExecutor
-
-    raw_iter = iter(raw_batches)
-
-    def _prepare_next():
-        batch = next(raw_iter, _SENTINEL)
-        if batch is _SENTINEL:
-            return _SENTINEL
-        images, rotation_matrices, translations, ctf_params, noise_variance, particle_indices, image_indices = batch
-        half_images = experiment_dataset.process_images_half(images)
-        return (
-            half_images,
-            rotation_matrices,
-            translations,
-            ctf_params,
-            noise_variance,
-            particle_indices,
-            image_indices,
-        )
-
-    with ThreadPoolExecutor(max_workers=1) as pool:
-        future = pool.submit(_prepare_next)
-        while True:
-            result = future.result()
-            if result is _SENTINEL:
-                return
-            future = pool.submit(_prepare_next)
-            yield result
 
 
 def _process_images_half_fast(images, dataset):

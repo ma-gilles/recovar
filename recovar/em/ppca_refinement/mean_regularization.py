@@ -15,7 +15,7 @@ import numpy as np
 
 from recovar import utils
 from recovar.core import fourier_transform_utils as ftu
-from recovar.ppca import AugmentedPPCAStats
+from recovar.ppca.pose_accumulators import AugmentedPPCAStats
 from recovar.reconstruction import relion_functions
 
 KCLASS_RELION_MINRES_MAP = 5

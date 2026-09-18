@@ -10,6 +10,7 @@ import numpy as np
 import recovar.core.fourier_transform_utils as ftu
 from recovar import core, utils
 from recovar.core import linalg
+from recovar.ppca.triangular import _tri_size, unpack_tri_to_full
 
 logger = logging.getLogger(__name__)
 
@@ -24,51 +25,6 @@ def _materialize_halfsets(dataset):
     if hasattr(dataset, "materialize_halfset_datasets"):
         return list(dataset.materialize_halfset_datasets())
     raise TypeError(f"Expected a CryoEMDataset with halfset support, got {type(dataset).__name__}")
-
-
-def _iter_processed_batches(experiment_dataset, batch_size):
-    for (
-        batch,
-        rotation_matrices,
-        translations,
-        ctf_params,
-        _noise_variance,
-        _particle_indices,
-        image_indices,
-    ) in experiment_dataset.iter_batches(
-        batch_size,
-        by_image=not getattr(experiment_dataset, "tilt_series_flag", False),
-    ):
-        yield (
-            experiment_dataset.process_images(batch, apply_image_mask=False),
-            ctf_params,
-            rotation_matrices,
-            translations,
-            image_indices,
-        )
-
-
-def _forward_model_from_map(
-    volume,
-    ctf_params,
-    rotation_matrices,
-    image_shape,
-    volume_shape,
-    voxel_size,
-    ctf_evaluator,
-    disc_type,
-    skip_ctf=False,
-):
-    slices = core.slice_volume(
-        volume,
-        rotation_matrices,
-        image_shape,
-        volume_shape,
-        disc_type,
-    )
-    if not skip_ctf:
-        slices = slices * ctf_evaluator(ctf_params, image_shape, voxel_size)
-    return slices
 
 
 def _prepare_mean_estimate_for_slicing(mean_estimate, mean_estimate_raw, volume_shape, disc_type_mean):
@@ -103,28 +59,9 @@ def compute_Cz_from_second_moments(second_moment_zs):
 batch_over_vol_slice_volume = jax.vmap(core.slice_volume, in_axes=(1, None, None, None, None), out_axes=1)
 
 
-def check_imaginary_part(x, image_shape, name, skip_ft=False):
-    if not skip_ft:
-        if len(image_shape) == 2:
-            y = ftu.get_idft2(x.reshape(-1, *image_shape))
-        else:
-            y = ftu.get_idft3(x.reshape(-1, *image_shape))
-    else:
-        y = x
-    imag_norm = np.linalg.norm(y.imag)
-    ratio = np.inf if imag_norm == 0 else np.linalg.norm(y.real) / imag_norm
-    print("imaginary part ratio", name, ratio)
-    return ratio
-
-
 batch_over_vol_adjoint_slice_volume = jax.vmap(
     core.adjoint_slice_volume, in_axes=(-1, None, None, None, None), out_axes=-1
 )
-
-
-def _tri_size(q):
-    """Number of upper-triangular entries (including diagonal) in a q×q matrix."""
-    return (q * (q + 1)) // 2
 
 
 _half_slice_volume = functools.partial(core.slice_volume, half_volume=True, half_image=True)
@@ -161,8 +98,6 @@ def _e_step_half_inner(
 
     Contrast dispatch happens OUTSIDE JIT in E_M_step_batch_half.
     """
-    basis_size = W_half.shape[1]
-
     w_1d = linalg.half_spectrum_last_axis_weights(image_shape[1])
     rfft_w = jnp.tile(w_1d, (image_shape[0], 1)).reshape(-1)
 
@@ -276,7 +211,6 @@ def E_M_step_batch_half(
     """
     basis_size = W_half.shape[1]
     tri_i, tri_j = np.triu_indices(basis_size)
-    tri_sz = len(tri_i)
 
     from recovar.ppca import contrast_posterior
 
@@ -432,20 +366,6 @@ def E_M_step_batch_half(
     )
 
 
-def unpack_tri_to_full(lhs_tri, basis_size):
-    """Unpack upper-triangular ``(…, tri_size)`` to symmetric ``(…, q, q)``.
-
-    Useful for converting the output of :func:`E_M_step_batch_half` back to the
-    full matrix format expected by downstream solvers.
-    """
-    tri_i, tri_j = np.triu_indices(basis_size)
-    shape = lhs_tri.shape[:-1] + (basis_size, basis_size)
-    out = jnp.zeros(shape, dtype=lhs_tri.dtype)
-    out = out.at[..., tri_i, tri_j].set(lhs_tri)
-    out = out.at[..., tri_j, tri_i].set(lhs_tri)
-    return out
-
-
 batch1_symmetrize_ft_volume = jax.vmap(utils.symmetrize_ft_volume, in_axes=(1, None), out_axes=1)
 
 
@@ -542,36 +462,10 @@ def _mstep_apply_fourier_op(V_real, lhs_tri, reg_diag, q, vs, unpack_fn, G):
     return G[None] * result
 
 
-def _mstep_cg(matvec, b, x0, maxiter, tol, precond):
-    """Preconditioned CG, real-flat vectors. Returns ``x`` at convergence/maxiter."""
-    x = x0
-    r = b - matvec(x)
-    z = precond(r) if precond is not None else r
-    p = z
-    rz = float(jnp.sum(r * z))
-    b2 = max(float(jnp.sum(b * b)), 1e-30)
-    for _ in range(maxiter):
-        Ap = matvec(p)
-        pAp = float(jnp.sum(p * Ap))
-        if pAp < 1e-30:
-            break
-        alpha = rz / pAp
-        x = x + alpha * p
-        r = r - alpha * Ap
-        rr = float(jnp.sum(r * r))
-        if jnp.sqrt(rr / b2) < tol:
-            break
-        z = precond(r) if precond is not None else r
-        rz_new = float(jnp.sum(r * z))
-        p = z + (rz_new / max(abs(rz), 1e-30)) * p
-        rz = rz_new
-    return x
-
-
 def _mstep_cg_projected(matvec, b, x0, maxiter, tol, precond, project):
     """Projected preconditioned CG for multi-mask M-step.
 
-    Like ``_mstep_cg`` but applies ``project`` after each update to enforce
+    Applies ``project`` after each update to enforce
     per-PC support constraints. When ``project`` is identity this reduces to
     standard PCG.
     """
@@ -613,7 +507,6 @@ def _build_pc_mask_projection(masks, pc_mask_assignment, sup, q, vol):
     pc_sup_mask : (n_sup, q) bool array
         True where PC k is allowed at union-support voxel i.
     """
-    n_sup = sup.shape[0]
     masks_flat = jnp.asarray(masks).reshape(len(masks), vol)
     # For each (support_voxel, pc): is that voxel in the PC's assigned mask?
     assignment = jnp.asarray(pc_mask_assignment)  # (q,)
@@ -729,7 +622,7 @@ def _pcg_hard_mstep(
 
 
 def _iter_processed_batches_half(experiment_dataset, batch_size):
-    """Like _iter_processed_batches but yields half-spectrum images and noise."""
+    """Yield processed half-spectrum images, CTF parameters, poses and image indices."""
     for (
         batch,
         rotation_matrices,
@@ -1349,7 +1242,6 @@ def EM(
     print("\n" + "=" * 140)
     print("EM ALGORITHM CONVERGENCE TABLE")
     print("=" * 140)
-    noise_cols = " | {'Noise_Mean':>10}" if update_noise else ""
     header = f"{'Iter':>4} | {'Neg_LL_Total':>12} | {'Neg_LL_Data':>12} | {'Neg_LL_Prior':>12} | {'Neg_Marg_LL':>12} | {'Exp_ZS_Mean':>12} | {'Exp_ZS_Var':>12}"
     if update_noise:
         header += f" | {'Noise_Mean':>10}"
@@ -1557,7 +1449,6 @@ def EM(
 
         # Recompute LL with the FINAL W (after mask + gridding) for fair comparison
         if recompute_ll:
-            ll_sum = jnp.array(0.0, dtype=jnp.complex64)
             _hv = int(np.prod(ftu.volume_shape_to_half_volume_shape(vs)))
             _tsz = _tri_size(basis_size)
             ll_sum_r = jnp.array(0.0, dtype=jnp.complex64)
@@ -1657,7 +1548,6 @@ def EM(
     else:
         U_real, S_squared, _Vt = _orthonormalize_W_to_basis(W, volume_shape)
     q_out = U_real.shape[0]
-    half_vs_out = ftu.volume_shape_to_half_volume_shape(volume_shape)
     U_half_F = ftu.get_dft3_real(jnp.array(U_real))  # (q, *half_vs)
     U = U_half_F.reshape(q_out, -1).T  # (half_vol, q)
     S = jnp.array(np.sqrt(np.maximum(S_squared, 0.0)).astype(np.float32))

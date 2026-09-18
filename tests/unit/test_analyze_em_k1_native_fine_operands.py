@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 from scripts.analyze_em_k1_native_fine_operands import (
+    _alternate_projected_reference,
     _full_to_compact,
     _infer_float32_common_addend,
     _tree_sum,
@@ -44,3 +45,22 @@ def test_infer_float32_common_addend_replays_large_costs():
 
     np.testing.assert_array_equal(base + inferred, target)
     assert exact == base.size
+
+
+def test_alternate_projected_reference_accepts_raw_local_score_dump():
+    rotations = np.broadcast_to(np.eye(3, dtype=np.float32), (2, 3, 3)).copy()
+    candidate_mask = np.array([[True, False], [True, True]])
+    half_weights = np.array([1.0, 2.0, 2.0], dtype=np.float32)
+    projected = np.arange(12, dtype=np.float32).reshape(2, 3, 2).view(np.complex64).reshape(2, 3)
+    rec = {
+        "rotations": rotations,
+        "candidate_mask": candidate_mask,
+        "half_weights": half_weights,
+    }
+    raw = {
+        "local_rotation_matrices": rotations,
+        "pass2_scores_raw": np.where(candidate_mask[None, ...], 0.0, -np.inf),
+        "debug_proj_weighted": projected * half_weights[None, :],
+    }
+
+    np.testing.assert_array_equal(_alternate_projected_reference(rec, raw), projected)

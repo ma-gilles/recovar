@@ -193,3 +193,50 @@ def test_relion_scoring_rotations_ffi_has_no_aliases(monkeypatch):
 
     assert result.shape == (2, 3, 3)
     assert "input_output_aliases" not in call_options
+
+
+def test_relion_scoring_rotations_f64_ffi_dtype_and_target(monkeypatch):
+    import recovar.cuda_backproject as cuda_backproject
+
+    call = {}
+
+    def fake_ffi_call(target, out_type, **options):
+        call.update(target=target, out_type=out_type, options=options)
+
+        def invoke(_eulers, _right_matrix, **attrs):
+            call["attrs"] = attrs
+            return jnp.empty(out_type.shape, out_type.dtype)
+
+        return invoke
+
+    monkeypatch.setattr(cuda_backproject.jax, "default_backend", lambda: "gpu")
+    monkeypatch.setattr(cuda_backproject, "custom_cuda_requested", lambda: True)
+    monkeypatch.setattr(cuda_backproject, "_ensure_ffi", lambda: None)
+    monkeypatch.setattr(cuda_backproject.jax.ffi, "ffi_call", fake_ffi_call)
+    result = cuda_backproject.relion_make_scoring_rotations_f64.__wrapped__(
+        jnp.zeros((2, 3), dtype=jnp.float64),
+        jnp.eye(3, dtype=jnp.float64),
+        do_right=False,
+    )
+
+    assert result.shape == (2, 3, 3)
+    assert result.dtype == jnp.float64
+    assert call["target"] == "cuda_relion_make_scoring_rotations_f64"
+    assert call["attrs"]["do_right"] == np.int64(0)
+    assert "input_output_aliases" not in call["options"]
+
+
+@pytest.mark.parametrize(
+    "eulers,right_matrix,error",
+    [
+        (np.zeros((2, 3), np.float32), np.eye(3, dtype=np.float64), "eulers_deg must be float64"),
+        (np.zeros((2, 3), np.float64), np.eye(3, dtype=np.float32), "right_matrix must be float64"),
+    ],
+)
+def test_relion_scoring_rotations_f64_rejects_narrow_inputs(monkeypatch, eulers, right_matrix, error):
+    import recovar.cuda_backproject as cuda_backproject
+
+    with pytest.raises(TypeError, match=error):
+        cuda_backproject.relion_make_scoring_rotations_f64.__wrapped__(
+            jnp.asarray(eulers), jnp.asarray(right_matrix)
+        )

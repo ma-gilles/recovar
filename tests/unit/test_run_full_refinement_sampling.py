@@ -6,12 +6,12 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
+from recovar.em.helpers.iteration_history import add_significant_count_artifacts
 from recovar.em.sampling import (
     advance_relion_perturbation_from_seed,
     relion_sampling_perturbation_for_iteration,
 )
 from scripts.run_full_refinement import (
-    _add_significant_count_artifacts,
     _configure_relion_firstiter_controls,
     _effective_perturb_seed,
     _explicit_relion_optimiser_for_seed,
@@ -65,9 +65,7 @@ def test_relion_firstiter_controls_do_not_change_other_modes(firstiter_cc, n_cla
 
 
 def test_k1_firstiter_cc_explicit_opt_outs_override_defaults(monkeypatch):
-    from recovar.em.dense_single_volume.helpers.significance import (
-        _firstiter_cc_tree_top2_rescore_max_margin,
-    )
+    from recovar.em.scoring.significance import _firstiter_cc_tree_top2_rescore_max_margin
 
     environment = {
         "RECOVAR_INITIAL_PROJECTOR_USE_REAL_REFERENCE": "0",
@@ -178,7 +176,6 @@ def test_cli_translation_grid_parameters_seed_refinement_state():
     assert kwargs["init_healpix_order"] == 2
     assert kwargs["init_translation_range"] == 3.0
     assert kwargs["init_translation_step"] == 1.0
-    assert kwargs["translation_pixel_offset"] == 1.0
 
 
 def test_cli_perturb_seed_defaults_to_relion_random_seed():
@@ -324,7 +321,7 @@ def test_pose_history_by_image_restores_original_particle_order():
         )
 
 
-def test_significant_count_artifacts_preserve_legacy_half_order_and_add_image_order():
+def test_significant_count_artifacts_save_half_and_image_order():
     half_indices = [
         np.asarray([2, 0, 4], dtype=np.int64),
         np.asarray([1, 3], dtype=np.int64),
@@ -332,14 +329,13 @@ def test_significant_count_artifacts_preserve_legacy_half_order_and_add_image_or
     counts_half_order = np.asarray([20, 0, 40, 10, 30], dtype=np.int32)
     artifacts = {}
 
-    _add_significant_count_artifacts(
+    add_significant_count_artifacts(
         artifacts,
         [counts_half_order, None],
         half_indices,
         n_images=5,
     )
 
-    np.testing.assert_array_equal(artifacts["sig_counts_iter_000"], counts_half_order)
     np.testing.assert_array_equal(
         artifacts["sig_counts_half_order_iter_000"],
         counts_half_order,
@@ -348,8 +344,7 @@ def test_significant_count_artifacts_preserve_legacy_half_order_and_add_image_or
         artifacts["sig_counts_by_image_iter_000"],
         np.asarray([0, 10, 20, 30, 40], dtype=np.int32),
     )
-    assert artifacts["sig_counts_iter_000"].dtype == counts_half_order.dtype
-    assert "sig_counts_iter_001" not in artifacts
+    assert artifacts["sig_counts_half_order_iter_000"].dtype == counts_half_order.dtype
     assert "sig_counts_half_order_iter_001" not in artifacts
     assert "sig_counts_by_image_iter_001" not in artifacts
 

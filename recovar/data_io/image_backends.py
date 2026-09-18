@@ -37,6 +37,15 @@ RelionFourierBackend = Literal["host_numpy", "jax_gpu", "relion_cuda"]
 _RELION_FOURIER_BACKENDS = frozenset(("host_numpy", "jax_gpu", "relion_cuda"))
 
 
+def _normalize_image_dtype(dtype):
+    """Return the supported complex scalar type for image Fourier data."""
+
+    normalized = np.dtype(dtype)
+    if normalized not in (np.dtype(np.complex64), np.dtype(np.complex128)):
+        raise TypeError(f"image dtype must be complex64 or complex128, got {normalized}")
+    return normalized.type
+
+
 def _apply_relion_soft_image_mask_numpy(images: np.ndarray, image_mask: np.ndarray) -> np.ndarray:
     """Apply RELION's background-fill image mask using NumPy arithmetic."""
 
@@ -106,6 +115,13 @@ def _centered_rfft2_jax(images):
     images_jax = jnp.asarray(images, dtype=jnp.float32)
     if images_jax.ndim == 2:
         images_jax = images_jax[None, ...]
+    return _centered_rfft2_jax_batched(images_jax)
+
+
+@jax.jit
+def _centered_rfft2_jax_batched(images_jax):
+    """One compiled shift/rFFT/shift program per batch shape."""
+
     shifted = jnp.fft.fftshift(images_jax, axes=(-2, -1))
     transformed = jnp.fft.rfft2(shifted, axes=(-2, -1))
     return jnp.fft.fftshift(transformed, axes=(-2,))
@@ -186,6 +202,7 @@ class ParticleImageDataset:
         strip_prefix: Optional[str] = None,
         downsample_D: Optional[int] = None,
         device=None,
+        dtype=np.complex64,
         **kwargs,
     ):
         if padding != 0:
@@ -215,7 +232,8 @@ class ParticleImageDataset:
         if self.image_size % 2 != 0:
             raise ValueError(f"Image size must be even, got {self.image_size}")
 
-        self.dtype = np.complex64
+        self.dtype = _normalize_image_dtype(dtype)
+        self.real_dtype = np.empty((), dtype=self.dtype).real.dtype
         self.image_shape = (self.image_size, self.image_size)
         self.total_pixels = self.image_size * self.image_size
         self.image_mask = np.array(mask.window_mask(self.image_size, 0.85, 0.99))
@@ -333,11 +351,14 @@ class ParticleImageDataset:
             else:
                 if images_np.ndim == 2:
                     images_np = images_np[np.newaxis, ...]
+                if np.dtype(self.dtype) == np.dtype(np.complex128):
+                    images_np = images_np.astype(np.float64, copy=False)
                 if apply_image_mask:
                     images_np = _apply_relion_soft_image_mask_numpy(images_np, self.image_mask)
                 transformed = _centered_fft2_numpy(images_np * self.mult)
                 return transformed.reshape((transformed.shape[0], -1)).astype(self.dtype, copy=False)
 
+        images = jnp.asarray(images, dtype=self.real_dtype)
         if apply_image_mask:
             if self.image_mask_mode == "relion_normalize_fill":
                 # RELION normalize.cpp: bg-mean subtract + bg-std normalize, then soft-mask blend.
@@ -428,11 +449,13 @@ class ParticleImageDataset:
             else:
                 if images_np.ndim == 2:
                     images_np = images_np[np.newaxis, ...]
+                if np.dtype(self.dtype) == np.dtype(np.complex128):
+                    images_np = images_np.astype(np.float64, copy=False)
                 if apply_image_mask:
                     images_np = _apply_relion_soft_image_mask_numpy(images_np, self.image_mask)
                 if self.relion_fourier_backend == "jax_gpu":
-                    transformed = _centered_rfft2_jax(images_np * np.float32(self.mult))
-                    return transformed.reshape((transformed.shape[0], -1)).astype(jnp.complex64)
+                    transformed = _centered_rfft2_jax(images_np * self.real_dtype.type(self.mult))
+                    return transformed.reshape((transformed.shape[0], -1)).astype(self.dtype)
                 if self.relion_fourier_backend != "host_numpy":
                     raise ValueError(
                         f"Unsupported RELION Fourier backend {self.relion_fourier_backend!r}; "
@@ -441,6 +464,7 @@ class ParticleImageDataset:
                 transformed = _centered_rfft2_numpy(images_np * self.mult)
                 return transformed.reshape((transformed.shape[0], -1)).astype(self.dtype, copy=False)
 
+        images = jnp.asarray(images, dtype=self.real_dtype)
         if apply_image_mask:
             if self.image_mask_mode == "relion_normalize_fill":
                 images = mask.apply_relion_soft_image_mask(images, self.image_mask, relion_normalize=True)
@@ -529,9 +553,9 @@ class TiltSeriesDataset(ParticleImageDataset):
         self.num_particles = len(self.particle_groups)
         self.dataset_tilt_indices = [canonical_groups.index(gn) for gn in self.particle_groups.keys()]
 
-        self.ctfscalefactor = np.asarray(star.df["_rlnCtfScalefactor"], dtype=np.float32)
+        self.ctfscalefactor = np.asarray(star.df["_rlnCtfScalefactor"], dtype=self.real_dtype)
         if "_rlnCtfBfactor" in star.df.columns:
-            self.ctfBfactor = np.asarray(star.df["_rlnCtfBfactor"], dtype=np.float32)
+            self.ctfBfactor = np.asarray(star.df["_rlnCtfBfactor"], dtype=self.real_dtype)
         elif tilt_file_option == "warp":
             raise ValueError(
                 "Warp tilt ordering requires '_rlnCtfBfactor' column in the "
@@ -539,7 +563,7 @@ class TiltSeriesDataset(ParticleImageDataset):
                 "was exported from Warp with B-factor information."
             )
         if tilt_file_option == "relion5":
-            self.dose = np.asarray(star.df["_rlnMicrographPreExposure"], dtype=np.float32)
+            self.dose = np.asarray(star.df["_rlnMicrographPreExposure"], dtype=self.real_dtype)
 
         self._compute_tilt_ordering(tilt_file_option)
 
@@ -788,15 +812,35 @@ class _PrefetchIterator:
 
     def __iter__(self):
         q = queue.Queue(maxsize=self._buffer_size)
+        stop_requested = threading.Event()
+
+        def _put_unless_stopped(item) -> bool:
+            while not stop_requested.is_set():
+                try:
+                    q.put(item, timeout=0.05)
+                    return True
+                except queue.Full:
+                    continue
+            return False
 
         def _producer():
+            iterator = None
             try:
-                for item in self._iterable:
-                    q.put(item)
+                iterator = iter(self._iterable)
+                for item in iterator:
+                    if not _put_unless_stopped(item):
+                        break
             except Exception as exc:
-                q.put(exc)
+                _put_unless_stopped(exc)
             finally:
-                q.put(_SENTINEL)
+                if stop_requested.is_set() and iterator is not None:
+                    close = getattr(iterator, "close", None)
+                    if close is not None:
+                        try:
+                            close()
+                        except Exception:
+                            pass
+                _put_unless_stopped(_SENTINEL)
 
         thread = threading.Thread(target=_producer, daemon=True)
         thread.start()
@@ -809,6 +853,7 @@ class _PrefetchIterator:
                     raise item
                 yield item
         finally:
+            stop_requested.set()
             thread.join(timeout=5.0)
 
 

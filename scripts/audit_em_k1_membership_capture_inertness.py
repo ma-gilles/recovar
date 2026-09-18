@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import math
 from pathlib import Path
@@ -13,16 +12,11 @@ from typing import Any
 import mrcfile
 import numpy as np
 
+from scripts.file_hash import sha256_file as _sha256
+
 SCHEMA = "em-k1-membership-capture-inertness-v1"
 DEFAULT_FSC_AUC_THRESHOLD = 0.999999
 
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(8 * 1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def _load_map(path: Path) -> np.ndarray:

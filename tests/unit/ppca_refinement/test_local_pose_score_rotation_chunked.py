@@ -10,7 +10,6 @@ to be approximate / zeroed in the chunked path and are not asserted here.
 
 from __future__ import annotations
 
-import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -93,11 +92,6 @@ def test_chunked_matches_unchunked(B, T, R, P, F, chunk, top_k):
         np.asarray(chunked.pmax), np.asarray(ref.pmax), rtol=1e-4, atol=1e-4,
     )
     np.testing.assert_allclose(
-        np.asarray(chunked.max_posterior_per_image),
-        np.asarray(ref.max_posterior_per_image),
-        rtol=1e-4, atol=1e-4,
-    )
-    np.testing.assert_allclose(
         np.asarray(chunked.top_log_score_per_image),
         np.asarray(ref.top_log_score_per_image),
         rtol=1e-5, atol=1e-4,
@@ -108,11 +102,6 @@ def test_chunked_matches_unchunked(B, T, R, P, F, chunk, top_k):
     )
     np.testing.assert_array_equal(
         np.asarray(chunked.top_translation_idx), np.asarray(ref.top_translation_idx),
-    )
-    np.testing.assert_allclose(
-        np.asarray(chunked.top_posterior_per_image),
-        np.asarray(ref.top_posterior_per_image),
-        rtol=1e-4, atol=1e-4,
     )
 
 
@@ -129,10 +118,4 @@ def test_chunked_skips_when_chunk_size_exceeds_R():
         Y1, proj_aug, ctf2_over_noise, y_norm, pose_log_prior,
         significance_threshold=1e-3, top_pose_count=2, rotation_chunk_size=64,
     )
-    # rotation_posterior_sums is zeroed in chunked path; on the delegated case
-    # it should match the reference (one-shot kernel).
-    np.testing.assert_allclose(
-        np.asarray(delegated.rotation_posterior_sums),
-        np.asarray(ref.rotation_posterior_sums),
-        rtol=1e-5,
-    )
+    np.testing.assert_array_equal(np.asarray(delegated.pmax), np.asarray(ref.pmax))

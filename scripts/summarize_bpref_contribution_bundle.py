@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 import subprocess
 
-from recovar.em.bpref_contribution_replay import (
+from recovar.em.diagnostics.bpref_contribution_replay import (
     load_bpref_contribution_bundle,
     summarize_bpref_contribution_bundle,
 )

@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 from pathlib import Path
 
@@ -15,10 +14,9 @@ import numpy as np
 from recovar.core.ctf import _compute_spa_ctf
 from recovar.cuda_backproject import relion_preprocess_real_f32
 from recovar.data_io.image_backends import _centered_rfft2_jax
-from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
-    _half_translation_phase_table_for_indices,
-)
-from recovar.em.dense_single_volume.local_backprojection import compute_local_mstep_sums
+from recovar.em.local.local_backprojection import compute_local_mstep_sums
+from recovar.em.sparse_pass2.sparse_pass2_bucket_io import _half_translation_phase_table_for_indices
+from recovar.utils.file_hash import sha256_file
 from scripts.recompute_bpref_high_precision import (
     _ctf_float64,
     _half_lattice,
@@ -29,14 +27,6 @@ from scripts.recompute_bpref_high_precision import (
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise ValueError(message)
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(8 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def _metrics(lhs: np.ndarray, rhs: np.ndarray) -> dict[str, object]:
@@ -266,7 +256,7 @@ def extract(contribution_directory: Path, selection_json: Path) -> tuple[dict[st
                 _require(match.size == 1 and stack not in locations, f"stack {stack}: duplicate contribution")
                 locations[stack] = (path, int(match[0]))
         if any(location[0] == path for location in locations.values()):
-            shard_hashes[path.name] = _sha256(path)
+            shard_hashes[path.name] = sha256_file(path)
     _require(set(locations) == set(stacks), "selected contribution identities are incomplete")
 
     first: dict[int, dict[str, np.ndarray | int | float]] = {}
@@ -347,7 +337,7 @@ def extract(contribution_directory: Path, selection_json: Path) -> tuple[dict[st
         "particle_count": len(stacks),
         "contribution_shard_count": len(shard_hashes),
         "selection_json": str(selection_json.resolve()),
-        "selection_sha256": _sha256(selection_json),
+        "selection_sha256": sha256_file(selection_json),
         "contribution_sha256": shard_hashes,
         "production_f32_repeat": repeat_metrics,
         "production_f32_capture_closure": capture_closure,
@@ -375,7 +365,7 @@ def main() -> None:
     args.output_npz.parent.mkdir(parents=True, exist_ok=True)
     np.savez(args.output_npz, **arrays)
     report["output_npz"] = str(args.output_npz.resolve())
-    report["output_npz_sha256"] = _sha256(args.output_npz)
+    report["output_npz_sha256"] = sha256_file(args.output_npz)
     args.output_json.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
     print(json.dumps(report, indent=2, sort_keys=True))
 

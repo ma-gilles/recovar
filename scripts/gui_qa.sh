@@ -52,7 +52,6 @@ echo ">>> Starting server..."
 cd "$REPO_DIR"
 pixi run python -m recovar.gui_v2.backend.main --port "$PORT" > "$QA_DIR/server.log" 2>&1 &
 SERVER_PID=$!
-sleep 5
 
 cleanup() {
     kill $SERVER_PID 2>/dev/null || true
@@ -63,6 +62,11 @@ trap cleanup EXIT
 
 # Check server — it may ignore --port
 ACTUAL_PORT=$PORT
+for _ in $(seq 1 60); do
+    curl -sf "http://localhost:$PORT/api/system/info" > /dev/null 2>&1 && break
+    kill -0 "$SERVER_PID" 2>/dev/null || break
+    sleep 1
+done
 if ! curl -sf "http://localhost:$PORT/api/system/info" > /dev/null 2>&1; then
     ACTUAL_PORT=$(grep -oP 'running on http://127\.0\.0\.1:\K\d+' "$QA_DIR/server.log" | head -1)
     if [[ -n "$ACTUAL_PORT" ]] && curl -sf "http://localhost:$ACTUAL_PORT/api/system/info" > /dev/null 2>&1; then
@@ -201,6 +205,17 @@ async function main() {
         log(1, 'PASS', 'Pipeline form has Particles and Mask fields');
     else
         log(1, 'FAIL', 'Pipeline form missing required fields');
+
+    // InitialModel extension: native defaults must load and render the core form.
+    const jobTypeSelect = page.locator('select').first();
+    await jobTypeSelect.selectOption('initial_model');
+    await page.waitForTimeout(1500);
+    await page.screenshot({ path: DIR + '/ac1_initial_model.png' });
+    const initialModelBody = await page.textContent('body') || '';
+    if (initialModelBody.includes('Input STAR') && initialModelBody.includes('Classes (K)') && initialModelBody.includes('Submit InitialModel Job'))
+        log(1, 'PASS', 'InitialModel form loads native defaults and core controls');
+    else
+        log(1, 'FAIL', 'InitialModel form or native defaults are unavailable');
 
     // AC-3: Volume viewer
     await page.goto(BASE + '/jobs/' + JOB_PIPELINE);

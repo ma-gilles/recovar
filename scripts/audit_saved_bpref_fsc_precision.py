@@ -9,7 +9,6 @@ atomic-order differences; those require versioned BPref contribution captures.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 from pathlib import Path
 
@@ -17,16 +16,9 @@ import numpy as np
 import starfile
 
 from recovar.reconstruction import regularization
+from recovar.utils.file_hash import sha256_file as _sha256
 
 SCHEMA = "recovar-saved-bpref-fsc-precision-audit-v2"
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(8 * 1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def _round_away(values) -> np.ndarray:

@@ -312,6 +312,66 @@ Conclusion:
 - FSC-only jitter audit:
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_particle1203_self_jitter_20260714_202700/self_jitter_audit.json`.
 
+### 2026-09-11 `k4-structural-cleanup-400ad81e4-100k256`
+
+Run metadata:
+
+- Commit: `400ad81e4b0e72a1aa24b269133cc53aa6b115c7` (PR179 `codex/recovar-structural-cleanup` lineage)
+- Branch: `<detached>` frozen qualification worktree
+- Worktree: `/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_qual_400ad81e4_20260910`
+- Dirty state: clean (empty porcelain status, empty-diff SHA-256 `e3b0c442…b855`; provenance under `provenance/submission/`)
+- Fixture: `/scratch/gpfs/GILLES/mg6942/em_relion_proj/ribosembly_k4_g256_n100000_completion_20260512_171123` (noise 1.0, B-factor 80)
+- Particle count: 100000
+- Box size: 256
+- K: 4 (exactly-K4 3D classification, 15 fixed iterations, `tau2_fudge 4`)
+- Initial/reference maps: the fixture's shared K4 initial references and STAR metadata, identical for both runs
+- RELION command/log: dispatch-logging build `/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/relion_k4_100k_dispatchv2_20260717/build/bin/relion_refine_mpi` with `--iter 15 --tau2_fudge 4 --K 4 --gpu 0 --j 4 --random_seed 1778628798 --dont_combine_weights_via_disc`; run `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_oracle_dispatchv2_100k256_h100_400ad81e4_20260910/run`, schema-3 schedule `schedule/dispatch_schedule.npz`
+- RECOVAR command/log: `scripts/run_em_completion_bench_slurm.sh` K4 cell with `RUN_K4_FUSED_SPARSE_PASS2=1 K4_IMAGE_BATCH_SIZE=50 K4_ROTATION_BLOCK_SIZE=2000 K4_MAX_ITER=15 RECOVAR_SPARSE_KCLASS_GROUP_TIMING=1`; log `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_completion_k4_400ad81e4_h100_20260910/k4_100k256_recovar/run_full_refinement.log`
+- Slurm job IDs: RELION oracle `13708102`; RECOVAR setup `13712371`, K4 `13712372` (07:53:42, exit 0), summary `13712373` (exit 2: the K1 cell of the pair is absent from this root and the K4 GT gate failed; `summary.md`/`summary_metrics.json` were still written)
+- Hardware: NVIDIA H100 80GB HBM3 on `della-h19g2` for both RELION and RECOVAR (same node); RECOVAR peak GPU memory 32.70 GiB
+- Artifacts: `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_completion_k4_400ad81e4_h100_20260910/{summary.md,summary_metrics.json,admission_record.json}`, `SAFE_TO_DELETE`
+
+Quality comparison (Hungarian matching by FSC-AUC; both permutations are the identity):
+
+| Metric | Previous accepted/reference | Current | Delta | Status |
+|--------|-----------------------------|---------|-------|--------|
+| mean class FSC-AUC vs GT, RECOVAR | 0.284755 (2026-06-29, other oracle build) | 0.265754 | -0.000519 vs RELION 0.266272 | **fail** (gate tolerance 0.0001) |
+| mean class FSC-AUC vs GT, RELION | 0.262172 (2026-06-29) | 0.266272 | new oracle build/GPU | reference |
+| per-class FSC-AUC vs GT, RECOVAR / RELION | pending | 0.267282/0.267857, 0.263314/0.263656, 0.262212/0.263219, 0.270207/0.270357 | -0.00058, -0.00034, -0.00101, -0.00015 | worse in all four classes |
+| per-class FSC 0.5 / 0.143 shells, RECOVAR vs RELION | pending | 35/41, 36/42, 35/41, 37/42 in both | 0 | same |
+| mean FSC shells 1-8 / 1-16 vs GT | pending | 0.997138/0.989725 vs RELION 0.997219/0.989890 | -0.00008 / -0.00017 | same within band |
+| mean class corr RECOVAR vs RELION | 0.994365 (2026-06-29) | 0.999886 (0.99996, 0.999793, 0.999811, 0.999981) | +0.0055 | better (diagnostic only) |
+| class populations RECOVAR vs RELION | pending | 0.2475/0.2486/0.2394/0.2645 vs 0.2476/0.2491/0.2387/0.2645 | <= 0.0007 | same |
+| K4 class assignment agreement vs RELION | 0.89025 (2026-06-29) | 0.99046 | +0.1002 | better |
+| Pmax gap RECOVAR minus RELION | pending | mean 0.928603 vs 0.928421 (+0.000182) | within 1e-3 | same |
+| Pmax absolute error distribution | pending | mean 0.018119, p95 0.097344, max 0.640163 | | executed |
+| pose angle error vs RELION | within 5 deg 0.71669 (2026-06-29) | mean 0.711 deg; within 1 deg 0.97806, within 5 deg 0.97806 | +0.261 | better |
+| translation error vs RELION | within 1 px 0.77529 (2026-06-29) | mean 0.0266 px; within 0.5 px 0.97616, within 1 px 0.97982 | +0.205 | better |
+| final all-data comparison | unavailable | unavailable: fixed 15 iterations, RELION has no `run_it016` products | missing | not measured |
+
+Performance comparison:
+
+| Metric | Previous/reference | Current | Delta | Status |
+|--------|--------------------|---------|-------|--------|
+| RECOVAR end-to-end walltime | 16952.2 s (2026-06-29, `della-l08g2`) | 28037.4 s (iterations 27999.2 s; Slurm job 28422 s including setup and the CUDA build) | +11085 s, +65 % | worse |
+| RELION end-to-end walltime | 7771 s (2026-06-29 oracle) | 4525 s | different build and GPU | reference |
+| RECOVAR/RELION wall ratio | 2.181x | 6.20x (iterations-only 6.19x, job wall 6.28x) | +4.0x | **fail** (target <= 2x) |
+| RECOVAR per-iteration walltime | pending | mean 1866.6 s; iteration 1 3227 s, iterations 2-15 1440-2135 s | | worse |
+| RELION per-iteration walltime | pending | 301.7 s mean (4525 s / 15) | | reference |
+| images per second, RECOVAR / RELION | pending | 3.57 / 22.10 | | worse |
+| RECOVAR peak GPU memory | 32.52 GiB | 32.70 GiB | +0.18 GiB | same |
+| RELION peak GPU memory | not measured | not measured | | not measured |
+| sparse K-class pass-2 total | 12453.5 s, 73.7 % of iteration wall | 23836 s, 85.1 % of iteration wall | +11383 s | worse |
+| K-class group M-step noise stats | 35.2 % of group wall | 47.1 % of group wall (compact-pair mode 48.8 %) | +11.9 points | worse |
+
+Conclusion:
+
+- Overall status: not accepted. The GT FSC-AUC gate fails by -0.000519 (tolerance 0.0001); every class is 0.00015-0.00101 behind RELION with identical FSC 0.5/0.143 shells, so the deficit is a small shellwise amplitude difference, not a class or pose mismatch.
+- Better metrics: class assignment agreement 0.990, poses within 1 deg 0.978, translations within 1 px 0.980 and map corr vs RELION >= 0.9998 are the best particle-level K4 parity recorded.
+- Worse metrics: 6.2x RELION wall (2.18x on 2026-06-29); sparse K-class pass-2 dominates (85 %) and its group noise statistics grew to 47 % of group wall. This matches the VDAM finding that K4 runtime is compile-bound per bucket shape (design item: shape-stable K-class bucketing).
+- Same metrics: populations, Pmax means, resolution shells, peak memory.
+- Accepted as new best: no. Handed to the numerical workstream (first-divergence search for the per-class GT-AUC deficit) and the VDAM performance workstream; this record is milestone evidence, not an edit-loop test.
+
 ## Required Metric Template
 
 Use this template for each new completion benchmark.

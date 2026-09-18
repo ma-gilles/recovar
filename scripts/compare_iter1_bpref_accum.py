@@ -150,13 +150,6 @@ def load_relion_dump(path):
                 r_max = int(tokens[tokens.index("r_max") + 1])
                 pf = float(tokens[tokens.index("padding_factor") + 1])
             elif line.startswith("# xsize"):
-                tokens = line.split()
-                xsize = int(tokens[tokens.index("xsize") + 1])
-                ysize = int(tokens[tokens.index("ysize") + 1])
-                zsize = int(tokens[tokens.index("zsize") + 1])
-                xinit = int(tokens[tokens.index("xinit") + 1])
-                yinit = int(tokens[tokens.index("yinit") + 1])
-                zinit = int(tokens[tokens.index("zinit") + 1])
                 break
     data = np.loadtxt(path, comments="#")
     k = data[:, 0].astype(np.int64)

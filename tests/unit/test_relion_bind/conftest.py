@@ -26,9 +26,3 @@ def random_real_volume(box_size, rng):
 def random_fftw_half(random_real_volume):
     """FFTW rfftn of the random volume."""
     return np.fft.rfftn(random_real_volume)
-
-
-@pytest.fixture()
-def random_recovar_centered(random_real_volume):
-    """recovar centered full-complex of the random volume."""
-    return np.fft.fftshift(np.fft.fftn(random_real_volume))

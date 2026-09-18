@@ -34,7 +34,6 @@ def _inputs(
     tmp_path: Path,
     *,
     outside_dominated: bool = True,
-    trajectory_schema: str = "em_k1_fsc_trajectory_audit_v2",
 ) -> tuple[Path, Path]:
     numbered_curve = np.ones(21)
     numbered_curve[1:] -= np.linspace(1.0e-7, 1.0e-5, 20)
@@ -65,7 +64,7 @@ def _inputs(
     trajectory_path.write_text(
         json.dumps(
             {
-                "schema": trajectory_schema,
+                "schema": "em_k1_fsc_trajectory_audit_v3",
                 "numbered_iterations": [numbered_row],
                 "final": final_row,
             }
@@ -91,21 +90,6 @@ def test_build_report_accepts_outside_radius_amplification(tmp_path: Path) -> No
     assert report["products"]["merged"]["final_over_numbered_deficit_amplification"] > 250.0
     assert report["products"]["merged"]["active_radius_fsc_auc_gate_passed"]
     assert report["products"]["merged"]["outside_radius_fsc_auc_gate_failed"]
-
-
-def test_build_report_accepts_v3_trajectory_schema(tmp_path: Path) -> None:
-    trajectory, shellwise = _inputs(
-        tmp_path,
-        trajectory_schema="em_k1_fsc_trajectory_audit_v3",
-    )
-    report = build_report(
-        trajectory_json=trajectory,
-        shellwise_npz=shellwise,
-        relion_iteration=7,
-        last_numbered_current_size=8,
-    )
-
-    assert report["status"] == "pass"
 
 
 def test_build_report_fails_closed_for_inside_radius_deficit(tmp_path: Path) -> None:

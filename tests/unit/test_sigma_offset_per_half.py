@@ -1,9 +1,9 @@
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume.helpers.types import make_noise_stats
-from recovar.em.dense_single_volume.mean_helpers import update_c1_sigma_offset_from_posterior
-from recovar.em.dense_single_volume.relion_replay import _as_sigma_offset_half_pair
+from recovar.em.helpers.types import make_noise_stats
+from recovar.em.refinement.half_inputs import _as_sigma_offset_half_pair
+from recovar.em.refinement.noise_updates import update_c1_sigma_offset_from_posterior
 
 pytestmark = pytest.mark.unit
 
@@ -23,7 +23,6 @@ def test_non_kclass_sigma_offset_is_independent_per_half():
         noise_stats_per_half_per_class=[None, None],
         current_sigma_offset_angstrom_per_half=[10.0, 10.0],
         n_classes=1,
-        k_class_enabled=False,
         state_fallback_offsets_angstrom=float("nan"),
     )
     assert result.current_sigma_offset_angstrom_per_half == pytest.approx([np.sqrt(3.0), np.sqrt(10.0)])
@@ -35,21 +34,20 @@ def test_kclass_sigma_offset_is_shared_across_halves():
         noise_stats_per_half=[_noise_stats(12.0, 2.0), _noise_stats(40.0, 2.0)],
         noise_stats_per_half_per_class=[None, None],
         current_sigma_offset_angstrom_per_half=[10.0, 10.0],
-        n_classes=1,
-        k_class_enabled=True,
+        n_classes=2,
         state_fallback_offsets_angstrom=float("nan"),
     )
     expected = np.sqrt(52.0 / 8.0)
     assert result.current_sigma_offset_angstrom_per_half == pytest.approx([expected, expected])
 
 
-def test_missing_half_uses_hard_assignment_fallback_independently():
+@pytest.mark.parametrize("missing_stats", [None, _noise_stats(0.0, 0.0)])
+def test_missing_half_uses_hard_assignment_fallback_independently(missing_stats):
     result = update_c1_sigma_offset_from_posterior(
-        noise_stats_per_half=[_noise_stats(0.0, 0.0), _noise_stats(40.0, 2.0)],
+        noise_stats_per_half=[missing_stats, _noise_stats(40.0, 2.0)],
         noise_stats_per_half_per_class=[None, None],
         current_sigma_offset_angstrom_per_half=[10.0, 10.0],
         n_classes=1,
-        k_class_enabled=False,
         state_fallback_offsets_angstrom=3.0,
     )
     assert result.current_sigma_offset_angstrom_per_half == pytest.approx([3.0, np.sqrt(10.0)])

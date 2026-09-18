@@ -1,20 +1,7 @@
-"""Centralized configuration dataclasses for PPCA refinement EM iterations.
+"""Geometry, batching, scoring and pose-selection options for PPCA refinement.
 
-Every tunable knob that an EM iteration accepts lives here. A reader who wants
-to know what dials exist should be able to read this file end-to-end in two
-minutes.
-
-Concerns are split orthogonally:
-
-* :class:`GeometryConfig` — volume/image shape, latent dim, domain.
-* :class:`ScheduleConfig` — batch sizes, M-step solve chunk size.
-* :class:`ScoringConfig` — image-side scoring options.
-* :class:`PoseSelectionConfig` — best/top-p pose diagnostic selection.
-* :class:`SparsePass2Config` — pass-2 backprojection sparsity culling.
-* :class:`MeanRegularizationConfig` — re-exported from :mod:`mean_regularization`.
-* :class:`PostprocessConfig` — re-exported from :mod:`postprocess`.
-
-Every config is ``frozen=True``.
+Mean regularization and postprocessing configs live in their implementation
+modules. All configuration dataclasses are frozen.
 """
 
 from __future__ import annotations
@@ -23,17 +10,12 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from recovar.em.ppca_refinement.mean_regularization import MeanRegularizationConfig
-from recovar.em.ppca_refinement.postprocess import PostprocessConfig
-
 __all__ = [
     "GeometryConfig",
     "ScheduleConfig",
     "ScoringConfig",
     "PoseSelectionConfig",
     "SparsePass2Config",
-    "MeanRegularizationConfig",
-    "PostprocessConfig",
 ]
 
 
@@ -62,20 +44,16 @@ class ScoringConfig:
 
     Attributes
     ----------
-    half_spectrum_scoring : bool
-        Misleading legacy name. ``False`` (default) **enables Hermitian
-        half-image weights** (``w_f = 2`` for non-DC/non-Nyquist pixels,
-        ``w_f = 1`` else) so every Fourier inner product in the E-step
-        equals the full-Fourier inner product exactly, the ``.real()``
-        projections in :func:`engine._per_pose_stats_block` are exact,
-        and ``z`` stays exactly real. ``True`` switches to RELION-style
-        unit weights everywhere, which biases pose scores by ~½, makes
-        ``Re(half_IP)`` an approximation of the full IP, and shifts the
-        effective ``z`` prior — only use for RELION-parity tests.
+    relion_unit_half_weights : bool
+        ``True`` uses RELION-style unit weights on the stored half image.
+        ``False`` (default) uses Hermitian multiplicity (``w_f = 2`` for
+        non-DC/non-Nyquist pixels and ``w_f = 1`` otherwise), so Fourier
+        inner products equal their full-image values. Enable unit weights
+        only for RELION parity.
     """
 
     score_with_masked_images: bool = False
-    half_spectrum_scoring: bool = False
+    relion_unit_half_weights: bool = False
     square_window: bool = False
     relion_texture_interp: bool = True
     class_log_prior: float = 0.0

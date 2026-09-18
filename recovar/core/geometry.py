@@ -73,12 +73,12 @@ def get_gridpoint_coords(rotation_matrix, image_shape, volume_shape):
     returns the corresponding 3-D grid indices in the volume.
 
     Args:
-        rotation_matrix: Rotation matrix, shape ``(3, 3)``.
-        image_shape: 2-D image side length (static).
-        volume_shape: 3-D volume shape tuple (static).
+        rotation_matrix (numpy.ndarray | jax.Array): Rotation matrix, shape ``(3, 3)``.
+        image_shape (tuple[int, int]): 2-D image shape (static).
+        volume_shape (tuple[int, int, int]): 3-D volume shape tuple (static).
 
     Returns:
-        Rotated grid coordinates, shape ``(image_size, 3)``.
+        coordinates (jax.Array): Rotated grid coordinates, shape ``(image_size, 3)``.
     """
     three_d_upsampling_factor = volume_shape[0] // image_shape[0]
     unrotated_plane_indices = get_unrotated_plane_grid_points(
@@ -173,15 +173,13 @@ def translate_images(image, translation, image_shape, *, half_image=False):
     """Apply in-plane translations to Fourier-space images via phase shifts.
 
     Args:
-        image: Fourier-space image(s), shape ``(batch, image_size)`` or
-            ``(image_size,)``.
-        translation: Shift(s) in fractional pixel units, shape
-            ``(batch, 2)`` or ``(2,)``.
-        image_shape: Image side length (static).
-        half_image: If True, use rfft-packed half-spectrum frequency grid.
+        image (numpy.ndarray | jax.Array): Fourier-space images, shape ``(batch, image_size)``.
+        translation (numpy.ndarray | jax.Array): Shifts in fractional pixel units, shape ``(batch, 2)``.
+        image_shape (tuple[int, int]): 2-D image shape (static).
+        half_image (bool): If True, use rfft-packed half-spectrum frequency grid.
 
     Returns:
-        Translated image(s) with the same shape as *image*.
+        images (jax.Array): Translated image(s) with the same shape as *image*.
     """
     if half_image:
         twod_lattice = fourier_transform_utils.get_k_coordinate_of_each_pixel_half(

@@ -3,7 +3,7 @@
 #
 # Runs ONLY the EM-long parity regression tests:
 #   - K=1 256² 50k run_full_refinement parity against RELION auto-refine
-#   - K=1 256² 50k native InitialModel/run_ab_initio quality against a
+#   - K=1 256² 50k native InitialModel quality against a
 #     RELION --grad --denovo_3dref reference
 #   - K=4 256² 50k K-class parity
 # Disjoint from ./scripts/run_tests_parallel.sh long-test by design — that one
@@ -20,7 +20,7 @@
 #   ./scripts/run_em_parity_long_slurm.sh --watch  # submit and tail logs
 #
 # Outputs:
-#   tests/baselines/em_parity_quality_long_ledger_*.json (per-test ledgers)
+#   <run-root>/results/<job-name>/**/em_parity_quality_long_ledger_*.json
 #   /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_parity_long_<timestamp>/  (Slurm logs)
 
 set -euo pipefail
@@ -84,7 +84,8 @@ echo
 git -C "${REPO_ROOT}" rev-parse HEAD
 git -C "${REPO_ROOT}" symbolic-ref --short HEAD || echo '<detached>'
 
-pixi run python -m pytest --em-parity-long -v -s "${test_path}"
+pixi run python -m pytest --em-parity-long -v -s \
+  --basetemp "${SCRATCH_DIR}/results/${job_name}_\${SLURM_JOB_ID}" "${test_path}"
 EOF
   chmod +x "${script_path}"
   echo "${script_path}"
@@ -231,17 +232,20 @@ for job_name in em_parity_long_k1_native_ref em_parity_long_k1 em_parity_long_k1
 done
 
 echo "=== EM-parity ledgers ==="
-ls -la tests/baselines/em_parity_quality_long_ledger_*.json 2>/dev/null || echo "(no ledgers)"
+find "${SCRATCH_DIR}/results" -name 'em_parity_quality_long_ledger_*.json' -print 2>/dev/null || true
 echo
-pixi run python scripts/extract_em_parity_tables.py --tier long || true
+pixi run python scripts/extract_em_parity_tables.py --tier long \
+  --ledger-root "${SCRATCH_DIR}/results" \
+  --require-case k1_long k1_native_initialmodel kclass_long || failed=1
 
 for ledger in \
-  tests/baselines/em_parity_quality_long_ledger_k1_long.json \
-  tests/baselines/em_parity_quality_long_ledger_k1_native_initialmodel.json \
-  tests/baselines/em_parity_quality_long_ledger_kclass_long.json
+  em_parity_quality_long_ledger_k1_long.json \
+  em_parity_quality_long_ledger_k1_native_initialmodel.json \
+  em_parity_quality_long_ledger_kclass_long.json
 do
-  if [[ ! -s "\${ledger}" ]]; then
-    echo "Missing expected EM-long ledger: \${ledger}" >&2
+  count=\$(find "${SCRATCH_DIR}/results" -name "\${ledger}" -type f -size +0c 2>/dev/null | wc -l)
+  if [[ "\${count}" -ne 1 ]]; then
+    echo "Expected exactly one nonempty EM-long ledger: \${ledger}" >&2
     failed=1
   fi
 done

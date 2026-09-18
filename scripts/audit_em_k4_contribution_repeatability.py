@@ -4,24 +4,17 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
+from scripts.file_hash import sha256_file as _sha256
+
 SCHEMA = "recovar.em_k4_contribution_repeatability.v1"
 GROUPS = ("pass2", "contribution", "device_signature")
 DEVICE_IGNORED_KEYS = frozenset({"companion_contribution_path"})
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(8 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def _load_archive(path: Path) -> dict[str, np.ndarray]:

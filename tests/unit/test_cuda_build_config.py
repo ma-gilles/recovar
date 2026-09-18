@@ -1,4 +1,5 @@
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -71,6 +72,28 @@ def _run_make(wrapper: Path, *targets: str, env: dict[str, str]):
         capture_output=True,
         check=False,
     )
+
+
+def test_local_cuda_includes_are_build_and_package_inputs():
+    import recovar.cuda_backproject as cb
+
+    pending = ["cuda_backproject.cu"]
+    sources = set()
+    while pending:
+        name = pending.pop()
+        if name in sources:
+            continue
+        sources.add(name)
+        pending.extend(
+            include
+            for include in re.findall(r'^#include "([^"\n]+)"', (_CUDA_DIR / name).read_text(), re.M)
+            if (_CUDA_DIR / include).is_file()
+        )
+    dependencies = _MAKEFILE.read_text().split("$(LIB):", 1)[1].split("|", 1)[0].split()
+    manifest = (_REPO_ROOT / "MANIFEST.in").read_text().splitlines()
+    assert sources <= set(cb._CUDA_BUILD_SOURCE_NAMES)
+    assert sources <= set(dependencies)
+    assert all(f"include recovar/cuda/{name}" in manifest for name in sources)
 
 
 def test_makefile_prefers_cudacxx_over_path_and_roots(tmp_path):
@@ -275,6 +298,18 @@ def test_cuda_available_accepts_cuda_platform_name(monkeypatch):
     monkeypatch.setattr(cb, "_ensure_ffi", lambda: None)
 
     assert cb.cuda_available() is True
+
+
+@pytest.mark.parametrize(("platform", "expected"), [("gpu", True), ("cuda", True), ("cpu", False)])
+def test_slicing_gpu_detection_uses_visible_device_platform(monkeypatch, platform, expected):
+    import recovar.core.slicing as core_slicing
+
+    core_slicing._on_gpu.cache_clear()
+    monkeypatch.setattr(core_slicing.jax, "devices", lambda: [types.SimpleNamespace(platform=platform)])
+    try:
+        assert core_slicing._on_gpu() is expected
+    finally:
+        core_slicing._on_gpu.cache_clear()
 
 
 def test_cuda_available_respects_runtime_disable_without_poisoning_cached_success(monkeypatch):

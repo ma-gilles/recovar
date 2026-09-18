@@ -5,19 +5,19 @@ import hashlib
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume.frozen_boundary import (
+from recovar.em.diagnostics.frozen_boundary import (
     FROZEN_BOUNDARY_FILENAME,
+    FROZEN_BOUNDARY_MANIFEST,
     FROZEN_BOUNDARY_NUMERICAL_CLASSIFICATION_SCOPE,
     FROZEN_BOUNDARY_PROVENANCE_VERIFICATION_SCOPE,
-    FROZEN_BOUNDARY_MANIFEST,
     FROZEN_BOUNDARY_SCHEMA,
     FROZEN_BOUNDARY_SCHEMA_V3,
-    V3_REQUIRED_SOURCE_NAMES,
+    V3_REQUIRED_FIXED_SOURCE_NAMES,
     load_frozen_refinement_boundary,
+    v3_source_role,
     validate_fixed_diagnostic_boundary_runtime_config,
     validate_fixed_diagnostic_boundary_sampling_state,
     verify_fixed_diagnostic_boundary_sources,
-    v3_source_role,
 )
 
 
@@ -96,7 +96,7 @@ def _write_boundary(root, **overrides):
 def _v3_overrides(source_digests=None):
     names = sorted(
         {
-            *V3_REQUIRED_SOURCE_NAMES,
+            *V3_REQUIRED_FIXED_SOURCE_NAMES,
             "particle_stack:0",
             "consumer_map:half1:class1",
             "consumer_map:half2:class1",
@@ -259,7 +259,7 @@ def test_v3_round_trips_fixed_arm_sources_sampling_config_and_per_half_tau2(tmp_
 
     assert boundary.fixed_diagnostic_arm is True
     assert set(boundary.source_sha256) == {
-        *V3_REQUIRED_SOURCE_NAMES,
+        *V3_REQUIRED_FIXED_SOURCE_NAMES,
         "particle_stack:0",
         "consumer_map:half1:class1",
         "consumer_map:half2:class1",
@@ -387,7 +387,7 @@ def test_v3_rejects_exact_projector_claim_without_direct_capture_consumption(tmp
     "missing_source",
     sorted(
         {
-            *V3_REQUIRED_SOURCE_NAMES,
+            *V3_REQUIRED_FIXED_SOURCE_NAMES,
             "particle_stack:0",
             "consumer_map:half1:class1",
             "consumer_map:half2:class1",

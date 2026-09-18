@@ -10,7 +10,6 @@ translation, correction, and contraction/accumulation boundaries.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import re
 import struct
@@ -21,6 +20,7 @@ import numpy as np
 
 from scripts import validate_relion_coarse_lane_capture as lane_validator
 from scripts import validate_relion_coarse_operand_capture as operand_validator
+from scripts.file_hash import sha256_file as _sha256
 
 HEADER_MAGIC = b"RLNP1PXV1HEADER\0"
 FOOTER_MAGIC = b"RLNP1PXV1FOOTER\0"
@@ -44,14 +44,6 @@ FIELD_NAMES = (
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise ValueError(message)
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(8 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def _bits(values: np.ndarray) -> np.ndarray:

@@ -190,6 +190,63 @@ def test_finite_max_ignores_nan_values():
     assert np.isnan(summarizer.finite_max(float("nan"), float("inf")))
 
 
+def test_gpu_monitor_reports_single_physical_uuid_and_peak_row(tmp_path):
+    monitor = tmp_path / "gpu_monitor.csv"
+    monitor.write_text(
+        "timestamp, index, name, uuid, memory.used [MiB], memory.total [MiB]\n"
+        "2026/09/01 01:00:00.000, 3, NVIDIA H100 80GB HBM3, GPU-good, 1024 MiB, 81559 MiB\n"
+        "2026/09/01 01:00:01.000, 3, NVIDIA H100 80GB HBM3, GPU-good, 2048 MiB, 81559 MiB\n"
+    )
+
+    summary = summarizer._read_gpu_monitor(monitor)
+
+    assert summary is not None
+    assert summary["sample_count"] == 2
+    assert summary["gpu_count"] == 1
+    assert summary["gpu_uuids"] == ["GPU-good"]
+    assert summary["gpu_uuid_count"] == 1
+    assert summary["peak_device_uuid"] == "GPU-good"
+    assert summary["peak_device_index"] == "3"
+    assert summary["peak_memory_mib"] == 2048.0
+
+
+def test_gpu_monitor_reports_mixed_or_malformed_uuids_without_accepting_or_rejecting_them(tmp_path):
+    monitor = tmp_path / "gpu_monitor.csv"
+    monitor.write_text(
+        "timestamp,index,name,uuid,memory.used [MiB]\n"
+        "t0,0,H100,GPU-first,10 MiB\n"
+        "t1,0,H100,not-a-gpu-uuid,20 MiB\n"
+        "t2,0,H100,,30 MiB\n"
+    )
+
+    summary = summarizer._read_gpu_monitor(monitor)
+
+    assert summary is not None
+    assert summary["sample_count"] == 3
+    assert summary["gpu_count"] == 1
+    assert summary["gpu_uuids"] == ["GPU-first", "not-a-gpu-uuid"]
+    assert summary["gpu_uuid_count"] == 2
+    assert summary["peak_device_uuid"] == ""
+    assert summary["notes"] == []
+
+
+def test_gpu_monitor_without_uuid_column_keeps_legacy_summary_shape_semantics(tmp_path):
+    monitor = tmp_path / "gpu_monitor.csv"
+    monitor.write_text(
+        "timestamp,index,name,memory.used [MiB]\n"
+        "t0,0,H100,10 MiB\n"
+    )
+
+    summary = summarizer._read_gpu_monitor(monitor)
+
+    assert summary is not None
+    assert summary["sample_count"] == 1
+    assert summary["gpu_count"] == 1
+    assert summary["gpu_uuids"] is None
+    assert summary["gpu_uuid_count"] is None
+    assert summary["peak_device_uuid"] is None
+
+
 def test_particle_metrics_prefers_final_all_data_pose_keys_and_orders_by_image_name(tmp_path, monkeypatch):
     recovar_dir = tmp_path / "recovar"
     relion_dir = tmp_path / "relion"

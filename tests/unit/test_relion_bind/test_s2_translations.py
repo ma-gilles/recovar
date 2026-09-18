@@ -68,6 +68,7 @@ class TestCoarseTranslations:
         exact_grid = get_relion_translation_grid(
             offset_range_angstrom / pixel_size,
             offset_step_angstrom / pixel_size,
+            source_units_per_pixel=pixel_size,
         )
         legacy_grid = get_translation_grid(
             offset_range_angstrom / pixel_size,
@@ -77,6 +78,27 @@ class TestCoarseTranslations:
         assert relion_grid_pixels.shape == (29, 2)
         assert exact_grid.shape == (29, 2)
         assert legacy_grid.shape == (25, 2)
+        np.testing.assert_allclose(exact_grid, relion_grid_pixels, rtol=0.0, atol=1e-12)
+
+    def test_squared_radius_tolerance_is_applied_before_pixel_conversion(self):
+        """The source-unit tolerance must not admit near-boundary pixel rows."""
+        from recovar.em.sampling import get_relion_translation_grid
+
+        offset_range_angstrom = 6.707714
+        offset_step_angstrom = 3.0
+        pixel_size = 4.25
+        relion_grid_pixels = (
+            get_coarse_translations(offset_range_angstrom, offset_step_angstrom)
+            / pixel_size
+        )
+        exact_grid = get_relion_translation_grid(
+            offset_range_angstrom / pixel_size,
+            offset_step_angstrom / pixel_size,
+            source_units_per_pixel=pixel_size,
+        )
+
+        assert relion_grid_pixels.shape == (13, 2)
+        assert exact_grid.shape == (13, 2)
         np.testing.assert_allclose(exact_grid, relion_grid_pixels, rtol=0.0, atol=1e-12)
 
 

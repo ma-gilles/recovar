@@ -68,7 +68,7 @@ unnumbered final state, perturbation seed recovery, and oracle-map lookup.
 Validate immediately after setup, without selecting or initializing a GPU:
 
 ```bash
-pixi run python scripts/run_k1_parity_smoke.py \
+pixi run python -m scripts.run_k1_parity_smoke \
   --fixture-dir /path/to/fixture \
   --output-dir /path/to/output \
   --validate-only
@@ -77,7 +77,7 @@ pixi run python scripts/run_k1_parity_smoke.py \
 Run on a conservatively idle local GPU, or submit to Slurm when none is idle:
 
 ```bash
-pixi run python scripts/run_k1_parity_smoke.py \
+pixi run python -m scripts.run_k1_parity_smoke \
   --fixture-dir /path/to/fixture \
   --output-dir /path/to/output \
   --mode auto

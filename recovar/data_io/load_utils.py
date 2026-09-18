@@ -40,12 +40,15 @@ def _log_ctf_params(params: np.ndarray) -> None:
         logger.info("%18s: %s", name, value)
 
 
-def load_ctf_params(D: int, ctf_params_pkl: str) -> np.ndarray:
+def load_ctf_params(D: int, ctf_params_pkl: str, *, preserve_source_geometry: bool = False) -> np.ndarray:
     """Load and adjust CTF parameters for a given image size.
 
     Args:
         D: Target image dimension (must be even)
         ctf_params_pkl: Path to pickle file containing CTF parameters
+        preserve_source_geometry: Resolve each row's pixel geometry in float64
+            on a copy, before dataset selection and computational casts. The
+            default retains the legacy array dtype and first-row scaling API.
 
     Returns:
         CTF parameters array with shape (N, 8), excluding image size column
@@ -66,7 +69,17 @@ def load_ctf_params(D: int, ctf_params_pkl: str) -> np.ndarray:
     if not np.all(np.isfinite(ctf_params)):
         raise ValueError("CTF parameters contain non-finite values (NaN/Inf)")
 
-    # Adjust pixel size based on original and target dimensions
+    if preserve_source_geometry:
+        from recovar.data_io.metadata_readers import pixel_sizes_at_grid
+
+        pixel_sizes = pixel_sizes_at_grid(ctf_params[:, 1], ctf_params[:, 0], D)
+        ctf_params = ctf_params.astype(np.float64, copy=True)
+        ctf_params[:, 0] = D
+        ctf_params[:, 1] = pixel_sizes
+        _log_ctf_params(ctf_params[0])
+        return ctf_params[:, 1:]
+
+    # Legacy public array path: preserve dtype and first-row broadcasting.
     original_D = ctf_params[0, 0]
     original_Apix = ctf_params[0, 1]
     new_Apix = original_D * original_Apix / D

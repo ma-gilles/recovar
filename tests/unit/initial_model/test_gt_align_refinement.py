@@ -20,7 +20,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from recovar.em.initial_model.gt_metrics import (
+from recovar.em.diagnostics.gt_metrics import (
     DEFAULT_GT_ALIGN_REFINE_ORDERS,
     align_volume_to_reference,
     relion_alignment_rotations,

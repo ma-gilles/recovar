@@ -117,8 +117,6 @@ def test_noise_rng_batch_size_generates_clean_prepare_command(tmp_path, monkeypa
     monkeypatch.setenv("RECOVAR_K_CLASS_DENSE_PASS2", "1")
     monkeypatch.setenv("RECOVAR_K_CLASS_DENSE_PASS2_MEAN_SUPPORT_FRACTION", "0")
     monkeypatch.setenv("RECOVAR_K_CLASS_RELION_X_HALF_MSTEP", "1")
-    monkeypatch.setenv("RECOVAR_K_CLASS_FULL_VOLUME_MSTEP", "1")
-    monkeypatch.setenv("RECOVAR_K_CLASS_HALF_VOLUME_MSTEP", "1")
     monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_REUSE_COMPACT_NOISE_SUMS", "1")
     monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS", "0")
     monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS_MIN_BUCKET_SIZE", "8192")

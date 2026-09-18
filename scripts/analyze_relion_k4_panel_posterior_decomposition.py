@@ -4,37 +4,23 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import math
-import subprocess
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
-if __package__:
-    from .analyze_relion_k4_panel_threeway import (
-        _float32_from_bits,
-        _rotation_map,
-        _translation_map,
-    )
-    from .validate_relion_bpref_factor_capture import load_factor_capture
-    from .validate_relion_fine_score_capture import ACTIVE, load_fine_score_capture
-else:
-    from analyze_relion_k4_panel_threeway import (  # type: ignore[no-redef]
-        _float32_from_bits,
-        _rotation_map,
-        _translation_map,
-    )
-    from validate_relion_bpref_factor_capture import (  # type: ignore[no-redef]
-        load_factor_capture,
-    )
-    from validate_relion_fine_score_capture import (  # type: ignore[no-redef]
-        ACTIVE,
-        load_fine_score_capture,
-    )
+from scripts.analyze_relion_k4_panel_threeway import (
+    _float32_from_bits,
+    _rotation_map,
+    _translation_map,
+)
+from scripts.analyzer_provenance import clean_repo_head
+from scripts.file_hash import sha256_file as _sha256
+from scripts.validate_relion_bpref_factor_capture import load_factor_capture
+from scripts.validate_relion_fine_score_capture import ACTIVE, load_fine_score_capture
 
 PANEL_SCHEMA = "recovar.k4_iter10_class2_residual_target_panel.v1"
 THREEWAY_SCHEMA = "recovar.k4_iter10_panel12_threeway_fine_score.v2"
@@ -56,14 +42,6 @@ EXP50_F32 = float(np.exp(np.float32(50.0), dtype=np.float32))
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise ValueError(message)
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(8 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def _load_npz(path: Path) -> dict[str, np.ndarray]:
@@ -662,19 +640,6 @@ def analyze(
     }
 
 
-def _clean_repo_head(repo: Path) -> str:
-    head = subprocess.check_output(
-        ["git", "-C", str(repo), "rev-parse", "HEAD"],
-        text=True,
-    ).strip()
-    status = subprocess.check_output(
-        ["git", "-C", str(repo), "status", "--porcelain=v1"],
-        text=True,
-    )
-    _require(not status, "analyzer repository is dirty")
-    return head
-
-
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", required=True, type=Path)
@@ -716,7 +681,7 @@ def main() -> None:
         "capture_a_directory": str(args.capture_a_directory.resolve()),
         "capture_b_directory": str(args.capture_b_directory.resolve()),
         "preprocess_root": str(args.preprocess_root.resolve()),
-        "analyzer_repo_head": _clean_repo_head(args.repo),
+        "analyzer_repo_head": clean_repo_head(args.repo),
     }
     args.output_json.parent.mkdir(parents=True, exist_ok=True)
     args.output_json.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")

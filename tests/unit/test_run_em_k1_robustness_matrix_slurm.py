@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 import pandas as pd
+import pytest
 import starfile
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -558,28 +559,6 @@ def test_case_jobs_build_cuda_lib_atomically_under_lock(tmp_path):
     assert 'mv -f "${CUDA_LIB_TMP}" "${RECOVAR_CUDA_LIB}"' in text
 
 
-def test_final_bpref_accumulator_dump_dir_is_case_scoped(tmp_path):
-    dump_root = tmp_path / "bpref_dumps"
-    proc, scratch = _dry_run_launcher(
-        tmp_path,
-        case="28",
-        extra_env={"RECOVAR_FINAL_BPREF_ACCUM_DUMP_DIR": str(dump_root)},
-    )
-
-    assert proc.returncode == 0, proc.stdout
-    scripts = list((scratch / "jobs").glob("em_k1_matrix_28_*.sh"))
-    assert len(scripts) == 1
-    text = scripts[0].read_text()
-    assert f"export RECOVAR_FINAL_BPREF_ACCUM_DUMP_DIR={dump_root}" in text
-    assert (
-        'export RECOVAR_FINAL_BPREF_ACCUM_DUMP_DIR="${RECOVAR_FINAL_BPREF_ACCUM_DUMP_DIR%/}/'
-        '28_small_kent_extra_offset_3k_g128_noise3_bf80"'
-    ) in text
-    assert 'mkdir -p "${RECOVAR_FINAL_BPREF_ACCUM_DUMP_DIR}"' in text
-    submission = (scratch / "submission.env").read_text()
-    assert f"RECOVAR_FINAL_BPREF_ACCUM_DUMP_DIR={dump_root}" in submission
-
-
 def test_bpref_and_relion_mstep_diagnostic_dump_dirs_are_case_scoped(tmp_path):
     bpref_root = tmp_path / "bpref_iter"
     pass2_root = tmp_path / "pass2"
@@ -779,49 +758,28 @@ def test_relion_binary_identity_is_recorded_in_case_job(tmp_path):
     assert 'if [[ "${slurm_gpu_token}" == GPU-* && "${slurm_gpu_token}" != "${gpu_uuid}" ]]' in case_script
 
 
-def test_k1_dense_pass2_diagnostic_env_is_forwarded(tmp_path):
+@pytest.mark.parametrize(
+    "case, env_name, value",
+    [
+        ("32", "RECOVAR_K1_DENSE_PASS2", "1"),
+        ("32", "RECOVAR_K1_SKIP_SIGNIFICANCE_PRUNING", "1"),
+        ("4", "RECOVAR_K1_COARSE_GAUSSIAN_FFI", "1"),
+        ("7", "RECOVAR_K1_BPREF_EXECUTION_ORDER_CHUNK_SIZE", "220"),
+        ("10", "RECOVAR_K1_RELION_EXACT_TRANSLATION_GRID", "0"),
+        ("32", "RECOVAR_K1_RELION_X_HALF_MSTEP", "0"),
+        ("26", "RECOVAR_RELION_X_HALF_MSTEP_DOUBLE", "1"),
+    ],
+)
+def test_diagnostic_env_is_forwarded(tmp_path, case, env_name, value):
     proc, scratch = _dry_run_launcher(
-        tmp_path,
-        case="32",
-        extra_env={"RECOVAR_K1_DENSE_PASS2": "1"},
+        tmp_path, case=case, extra_env={env_name: value},
     )
-
     assert proc.returncode == 0, proc.stdout
-    scripts = list((scratch / "jobs").glob("em_k1_matrix_32_*.sh"))
+    scripts = list((scratch / "jobs").glob(f"em_k1_matrix_{case}_*.sh"))
     assert len(scripts) == 1
     text = scripts[0].read_text()
-    assert "export RECOVAR_K1_DENSE_PASS2=1" in text
-    assert "RECOVAR_K1_DENSE_PASS2=1" in (scratch / "submission.env").read_text()
-
-
-def test_k1_skip_significance_pruning_diagnostic_env_is_forwarded(tmp_path):
-    proc, scratch = _dry_run_launcher(
-        tmp_path,
-        case="32",
-        extra_env={"RECOVAR_K1_SKIP_SIGNIFICANCE_PRUNING": "1"},
-    )
-
-    assert proc.returncode == 0, proc.stdout
-    scripts = list((scratch / "jobs").glob("em_k1_matrix_32_*.sh"))
-    assert len(scripts) == 1
-    text = scripts[0].read_text()
-    assert "export RECOVAR_K1_SKIP_SIGNIFICANCE_PRUNING=1" in text
-    assert "RECOVAR_K1_SKIP_SIGNIFICANCE_PRUNING=1" in (scratch / "submission.env").read_text()
-
-
-def test_k1_coarse_gaussian_ffi_env_is_forwarded(tmp_path):
-    proc, scratch = _dry_run_launcher(
-        tmp_path,
-        case="4",
-        extra_env={"RECOVAR_K1_COARSE_GAUSSIAN_FFI": "1"},
-    )
-
-    assert proc.returncode == 0, proc.stdout
-    scripts = list((scratch / "jobs").glob("em_k1_matrix_4_*.sh"))
-    assert len(scripts) == 1
-    text = scripts[0].read_text()
-    assert "export RECOVAR_K1_COARSE_GAUSSIAN_FFI=1" in text
-    assert "RECOVAR_K1_COARSE_GAUSSIAN_FFI=1" in (scratch / "submission.env").read_text()
+    assert f"export {env_name}={value}" in text
+    assert f"{env_name}={value}" in (scratch / "submission.env").read_text()
 
 
 def test_k1_coarse_gaussian_native_texture_env_is_forwarded(tmp_path):
@@ -838,40 +796,6 @@ def test_k1_coarse_gaussian_native_texture_env_is_forwarded(tmp_path):
     assert "export RECOVAR_K1_COARSE_GAUSSIAN_NATIVE_TEXTURE=1" in text
     assert "--image-fourier-backend relion_cuda" in text
     assert "RECOVAR_K1_COARSE_GAUSSIAN_NATIVE_TEXTURE=1" in (
-        scratch / "submission.env"
-    ).read_text()
-
-
-def test_k1_bpref_execution_order_chunk_size_env_is_forwarded(tmp_path):
-    proc, scratch = _dry_run_launcher(
-        tmp_path,
-        case="7",
-        extra_env={"RECOVAR_K1_BPREF_EXECUTION_ORDER_CHUNK_SIZE": "220"},
-    )
-
-    assert proc.returncode == 0, proc.stdout
-    scripts = list((scratch / "jobs").glob("em_k1_matrix_7_*.sh"))
-    assert len(scripts) == 1
-    text = scripts[0].read_text()
-    assert "export RECOVAR_K1_BPREF_EXECUTION_ORDER_CHUNK_SIZE=220" in text
-    assert "RECOVAR_K1_BPREF_EXECUTION_ORDER_CHUNK_SIZE=220" in (
-        scratch / "submission.env"
-    ).read_text()
-
-
-def test_k1_legacy_translation_grid_diagnostic_env_is_forwarded(tmp_path):
-    proc, scratch = _dry_run_launcher(
-        tmp_path,
-        case="10",
-        extra_env={"RECOVAR_K1_RELION_EXACT_TRANSLATION_GRID": "0"},
-    )
-
-    assert proc.returncode == 0, proc.stdout
-    scripts = list((scratch / "jobs").glob("em_k1_matrix_10_*.sh"))
-    assert len(scripts) == 1
-    text = scripts[0].read_text()
-    assert "export RECOVAR_K1_RELION_EXACT_TRANSLATION_GRID=0" in text
-    assert "RECOVAR_K1_RELION_EXACT_TRANSLATION_GRID=0" in (
         scratch / "submission.env"
     ).read_text()
 
@@ -894,38 +818,6 @@ def test_k1_selected_treatment_env_is_forwarded_and_recorded(tmp_path):
     for name, value in treatment.items():
         assert f"export {name}={value}" in script
         assert f"{name}={value}" in submission
-
-
-def test_k1_relion_x_half_mstep_diagnostic_env_is_forwarded(tmp_path):
-    proc, scratch = _dry_run_launcher(
-        tmp_path,
-        case="32",
-        extra_env={"RECOVAR_K1_RELION_X_HALF_MSTEP": "0"},
-    )
-
-    assert proc.returncode == 0, proc.stdout
-    scripts = list((scratch / "jobs").glob("em_k1_matrix_32_*.sh"))
-    assert len(scripts) == 1
-    text = scripts[0].read_text()
-    assert "export RECOVAR_K1_RELION_X_HALF_MSTEP=0" in text
-    assert "RECOVAR_K1_RELION_X_HALF_MSTEP=0" in (scratch / "submission.env").read_text()
-
-
-def test_relion_x_half_mstep_double_diagnostic_env_is_forwarded(tmp_path):
-    proc, scratch = _dry_run_launcher(
-        tmp_path,
-        case="26",
-        extra_env={"RECOVAR_RELION_X_HALF_MSTEP_DOUBLE": "1"},
-    )
-
-    assert proc.returncode == 0, proc.stdout
-    scripts = list((scratch / "jobs").glob("em_k1_matrix_26_*.sh"))
-    assert len(scripts) == 1
-    text = scripts[0].read_text()
-    assert "export RECOVAR_RELION_X_HALF_MSTEP_DOUBLE=1" in text
-    assert "RECOVAR_RELION_X_HALF_MSTEP_DOUBLE=1" in (
-        scratch / "submission.env"
-    ).read_text()
 
 
 def test_exact_local_packed_noise_chunk_target_env_is_forwarded(tmp_path):
@@ -1202,45 +1094,3 @@ def test_case_time_limit_override_updates_script_and_case_table(tmp_path):
     assert selected["time_limit"].tolist() == ["36:00:00"]
     submission = (scratch / "submission.env").read_text()
     assert "EM_K1_MATRIX_TIME_LIMIT=36:00:00" in submission
-
-
-def test_existing_relion_prefix_exposes_scoped_native_texture_diagnostic():
-    launcher = (REPO_ROOT / "scripts" / "run_k1_existing_relion_prefix.sbatch").read_text()
-
-    assert "ENABLE_NATIVE_TEXTURE=${ENABLE_NATIVE_TEXTURE:-0}" in launcher
-    assert 'case "${ENABLE_NATIVE_TEXTURE}" in 0|1)' in launcher
-    assert (
-        "export RECOVAR_K1_COARSE_GAUSSIAN_NATIVE_TEXTURE=${ENABLE_NATIVE_TEXTURE}"
-        in launcher
-    )
-
-
-def test_case05_bpref_pool_launcher_pins_overridable_cuda_library():
-    launcher = (REPO_ROOT / "scripts" / "run_k1_case05_it1_bpref_pool3.sbatch").read_text()
-
-    assert ': "${EXPECTED_CUDA_LIB_SHA256:?pin the selected CUDA library}"' in launcher
-    assert "CUDA_LIB=${CUDA_LIB_OVERRIDE:-" in launcher
-    assert (
-        'test "$(sha256sum "${CUDA_LIB}" | awk \'{print $1}\')" = '
-        '"${EXPECTED_CUDA_LIB_SHA256}"'
-        in launcher
-    )
-
-
-def test_case05_bpref_primitive_launcher_requires_inert_native_capture_and_pinned_inputs():
-    launcher = (REPO_ROOT / "scripts" / "run_k1_case05_it1_bpref_primitives.sbatch").read_text()
-
-    assert 'test -f "${CAPTURE_SUCCESS}"' in launcher
-    assert 'assert all(row["map_stable"] for row in report["iterations"])' in launcher
-    assert 'assert all(row["selected_topology_exact"] for row in report["iterations"])' in launcher
-    for variable in (
-        "EXPECTED_ANALYZER_SHA256",
-        "EXPECTED_SELECTION_SHA256",
-        "EXPECTED_SOURCE_STAR_SHA256",
-        "EXPECTED_SIGMA2_SHA256",
-        "EXPECTED_PASS2_SHA256",
-        "EXPECTED_CONTRIBUTION_SHA256",
-        "EXPECTED_CUDA_LIB_SHA256",
-    ):
-        assert f': "${{{variable}:?' in launcher
-    assert "scripts.compare_k1_relion_recovar_bpref_primitives" in launcher

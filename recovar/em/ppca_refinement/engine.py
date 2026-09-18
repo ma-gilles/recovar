@@ -9,20 +9,13 @@ materializing global pose moment tensors.
 
 from __future__ import annotations
 
-import dataclasses
 from functools import partial
 from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
 
-from recovar.em.ppca_refinement.diagnostics import build_iteration_diagnostics
-from recovar.em.ppca_refinement.mean_regularization import (
-    MeanRegularizationConfig,
-    resolve_mean_precision,
-)
-from recovar.em.ppca_refinement.postprocess import PostprocessConfig, postprocess_ppca_half_volumes
-from recovar.ppca import AugmentedPPCAStats, augmented_ppca_mstep_objective, solve_augmented_ppca_mstep
+from recovar.ppca.pose_accumulators import AugmentedPPCAStats
 from recovar.ppca.pose_marginal import compute_ppca_pose_scores_and_moments_no_contrast
 from recovar.ppca.triangular import _tri_size
 
@@ -54,12 +47,6 @@ class DensePPCAFusedEMResult(NamedTuple):
     diagnostics: dict
 
 
-class DenseImageStats(NamedTuple):
-    alpha_aug_acc: jax.Array
-    G_aug_tri_acc: jax.Array
-    log_evidence: jax.Array
-
-
 class PosteriorDiagnostics(NamedTuple):
     logZ: jax.Array
     pmax: jax.Array
@@ -67,12 +54,9 @@ class PosteriorDiagnostics(NamedTuple):
     best_translation_idx: jax.Array
     n_significant_per_image: jax.Array
     best_log_score_per_image: jax.Array
-    rotation_posterior_sums: jax.Array
-    max_posterior_per_image: jax.Array
     top_rotation_idx: jax.Array
     top_translation_idx: jax.Array
     top_log_score_per_image: jax.Array
-    top_posterior_per_image: jax.Array
 
 
 class DenseScoreStats(NamedTuple):
@@ -94,15 +78,14 @@ class DenseScoreTensorStats(NamedTuple):
     best_translation_idx: jax.Array
 
 
-def _top_pose_diagnostics_from_score_flat(score_flat, logZ, n_rot: int, top_pose_count: int):
+def _top_pose_diagnostics_from_score_flat(score_flat, n_rot: int, top_pose_count: int):
     """Return top-k pose diagnostics for a flattened ``(translation, rotation)`` score axis."""
 
     k = max(1, min(int(top_pose_count), int(score_flat.shape[-1])))
     top_scores, top_flat = jax.lax.top_k(score_flat, k)
     top_rot = (top_flat % int(n_rot)).astype(jnp.int32)
     top_trans = (top_flat // int(n_rot)).astype(jnp.int32)
-    top_prob = jnp.exp(top_scores - jnp.asarray(logZ)[:, None]).astype(jnp.float32)
-    return top_rot, top_trans, top_scores.astype(jnp.float32), top_prob
+    return top_rot, top_trans, top_scores.astype(jnp.float32)
 
 
 def _per_pose_stats_block(Y1, proj_aug, ctf2_over_noise, y_norm):
@@ -178,13 +161,13 @@ def _per_pose_stats_block(Y1, proj_aug, ctf2_over_noise, y_norm):
     the real parts of the Hermitian inner products. The ``.real``
     projections are exact (not approximations) provided the half-image
     weights are baked into ``Y1``, ``ctf2_over_noise``, and ``y_norm``
-    upstream. They are: ``recovar.em.dense_single_volume.helpers.preprocessing.preprocess_batch``
+    upstream. They are: ``recovar.em.helpers.preprocessing.preprocess_batch``
     computes ``y_norm = Σ_f (|y|²/σ²) · w_f``, and
     :func:`iter_dense_ppca_dataset_blocks` bakes
     ``score_mask = window_mask × half_weights`` into both ``Y1`` and
     ``ctf2_over_noise``. The weights are ``w_f = 2`` for non-DC /
     non-Nyquist Fourier pixels and ``w_f = 1`` for DC and Nyquist (see
-    :func:`recovar.em.dense_single_volume.helpers.half_spectrum.make_half_image_weights`),
+    :func:`recovar.em.helpers.half_spectrum.make_half_image_weights`),
     so each einsum below is the **full-Fourier** inner product and its
     real part is exact under the Hermitian symmetry of real-space volumes.
     """
@@ -231,68 +214,6 @@ def _add_pose_log_prior(score, pose_log_prior):
     if pose_log_prior is None:
         return score
     return score + jnp.swapaxes(jnp.asarray(pose_log_prior), -1, -2)
-
-
-@partial(jax.jit, static_argnames=("significance_threshold", "top_pose_count"))
-def dense_pose_ppca_E_step_blocked(
-    Y1,
-    proj_aug,
-    ctf2_over_noise,
-    y_norm,
-    pose_log_prior=None,
-    *,
-    significance_threshold: float = 1e-3,
-    top_pose_count: int = 1,
-):
-    """Run a dense PPCA E-step on one static block.
-
-    ``Y1`` has shape ``[B, T, F]``. ``proj_aug`` has shape ``[R, q+1, F]``
-    with component 0 equal to the mean projection and components 1..q equal
-    to loading projections. ``pose_log_prior`` is optional ``[B, R, T]``.
-    """
-    B, T, _F = jnp.asarray(Y1).shape
-    R, P, _ = jnp.asarray(proj_aug).shape
-    if pose_log_prior is not None and jnp.asarray(pose_log_prior).shape != (B, R, T):
-        raise ValueError(f"pose_log_prior shape {jnp.asarray(pose_log_prior).shape} != ({B}, {R}, {T})")
-    y_stats = _per_pose_stats_block(
-        jnp.asarray(Y1),
-        jnp.asarray(proj_aug),
-        jnp.asarray(ctf2_over_noise),
-        jnp.asarray(y_norm),
-    )
-    score_pre, alpha, G_tri = compute_ppca_pose_scores_and_moments_no_contrast(
-        *y_stats,
-        return_moments=True,
-    )
-    score = _add_pose_log_prior(score_pre, pose_log_prior)
-    score_flat = score.reshape(B, T * R)
-    logZ = jax.scipy.special.logsumexp(score_flat, axis=-1)
-    gamma = jnp.exp(score - logZ[:, None, None])
-    best_flat = jnp.argmax(score_flat, axis=-1)
-    pmax = jnp.max(gamma.reshape(B, T * R), axis=-1)
-    top_rot, top_trans, top_scores, top_prob = _top_pose_diagnostics_from_score_flat(
-        score_flat,
-        logZ,
-        R,
-        top_pose_count,
-    )
-    diagnostics = PosteriorDiagnostics(
-        logZ=logZ,
-        pmax=pmax,
-        best_rotation_idx=(best_flat % R).astype(jnp.int32),
-        best_translation_idx=(best_flat // R).astype(jnp.int32),
-        n_significant_per_image=jnp.sum(gamma > float(significance_threshold), axis=(1, 2)).astype(jnp.int32),
-        best_log_score_per_image=jnp.max(score_flat, axis=-1).astype(jnp.float32),
-        rotation_posterior_sums=jnp.sum(gamma, axis=(0, 1)).astype(jnp.float32),
-        max_posterior_per_image=pmax,
-        top_rotation_idx=top_rot,
-        top_translation_idx=top_trans,
-        top_log_score_per_image=top_scores,
-        top_posterior_per_image=top_prob,
-    )
-    alpha_aug_acc = jnp.einsum("btr,btrp->bp", gamma.astype(alpha.dtype), alpha)
-    G_aug_tri_acc = jnp.einsum("btr,btrk->bk", gamma.astype(G_tri.dtype), G_tri)
-    return DenseImageStats(alpha_aug_acc=alpha_aug_acc, G_aug_tri_acc=G_aug_tri_acc, log_evidence=logZ), diagnostics
 
 
 @jax.jit
@@ -365,23 +286,6 @@ def dense_pose_ppca_score_tensor_stats_blocked(
     )
 
 
-def dense_pose_ppca_logZ_blocked(
-    Y1,
-    proj_aug,
-    ctf2_over_noise,
-    y_norm,
-    pose_log_prior=None,
-):
-    """Return block log normalizers without materializing PPCA moments."""
-    return dense_pose_ppca_score_stats_blocked(
-        Y1,
-        proj_aug,
-        ctf2_over_noise,
-        y_norm,
-        pose_log_prior,
-    ).logZ
-
-
 def _score_gamma_and_moments(
     Y1,
     proj_aug,
@@ -408,9 +312,8 @@ def _score_gamma_and_moments(
     gamma = jnp.exp(score - logZ[:, None, None])
     best_flat = jnp.argmax(score_flat, axis=-1)
     pmax = jnp.max(gamma.reshape(B, T * R), axis=-1)
-    top_rot, top_trans, top_scores, top_prob = _top_pose_diagnostics_from_score_flat(
+    top_rot, top_trans, top_scores = _top_pose_diagnostics_from_score_flat(
         score_flat,
-        logZ,
         R,
         top_pose_count,
     )
@@ -421,12 +324,9 @@ def _score_gamma_and_moments(
         best_translation_idx=(best_flat // R).astype(jnp.int32),
         n_significant_per_image=jnp.sum(gamma > float(significance_threshold), axis=(1, 2)).astype(jnp.int32),
         best_log_score_per_image=jnp.max(score_flat, axis=-1).astype(jnp.float32),
-        rotation_posterior_sums=jnp.sum(gamma, axis=(0, 1)).astype(jnp.float32),
-        max_posterior_per_image=pmax,
         top_rotation_idx=top_rot,
         top_translation_idx=top_trans,
         top_log_score_per_image=top_scores,
-        top_posterior_per_image=top_prob,
     )
     return gamma, alpha, G_tri, diagnostics
 
@@ -493,59 +393,14 @@ def dense_pose_ppca_score_with_moments_blocked(
     )
 
 
-@partial(
-    jax.jit,
-    static_argnames=(
-        "significance_threshold",
-        "disc_type_backproject",
-        "use_recon_window",
-        "backprojection_max_r",
-        "image_shape",
-        "volume_shape",
-    ),
-)
-def accumulate_pose_ppca_block_cached(
-    score,
-    alpha,
-    G_tri,
-    normalization_logZ,
-    Y1_recon,
-    ctf2_over_noise_recon,
-    rotations_block,
-    image_shape,
-    volume_shape,
-    rhs_volume,
-    lhs_tri_volume,
-    *,
-    significance_threshold: float = 1e-3,
-    disc_type_backproject: str = "linear_interp",
-    recon_window_indices=None,
-    use_recon_window: bool = False,
-    backprojection_max_r=None,
+def _backproject_pose_moments(
+    gamma, alpha, G_tri, Y1_recon, ctf2_over_noise_recon,
+    rotations_block, image_shape, volume_shape, rhs_volume, lhs_tri_volume,
+    *, disc_type_backproject, recon_window_indices, use_recon_window,
+    backprojection_max_r,
 ):
-    """Pass-2 aggregate + backproject from pre-computed score + moments.
-
-    The dual of :func:`fused_dense_pose_ppca_block` but without the duplicate
-    score recompute — consumes the output of
-    :func:`dense_pose_ppca_score_with_moments_blocked`. Same math, same
-    numerics: γ = exp(score − logZ), aggregate via einsum, backproject.
-    """
-    from recovar.em.dense_single_volume.helpers.adjoint import batch_adjoint_slice_volume_maybe_windowed
-
-    score = jnp.asarray(score)
-    alpha = jnp.asarray(alpha)
-    G_tri = jnp.asarray(G_tri)
-    logZ = jnp.asarray(normalization_logZ)
-    Y1_recon = jnp.asarray(Y1_recon)
-    ctf2_over_noise_recon = jnp.asarray(ctf2_over_noise_recon)
-    rotations_block = jnp.asarray(rotations_block)
-    rhs_volume = jnp.asarray(rhs_volume)
-    lhs_tri_volume = jnp.asarray(lhs_tri_volume)
-
-    B, T, R = score.shape
-    gamma = jnp.exp(score - logZ[:, None, None])
-    pmax = jnp.max(gamma.reshape(B, T * R), axis=-1)
-    n_significant = jnp.sum(gamma > float(significance_threshold), axis=(1, 2)).astype(jnp.int32)
+    """Accumulate posterior-weighted augmented RHS/LHS projections into half volumes."""
+    from recovar.em.helpers.adjoint import batch_adjoint_slice_volume_maybe_windowed
 
     rhs_dtype = rhs_volume.dtype
     lhs_dtype = lhs_tri_volume.dtype
@@ -588,6 +443,71 @@ def accumulate_pose_ppca_block_cached(
         True,
         use_window=bool(use_recon_window),
         max_r=backprojection_max_r,
+    )
+
+    return rhs_volume, lhs_tri_volume
+
+
+@partial(
+    jax.jit,
+    static_argnames=(
+        "significance_threshold",
+        "disc_type_backproject",
+        "use_recon_window",
+        "backprojection_max_r",
+        "image_shape",
+        "volume_shape",
+    ),
+)
+def accumulate_pose_ppca_block_cached(
+    score,
+    alpha,
+    G_tri,
+    normalization_logZ,
+    Y1_recon,
+    ctf2_over_noise_recon,
+    rotations_block,
+    image_shape,
+    volume_shape,
+    rhs_volume,
+    lhs_tri_volume,
+    *,
+    significance_threshold: float = 1e-3,
+    disc_type_backproject: str = "linear_interp",
+    recon_window_indices=None,
+    use_recon_window: bool = False,
+    backprojection_max_r=None,
+):
+    """Pass-2 aggregate + backproject from pre-computed score + moments.
+
+    The dual of :func:`fused_dense_pose_ppca_block` but without the duplicate
+    score recompute — consumes the output of
+    :func:`dense_pose_ppca_score_with_moments_blocked`. Same math, same
+    numerics: γ = exp(score − logZ), aggregate via einsum, backproject.
+    """
+
+    score = jnp.asarray(score)
+    alpha = jnp.asarray(alpha)
+    G_tri = jnp.asarray(G_tri)
+    logZ = jnp.asarray(normalization_logZ)
+    Y1_recon = jnp.asarray(Y1_recon)
+    ctf2_over_noise_recon = jnp.asarray(ctf2_over_noise_recon)
+    rotations_block = jnp.asarray(rotations_block)
+    rhs_volume = jnp.asarray(rhs_volume)
+    lhs_tri_volume = jnp.asarray(lhs_tri_volume)
+
+    B, T, R = score.shape
+    gamma = jnp.exp(score - logZ[:, None, None])
+    pmax = jnp.max(gamma.reshape(B, T * R), axis=-1)
+    n_significant = jnp.sum(gamma > float(significance_threshold), axis=(1, 2)).astype(jnp.int32)
+
+    rhs_volume, lhs_tri_volume = _backproject_pose_moments(
+        gamma, alpha, G_tri, Y1_recon, ctf2_over_noise_recon,
+        rotations_block, image_shape, volume_shape, rhs_volume, lhs_tri_volume,
+        disc_type_backproject=disc_type_backproject,
+        recon_window_indices=recon_window_indices,
+        use_recon_window=use_recon_window,
+        backprojection_max_r=backprojection_max_r,
     )
 
     return rhs_volume, lhs_tri_volume, n_significant, pmax
@@ -645,7 +565,6 @@ def fused_dense_pose_ppca_block(
     This keeps tensors at block scope and avoids a global
     ``[images, rotations, translations, q, q]`` moment tensor.
     """
-    from recovar.em.dense_single_volume.helpers.adjoint import batch_adjoint_slice_volume_maybe_windowed
 
     Y1 = jnp.asarray(Y1)
     proj_aug = jnp.asarray(proj_aug)
@@ -686,207 +605,20 @@ def fused_dense_pose_ppca_block(
         normalization_logZ=normalization_logZ,
         top_pose_count=top_pose_count,
     )
-    rhs_dtype = rhs_volume.dtype
-    lhs_dtype = lhs_tri_volume.dtype
-
-    rhs_images = jnp.einsum(
-        "btr,btrp,btf->prf",
-        gamma.astype(rhs_dtype),
-        jnp.conj(alpha).astype(rhs_dtype),
-        Y1_recon.astype(rhs_dtype),
-    ).astype(rhs_dtype)
-    rhs_volume = batch_adjoint_slice_volume_maybe_windowed(
-        rhs_images,
-        recon_window_indices,
-        rotations_block,
-        rhs_volume,
-        image_shape,
-        volume_shape,
-        disc_type_backproject,
-        True,
-        True,
-        use_window=bool(use_recon_window),
-        max_r=backprojection_max_r,
-    )
-
-    lhs_images = jnp.einsum(
-        "btr,btrk,bf->krf",
-        gamma.astype(lhs_dtype),
-        G_tri,
-        ctf2_over_noise_recon.astype(lhs_dtype),
-    ).real.astype(lhs_dtype)
-    lhs_tri_volume = batch_adjoint_slice_volume_maybe_windowed(
-        lhs_images,
-        recon_window_indices,
-        rotations_block,
-        lhs_tri_volume,
-        image_shape,
-        volume_shape,
-        disc_type_backproject,
-        True,
-        True,
-        use_window=bool(use_recon_window),
-        max_r=backprojection_max_r,
+    rhs_volume, lhs_tri_volume = _backproject_pose_moments(
+        gamma, alpha, G_tri, Y1_recon, ctf2_over_noise_recon,
+        rotations_block, image_shape, volume_shape, rhs_volume, lhs_tri_volume,
+        disc_type_backproject=disc_type_backproject,
+        recon_window_indices=recon_window_indices,
+        use_recon_window=use_recon_window,
+        backprojection_max_r=backprojection_max_r,
     )
 
     return rhs_volume, lhs_tri_volume, diagnostics
 
 
 def _enforce_augmented_x0(volumes, volume_shape):
-    from recovar.em.dense_single_volume.local_backprojection import enforce_relion_half_volume_x0_hermitian
+    from recovar.em.local.local_backprojection import enforce_relion_half_volume_x0_hermitian
 
     enforced = [enforce_relion_half_volume_x0_hermitian(volumes[i], volume_shape) for i in range(volumes.shape[0])]
     return jnp.stack(enforced, axis=0)
-
-
-def run_dense_ppca_fused_refinement_blocks(
-    blocks,
-    *,
-    q: int,
-    image_shape,
-    volume_shape,
-    mean_prior,
-    W_prior,
-    mean_reg: MeanRegularizationConfig | None = None,
-    postprocess: PostprocessConfig | None = None,
-    disc_type_backproject: str = "linear_interp",
-    enforce_x0: bool = True,
-    mstep_chunk_size: int | None = None,
-    fixed_mean_half=None,
-):
-    """Run one dense PPCA EM update over prepared fused blocks.
-
-    This is the first integration layer above :func:`fused_dense_pose_ppca_block`.
-    It streams the prepared blocks into augmented ``[μ, W]`` half-volume
-    sufficient statistics (``rhs``, ``lhs_tri``) and then calls the joint
-    augmented M-step :func:`recovar.ppca.augmented_mstep.solve_augmented_ppca_mstep`.
-
-    The caller is responsible for building the block list from the dataset
-    given the current iteration's geometry (``current_size``, ``q``,
-    ``volume_domain``) and schedule (batch sizes); this function does not
-    know about HEALPix orders or per-iter schedules. The dataset-facing
-    entry points :func:`recovar.em.ppca_refinement.dense_dataset.iter_dense_ppca_dataset_blocks`
-    / :func:`recovar.em.ppca_refinement.local_dataset.iter_local_ppca_dataset_blocks`
-    are what produce the blocks.
-    """
-    mean_reg = mean_reg if mean_reg is not None else MeanRegularizationConfig()
-    postprocess = postprocess if postprocess is not None else PostprocessConfig()
-    q = int(q)
-    P = q + 1
-    tri = _tri_size(P)
-    mean_prior = jnp.asarray(mean_prior)
-    W_prior = jnp.asarray(W_prior)
-    if W_prior.shape != (mean_prior.shape[0], q):
-        raise ValueError(f"W_prior shape {W_prior.shape} != ({mean_prior.shape[0]}, {q})")
-
-    rhs_volume = jnp.zeros((P, mean_prior.shape[0]), dtype=jnp.complex64)
-    lhs_tri_volume = jnp.zeros((tri, mean_prior.shape[0]), dtype=jnp.float32)
-    log_likelihood = 0.0
-    n_images = 0
-    pmax_values = []
-    nsig_values = []
-    best_rotations = []
-    best_translations = []
-    postprocess_bandlimit_max_r = None
-
-    for block in blocks:
-        if postprocess_bandlimit_max_r is None and bool(block.use_recon_window):
-            postprocess_bandlimit_max_r = block.backprojection_max_r
-        rhs_volume, lhs_tri_volume, posterior = fused_dense_pose_ppca_block(
-            block.Y1,
-            block.proj_aug,
-            block.ctf2_over_noise,
-            block.y_norm,
-            block.rotations,
-            image_shape,
-            volume_shape,
-            rhs_volume,
-            lhs_tri_volume,
-            block.pose_log_prior,
-            Y1_recon=block.Y1_recon,
-            ctf2_over_noise_recon=block.ctf2_over_noise_recon,
-            disc_type_backproject=disc_type_backproject,
-            recon_window_indices=block.recon_window_indices,
-            use_recon_window=block.use_recon_window,
-            backprojection_max_r=block.backprojection_max_r,
-        )
-        log_likelihood += float(jnp.sum(posterior.logZ))
-        n_images += int(posterior.logZ.shape[0])
-        pmax_values.append(jnp.asarray(posterior.pmax))
-        nsig_values.append(jnp.asarray(posterior.n_significant_per_image))
-        best_rotations.append(jnp.asarray(posterior.best_rotation_idx))
-        best_translations.append(jnp.asarray(posterior.best_translation_idx))
-
-    if enforce_x0:
-        rhs_volume = _enforce_augmented_x0(rhs_volume, volume_shape)
-        lhs_tri_volume = _enforce_augmented_x0(lhs_tri_volume.astype(jnp.complex64), volume_shape).real.astype(
-            jnp.float32
-        )
-
-    diagnostics = build_iteration_diagnostics(
-        pmax_values=pmax_values,
-        nsig_values=nsig_values,
-        best_rotations=best_rotations,
-        best_translations=best_translations,
-        log_likelihood=log_likelihood,
-        n_images=n_images,
-        mean_reg=mean_reg,
-        image_scale_min=1.0,
-        image_scale_max=1.0,
-        image_scale_corrections=None,
-    )
-    stats = AugmentedPPCAStats(
-        rhs=jnp.swapaxes(rhs_volume, 0, 1),
-        lhs_tri=jnp.swapaxes(lhs_tri_volume, 0, 1),
-        log_likelihood=log_likelihood,
-        n_images=n_images,
-        diagnostics=diagnostics,
-    )
-    mean_precision = resolve_mean_precision(stats, mean_prior, volume_shape, mean_reg)
-    mu_half, W_half = solve_augmented_ppca_mstep(
-        stats,
-        mean_prior=mean_prior,
-        W_prior=W_prior,
-        mean_precision=mean_precision,
-        fixed_mean=fixed_mean_half,
-        chunk_size=mstep_chunk_size,
-    )
-    solved_objective = augmented_ppca_mstep_objective(
-        stats,
-        mu_half,
-        W_half,
-        mean_prior=mean_prior,
-        W_prior=W_prior,
-        mean_precision=mean_precision,
-        chunk_size=mstep_chunk_size,
-    )
-    postprocessed = postprocess_ppca_half_volumes(
-        mu_half,
-        W_half,
-        volume_shape,
-        config=dataclasses.replace(postprocess, bandlimit_max_r=postprocess_bandlimit_max_r),
-    )
-    diagnostics.update(postprocessed.diagnostics)
-    mu_half, W_half = postprocessed.mu_half, postprocessed.W_half
-    diagnostics["mean_frozen"] = fixed_mean_half is not None
-    diagnostics["mstep_mode"] = "fixed_mean_conditional_W" if fixed_mean_half is not None else "joint_mu_W"
-    if fixed_mean_half is not None:
-        mu_half = jnp.asarray(fixed_mean_half)
-    output_objective = augmented_ppca_mstep_objective(
-        stats,
-        mu_half,
-        W_half,
-        mean_prior=mean_prior,
-        W_prior=W_prior,
-        mean_precision=mean_precision,
-        chunk_size=mstep_chunk_size,
-    )
-    diagnostics.update(solved_objective.diagnostics("mstep_objective_solved", n_images=n_images))
-    diagnostics.update(output_objective.diagnostics("mstep_objective_output", n_images=n_images))
-    diagnostics["mstep_objective_postprocess_delta"] = float(output_objective.total - solved_objective.total)
-    diagnostics["mstep_objective_postprocess_delta_per_image"] = (
-        float((output_objective.total - solved_objective.total) / n_images) if n_images else float("nan")
-    )
-    diagnostics["mstep_objective_scope"] = "fixed_e_step_augmented_quadratic_without_constants"
-    diagnostics["mstep_objective_postprocess_in_objective"] = False
-    return DensePPCAFusedEMResult(mu_half=mu_half, W_half=W_half, stats=stats, diagnostics=diagnostics)

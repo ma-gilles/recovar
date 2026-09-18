@@ -12,17 +12,11 @@ acceptance metric.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
-import sys
 from pathlib import Path
 from typing import Any
 
 import numpy as np
-
-REPO_ROOT = Path(__file__).resolve().parents[1]
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
 
 from scripts.analyze_em_k1_live_reference_counterfactual import (  # noqa: E402
     relion_reference_on_recovar_window,
@@ -31,6 +25,7 @@ from scripts.analyze_em_k1_live_reference_counterfactual import (  # noqa: E402
 from scripts.compare_relion_recovar_estep_dump import (  # noqa: E402
     _nearest_rotation_rows_by_matrix,
 )
+from scripts.file_hash import sha256_file as _sha256
 
 SCHEMA = "em-k1-fine-top-pair-operands-v1"
 INERTNESS_SCHEMA = "em-recovar-intermediate-capture-inertness-v1"
@@ -41,14 +36,6 @@ ROTATION_MATRIX_MAX_FROBENIUS_GATE = 1.0e-6
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise ValueError(message)
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with Path(path).open("rb") as stream:
-        for block in iter(lambda: stream.read(8 * 1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def _relative_l2(source: np.ndarray, target: np.ndarray) -> float:

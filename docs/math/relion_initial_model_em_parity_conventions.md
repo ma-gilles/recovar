@@ -8,10 +8,9 @@ algorithm. It is intended as the first checklist for future RELION parity work.
 
 The discussion covers the dense single-volume RELION-parity code paths:
 
-- `recovar/em/initial_model/gpu_pipeline.py`
-- `recovar/em/dense_single_volume/`
+- `recovar/em/`
 - `scripts/run_k_class_parity.py`
-- `tests/unit/initial_model/test_estep_fixture.py`
+- `recovar/em/vdam/` and the current InitialModel unit/trajectory tests
 
 It does not describe the older generic homogeneous EM API or the low-rank
 heterogeneity pipeline except where those paths share conventions.
@@ -88,7 +87,7 @@ The RELION-adaptive InitialModel path uses RELION's native convention:
 - the signed CTF/image convention is already handled before accumulation,
 - the final BPref output needs no extra `-N^2` / `N^4` conversion.
 
-This is encoded in `gpu_pipeline.py` as:
+These frame conversions are retained in the current VDAM adapters and shared EM engines:
 
 - adaptive mode: `noise_scale = 1.0`
 - dense mode: `noise_scale = N^4`

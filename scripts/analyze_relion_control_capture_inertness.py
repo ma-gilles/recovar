@@ -9,7 +9,6 @@ than recovered with a positional ``iloc`` lookup.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import math
 import re
@@ -20,6 +19,8 @@ import mrcfile
 import numpy as np
 import pandas as pd
 import starfile
+
+from scripts.file_hash import sha256_file as _sha256
 
 SCHEMA = "em_relion_iteration1_particle_state_inertness_v3"
 IDENTITY_FIELD = "rlnImageName"
@@ -35,14 +36,6 @@ PARTICLE_FIELDS = (
 )
 MAP_FSC_AUC_THRESHOLD = 0.999999
 MAX_MISMATCH_EXAMPLES = 16
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(8 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def _json_scalar(value: Any) -> int | float | str | bool | None:

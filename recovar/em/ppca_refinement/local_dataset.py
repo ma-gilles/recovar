@@ -12,12 +12,9 @@ import jax.numpy as jnp
 import numpy as np
 
 from recovar.core.configs import ForwardModelConfig
-from recovar.em.dense_single_volume.helpers.batch_fetch import fetch_indexed_batch
-from recovar.em.dense_single_volume.helpers.preprocessing import (
-    prepare_reconstruction_batch,
-    preprocess_batch,
-)
-from recovar.em.dense_single_volume.local_layout import LocalHypothesisLayout, bucket_local_hypothesis_layout
+from recovar.em.helpers.batch_fetch import fetch_indexed_batch
+from recovar.em.helpers.preprocessing import prepare_reconstruction_batch, preprocess_batch
+from recovar.em.local.local_layout import LocalHypothesisLayout, bucket_local_hypothesis_layout
 from recovar.em.ppca_refinement.config import (
     GeometryConfig,
     PoseSelectionConfig,
@@ -25,25 +22,28 @@ from recovar.em.ppca_refinement.config import (
     ScoringConfig,
     SparsePass2Config,
 )
+from recovar.em.ppca_refinement.dense_dataset import (
+    _project_augmented_half_volumes as _project_local_augmented,
+)
 from recovar.em.ppca_refinement.dense_dataset import prepare_dense_ppca_dataset_inputs
+from recovar.em.ppca_refinement.diagnostics import build_iteration_diagnostics, resolve_image_scale_range
 from recovar.em.ppca_refinement.engine import (
-    DensePPCAFusedBlock,
     DensePPCAFusedEMResult,
     PosteriorDiagnostics,
     _enforce_augmented_x0,
 )
-from recovar.em.ppca_refinement.diagnostics import build_iteration_diagnostics, resolve_image_scale_range
 from recovar.em.ppca_refinement.mean_regularization import (
     MeanRegularizationConfig,
     resolve_mean_precision,
 )
-from recovar.em.ppca_refinement.postprocess import PostprocessConfig, postprocess_ppca_half_volumes
 from recovar.em.ppca_refinement.pose_selection import (
     select_distinct_top_poses,
     top_pose_candidate_count,
 )
+from recovar.em.ppca_refinement.postprocess import PostprocessConfig, postprocess_ppca_half_volumes
 from recovar.em.ppca_refinement.state import PoseMarginalPPCAEMState
-from recovar.ppca import AugmentedPPCAStats, augmented_ppca_mstep_objective, solve_augmented_ppca_mstep
+from recovar.ppca.augmented_mstep import augmented_ppca_mstep_objective, solve_augmented_ppca_mstep
+from recovar.ppca.pose_accumulators import AugmentedPPCAStats
 from recovar.ppca.pose_marginal import compute_ppca_pose_scores_and_moments_no_contrast
 from recovar.ppca.triangular import _tri_size
 from recovar.reconstruction import noise as noise_utils
@@ -62,7 +62,6 @@ PPCA_LOCAL_IMAGE_BATCH_FLOOR = 1
 # ~3-5× that). At 8 we comfortably fit in ~10 GiB; 16 needs ~20 GiB. Bump
 # only when the GPU has plenty of free memory.
 PPCA_LOCAL_IMAGE_BATCH_CEIL = int(os.environ.get("RECOVAR_PPCA_LOCAL_IMAGE_BATCH_CEIL", "8"))
-PPCA_LOCAL_AUTO_DISABLE_ENV = "RECOVAR_PPCA_LOCAL_AUTO_SIZING_DISABLE"
 
 
 def _ppca_local_smart_max_hypotheses_per_microbatch(default: int | None, n_windowed: int, q: int) -> int:
@@ -74,8 +73,6 @@ def _ppca_local_smart_max_hypotheses_per_microbatch(default: int | None, n_windo
         if value <= 0:
             raise ValueError("max_hypotheses_per_microbatch must be positive")
         return value
-    if os.environ.get(PPCA_LOCAL_AUTO_DISABLE_ENV, "0") == "1":
-        return 32_768  # legacy default
     target_row_pixels = int(os.environ.get(PPCA_LOCAL_TARGET_ROW_PIXELS_ENV, PPCA_LOCAL_TARGET_ROW_PIXELS))
     if target_row_pixels <= 0:
         raise ValueError(f"{PPCA_LOCAL_TARGET_ROW_PIXELS_ENV} must be positive")
@@ -98,8 +95,6 @@ def _ppca_local_smart_image_batch_size(
     respected so explicit user choices win."""
     if default is not None and int(default) not in (0, 2):
         return int(default)
-    if os.environ.get(PPCA_LOCAL_AUTO_DISABLE_ENV, "0") == "1":
-        return 2 if default is None else int(default)
     bucket = max(1, int(mean_bucket_size))
     cap = max(1, int(max_hypotheses_per_microbatch) // bucket)
     return int(max(PPCA_LOCAL_IMAGE_BATCH_FLOOR, min(PPCA_LOCAL_IMAGE_BATCH_CEIL, cap)))
@@ -226,32 +221,6 @@ def _slice_local_hypothesis_layout(layout: LocalHypothesisLayout, rows) -> Local
     )
 
 
-def _local_translation_log_prior(layout: LocalHypothesisLayout, image_index: int) -> np.ndarray:
-    prior = np.asarray(layout.translation_log_priors, dtype=np.float32)
-    if prior.ndim == 1:
-        return prior
-    if prior.ndim == 2:
-        return prior[int(image_index)]
-    raise ValueError(f"translation_log_priors must be 1D or 2D, got {prior.shape}")
-
-
-def _fetch_single_image_batch(experiment_dataset, image_index: int):
-    batch_iter = experiment_dataset.iter_batches(
-        1,
-        indices=np.asarray([int(image_index)], dtype=np.int64),
-        by_image=False,
-    )
-    try:
-        return next(batch_iter)
-    except StopIteration as exc:
-        raise ValueError(f"Could not fetch image index {image_index}") from exc
-
-
-from recovar.em.ppca_refinement.dense_dataset import (
-    _project_augmented_half_volumes as _project_local_augmented,
-)
-
-
 def _per_pose_stats_local_bucket(Y1, proj_aug, ctf2_over_noise, y_norm):
     """Build PPCA sufficient stats for image-specific local rotation buckets."""
 
@@ -314,7 +283,6 @@ def _score_gamma_and_moments_local_bucket(
     top_scores, top_flat = jax.lax.top_k(score_flat, k)
     top_rot = (top_flat % R).astype(jnp.int32)
     top_trans = (top_flat // R).astype(jnp.int32)
-    top_prob = jnp.exp(top_scores - logZ[:, None]).astype(jnp.float32)
     diagnostics = PosteriorDiagnostics(
         logZ=logZ,
         pmax=pmax,
@@ -322,12 +290,9 @@ def _score_gamma_and_moments_local_bucket(
         best_translation_idx=(best_flat // R).astype(jnp.int32),
         n_significant_per_image=jnp.sum(gamma > float(significance_threshold), axis=(1, 2)).astype(jnp.int32),
         best_log_score_per_image=jnp.max(score_flat, axis=-1).astype(jnp.float32),
-        rotation_posterior_sums=jnp.sum(gamma, axis=(0, 1)).astype(jnp.float32),
-        max_posterior_per_image=pmax,
         top_rotation_idx=top_rot,
         top_translation_idx=top_trans,
         top_log_score_per_image=top_scores.astype(jnp.float32),
-        top_posterior_per_image=top_prob,
     )
     return gamma, alpha, G_tri, diagnostics
 
@@ -377,12 +342,9 @@ def score_local_pose_ppca_bucket(
         best_translation_idx=(best_flat // R).astype(jnp.int32),
         n_significant_per_image=jnp.sum(gamma > float(significance_threshold), axis=(1, 2)).astype(jnp.int32),
         best_log_score_per_image=jnp.max(score_flat, axis=-1).astype(jnp.float32),
-        rotation_posterior_sums=jnp.sum(gamma, axis=(0, 1)).astype(jnp.float32),
-        max_posterior_per_image=pmax,
         top_rotation_idx=(top_flat % R).astype(jnp.int32),
         top_translation_idx=(top_flat // R).astype(jnp.int32),
         top_log_score_per_image=top_scores.astype(jnp.float32),
-        top_posterior_per_image=jnp.exp(top_scores - logZ[:, None]).astype(jnp.float32),
     )
 
 
@@ -519,8 +481,6 @@ def _score_local_pose_ppca_bucket_rotation_chunked(
     final_top_scores, final_top_indices = jax.lax.top_k(combined_scores, K)
     final_top_rot = jnp.take_along_axis(combined_rot, final_top_indices, axis=1)
     final_top_trans = jnp.take_along_axis(combined_trans, final_top_indices, axis=1)
-    final_top_posterior = jnp.exp(final_top_scores - global_logZ[:, None]).astype(jnp.float32)
-
     pmax = jnp.exp(global_best_score - global_logZ).astype(jnp.float32)
     n_sig_total = jnp.sum(jnp.stack(chunk_n_significant, axis=-1), axis=-1).astype(jnp.int32)
 
@@ -531,12 +491,9 @@ def _score_local_pose_ppca_bucket_rotation_chunked(
         best_translation_idx=best_translation_idx,
         n_significant_per_image=n_sig_total,
         best_log_score_per_image=global_best_score.astype(jnp.float32),
-        rotation_posterior_sums=jnp.zeros((R,), dtype=jnp.float32),
-        max_posterior_per_image=pmax,
         top_rotation_idx=final_top_rot,
         top_translation_idx=final_top_trans,
         top_log_score_per_image=final_top_scores.astype(jnp.float32),
-        top_posterior_per_image=final_top_posterior,
     )
 
 
@@ -547,7 +504,7 @@ def _score_local_pose_ppca_bucket_rotation_chunked(
         "top_pose_count",
     ),
 )
-def score_local_pose_ppca_bucket_with_moments(
+def _score_local_pose_ppca_bucket_with_moments(
     Y1,
     proj_aug,
     ctf2_over_noise,
@@ -585,12 +542,9 @@ def score_local_pose_ppca_bucket_with_moments(
         best_translation_idx=(best_flat // R).astype(jnp.int32),
         n_significant_per_image=jnp.sum(gamma > float(significance_threshold), axis=(1, 2)).astype(jnp.int32),
         best_log_score_per_image=jnp.max(score_flat, axis=-1).astype(jnp.float32),
-        rotation_posterior_sums=jnp.sum(gamma, axis=(0, 1)).astype(jnp.float32),
-        max_posterior_per_image=pmax,
         top_rotation_idx=(top_flat % R).astype(jnp.int32),
         top_translation_idx=(top_flat // R).astype(jnp.int32),
         top_log_score_per_image=top_scores.astype(jnp.float32),
-        top_posterior_per_image=jnp.exp(top_scores - logZ[:, None]).astype(jnp.float32),
     )
     return LocalScoreAndMomentsStats(score=score, alpha=alpha, G_tri=G_tri, diagnostics=diagnostics)
 
@@ -605,7 +559,7 @@ def score_local_pose_ppca_bucket_with_moments(
         "volume_shape",
     ),
 )
-def accumulate_local_pose_ppca_bucket_cached(
+def _accumulate_local_pose_ppca_bucket_cached(
     score,
     alpha,
     G_tri,
@@ -625,7 +579,7 @@ def accumulate_local_pose_ppca_bucket_cached(
 ):
     """Exact local PPCA M-step backprojection from cached score moments."""
 
-    from recovar.em.dense_single_volume.helpers.adjoint import batch_adjoint_slice_volume_maybe_windowed
+    from recovar.em.helpers.adjoint import batch_adjoint_slice_volume_maybe_windowed
 
     score = jnp.asarray(score)
     alpha = jnp.asarray(alpha)
@@ -699,7 +653,7 @@ def accumulate_local_pose_ppca_bucket_cached(
         "top_k_mstep",
     ),
 )
-def accumulate_local_pose_ppca_bucket_topk_cached(
+def _accumulate_local_pose_ppca_bucket_topk_cached(
     score,
     alpha,
     G_tri,
@@ -720,7 +674,7 @@ def accumulate_local_pose_ppca_bucket_topk_cached(
 ):
     """Approximate local M-step that backprojects only the top-k posterior poses."""
 
-    from recovar.em.dense_single_volume.helpers.adjoint import batch_adjoint_slice_volume_maybe_windowed
+    from recovar.em.helpers.adjoint import batch_adjoint_slice_volume_maybe_windowed
 
     score = jnp.asarray(score)
     alpha = jnp.asarray(alpha)
@@ -808,7 +762,7 @@ def accumulate_local_pose_ppca_bucket_topk_cached(
         "top_pose_count",
     ),
 )
-def fused_local_pose_ppca_bucket(
+def _fused_local_pose_ppca_bucket(
     Y1,
     proj_aug,
     ctf2_over_noise,
@@ -836,7 +790,7 @@ def fused_local_pose_ppca_bucket(
     posterior accumulation instead of summing over images before the adjoint.
     """
 
-    from recovar.em.dense_single_volume.helpers.adjoint import batch_adjoint_slice_volume_maybe_windowed
+    from recovar.em.helpers.adjoint import batch_adjoint_slice_volume_maybe_windowed
 
     Y1 = jnp.asarray(Y1)
     proj_aug = jnp.asarray(proj_aug)
@@ -926,144 +880,7 @@ def fused_local_pose_ppca_bucket(
     return rhs_volume, lhs_tri_volume, diagnostics
 
 
-def iter_local_ppca_dataset_blocks(
-    experiment_dataset,
-    mu,
-    W=None,
-    noise_variance=None,
-    local_layout: LocalHypothesisLayout | None = None,
-    *,
-    disc_type: str = "linear_interp",
-    current_size: int | None = None,
-    q: int | None = None,
-    volume_domain: str = "auto",
-    score_with_masked_images: bool = False,
-    half_spectrum_scoring: bool = False,
-    square_window: bool = False,
-    class_log_prior: float = 0.0,
-    image_scale_corrections: np.ndarray | None = None,
-) -> Iterable[tuple[int, np.ndarray, DensePPCAFusedBlock]]:
-    """Yield one exact-local PPCA block per image.
-
-    The support is entirely defined by ``LocalHypothesisLayout``. Pruning is
-    support-only: candidate masks add ``-inf`` to the same PPCA score algebra
-    used by the dense path.
-    """
-
-    if local_layout is None:
-        raise ValueError("local_layout is required")
-    if noise_variance is None:
-        raise ValueError("noise_variance is required")
-    if int(local_layout.n_images) != int(getattr(experiment_dataset, "n_units", experiment_dataset.n_images)):
-        raise ValueError(
-            f"local_layout.n_images={local_layout.n_images} does not match dataset image count",
-        )
-
-    resolved = prepare_dense_ppca_dataset_inputs(
-        experiment_dataset,
-        mu,
-        W,
-        q=q,
-        volume_domain=volume_domain,
-        current_size=current_size,
-        half_spectrum_scoring=half_spectrum_scoring,
-        square_window=square_window,
-    )
-    config = ForwardModelConfig.from_dataset(
-        experiment_dataset,
-        disc_type=disc_type,
-        process_fn=experiment_dataset.process_images,
-    )
-    noise_variance_half = noise_utils.to_batched_half_pixel_noise(noise_variance, resolved.image_shape).squeeze()
-    n_trans = int(local_layout.translation_grid.shape[0])
-
-    for image_index in range(int(local_layout.n_images)):
-        start = int(local_layout.rotation_offsets[image_index])
-        end = int(local_layout.rotation_offsets[image_index + 1])
-        if end <= start:
-            continue
-        rotations = np.asarray(local_layout.rotations_flat[start:end], dtype=np.float32)
-        rotation_ids = np.asarray(local_layout.rotation_ids_flat[start:end], dtype=np.int32)
-        batch_data, _rots, _trans, ctf_params, _noise, _particle_indices, indices = _fetch_single_image_batch(
-            experiment_dataset,
-            image_index,
-        )
-        shifted_score_half, batch_norm, ctf2_over_nv_half = preprocess_batch(
-            experiment_dataset,
-            batch_data,
-            ctf_params,
-            noise_variance_half,
-            local_layout.translation_grid,
-            config,
-            score_with_masked_images=score_with_masked_images,
-        )
-        if score_with_masked_images:
-            shifted_recon_half = prepare_reconstruction_batch(
-                experiment_dataset,
-                batch_data,
-                ctf_params,
-                noise_variance_half,
-                local_layout.translation_grid,
-                config,
-            )
-        else:
-            shifted_recon_half = shifted_score_half
-
-        F = int(shifted_score_half.shape[-1])
-        if image_scale_corrections is None:
-            image_scale = jnp.asarray(1.0, dtype=shifted_score_half.real.dtype)
-        else:
-            scale_arr = np.asarray(image_scale_corrections, dtype=np.float32)
-            original_index = int(np.asarray(indices, dtype=np.int64).reshape(-1)[0])
-            if scale_arr.shape[0] > original_index:
-                image_scale = jnp.asarray(scale_arr[original_index], dtype=shifted_score_half.real.dtype)
-            elif scale_arr.shape[0] > image_index:
-                image_scale = jnp.asarray(scale_arr[image_index], dtype=shifted_score_half.real.dtype)
-            else:
-                raise ValueError(
-                    f"image_scale_corrections has {scale_arr.shape[0]} entries but image indices "
-                    f"{original_index} and {image_index} are out of range"
-                )
-        image_scale_sq = image_scale**2
-        Y1_score = shifted_score_half.reshape(1, n_trans, F) * image_scale * resolved.score_mask[None, None, :]
-        ctf2_score = ctf2_over_nv_half * image_scale_sq * resolved.score_mask[None, :]
-        Y1_recon = shifted_recon_half.reshape(1, n_trans, F) * image_scale * resolved.recon_mask[None, None, :]
-        ctf2_recon = ctf2_over_nv_half * image_scale_sq * resolved.recon_mask[None, :]
-        proj_aug = _project_local_augmented(
-            resolved.augmented_half_volumes,
-            rotations,
-            resolved.image_shape,
-            resolved.volume_shape,
-            disc_type,
-            max_r=resolved.projection_max_r,
-        )
-
-        rotation_prior = np.asarray(local_layout.rotation_log_priors_flat[start:end], dtype=np.float32)
-        translation_prior = _local_translation_log_prior(local_layout, image_index)
-        pose_prior = rotation_prior[:, None] + translation_prior[None, :] + float(class_log_prior)
-        if local_layout.sample_mask_flat is not None:
-            sample_mask = np.asarray(local_layout.sample_mask_flat[start:end], dtype=bool)
-            if sample_mask.shape != (end - start, n_trans):
-                raise ValueError(f"sample_mask shape {sample_mask.shape} != ({end - start}, {n_trans})")
-            pose_prior = np.where(sample_mask, pose_prior, -np.inf)
-
-        yield (
-            image_index,
-            rotation_ids,
-            DensePPCAFusedBlock(
-                Y1=Y1_score,
-                proj_aug=proj_aug,
-                ctf2_over_noise=ctf2_score,
-                y_norm=jnp.asarray(batch_norm).reshape(1),
-                rotations=jnp.asarray(rotations),
-                pose_log_prior=jnp.asarray(pose_prior[None, :, :], dtype=jnp.float32),
-                Y1_recon=Y1_recon,
-                ctf2_over_noise_recon=ctf2_recon,
-            ),
-        )
-
-
-def iter_local_ppca_dataset_bucket_blocks(
+def _iter_local_ppca_dataset_bucket_blocks(
     experiment_dataset,
     mu,
     W=None,
@@ -1079,7 +896,7 @@ def iter_local_ppca_dataset_bucket_blocks(
     volume_domain: str = "auto",
     image_indices: np.ndarray | None = None,
     score_with_masked_images: bool = False,
-    half_spectrum_scoring: bool = False,
+    relion_unit_half_weights: bool = False,
     square_window: bool = False,
     class_log_prior: float = 0.0,
     image_scale_corrections: np.ndarray | None = None,
@@ -1099,7 +916,7 @@ def iter_local_ppca_dataset_bucket_blocks(
         q=q,
         volume_domain=volume_domain,
         current_size=current_size,
-        half_spectrum_scoring=half_spectrum_scoring,
+        relion_unit_half_weights=relion_unit_half_weights,
         square_window=square_window,
     )
     config = ForwardModelConfig.from_dataset(
@@ -1238,7 +1055,6 @@ def _accumulate_local_ppca_fused_stats(
     noise_variance,
     local_layout: LocalHypothesisLayout,
     geometry: GeometryConfig,
-    schedule: ScheduleConfig,
     scoring: ScoringConfig,
     mean_reg: MeanRegularizationConfig,
     disc_type: str,
@@ -1257,7 +1073,7 @@ def _accumulate_local_ppca_fused_stats(
     q = geometry.q
     volume_domain = geometry.volume_domain
     score_with_masked_images = scoring.score_with_masked_images
-    half_spectrum_scoring = scoring.half_spectrum_scoring
+    relion_unit_half_weights = scoring.relion_unit_half_weights
     square_window = scoring.square_window
     image_scale_corrections = scoring.image_scale_corrections
 
@@ -1292,7 +1108,7 @@ def _accumulate_local_ppca_fused_stats(
     local_mstep_exact_buckets = 0
     local_mstep_retained_mass_values = []
 
-    for block in iter_local_ppca_dataset_bucket_blocks(
+    for block in _iter_local_ppca_dataset_bucket_blocks(
         experiment_dataset,
         mu,
         W,
@@ -1307,7 +1123,7 @@ def _accumulate_local_ppca_fused_stats(
         volume_domain=volume_domain,
         image_indices=image_indices,
         score_with_masked_images=score_with_masked_images,
-        half_spectrum_scoring=half_spectrum_scoring,
+        relion_unit_half_weights=relion_unit_half_weights,
         square_window=square_window,
         class_log_prior=class_log_prior,
         image_scale_corrections=image_scale_corrections,
@@ -1317,7 +1133,7 @@ def _accumulate_local_ppca_fused_stats(
         candidate_count = int(block.rotations.shape[1]) * int(local_layout.translation_grid.shape[0])
         raw_top_pose_count = top_pose_candidate_count(pose_selection, candidate_count)
         if local_topk_mstep > 0:
-            score_result = score_local_pose_ppca_bucket_with_moments(
+            score_result = _score_local_pose_ppca_bucket_with_moments(
                 block.Y1,
                 block.proj_aug,
                 block.ctf2_over_noise,
@@ -1329,7 +1145,7 @@ def _accumulate_local_ppca_fused_stats(
             pmax_np = np.asarray(jax.block_until_ready(posterior.pmax), dtype=np.float32)
             use_topk_mstep = bool(pmax_np.size) and float(np.min(pmax_np)) >= local_topk_min_pmax
             if use_topk_mstep:
-                rhs_volume, lhs_tri_volume, retained_mass = accumulate_local_pose_ppca_bucket_topk_cached(
+                rhs_volume, lhs_tri_volume, retained_mass = _accumulate_local_pose_ppca_bucket_topk_cached(
                     score_result.score,
                     score_result.alpha,
                     score_result.G_tri,
@@ -1349,7 +1165,7 @@ def _accumulate_local_ppca_fused_stats(
                 )
                 local_mstep_topk_buckets += 1
             else:
-                rhs_volume, lhs_tri_volume, retained_mass = accumulate_local_pose_ppca_bucket_cached(
+                rhs_volume, lhs_tri_volume, retained_mass = _accumulate_local_pose_ppca_bucket_cached(
                     score_result.score,
                     score_result.alpha,
                     score_result.G_tri,
@@ -1369,7 +1185,7 @@ def _accumulate_local_ppca_fused_stats(
                 local_mstep_exact_buckets += 1
             local_mstep_retained_mass_values.append(jnp.asarray(retained_mass, dtype=jnp.float32))
         else:
-            rhs_volume, lhs_tri_volume, posterior = fused_local_pose_ppca_bucket(
+            rhs_volume, lhs_tri_volume, posterior = _fused_local_pose_ppca_bucket(
                 block.Y1,
                 block.proj_aug,
                 block.ctf2_over_noise,
@@ -1528,7 +1344,6 @@ def _score_local_ppca_pose_diagnostics(
     noise_variance,
     local_layout: LocalHypothesisLayout,
     geometry: GeometryConfig,
-    schedule: ScheduleConfig,
     scoring: ScoringConfig,
     mean_reg: MeanRegularizationConfig,
     disc_type: str,
@@ -1545,7 +1360,7 @@ def _score_local_ppca_pose_diagnostics(
     q = geometry.q
     volume_domain = geometry.volume_domain
     score_with_masked_images = scoring.score_with_masked_images
-    half_spectrum_scoring = scoring.half_spectrum_scoring
+    relion_unit_half_weights = scoring.relion_unit_half_weights
     square_window = scoring.square_window
     image_scale_corrections = scoring.image_scale_corrections
 
@@ -1566,7 +1381,7 @@ def _score_local_ppca_pose_diagnostics(
     top_posterior_values = []
     output_image_indices = []
 
-    for block in iter_local_ppca_dataset_bucket_blocks(
+    for block in _iter_local_ppca_dataset_bucket_blocks(
         experiment_dataset,
         mu,
         W,
@@ -1581,7 +1396,7 @@ def _score_local_ppca_pose_diagnostics(
         volume_domain=volume_domain,
         image_indices=image_indices,
         score_with_masked_images=score_with_masked_images,
-        half_spectrum_scoring=half_spectrum_scoring,
+        relion_unit_half_weights=relion_unit_half_weights,
         square_window=square_window,
         class_log_prior=class_log_prior,
         image_scale_corrections=image_scale_corrections,
@@ -1594,7 +1409,8 @@ def _score_local_ppca_pose_diagnostics(
         # ``R / chunk`` so users can raise ``--image-batch-size`` past 1 on
         # large per-image neighborhoods (HP6 top-p at box 256² needs
         # ~1700-2900 rotations/image; full bucket peaks 3-5x proj_aug).
-        # See docs/perf/ppca_local_hp6_topp_runtime.md for the design.
+        # Historical design and timings:
+        # https://github.com/ma-gilles/recovar-experiments/blob/9c2e4b0b8c10cd58efe86b693f811f0195329b25/docs/perf/ppca_local_hp6_topp_runtime.md
         r_chunk_env = os.environ.get("RECOVAR_PPCA_LOCAL_R_CHUNK_SIZE", "")
         r_chunk = int(r_chunk_env) if r_chunk_env.strip().lstrip("-").isdigit() else 0
         if r_chunk > 0 and r_chunk < int(block.proj_aug.shape[1]):
@@ -1837,7 +1653,6 @@ def _accumulate_local_ppca_fused_stats_sharded(
     noise_variance,
     local_layout: LocalHypothesisLayout,
     geometry: GeometryConfig,
-    schedule: ScheduleConfig,
     scoring: ScoringConfig,
     mean_reg: MeanRegularizationConfig,
     disc_type: str,
@@ -1863,7 +1678,6 @@ def _accumulate_local_ppca_fused_stats_sharded(
             noise_variance=noise_variance,
             local_layout=local_layout,
             geometry=geometry,
-            schedule=schedule,
             scoring=scoring,
             mean_reg=mean_reg,
             disc_type=disc_type,
@@ -1892,7 +1706,6 @@ def _accumulate_local_ppca_fused_stats_sharded(
                 noise_variance=noise_variance,
                 local_layout=shard_layout,
                 geometry=geometry,
-                schedule=schedule,
                 scoring=scoring,
                 mean_reg=mean_reg,
                 disc_type=disc_type,
@@ -1942,13 +1755,7 @@ def run_local_ppca_fused_em_iteration(
     sparse_pass2 = sparse_pass2 if sparse_pass2 is not None else SparsePass2Config(enabled=False)
     # Hoist into locals so the rest of the body reads cleanly.
     current_size = geometry.current_size
-    q = geometry.q
-    volume_domain = geometry.volume_domain
-    score_with_masked_images = scoring.score_with_masked_images
-    half_spectrum_scoring = scoring.half_spectrum_scoring
-    square_window = scoring.square_window
     class_log_prior = scoring.class_log_prior
-    image_scale_corrections = scoring.image_scale_corrections
     mstep_chunk_size = schedule.mstep_chunk_size
     image_batch_size = schedule.image_batch_size
     rotation_block_size = schedule.rotation_block_size
@@ -1999,7 +1806,6 @@ def run_local_ppca_fused_em_iteration(
         noise_variance=noise_variance,
         local_layout=local_layout,
         geometry=geometry,
-        schedule=schedule,
         scoring=scoring,
         mean_reg=mean_reg,
         disc_type=disc_type,
@@ -2139,7 +1945,6 @@ def run_local_ppca_pose_scoring_iteration(
         noise_variance=noise_variance,
         local_layout=local_layout,
         geometry=geometry,
-        schedule=schedule,
         scoring=scoring,
         mean_reg=mean_reg,
         disc_type=disc_type,
@@ -2150,61 +1955,6 @@ def run_local_ppca_pose_scoring_iteration(
         pose_selection=pose_selection,
         class_log_prior=float(scoring.class_log_prior),
     )
-
-
-def run_local_ppca_halfset_pose_scoring_iteration(
-    state: PoseMarginalPPCAEMState,
-    halfset_datasets,
-    halfset_local_layouts,
-    *,
-    geometry: GeometryConfig | None = None,
-    schedule: ScheduleConfig | None = None,
-    scoring: ScoringConfig | None = None,
-    mean_reg: MeanRegularizationConfig | None = None,
-    pose_selection: PoseSelectionConfig | None = None,
-    top_pose_count: int = 1,
-    disc_type: str = "linear_interp",
-) -> PoseMarginalPPCAEMState:
-    """Run a two-halfset exact-local PPCA pose-only pass.
-
-    This is the high-resolution warmup/probe stage: it updates only
-    ``pose_diagnostics`` so the following EM iteration can build local supports
-    around PPCA-selected candidates without contaminating the probe with an
-    M-step update.
-    """
-
-    if len(halfset_datasets) != 2 or len(halfset_local_layouts) != 2:
-        raise ValueError("halfset_datasets and halfset_local_layouts must each have length 2")
-    geometry = geometry if geometry is not None else GeometryConfig(volume_domain="fourier_half")
-    schedule = schedule if schedule is not None else ScheduleConfig(image_batch_size=2, rotation_block_size=512)
-    scoring = scoring if scoring is not None else ScoringConfig()
-    mean_reg = mean_reg if mean_reg is not None else MeanRegularizationConfig()
-    results = []
-    for half_dataset, half_layout in zip(halfset_datasets, halfset_local_layouts, strict=True):
-        results.append(
-            run_local_ppca_pose_scoring_iteration(
-                half_dataset,
-                state.mu_score,
-                state.W_score,
-                noise_variance=state.noise_variance,
-                local_layout=half_layout,
-                geometry=geometry,
-                schedule=schedule,
-                scoring=scoring,
-                mean_reg=mean_reg,
-                pose_selection=pose_selection,
-                top_pose_count=top_pose_count,
-                disc_type=disc_type,
-            )
-        )
-    pose_diagnostics = {
-        "halfset0": results[0].diagnostics,
-        "halfset1": results[1].diagnostics,
-        "delta_rms_mu": 0.0,
-        "delta_rms_W": 0.0,
-        "pose_score_only": True,
-    }
-    return state.replace(pose_diagnostics=pose_diagnostics)
 
 
 def run_local_ppca_halfset_fused_em_iteration(

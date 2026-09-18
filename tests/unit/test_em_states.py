@@ -1,8 +1,8 @@
 """
-Unit tests for recovar.em.states.
+Unit tests for recovar.em.reference.states.
 
 Covers construction and initial attribute values for:
-  EMState, SGDState, HeterogeneousEMState
+  EMState, HeterogeneousEMState
 
 No E-step or M-step is invoked – only attribute inspection.
 """
@@ -12,7 +12,7 @@ import pytest
 
 pytest.importorskip("jax")
 
-from recovar.em.states import EMState, SGDState, HeterogeneousEMState
+from recovar.em.reference.states import EMState, HeterogeneousEMState
 
 pytestmark = pytest.mark.unit
 
@@ -56,37 +56,6 @@ def test_EMState_initial_accumulators_are_zero():
 def test_EMState_name_is_EM():
     state = EMState(_mean(), _mean_variance(), _noise_variance())
     assert state.name == "EM"
-
-
-# ---------------------------------------------------------------------------
-# SGDState
-# ---------------------------------------------------------------------------
-
-
-def test_SGDState_stores_attributes():
-    mean = _mean()
-    mean_var = _mean_variance()
-    noise_var = _noise_variance()
-    state = SGDState(mean, mean_var, noise_var)
-    np.testing.assert_array_equal(state.mean, mean)
-    np.testing.assert_array_equal(state.mean_variance, mean_var)
-    np.testing.assert_array_equal(state.noise_variance, noise_var)
-
-
-def test_SGDState_update_is_zero_at_init():
-    state = SGDState(_mean(), _mean_variance(), _noise_variance())
-    assert state.update == 0
-
-
-def test_SGDState_name_is_SGD():
-    state = SGDState(_mean(), _mean_variance(), _noise_variance())
-    assert state.name == "SGD"
-
-
-def test_SGDState_has_sgd_batchsize_attribute():
-    state = SGDState(_mean(), _mean_variance(), _noise_variance())
-    assert hasattr(state, "sgd_batchsize")
-    assert state.sgd_batchsize > 0
 
 
 # ---------------------------------------------------------------------------

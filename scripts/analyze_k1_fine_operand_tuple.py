@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -17,11 +16,12 @@ from scripts.compare_k4_relion_recovar_fine_operands import (
     _translation_alignment,
     _zero_dc_compact_score_weight,
 )
+from scripts.file_hash import sha256_file as _sha256
 from scripts.validate_relion_fine_operand_capture import (
     _cuda_fine_contribution,
     _cuda_fine_production_lanes,
-    _replay_lanes,
     _reduce_lanes,
+    _replay_lanes,
     load_fine_operand_capture,
     validate_capture,
 )
@@ -30,14 +30,6 @@ from scripts.validate_relion_fine_operand_capture import (
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise ValueError(message)
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(8 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def _sass_tree_raw_diff2(

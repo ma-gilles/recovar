@@ -7,7 +7,7 @@ import argparse
 import json
 from pathlib import Path
 
-from recovar.em.global_winner_analysis import (
+from recovar.em.diagnostics.global_winner_analysis import (
     analyze_summaries,
     load_recovar_summary,
     load_relion_summary,

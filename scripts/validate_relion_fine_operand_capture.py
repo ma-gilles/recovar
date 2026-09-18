@@ -4,13 +4,14 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import struct
 from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
+
+from scripts.file_hash import sha256_file as _sha256
 
 HEADER_SIZE = 528
 CANDIDATE_SIZE = 1120
@@ -90,14 +91,6 @@ class FineOperandCapture:
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise ValueError(message)
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(8 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def _decode_magic(value: bytes) -> str:

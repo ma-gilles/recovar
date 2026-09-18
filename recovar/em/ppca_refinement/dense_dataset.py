@@ -19,13 +19,10 @@ import numpy as np
 import recovar.core.fourier_transform_utils as ftu
 from recovar import core
 from recovar.core.configs import ForwardModelConfig
-from recovar.em.dense_single_volume.helpers.fourier_window import make_fourier_window_spec
-from recovar.em.dense_single_volume.helpers.half_spectrum import make_scoring_half_image_weights
-from recovar.em.dense_single_volume.helpers.oversampling import find_significant_mask
-from recovar.em.dense_single_volume.helpers.preprocessing import (
-    prepare_reconstruction_batch,
-    preprocess_batch,
-)
+from recovar.em.helpers.fourier_window import make_fourier_window_spec
+from recovar.em.helpers.half_spectrum import make_scoring_half_image_weights
+from recovar.em.helpers.oversampling import find_significant_mask
+from recovar.em.helpers.preprocessing import prepare_reconstruction_batch, preprocess_batch
 from recovar.em.ppca_refinement.config import (
     GeometryConfig,
     PoseSelectionConfig,
@@ -38,7 +35,6 @@ from recovar.em.ppca_refinement.engine import (
     DensePPCAFusedBlock,
     DensePPCAFusedEMResult,
     DenseScoreStats,
-    DenseScoreTensorStats,
     _enforce_augmented_x0,
     accumulate_pose_ppca_block_cached,
     dense_pose_ppca_score_stats_blocked,
@@ -51,15 +47,16 @@ from recovar.em.ppca_refinement.mean_regularization import (
     MeanRegularizationConfig,
     resolve_mean_precision,
 )
-from recovar.em.ppca_refinement.postprocess import PostprocessConfig, postprocess_ppca_half_volumes
 from recovar.em.ppca_refinement.pose_selection import (
     merge_top_p_pose_scores,
     select_distinct_top_poses,
     top_p_from_score_block,
     top_pose_candidate_count,
 )
+from recovar.em.ppca_refinement.postprocess import PostprocessConfig, postprocess_ppca_half_volumes
 from recovar.em.ppca_refinement.state import PoseMarginalPPCAEMState
-from recovar.ppca import AugmentedPPCAStats, augmented_ppca_mstep_objective, solve_augmented_ppca_mstep
+from recovar.ppca.augmented_mstep import augmented_ppca_mstep_objective, solve_augmented_ppca_mstep
+from recovar.ppca.pose_accumulators import AugmentedPPCAStats
 from recovar.ppca.triangular import _tri_size
 from recovar.reconstruction import noise as noise_utils
 
@@ -84,7 +81,6 @@ class DensePPCADatasetBlockInputs(NamedTuple):
     q: int
     image_shape: tuple[int, int]
     volume_shape: tuple[int, int, int]
-    half_volume_size: int
     score_mask: jax.Array
     recon_mask: jax.Array
     score_indices: jax.Array | None
@@ -187,7 +183,7 @@ def prepare_dense_ppca_dataset_inputs(
     q: int | None = None,
     volume_domain: str = "auto",
     current_size: int | None = None,
-    half_spectrum_scoring: bool = False,
+    relion_unit_half_weights: bool = False,
     square_window: bool = False,
 ) -> DensePPCADatasetBlockInputs:
     """Resolve augmented volumes and Fourier-window masks for dense PPCA."""
@@ -212,7 +208,7 @@ def prepare_dense_ppca_dataset_inputs(
     )
     half_weights = make_scoring_half_image_weights(
         image_shape,
-        relion_half_sum=half_spectrum_scoring,
+        relion_half_sum=relion_unit_half_weights,
     )
     score_mask = _mask_from_indices(n_half, window_spec.score_indices) * half_weights
     recon_mask = _mask_from_indices(n_half, window_spec.recon_indices)
@@ -221,7 +217,6 @@ def prepare_dense_ppca_dataset_inputs(
         q=q,
         image_shape=image_shape,
         volume_shape=volume_shape,
-        half_volume_size=int(np.prod(ftu.volume_shape_to_half_volume_shape(volume_shape))),
         score_mask=score_mask.astype(jnp.float32),
         recon_mask=recon_mask.astype(jnp.float32),
         score_indices=window_spec.score_indices,
@@ -352,15 +347,6 @@ def _top_pose_from_score_stats(score_stats: DenseScoreStats, *, rotation_offset:
     )
 
 
-def _score_tensor_stats_to_score_stats(stats: DenseScoreTensorStats) -> DenseScoreStats:
-    return DenseScoreStats(
-        logZ=stats.logZ,
-        best_log_score_per_image=stats.best_log_score_per_image,
-        best_rotation_idx=stats.best_rotation_idx,
-        best_translation_idx=stats.best_translation_idx,
-    )
-
-
 def iter_dense_ppca_dataset_blocks(
     experiment_dataset,
     mu,
@@ -382,7 +368,7 @@ def iter_dense_ppca_dataset_blocks(
     image_scale_corrections: np.ndarray | None = None,
     class_log_prior: float = 0.0,
     score_with_masked_images: bool = False,
-    half_spectrum_scoring: bool = False,
+    relion_unit_half_weights: bool = False,
     square_window: bool = False,
     relion_texture_interp: bool = True,
     skip_empty_pose_blocks: bool = False,
@@ -407,7 +393,7 @@ def iter_dense_ppca_dataset_blocks(
         q=q,
         volume_domain=volume_domain,
         current_size=current_size,
-        half_spectrum_scoring=half_spectrum_scoring,
+        relion_unit_half_weights=relion_unit_half_weights,
         square_window=square_window,
     )
     config = ForwardModelConfig.from_dataset(
@@ -537,7 +523,7 @@ def iter_dense_ppca_dataset_blocks(
         batch_start += batch_count
 
 
-def iter_dense_ppca_dataset_block_groups(
+def _iter_dense_ppca_dataset_block_groups(
     experiment_dataset,
     mu,
     W=None,
@@ -605,7 +591,7 @@ def compute_dense_ppca_adaptive_significance(
 
     The returned ``significant_sample_indices`` use rotation-major packed pose
     IDs (``rotation_idx * n_translations + translation_idx``), matching
-    :func:`recovar.em.dense_single_volume.local_layout.build_pass2_hypothesis_layout`.
+    :func:`recovar.em.local.local_layout.build_pass2_hypothesis_layout`.
     """
 
     geometry = geometry if geometry is not None else GeometryConfig()
@@ -653,7 +639,7 @@ def compute_dense_ppca_adaptive_significance(
         image_scale_corrections=scoring.image_scale_corrections,
         class_log_prior=scoring.class_log_prior,
         score_with_masked_images=scoring.score_with_masked_images,
-        half_spectrum_scoring=scoring.half_spectrum_scoring,
+        relion_unit_half_weights=scoring.relion_unit_half_weights,
         square_window=scoring.square_window,
         relion_texture_interp=scoring.relion_texture_interp,
         skip_empty_pose_blocks=skip_empty_pose_blocks,
@@ -772,41 +758,6 @@ def compute_dense_ppca_adaptive_significance(
     )
 
 
-def build_dense_ppca_fine_pose_mask_from_significance(
-    significant_sample_indices,
-    *,
-    n_coarse_rotations: int,
-    n_coarse_translations: int,
-    rot_parent_map: np.ndarray,
-    trans_parent_map: np.ndarray,
-    n_fine_rotations: int,
-    n_fine_translations: int,
-) -> np.ndarray:
-    """Expand coarse PPCA significant samples to a fine-grid pass-2 mask."""
-
-    rot_parent_map = np.asarray(rot_parent_map, dtype=np.int64)
-    trans_parent_map = np.asarray(trans_parent_map, dtype=np.int64)
-    if rot_parent_map.shape != (int(n_fine_rotations),):
-        raise ValueError(f"rot_parent_map shape {rot_parent_map.shape} != ({int(n_fine_rotations)},)")
-    if trans_parent_map.shape != (int(n_fine_translations),):
-        raise ValueError(f"trans_parent_map shape {trans_parent_map.shape} != ({int(n_fine_translations)},)")
-    n_images = len(significant_sample_indices)
-    mask = np.zeros((n_images, int(n_fine_rotations), int(n_fine_translations)), dtype=bool)
-    for image_idx, sig in enumerate(significant_sample_indices):
-        if sig is None:
-            mask[image_idx] = True
-            continue
-        sig = np.asarray(sig, dtype=np.int64).reshape(-1)
-        if sig.size == 0:
-            continue
-        coarse_rot = sig // int(n_coarse_translations)
-        coarse_trans = sig % int(n_coarse_translations)
-        coarse_pair = np.zeros((int(n_coarse_rotations), int(n_coarse_translations)), dtype=bool)
-        coarse_pair[coarse_rot, coarse_trans] = True
-        mask[image_idx] = coarse_pair[rot_parent_map][:, trans_parent_map]
-    return mask
-
-
 def run_dense_ppca_fused_em_iteration(
     experiment_dataset,
     mu,
@@ -853,7 +804,7 @@ def run_dense_ppca_fused_em_iteration(
     )
     top_pose_count = int(pose_selection.top_p_poses)
 
-    block_groups = iter_dense_ppca_dataset_block_groups(
+    block_groups = _iter_dense_ppca_dataset_block_groups(
         experiment_dataset,
         mu,
         W,
@@ -873,7 +824,7 @@ def run_dense_ppca_fused_em_iteration(
         image_scale_corrections=scoring.image_scale_corrections,
         class_log_prior=scoring.class_log_prior,
         score_with_masked_images=scoring.score_with_masked_images,
-        half_spectrum_scoring=scoring.half_spectrum_scoring,
+        relion_unit_half_weights=scoring.relion_unit_half_weights,
         square_window=scoring.square_window,
         relion_texture_interp=scoring.relion_texture_interp,
         skip_empty_pose_blocks=skip_empty_pose_blocks,
@@ -971,7 +922,12 @@ def run_dense_ppca_fused_em_iteration(
                         block.y_norm,
                         block.pose_log_prior,
                     )
-                    score_stats = _score_tensor_stats_to_score_stats(score_tensor_stats)
+                    score_stats = DenseScoreStats(
+                        logZ=score_tensor_stats.logZ,
+                        best_log_score_per_image=score_tensor_stats.best_log_score_per_image,
+                        best_rotation_idx=score_tensor_stats.best_rotation_idx,
+                        best_translation_idx=score_tensor_stats.best_translation_idx,
+                    )
                     top_scores, top_rot, top_trans = top_p_from_score_block(
                         score_tensor_stats.score,
                         rotation_offset=int(block.rotation_start),

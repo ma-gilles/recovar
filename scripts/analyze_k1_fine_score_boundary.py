@@ -18,27 +18,13 @@ from typing import Any
 import numpy as np
 import starfile
 
-if __package__:
-    from .validate_relion_bpref_factor_capture import fnv1a64, load_factor_capture
-    from .validate_relion_fine_operand_capture import (
-        _cuda_fine_half_squared_difference,
-        _fma_float32,
-    )
-    from .validate_relion_fine_score_capture import ACTIVE, load_fine_score_capture
-else:
-    from validate_relion_bpref_factor_capture import (  # type: ignore[no-redef]
-        fnv1a64,
-        load_factor_capture,
-    )
-    from validate_relion_fine_score_capture import (  # type: ignore[no-redef]
-        ACTIVE,
-        load_fine_score_capture,
-    )
-    from validate_relion_fine_operand_capture import (  # type: ignore[no-redef]
-        _cuda_fine_half_squared_difference,
-        _fma_float32,
-    )
-
+from scripts.file_hash import sha256_file as _sha256
+from scripts.validate_relion_bpref_factor_capture import fnv1a64, load_factor_capture
+from scripts.validate_relion_fine_operand_capture import (
+    _cuda_fine_half_squared_difference,
+    _fma_float32,
+)
+from scripts.validate_relion_fine_score_capture import ACTIVE, load_fine_score_capture
 
 SELECTION_SCHEMAS = {
     "recovar.em.k1_fine_score_panel.v1",
@@ -64,14 +50,6 @@ EXACT_BOUNDARY_ORDER = (
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise ValueError(message)
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(8 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def _metric(reference: np.ndarray, candidate: np.ndarray) -> dict[str, Any]:
@@ -655,7 +633,6 @@ def _compare_particle(
     factor,
     score,
     recovar: dict[str, np.ndarray],
-    native_state_row,
     physical_image_size: int,
     current_size: int,
 ) -> dict[str, Any]:
@@ -1182,7 +1159,6 @@ def analyze(
                 factor=factors[stack],
                 score=scores[stack],
                 recovar=recovar,
-                native_state_row=state.loc[identity],
                 physical_image_size=physical_image_size,
                 current_size=current_size,
             )

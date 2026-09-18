@@ -10,21 +10,17 @@ ties in both captured RELION and RECOVAR.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import math
 import subprocess
-import sys
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
-
-from scripts.parse_relion_dump_dir import parse_dump_dir  # noqa: E402
+from scripts.analyzer_provenance import clean_repo_head
+from scripts.file_hash import sha256_file as _sha256
+from scripts.parse_relion_dump_dir import parse_dump_dir
 
 INERTNESS_SCHEMA = "em_relion_iteration1_particle_state_inertness_v3"
 REPORT_SCHEMA = "em_relion_capture_target_tie_classification_v1"
@@ -39,14 +35,6 @@ EXPECTED_EXACT_FIELDS = (
     "rlnMaxValueProbDistribution",
     "rlnNrOfSignificantSamples",
 )
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(8 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def _require(condition: bool, message: str) -> None:
@@ -332,13 +320,6 @@ def _load_relion(dump_dir: Path) -> dict[str, np.ndarray]:
     }
 
 
-def _clean_repo_head(repo: Path) -> str:
-    head = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"], text=True).strip()
-    status = subprocess.check_output(["git", "-C", str(repo), "status", "--porcelain=v1"], text=True)
-    _require(not status, "analyzer repository is dirty")
-    return head
-
-
 def build_report(
     *,
     repo: Path,
@@ -372,7 +353,7 @@ def build_report(
             "sha256": _sha256(dump_manifest),
             "verified": True,
         },
-        "analyzer_repo_head": _clean_repo_head(repo),
+        "analyzer_repo_head": clean_repo_head(repo),
     }
     return report
 

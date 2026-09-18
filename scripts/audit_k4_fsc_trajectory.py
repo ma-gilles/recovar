@@ -23,21 +23,12 @@ from typing import Any
 import numpy as np
 from scipy.optimize import linear_sum_assignment
 
-if __package__:
-    from scripts.summarize_em_completion_bench import (
-        _load_recovar_volume,
-        _load_relion_volume,
-        normalized_fsc_auc,
-        shell_fsc,
-    )
-else:
-    from summarize_em_completion_bench import (
-        _load_recovar_volume,
-        _load_relion_volume,
-        normalized_fsc_auc,
-        shell_fsc,
-    )
-
+from scripts.summarize_em_completion_bench import (
+    _load_recovar_volume,
+    _load_relion_volume,
+    normalized_fsc_auc,
+    shell_fsc,
+)
 
 SCHEMA = "em_k4_fsc_trajectory_audit_v2"
 N_CLASSES = 4

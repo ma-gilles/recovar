@@ -167,7 +167,12 @@ def run_smoke(
     subset_star = _write_subset_star(fixture_dir, output_dir, int(n_particles))
     cmd = [
         sys.executable,
-        "scripts/run_ab_initio.py",
+        "-m",
+        "recovar.commands.initial_model",
+        "--jax-compilation-cache" if os.environ.get("JAX_COMPILATION_CACHE_DIR") else "--no-jax-compilation-cache",
+        "--no-require-custom-cuda",
+        "--gpu",
+        "",
         "--i",
         str(subset_star),
         "--datadir",
@@ -200,7 +205,7 @@ def run_smoke(
         str(rotation_block_size),
         "--padding_factor",
         "1",
-        "--eager_images",
+        "--no-lazy",
     ]
     t0 = time.perf_counter()
     returncode, output = _run_text(cmd, env=env)

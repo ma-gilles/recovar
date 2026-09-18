@@ -128,6 +128,7 @@ def test_compare_complete_aligned_prescatter_operands(tmp_path: Path):
         contribution_path,
         shadow_only_mode=np.asarray(False),
         stack_indices_1based=np.asarray([202], dtype=np.int64),
+        original_indices=np.asarray([17], dtype=np.int64),
         active_particle_rows=np.zeros(8, dtype=np.int32),
         active_summed=summed,
         active_ctf_probs=ctf,
@@ -140,11 +141,17 @@ def test_compare_complete_aligned_prescatter_operands(tmp_path: Path):
     geometry = tmp_path / "geometry"
     geometry.mkdir()
     np.savez(
-        geometry / "geometry.npz",
+        geometry / "geometry.device.npz",
+        schema=np.asarray("recovar-device-scatter-signature-v1"),
         companion_contribution_path=np.asarray(str(contribution_path)),
-        signature_particle_rows=np.asarray([0], dtype=np.int32),
-        signature_pixel_indices=np.asarray([[physical_pixel, 2]], dtype=np.int32),
-        signature_row_flags=np.asarray([[64, 0]], dtype=np.uint32),
+        signature_inertness_gate_passed=np.asarray(True),
+        signature_accumulator_shadow_bitwise_equal=np.asarray(True),
+        signature_prepared_operands_bitwise_equal=np.asarray(True),
+        particle_original_indices=np.asarray([17], dtype=np.int64),
+        image_shape=np.asarray([256, 256], dtype=np.int32),
+        current_size=np.asarray(48, dtype=np.int32),
+        canonical_pixel_indices=np.asarray([[47 * 25 + 1, 2]], dtype=np.int32),
+        row_flags=np.asarray([[64, 0]], dtype=np.uint32),
     )
     validation = tmp_path / "validation.json"
     validation.write_text(json.dumps({"classification_ready": True, "particle_count": 2}))

@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -15,20 +14,13 @@ from scripts.analyze_em_k1_bpref_membership_cohort import (
     MASS_RELATIVE_L2_TOLERANCE,
 )
 from scripts.analyze_k1_bpref_contributor_membership import match_rotations
+from scripts.file_hash import sha256_file as _sha256
 from scripts.validate_relion_bpref_rotation_mass import validate_directory
 
 
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise ValueError(message)
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(8 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def _quantiles(values: list[float]) -> dict[str, float]:

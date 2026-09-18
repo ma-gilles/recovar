@@ -11,7 +11,6 @@ import numpy as np
 import recovar.core.fourier_transform_utils as ftu
 from recovar.utils import helpers as utils
 
-
 VolumeAligner = Callable[[np.ndarray, np.ndarray], np.ndarray]
 
 
@@ -84,23 +83,6 @@ def _align_volume_stack(volumes: np.ndarray, alignment_fn: VolumeAligner | None)
             raise ValueError(f"alignment_fn returned shape {aligned_moving.shape}, expected {reference.shape}")
         aligned.append(aligned_moving)
     return np.stack(aligned, axis=0), True
-
-
-def empirical_weighted_covariance(volumes: np.ndarray, weights) -> np.ndarray:
-    """Return the probability-weighted centered covariance of flattened volumes."""
-    volumes = np.asarray(volumes)
-    weights = _normalize_weights(weights, int(volumes.shape[0]))
-    flat = volumes.reshape(volumes.shape[0], -1)
-    mean = np.sum(weights[:, None] * flat, axis=0)
-    centered = flat - mean[None, :]
-    return (centered * weights[:, None]).T @ np.conj(centered)
-
-
-def covariance_from_loading_matrix(W: np.ndarray) -> np.ndarray:
-    """Return ``W W*`` for loading volumes shaped ``[q, *volume_shape]``."""
-    W = np.asarray(W)
-    flat = W.reshape(W.shape[0], -1)
-    return flat.T @ np.conj(flat)
 
 
 def real_volume_to_centered_fourier(volume: np.ndarray) -> np.ndarray:
@@ -264,7 +246,7 @@ def pipeline_variance_W_prior(
 
     The recovar pipeline saves per-Fourier-voxel signal-variance arrays in
     ``params.pkl['variance_est']`` (``'prior'`` and ``'combined'`` keys). When
-    re-exported into a PPCA init NPZ by ``prepare_ppca_init_from_pipeline_output_v2.py``
+    re-exported into a PPCA init NPZ by ``prepare_ppca_init_from_pipeline_output.py``
     the array is already flattened in half-spectrum order and matches the EM
     refinement's per-voxel W prior layout. To produce the ``(half_size, q)``
     array the M-step expects, we repeat the same prior across q columns. By

@@ -1,13 +1,13 @@
 """Prerequisite test P2 for the PPCA-ab-initio v0 plan.
 
-Audits dtype propagation through recovar.em.heterogeneity's
+Audits dtype propagation through recovar.em.reference.heterogeneity's
 low-rank score path. Per the audit in
 docs/math/plan_ppca_abinitio_v0.md (Section "Audit 2"), the entire
 production E-step path runs at complex64 / float32, even though
 jax_enable_x64 is True globally. This is because:
 
   - CryoEMDataset.__init__ defaults to dtype=np.complex64
-  - E_with_precompute creates `projections` and `u_projections`
+  - compute_pose_probabilities creates `projections` and `u_projections`
     explicitly as np.complex64
   - compute_UPLambdainvPU uses `.real` of those complex64 outer
     products, producing float32
@@ -44,7 +44,7 @@ pytest.importorskip("jax")
 import jax
 import jax.numpy as jnp
 
-import recovar.em.heterogeneity as hetero
+import recovar.em.reference.heterogeneity as hetero
 
 pytestmark = pytest.mark.unit
 

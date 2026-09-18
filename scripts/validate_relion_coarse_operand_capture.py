@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import re
 import struct
@@ -14,6 +13,7 @@ from pathlib import Path
 import numpy as np
 
 from scripts import validate_relion_coarse_pass1_components as component_validator
+from scripts.file_hash import sha256_file as _sha256
 
 HEADER_MAGIC = b"RLNP1OPV2HEADER\0"
 FOOTER_MAGIC = b"RLNP1OPV2FOOTER\0"
@@ -35,12 +35,6 @@ def _require(condition: bool, message: str) -> None:
         raise ValueError(message)
 
 
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(8 * 1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 @dataclass(frozen=True)

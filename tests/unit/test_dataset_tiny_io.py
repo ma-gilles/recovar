@@ -97,6 +97,70 @@ def test_load_dataset_tiny_spa_files(tmp_path):
     assert cryo.ctf_evaluator.mode == core.CTFMode.SPA
 
 
+def test_load_dataset_complex128_preserves_source_metadata_and_backend_precision(tmp_path):
+    files = tiny_synthetic.make_tiny_loader_files(tmp_path, grid_size=8, n_images=4, n_particles=2)
+
+    ctf = np.asarray(utils.pickle_load(files["ctf_pkl"]), dtype=np.float64)
+    ctf[:, 2] = np.float64("15000.000123")
+    ctf[:, 3] = np.float64("14999.999321")
+    ctf[:, 4] = np.float64("100.841064")
+    utils.pickle_dump(ctf, files["ctf_pkl"])
+
+    rots, trans = utils.pickle_load(files["poses_pkl"])
+    rots = np.asarray(rots, dtype=np.float64)
+    trans = np.asarray(trans, dtype=np.float64)
+    trans[0, 0] = np.float64("0.012345678901")
+    utils.pickle_dump((rots, trans), files["poses_pkl"])
+
+    cryo = dataset.load_dataset(
+        particles_file=files["particles_mrcs"],
+        poses_file=files["poses_pkl"],
+        ctf_file=files["ctf_pkl"],
+        datadir=str(tmp_path),
+        lazy=True,
+        dtype=np.complex128,
+    )
+
+    assert cryo.dtype is np.complex128
+    assert cryo.dtype_real == np.dtype(np.float64)
+    assert cryo.image_source.backend.dtype is np.complex128
+    assert cryo.image_source.backend.real_dtype == np.dtype(np.float64)
+    assert cryo.rotation_matrices.dtype == np.float64
+    assert cryo.translations.dtype == np.float64
+    assert cryo.CTF_params.dtype == np.float64
+    assert cryo.CTF_params[0, core.CTFParamIndex.DFU] == np.float64("15000.000123")
+    assert cryo.CTF_params[0, core.CTFParamIndex.DFV] == np.float64("14999.999321")
+    assert cryo.CTF_params[0, core.CTFParamIndex.DFANG] == np.float64("100.841064")
+
+    subset = cryo.subset(np.array([2, 0], dtype=np.int32))
+    assert subset.dtype is np.complex128
+    assert subset.CTF_params.dtype == np.float64
+
+    reloaded = cryo.reload_from_original_images(np.array([2, 0], dtype=np.int32), lazy=True)
+    assert reloaded.dtype is np.complex128
+    assert reloaded.image_source.backend.dtype is np.complex128
+    assert reloaded.CTF_params.dtype == np.float64
+    np.testing.assert_array_equal(reloaded.CTF_params, cryo.CTF_params[[2, 0]])
+
+
+def test_load_dataset_default_precision_remains_float32(tmp_path):
+    files = tiny_synthetic.make_tiny_loader_files(tmp_path, grid_size=8, n_images=4, n_particles=2)
+    cryo = dataset.load_dataset(
+        particles_file=files["particles_mrcs"],
+        poses_file=files["poses_pkl"],
+        ctf_file=files["ctf_pkl"],
+        datadir=str(tmp_path),
+        lazy=True,
+    )
+
+    assert cryo.dtype is np.complex64
+    assert cryo.dtype_real == np.dtype(np.float32)
+    assert cryo.image_source.backend.dtype is np.complex64
+    assert cryo.rotation_matrices.dtype == np.float32
+    assert cryo.translations.dtype == np.float32
+    assert cryo.CTF_params.dtype == np.float32
+
+
 def test_load_dataset_tiny_spa_boolean_ind_preserves_dataset_indices_and_image_identity(tmp_path):
     files = tiny_synthetic.make_tiny_loader_files(tmp_path, grid_size=8, n_images=6, n_particles=3)
     mask = np.array([False, True, True, False, True, False], dtype=bool)

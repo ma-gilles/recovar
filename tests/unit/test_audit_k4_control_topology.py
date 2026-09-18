@@ -8,7 +8,7 @@ import pandas as pd
 import pytest
 import starfile
 
-from recovar.em.dense_single_volume.relion_worker_scale import (
+from recovar.em.relion.relion_worker_scale import (
     make_relion_dispatch_schedule_from_chunks,
     relion_class3d_follower_owners_from_schedule,
     relion_oracle_id,
@@ -168,7 +168,6 @@ def _fixture(tmp_path: Path, *, final_all_data: bool = False) -> dict[str, Path]
             relion_class3d_follower_owners_from_schedule(
                 schedule,
                 particle_ids_by_image=particle_ids,
-                optics_group_ids_by_image=np.zeros(n_images, dtype=np.int64),
                 random_seed=17,
                 relion_iteration=int(iteration),
             )
@@ -183,7 +182,7 @@ def _fixture(tmp_path: Path, *, final_all_data: bool = False) -> dict[str, Path]
         half2_indices=np.empty(0, dtype=np.int64),
         current_sizes=np.asarray([40, 52], dtype=np.int64),
         class_weights=np.full(4, 0.25, dtype=np.float64),
-        class_weight_trajectory=np.full((2, 4), 0.25, dtype=np.float64),
+        class_mstep_weight_trajectory=np.full((2, 4), 0.25, dtype=np.float64),
         relion_dispatch_oracle_id=np.asarray(oracle_id),
         relion_dispatch_oracle_manifest_sha256=np.asarray(manifest),
         relion_dispatch_particle_order_sha256=np.asarray(particle_order),
@@ -275,7 +274,7 @@ def test_exact_mismatches_fail_combined_control_gate(tmp_path):
 @pytest.mark.parametrize(
     ("updates", "match"),
     [
-        ({"class_weight_trajectory": np.asarray([[0.25] * 4, [0.25, 0.25, np.nan, 0.25]])}, "non-finite"),
+        ({"class_mstep_weight_trajectory": np.asarray([[0.25] * 4, [0.25, 0.25, np.nan, 0.25]])}, "non-finite"),
         ({"convergence_has_converged": np.asarray(0, dtype=np.int64)}, "boolean scalar"),
         ({"half2_indices": np.asarray([0], dtype=np.int64)}, "strict K=4 Class3D topology"),
     ],

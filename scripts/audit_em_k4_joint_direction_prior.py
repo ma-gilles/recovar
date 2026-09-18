@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import re
 from pathlib import Path
@@ -13,20 +12,15 @@ from typing import Any, Mapping
 import numpy as np
 import starfile
 
+from scripts.file_hash import sha256_file as _sha256
+from scripts.relion_reference import relion_score_replay as _relion_score_replay
+
 SCHEMA = "recovar-k4-joint-direction-prior-audit-v1"
 
 
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise ValueError(message)
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(8 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def _metric(left: np.ndarray, right: np.ndarray) -> dict[str, Any]:
@@ -61,29 +55,6 @@ def _metric(left: np.ndarray, right: np.ndarray) -> dict[str, Any]:
             np.max(np.abs(delta[finite])) if np.any(finite) else 0.0
         ),
     }
-
-
-def _relion_score_replay(
-    raw_diff2: np.ndarray,
-    rotation_prior: np.ndarray,
-    translation_prior: np.ndarray,
-    min_diff2: np.float32,
-) -> np.ndarray:
-    """Replay RELION's float32 prior/min/raw operation order."""
-
-    return np.subtract(
-        np.add(
-            np.add(
-                np.asarray(rotation_prior, dtype=np.float32),
-                np.asarray(translation_prior, dtype=np.float32),
-                dtype=np.float32,
-            ),
-            np.float32(min_diff2),
-            dtype=np.float32,
-        ),
-        np.asarray(raw_diff2, dtype=np.float32),
-        dtype=np.float32,
-    )
 
 
 def audit_joint_direction_prior(

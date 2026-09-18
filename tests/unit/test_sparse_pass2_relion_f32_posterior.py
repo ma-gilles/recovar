@@ -1,4 +1,4 @@
-"""Focused tests for the opt-in RELION float32 fine-posterior diagnostic."""
+"""Focused tests for the RELION float32 fine-posterior path."""
 
 import numpy as np
 import pytest
@@ -6,14 +6,72 @@ import pytest
 pytest.importorskip("jax")
 import jax.numpy as jnp
 
-from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+from recovar.em.sparse_pass2.sparse_pass2_posterior import (
     _RELION_X_HALF_F32_FINE_POSTERIOR_ENV,
+    _relion_f32_fine_posterior,
     _relion_f32_fine_reconstruction_probs,
     _relion_pass2_reconstruction_probs,
     _relion_pass2_reconstruction_probs_for_mstep,
 )
 
 pytestmark = pytest.mark.unit
+
+
+@pytest.mark.parametrize("keep_all", [False, True])
+@pytest.mark.parametrize("external_sum", [False, True])
+@pytest.mark.parametrize("diagnostics", [False, True])
+def test_reconstruction_wrapper_preserves_coarse_normalization_controls(
+    monkeypatch,
+    keep_all,
+    external_sum,
+    diagnostics,
+):
+    """The ordinary K1 wrapper must not drop the existing primitive's controls."""
+    monkeypatch.setenv(_RELION_X_HALF_F32_FINE_POSTERIOR_ENV, "0")
+    scores = jnp.asarray([[[0.0, -1.0, -4.0, -np.inf]], [[0.0, -0.5, -6.0, -np.inf]]], dtype=jnp.float32)
+    ordinary = _relion_f32_fine_posterior(scores, adaptive_fraction=0.8)
+    denominator = ordinary[4] * jnp.float32(2.0) if external_sum else None
+    expected = _relion_f32_fine_posterior(
+        scores,
+        adaptive_fraction=0.8,
+        normalization_sum_weight=denominator,
+        keep_all=keep_all,
+    )[1:]
+    actual = _relion_pass2_reconstruction_probs_for_mstep(
+        scores,
+        ordinary[0],
+        adaptive_fraction=0.8,
+        use_relion_x_half_mstep=True,
+        use_relion_f32_fine_posterior=True,
+        normalization_sum_weight=denominator,
+        keep_all=keep_all,
+        return_diagnostics=diagnostics,
+    )
+    for got, wanted in zip(actual, expected if diagnostics else expected[:3], strict=True):
+        np.testing.assert_array_equal(got, wanted)
+    if keep_all:
+        np.testing.assert_array_equal(actual[1], np.isfinite(scores))
+        np.testing.assert_array_equal(actual[2], [3, 3])
+    if diagnostics and external_sum:
+        np.testing.assert_array_equal(actual[3], denominator)
+
+
+@pytest.mark.parametrize("mode", ["no_xhalf", "legacy", "winner"])
+def test_reconstruction_wrapper_rejects_unhandled_coarse_normalization(monkeypatch, mode):
+    """Do not silently ignore controls on a path with different semantics."""
+    monkeypatch.setenv(_RELION_X_HALF_F32_FINE_POSTERIOR_ENV, "0")
+    scores = jnp.asarray([[[0.0, -1.0]]], dtype=jnp.float32)
+    with pytest.raises(ValueError, match="coarse normalization.*float32"):
+        _relion_pass2_reconstruction_probs_for_mstep(
+            scores,
+            jnp.ones_like(scores),
+            adaptive_fraction=0.8,
+            use_relion_x_half_mstep=mode != "no_xhalf",
+            use_relion_f32_fine_posterior=mode != "legacy",
+            winner_take_all=mode == "winner",
+            normalization_sum_weight=jnp.asarray([1.0], dtype=jnp.float32),
+            keep_all=True,
+        )
 
 
 def _numpy_relion_f32_reference(scores, adaptive_fraction):
@@ -95,12 +153,77 @@ def test_relion_f32_fine_posterior_matches_numpy_reference_with_cutoff_ties():
     assert not np.any(actual[1][2])
 
 
-def test_relion_f32_fine_posterior_gate_off_preserves_default(monkeypatch):
-    monkeypatch.delenv(_RELION_X_HALF_F32_FINE_POSTERIOR_ENV, raising=False)
+def test_relion_f32_fine_posterior_exposes_full_joint_normalization():
+    scores = jnp.asarray(
+        [[0.0, -0.25, -1.5, -4.0, -np.inf]],
+        dtype=jnp.float32,
+    )
+    full = tuple(
+        np.asarray(value)
+        for value in _relion_f32_fine_posterior(
+            scores,
+            adaptive_fraction=0.8,
+        )
+    )
+    legacy = tuple(
+        np.asarray(value)
+        for value in _relion_f32_fine_reconstruction_probs(
+            scores,
+            adaptive_fraction=0.8,
+        )
+    )
+
+    np.testing.assert_allclose(np.sum(full[0], axis=1), np.ones(1), rtol=2e-6)
+    np.testing.assert_array_equal(full[1], np.where(full[2], full[0], 0.0))
+    for actual, expected in zip(full[1:], legacy, strict=True):
+        np.testing.assert_array_equal(actual, expected)
+
+
+def test_relion_f32_fine_posterior_reuses_external_coarse_sum_and_keeps_support():
+    scores = jnp.asarray(
+        [[0.0, -0.25, -1.5, -4.0, -np.inf]],
+        dtype=jnp.float32,
+    )
+    ordinary = tuple(
+        np.asarray(value)
+        for value in _relion_f32_fine_posterior(
+            scores,
+            adaptive_fraction=0.8,
+        )
+    )
+    coarse_sum_weight = ordinary[4] * np.float32(2.0)
+    reused = tuple(
+        np.asarray(value)
+        for value in _relion_f32_fine_posterior(
+            scores,
+            adaptive_fraction=0.8,
+            normalization_sum_weight=jnp.asarray(coarse_sum_weight),
+            keep_all=True,
+        )
+    )
+
+    np.testing.assert_allclose(reused[0], ordinary[0] * np.float32(0.5), rtol=2e-6)
+    np.testing.assert_array_equal(reused[1], reused[0])
+    np.testing.assert_array_equal(reused[2], [[True, True, True, True, False]])
+    np.testing.assert_array_equal(reused[3], [4])
+    np.testing.assert_array_equal(reused[4], coarse_sum_weight)
+    np.testing.assert_array_equal(reused[5], np.zeros(1, dtype=np.float32))
+
+
+@pytest.mark.parametrize("setting", [None, "0", "1"])
+def test_relion_f32_fine_posterior_environment_policy(monkeypatch, setting):
+    if setting is None:
+        monkeypatch.delenv(_RELION_X_HALF_F32_FINE_POSTERIOR_ENV, raising=False)
+    else:
+        monkeypatch.setenv(_RELION_X_HALF_F32_FINE_POSTERIOR_ENV, setting)
     scores = jnp.asarray([[[0.0, -0.2, -1.7], [-2.1, -3.5, -np.inf]]], dtype=jnp.float32)
     probs = jnp.asarray([[[0.52, 0.31, 0.09], [0.05, 0.03, 0.0]]], dtype=jnp.float64)
 
-    expected = _relion_pass2_reconstruction_probs(probs, adaptive_fraction=0.9)
+    expected = (
+        _relion_f32_fine_reconstruction_probs(scores, adaptive_fraction=0.9)[:3]
+        if setting == "1"
+        else _relion_pass2_reconstruction_probs(probs, adaptive_fraction=0.9)
+    )
     actual = _relion_pass2_reconstruction_probs_for_mstep(
         scores,
         probs,
@@ -113,7 +236,7 @@ def test_relion_f32_fine_posterior_gate_off_preserves_default(monkeypatch):
 
 
 def test_relion_f32_fine_posterior_explicit_k1_route(monkeypatch):
-    monkeypatch.delenv(_RELION_X_HALF_F32_FINE_POSTERIOR_ENV, raising=False)
+    monkeypatch.setenv(_RELION_X_HALF_F32_FINE_POSTERIOR_ENV, "0")
     scores = jnp.asarray([[[0.0, -0.2, -1.7], [-2.1, -3.5, -np.inf]]], dtype=jnp.float32)
     probs = jnp.asarray([[[0.52, 0.31, 0.09], [0.05, 0.03, 0.0]]], dtype=jnp.float64)
 

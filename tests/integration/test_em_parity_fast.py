@@ -1,32 +1,22 @@
-"""Fast-tier EM parity regression tests (~5–10 min on a single A100).
+"""GPU regressions for EM replay, initialization and sampling paths.
 
-Locks down kernel-level RELION parity so future PRs cannot silently
-regress the E-step / M-step / FSC / tau² / SamplingPerturbation paths.
+The seven cases cover K1 replay/cold start/perturbation replay, K2 replay,
+and three K4 initialization/sampling combinations. K4 replay requires a
+same-oracle dispatch schedule; choose the oracle for each case's grid.
+The historical strict K4 case disables oversampling, unlike the available
+oversampling-1 captures. Its name does not establish matched-state parity.
 
-Tests:
-1. K=1 128² 5k replay (iter 3→4) against the data_noise1_5k_normalized
-   fixture. Asserts ``final_half[12]_corr_vs_relion >= 0.999`` and
-   ``|ΔPmax| < 1e-3`` versus RELION it004.
-2. K=2 128² 5k replay (iter 0→1) against data_pdb_k2_5k_128 — runs the
-   K-class parity harness and asserts mean class-map correlation and
-   per-image Pmax agreement, with Hungarian class permutation.
-
-Both tests run the worktree provenance gate first via
-:func:`recovar.utils.parity_provenance.assert_parity_ancestors`. A missing
-parity-fix commit raises a clear error rather than silently producing
-"broken parity" — the same protection ``scripts/run_multi_iter_parity.py``
-provides for command-line use.
-
-Quality ledger artifacts are written to
-``tests/baselines/em_parity_quality_fast_ledger_*.json`` for visibility in
-CI logs and PR descriptions; baseline comparisons go to
-``em_parity_quality_fast_baseline.json`` (auto-created on first run).
+Quality ledgers are saved under pytest's temporary output directory; retain
+them with --basetemp and inspect them with scripts/extract_em_parity_tables.py.
+Correlation assertions are regression checks, not the current FSC/FSC-AUC
+quality gates. Baselines are read only, and source ancestry is checked first.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import os
 import subprocess
 import sys
 import time
@@ -34,6 +24,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+import starfile
 from conftest import gpu_subprocess_env
 
 logger = logging.getLogger(__name__)
@@ -60,7 +51,21 @@ K2_RELION_DIR = K2_FIXTURE_DIR / "relion_pdb_k2_os0_ref"
 K2_DATA_STAR = K2_FIXTURE_DIR / "particles.star"
 
 K4_FIXTURE_DIR = FIXTURE_BASE / "data_pdb_k4_5k_128"
-K4_RELION_DIR = K4_FIXTURE_DIR / "relion_pdb_k4_os0_ref"
+# The shipped K4 oracle was a single-process RELION run captured before dispatch
+# logging existed, so strict K>1 replay cannot use it. Point these at a
+# dispatch-capable oracle rerun (RELION MPI with RELION_DISPATCH_LOG) and its
+# schema-3 schedule to run the K4 cases; unset, the tests report the fixture gap.
+K4_RELION_DIR = Path(os.environ.get("EM_PARITY_FAST_K4_RELION_DIR", str(K4_FIXTURE_DIR / "relion_pdb_k4_os0_ref")))
+K4_DISPATCH_SCHEDULE = os.environ.get("EM_PARITY_FAST_K4_DISPATCH_SCHEDULE") or None
+
+
+def _k4_dispatch_schedule_args() -> list[str]:
+    """Strict K>1 replay needs the dispatch schedule captured with the oracle."""
+
+    if K4_DISPATCH_SCHEDULE is None:
+        return []
+    _require_fixture(Path(K4_DISPATCH_SCHEDULE))
+    return ["--relion-dispatch-schedule", K4_DISPATCH_SCHEDULE]
 K4_DATA_STAR = K4_FIXTURE_DIR / "particles.star"
 
 
@@ -72,7 +77,7 @@ def _require_fixture(*paths: Path) -> None:
 
 def _assert_parity_ancestors_or_skip() -> None:
     """Hard-fail the test (don't skip) if the parity-fix commits are missing."""
-    from recovar.utils.parity_provenance import (
+    from recovar.em.diagnostics.parity_provenance import (
         ParityAncestryError,
         assert_parity_ancestors,
         print_provenance_banner,
@@ -85,15 +90,10 @@ def _assert_parity_ancestors_or_skip() -> None:
         pytest.fail(str(exc))
 
 
-def _write_quality_ledger(name: str, payload: dict) -> Path:
-    """Append the test result to em_parity_quality_fast_ledger_<name>.json.
-
-    Each test writes one ledger file so multiple parametrizations don't
-    clobber each other. The companion baseline file is read-only here —
-    do not auto-update.
-    """
-    BASELINES_DIR.mkdir(parents=True, exist_ok=True)
-    ledger_path = BASELINES_DIR / f"em_parity_quality_fast_ledger_{name}.json"
+def _write_quality_ledger(name: str, payload: dict, *, output_dir: Path) -> Path:
+    """Write this case's result beside its outputs, separately from baselines."""
+    output_dir.mkdir(parents=True, exist_ok=True)
+    ledger_path = output_dir / f"em_parity_quality_fast_ledger_{name}.json"
     payload = dict(payload)
     payload.setdefault("timestamp", time.strftime("%Y-%m-%dT%H:%M:%S"))
     with ledger_path.open("w") as f:
@@ -116,6 +116,14 @@ def _log_comparison(name: str, current: float, baseline: float | None, lower_is_
     print(line, file=sys.stderr, flush=True)
 
 
+def _map_correlation(a: np.ndarray, b: np.ndarray) -> float:
+    a = a.ravel()
+    b = b.ravel()
+    a = a - a.mean()
+    b = b - b.mean()
+    return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-30))
+
+
 def _read_baseline(filename: str, key: str) -> float | None:
     path = BASELINES_DIR / filename
     if not path.exists():
@@ -130,17 +138,14 @@ def _read_baseline(filename: str, key: str) -> float | None:
 @pytest.mark.integration
 @pytest.mark.slow
 def test_em_parity_fast_k1_replay(tmp_path):
-    """K=1 128² 5k iter-3→4 replay vs RELION run_it004.
+    """Replay K1 iteration 3→4 on the 5k/128 fixture.
 
-    Pass criteria (machine-precision band on H100/A100):
-      * ``corr(half1, RELION it004 half1) ≥ 0.999``
-      * ``corr(half2, RELION it004 half2) ≥ 0.999``
-      * ``|recovar.ave_Pmax − RELION.ave_Pmax| < 1e-3``
-
-    Walltime budget: ~3 min on a single A100 (cold compile included).
+    Compare both half maps and optimizer Pmax with RELION iteration 4.
+    The assertions retain the correlation floor and Pmax error bound.
     """
     _assert_parity_ancestors_or_skip()
-    _require_fixture(PARITY_SCRIPT, K1_RELION_DIR, K1_DATA_STAR, K1_GT_VOLUME)
+    model_path = K1_RELION_DIR / "run_it004_half1_model.star"
+    _require_fixture(PARITY_SCRIPT, K1_RELION_DIR, K1_DATA_STAR, K1_GT_VOLUME, model_path)
 
     output_dir = tmp_path / "k1_replay"
     output_dir.mkdir()
@@ -186,12 +191,7 @@ def test_em_parity_fast_k1_replay(tmp_path):
     pmax_traj = np.asarray(npz["ave_Pmax_trajectory"], dtype=np.float64)
     recovar_pmax = float(pmax_traj[0])
 
-    # RELION it004 ave_Pmax from RELION's run_it004_optimiser.star — we read it
-    # back from the npz where the script logs RELION's reference value.
-    # The script prints "RELION ave_Pmax=..." but doesn't always save it;
-    # use the documented value 0.9735 from the verified baseline as a sanity
-    # band, and rely on map correlation for the strong assertion.
-    relion_pmax_reference = 0.9735  # data_noise1_5k_normalized RELION it004 ave_Pmax
+    relion_pmax_reference = float(starfile.read(model_path)["model_general"]["rlnAveragePmax"])
     pmax_abs_diff = abs(recovar_pmax - relion_pmax_reference)
 
     baseline_h1 = _read_baseline("em_parity_quality_fast_baseline.json", "k1_replay_half1_corr_vs_relion")
@@ -213,7 +213,7 @@ def test_em_parity_fast_k1_replay(tmp_path):
         "k1_replay_pmax_abs_diff": pmax_abs_diff,
         "k1_replay_walltime_s": elapsed,
     }
-    ledger = _write_quality_ledger("k1_replay", payload)
+    ledger = _write_quality_ledger("k1_replay", payload, output_dir=output_dir)
     logger.info("K=1 replay ledger: %s", ledger)
 
     # NEVER widen tolerance to make a test pass. Fix the code instead.
@@ -264,16 +264,12 @@ def test_em_parity_fast_kclass_replay(tmp_path):
         "1",
         "--output-dir",
         str(output_dir),
-        # K=2 fixture was generated by RELION with --firstiter_cc, so iter 1 uses
-        # winner-take-all CC scoring (run_it000_optimiser.star command). Match RELION's
-        # hard-assignment semantics for parity; otherwise pmax_abs_mean compares soft (recovar)
-        # vs hard 1.0 (RELION) and drifts by ~0.1.
-        "--winner-take-all-mstep",
-        # RELION evaluates fine-grid (oversampling=1) poses in pass-2 of every
-        # iteration. Match that here: pass-1 finds each class's best coarse
-        # pose, pass-2 refines around its 8*4=32 children
-        # (ml_optimiser.cpp:5022, 9181-9207). Closes the iter 0->1 mean_corr
-        # gap from 0.984 (coarse-only) to ~0.99.
+        # This fixture uses RELION firstiter CC: select the global coarse winner,
+        # then refine its pose within that class (acc_ml_optimiser_impl.h).
+        # The replay's default broad adaptive support is a different policy.
+        "--firstiter-cc-mode",
+        "force",
+        "--firstiter-cc-pass2-only-best-coarse",
         "--adaptive-2pass",
     ]
     logger.info("K-class replay cmd: %s", " ".join(cmd))
@@ -317,7 +313,7 @@ def test_em_parity_fast_kclass_replay(tmp_path):
         "kclass_replay_class_assignment_accuracy": class_acc,
         "kclass_replay_walltime_s": elapsed,
     }
-    ledger = _write_quality_ledger("kclass_replay", payload)
+    ledger = _write_quality_ledger("kclass_replay", payload, output_dir=output_dir)
     logger.info("K-class replay ledger: %s", ledger)
 
     # K=2 iter 0→1 is the first K-class iteration after class seeds are loaded;
@@ -338,21 +334,11 @@ def test_em_parity_fast_kclass_replay(tmp_path):
 @pytest.mark.integration
 @pytest.mark.slow
 def test_em_parity_fast_k1_coldstart(tmp_path):
-    """K=1 cold-start ab-initio parity at 5k 128² for 3 iters.
+    """Run three K1 iterations from raw 5k/128 inputs and the initial map.
 
-    Unlike test_em_parity_fast_k1_replay (which inherits RELION's iter-0
-    state via run_multi_iter_parity.py), this test runs run_full_refinement.py
-    from raw particles + reference_init.mrc with NO --perturb_replay_relion_dir
-    and NO --replay_relion_normcorr — true RELION auto-refine semantics.
-
-    Pass criteria (moderate band per the ab-initio plan):
-      * final half[12] vs RELION run_it003_half[12]_class001.mrc: ``corr ≥ 0.999``
-      * iter-3 optimizer ``ave_Pmax`` matches RELION
-        ``run_it003_half1_model.star::rlnAveragePmax`` within ``1e-2``
-      * sigma_offset trajectory at iter 2 ≤ 5 Å (proves the A.1 sigma_offset
-        carryover fix is wired; pre-fix it stuck at default 10 Å)
-
-    Walltime budget: ~5 min on a single A100 (cold compile included).
+    Preserve RELION half-set membership and CUDA image preprocessing, while
+    letting RECOVAR initialize and update noise, tau, sigma and FSC state.
+    Compare iteration-3 half maps/Pmax and check the sigma-offset update.
     """
     _assert_parity_ancestors_or_skip()
     _require_fixture(REFINE_SCRIPT, K1_FIXTURE_DIR, K1_RELION_DIR, K1_DATA_STAR)
@@ -396,6 +382,11 @@ def test_em_parity_fast_k1_coldstart(tmp_path):
         # half-2 vs RELION's half-1 — meaningless for parity).
         "--relion_half_sets",
         str(K1_FIXTURE_DIR / "particles_with_halfsets.star"),
+        # The fresh K=1 defaults (source-faithful powerClass normalization, exact
+        # BPref operands) score from RELION's CUDA image preprocessing, as the
+        # K1 completion launcher does.
+        "--image-fourier-backend",
+        "relion_cuda",
     ]
     logger.info("K=1 cold-start cmd: %s", " ".join(cmd))
     t0 = time.time()
@@ -427,19 +418,12 @@ def test_em_parity_fast_k1_coldstart(tmp_path):
     def _load_relion_real(p: Path) -> np.ndarray:
         return np.asarray(_recovar_helpers.load_relion_volume(str(p)), dtype=np.float64)
 
-    def _corr(a: np.ndarray, b: np.ndarray) -> float:
-        a = a.ravel()
-        b = b.ravel()
-        a = a - a.mean()
-        b = b - b.mean()
-        return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-30))
-
     recovar_h1 = _load_recovar_real(output_dir / "final_half1.mrc")
     recovar_h2 = _load_recovar_real(output_dir / "final_half2.mrc")
     relion_h1 = _load_relion_real(K1_RELION_DIR / "run_it003_half1_class001.mrc")
     relion_h2 = _load_relion_real(K1_RELION_DIR / "run_it003_half2_class001.mrc")
-    h1_corr = _corr(recovar_h1, relion_h1)
-    h2_corr = _corr(recovar_h2, relion_h2)
+    h1_corr = _map_correlation(recovar_h1, relion_h1)
+    h2_corr = _map_correlation(recovar_h2, relion_h2)
 
     # Read the authoritative optimizer/scheduling scalar, not the arithmetic
     # mean of the per-particle data column.
@@ -459,7 +443,7 @@ def test_em_parity_fast_k1_coldstart(tmp_path):
         "k1_coldstart_sigma_offset_used_trajectory": sigma_used_traj.tolist(),
         "k1_coldstart_walltime_s": elapsed,
     }
-    ledger = _write_quality_ledger("k1_coldstart", payload)
+    ledger = _write_quality_ledger("k1_coldstart", payload, output_dir=output_dir)
     logger.info("K=1 cold-start ledger: %s", ledger)
 
     print(file=sys.stderr, flush=True)
@@ -496,21 +480,11 @@ def test_em_parity_fast_k1_coldstart(tmp_path):
 @pytest.mark.integration
 @pytest.mark.slow
 def test_em_parity_fast_k1_perturbreplay(tmp_path):
-    """K=1 cold-start with RELION replay metadata at 5k 128² for 3 iters.
+    """Run three K1 iterations with RELION perturbation/correction replay.
 
-    Stricter companion to test_em_parity_fast_k1_coldstart that pins the
-    perturbation drift component by reading RELION's per-iter
-    SamplingPerturbInstance values from the reference run. In replay mode,
-    run_full_refinement.py also injects RELION's per-iter normCorrection and
-    group-scale corrections by default. recovar still runs its own E/M,
-    sigma_offset, tau2, and FSC machinery.
-
-    Pass criteria (tighter than coldstart since perturbation drift is
-    eliminated):
-      * half[12] corr ≥ 0.99 vs RELION run_it003 — observed 0.992 at HEAD
-      * |ΔPmax_iter3| < 0.05 vs RELION
-
-    Walltime ~2-3 min on A100.
+    The driver injects sampling perturbations, normalization and group scales;
+    RECOVAR still runs E/M and updates sigma, tau and FSC. Compare iteration-3
+    half maps and optimizer Pmax. This is distinct from autonomous cold start.
     """
     _assert_parity_ancestors_or_skip()
     _require_fixture(REFINE_SCRIPT, K1_FIXTURE_DIR, K1_RELION_DIR, K1_DATA_STAR)
@@ -563,13 +537,6 @@ def test_em_parity_fast_k1_perturbreplay(tmp_path):
 
     from recovar.utils import helpers as _recovar_helpers
 
-    def _C(a, b):
-        a = a.ravel()
-        b = b.ravel()
-        a = a - a.mean()
-        b = b - b.mean()
-        return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-30))
-
     rec_h1 = np.asarray(_recovar_helpers.load_mrc(str(output_dir / "final_half1.mrc")), dtype=np.float64)
     rec_h2 = np.asarray(_recovar_helpers.load_mrc(str(output_dir / "final_half2.mrc")), dtype=np.float64)
     rel_h1 = np.asarray(
@@ -578,8 +545,8 @@ def test_em_parity_fast_k1_perturbreplay(tmp_path):
     rel_h2 = np.asarray(
         _recovar_helpers.load_relion_volume(str(K1_RELION_DIR / "run_it003_half2_class001.mrc")), dtype=np.float64
     )
-    h1_corr = _C(rec_h1, rel_h1)
-    h2_corr = _C(rec_h2, rel_h2)
+    h1_corr = _map_correlation(rec_h1, rel_h1)
+    h2_corr = _map_correlation(rec_h2, rel_h2)
 
     import starfile
 
@@ -595,7 +562,7 @@ def test_em_parity_fast_k1_perturbreplay(tmp_path):
         "k1_perturbreplay_pmax_iter3_abs_diff": pmax_diff,
         "k1_perturbreplay_walltime_s": elapsed,
     }
-    ledger = _write_quality_ledger("k1_perturbreplay", payload)
+    ledger = _write_quality_ledger("k1_perturbreplay", payload, output_dir=output_dir)
     logger.info("K=1 perturb-replay ledger: %s", ledger)
 
     print(file=sys.stderr, flush=True)
@@ -620,26 +587,11 @@ def test_em_parity_fast_k1_perturbreplay(tmp_path):
 @pytest.mark.integration
 @pytest.mark.slow
 def test_em_parity_fast_kclass_coldstart(tmp_path):
-    """K=4 RELION-like cold-start ab-initio at 5k 128² for 3 iters.
+    """Run K4 cold start at coarse order 2 with oversampling 1.
 
-    Companion to test_em_parity_fast_k1_coldstart; this one exercises the
-    full K-class auto-refine path via run_full_refinement.py --n_classes 4.
-    Compares per-class halfmaps against RELION's run_it003_class00X.mrc
-    using Hungarian matching to absorb class permutations.
-
-    This is the cold-start parity target with RELION search-grid and per-image
-    correction replay: use RELION-like Class3D sampling (firstiter_cc +
-    adaptive_oversampling=1 + perturb replay) but do NOT pass
-    --relion_init_dir. Any remaining gap should come from RECOVAR not
-    reproducing RELION's initial model/noise/tau/sigma state from first
-    principles, not from testing a deliberately different search grid or
-    normalization stream.
-
-    Pass criteria:
-      * worst per-class corr ≥ 0.997
-      * mean (Hungarian-matched) per-class corr ≥ 0.9985
-
-    Walltime ~10 min on A100/H100.
+    Use the 5k/128 fixture, firstiter_cc and captured perturbation/correction
+    replay, but derive initial noise/tau/sigma locally. Hungarian-match the four
+    iteration-3 class maps. The dispatch oracle must use the same sampling grid.
     """
     _assert_parity_ancestors_or_skip()
     _require_fixture(REFINE_SCRIPT, K4_FIXTURE_DIR, K4_RELION_DIR, K4_DATA_STAR)
@@ -672,6 +624,7 @@ def test_em_parity_fast_kclass_coldstart(tmp_path):
         "0.5",
         "--perturb_replay_relion_dir",
         str(K4_RELION_DIR),
+        *_k4_dispatch_schedule_args(),
         "--firstiter_cc",
         "--init_resolution",
         "30.0",
@@ -694,13 +647,6 @@ def test_em_parity_fast_kclass_coldstart(tmp_path):
 
     from recovar.utils import helpers as _recovar_helpers
 
-    def _C(a, b):
-        a = a.ravel()
-        b = b.ravel()
-        a = a - a.mean()
-        b = b - b.mean()
-        return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-30))
-
     recov_classes = [
         np.asarray(_recovar_helpers.load_mrc(str(output_dir / f"final_class{c + 1:03d}.mrc")), dtype=np.float64)
         for c in range(4)
@@ -715,7 +661,7 @@ def test_em_parity_fast_kclass_coldstart(tmp_path):
     M = np.zeros((4, 4))
     for i in range(4):
         for j in range(4):
-            M[i, j] = _C(recov_classes[i], relion_classes[j])
+            M[i, j] = _map_correlation(recov_classes[i], relion_classes[j])
     row, col = linear_sum_assignment(-M)
     matched = [float(M[i, j]) for i, j in zip(row, col)]
     mean_corr = float(np.mean(matched))
@@ -728,7 +674,7 @@ def test_em_parity_fast_kclass_coldstart(tmp_path):
         "kclass_coldstart_hungarian_assignment": [(int(i), int(j)) for i, j in zip(row, col)],
         "kclass_coldstart_walltime_s": elapsed,
     }
-    ledger = _write_quality_ledger("kclass_coldstart", payload)
+    ledger = _write_quality_ledger("kclass_coldstart", payload, output_dir=output_dir)
     logger.info("K-class cold-start ledger: %s", ledger)
 
     print(file=sys.stderr, flush=True)
@@ -749,39 +695,14 @@ def test_em_parity_fast_kclass_coldstart(tmp_path):
 @pytest.mark.gpu
 @pytest.mark.integration
 @pytest.mark.slow
-def test_em_parity_fast_kclass_strict_coldstart(tmp_path):
-    """K=4 STRICT-PARITY cold-start at 5k 128² for 3 iters.
+def test_em_parity_fast_kclass_nonadaptive_replay(tmp_path):
+    """Exercise three K4 iterations at coarse order 1 without oversampling.
 
-    The "strict" path layers on top of the basic cold-start:
-      * --relion_init_dir : recovar uses RELION's exact iter-0 sigma2_noise
-        spectrum + per-class rlnReferenceTau2 + rlnTau2FudgeFactor +
-        rlnSigmaOffsetsAngst instead of bootstrapping from images
-      * --perturb_replay_relion_dir : recovar uses RELION's per-iter
-        SamplingPerturbInstance values for HEALPix grid jitter and, by
-        default, per-iter normCorrection / group-scale corrections
-      * --firstiter_cc : recovar's iter-1 uses normalized-CC + winner-take-all,
-        AND iteration_loop.py routes the iter-1 K-class M-step through
-        run_dense_k_class_em_adaptive with firstiter_cc_pass2_only_best_coarse=True
-        (matches the run_k_class_parity.py path that achieves 0.998 single-step).
-
-    This is NOT typical user-facing usage; it's a kernel-level parity test
-    that locks the strictest cold-start parity recovar can achieve at K=4
-    on the 5k 128² fixture, so a regression in any of:
-      * relion_init_dir state-load path in run_full_refinement.py
-      * adaptive K-class engine routing at iter 1 (iteration_loop.py)
-      * --firstiter_cc plumbing (run_full_refinement / iteration_loop)
-      * relion_volume_to_recovar / load_mrc axis conventions
-    will trip this test even when the looser test_em_parity_fast_kclass_coldstart
-    still passes.
-
-    Pass criteria (calibrated after Class3D M-step + post-mask parity):
-      * worst per-class corr ≥ 0.975   (observed 0.9777)
-      * mean (Hungarian-matched) ≥ 0.982 (observed 0.9829)
-      * iter-3 class assignment match ≥ 0.84 (observed 0.865 at HEAD)
-    Reaching the 0.99 ceiling requires the remaining per-particle assignment
-    parity work; the M-step no longer uses FSC or split-half Wiener solves.
-
-    Walltime ~2 min on A100.
+    Load RELION iteration-0 noise/tau/sigma and replay perturbations/corrections
+    with firstiter_cc. Check all four matched maps and particle class assignments.
+    RELION GPU rejects firstiter_cc without oversampling. Comparing against its
+    oversampling-1 reference preserves cross-grid regression coverage, not
+    strict matched-state parity.
     """
     _assert_parity_ancestors_or_skip()
     _require_fixture(REFINE_SCRIPT, K4_FIXTURE_DIR, K4_RELION_DIR, K4_DATA_STAR)
@@ -815,6 +736,7 @@ def test_em_parity_fast_kclass_strict_coldstart(tmp_path):
         str(relion_dir),
         "--relion_init_dir",
         str(relion_dir),
+        *_k4_dispatch_schedule_args(),
         "--firstiter_cc",
         "--init_resolution",
         "30.0",
@@ -823,7 +745,7 @@ def test_em_parity_fast_kclass_strict_coldstart(tmp_path):
         "--rotation_block_size",
         "2000",
     ]
-    logger.info("K-class STRICT-PARITY cold-start cmd: %s", " ".join(cmd))
+    logger.info("K-class nonadaptive replay cmd: %s", " ".join(cmd))
     t0 = time.time()
     proc = subprocess.run(cmd, capture_output=True, text=True, env=gpu_subprocess_env())
     elapsed = time.time() - t0
@@ -834,13 +756,6 @@ def test_em_parity_fast_kclass_strict_coldstart(tmp_path):
     from scipy.optimize import linear_sum_assignment
 
     from recovar.utils import helpers as _recovar_helpers
-
-    def _C(a, b):
-        a = a.ravel()
-        b = b.ravel()
-        a = a - a.mean()
-        b = b - b.mean()
-        return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-30))
 
     recov_classes = [
         np.asarray(_recovar_helpers.load_mrc(str(output_dir / f"final_class{c + 1:03d}.mrc")), dtype=np.float64)
@@ -856,7 +771,7 @@ def test_em_parity_fast_kclass_strict_coldstart(tmp_path):
     M = np.zeros((4, 4))
     for i in range(4):
         for j in range(4):
-            M[i, j] = _C(recov_classes[i], relion_classes[j])
+            M[i, j] = _map_correlation(recov_classes[i], relion_classes[j])
     row, col = linear_sum_assignment(-M)
     matched = [float(M[i, j]) for i, j in zip(row, col)]
     mean_corr = float(np.mean(matched))
@@ -900,12 +815,12 @@ def test_em_parity_fast_kclass_strict_coldstart(tmp_path):
         "kclass_strict_iter3_class_match": iter3_match,
         "kclass_strict_walltime_s": elapsed,
     }
-    ledger = _write_quality_ledger("kclass_strict", payload)
-    logger.info("K-class strict-parity ledger: %s", ledger)
+    ledger = _write_quality_ledger("kclass_strict", payload, output_dir=output_dir)
+    logger.info("K-class nonadaptive replay ledger: %s", ledger)
 
     print(file=sys.stderr, flush=True)
     print(
-        "=== K=4 STRICT-PARITY cold-start (relion_init + perturb_replay + firstiter_cc + adaptive engine) ===",
+        "=== K=4 nonadaptive replay (RELION os1 reference; cross-grid diagnostic) ===",
         file=sys.stderr,
         flush=True,
     )
@@ -931,22 +846,11 @@ def test_em_parity_fast_kclass_strict_coldstart(tmp_path):
 @pytest.mark.integration
 @pytest.mark.slow
 def test_em_parity_fast_kclass_strict_oversample_coldstart(tmp_path):
-    """K=4 STRICT-PARITY cold-start with adaptive_oversampling=1 (8× pose grid).
+    """Run three oracle-assisted K4 iterations at coarse order 1/oversampling 1.
 
-    The strictest K-class test. Builds on test_em_parity_fast_kclass_strict_coldstart
-    with --adaptive_oversampling 1 + --healpix_order 1 (coarse pass 1 stays at
-    healpix order 1 = 576 rotations matching RELION's iter-1 evaluation grid,
-    fine pass 2 is order 2 = 4608 rotations). Routes ALL K-class iters through
-    the run_dense_k_class_em_adaptive plumbing.
-
-    Pass criteria (calibrated after Class3D M-step + post-mask parity):
-      * worst per-class corr ≥ 0.985
-      * mean (Hungarian-matched) ≥ 0.994
-    With RELION normCorrection replay enabled, this fixture currently reaches
-    the 0.9996+ per-class band; lower values usually indicate replay metadata
-    or adaptive K-class routing regressed.
-
-    Walltime ~3-4 min on A100 (oversampled grid is more expensive per iter).
+    Load iteration-0 state and replay perturbations/corrections with firstiter_cc.
+    All iterations use adaptive K-class execution; Hungarian-match all four final
+    class maps against iteration 3 from the same dispatch-capable oracle.
     """
     _assert_parity_ancestors_or_skip()
     _require_fixture(REFINE_SCRIPT, K4_FIXTURE_DIR, K4_RELION_DIR, K4_DATA_STAR)
@@ -980,6 +884,7 @@ def test_em_parity_fast_kclass_strict_oversample_coldstart(tmp_path):
         str(relion_dir),
         "--relion_init_dir",
         str(relion_dir),
+        *_k4_dispatch_schedule_args(),
         "--firstiter_cc",
         "--init_resolution",
         "30.0",
@@ -1000,13 +905,6 @@ def test_em_parity_fast_kclass_strict_oversample_coldstart(tmp_path):
 
     from recovar.utils import helpers as _recovar_helpers
 
-    def _C(a, b):
-        a = a.ravel()
-        b = b.ravel()
-        a = a - a.mean()
-        b = b - b.mean()
-        return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-30))
-
     recov_classes = [
         np.asarray(_recovar_helpers.load_mrc(str(output_dir / f"final_class{c + 1:03d}.mrc")), dtype=np.float64)
         for c in range(4)
@@ -1021,7 +919,7 @@ def test_em_parity_fast_kclass_strict_oversample_coldstart(tmp_path):
     M = np.zeros((4, 4))
     for i in range(4):
         for j in range(4):
-            M[i, j] = _C(recov_classes[i], relion_classes[j])
+            M[i, j] = _map_correlation(recov_classes[i], relion_classes[j])
     row, col = linear_sum_assignment(-M)
     matched = [float(M[i, j]) for i, j in zip(row, col)]
     mean_corr = float(np.mean(matched))
@@ -1033,7 +931,7 @@ def test_em_parity_fast_kclass_strict_oversample_coldstart(tmp_path):
         "kclass_strict_os1_worst_class_corr": worst_corr,
         "kclass_strict_os1_walltime_s": elapsed,
     }
-    ledger = _write_quality_ledger("kclass_strict_os1", payload)
+    ledger = _write_quality_ledger("kclass_strict_os1", payload, output_dir=output_dir)
     logger.info("K-class strict-parity oversample ledger: %s", ledger)
 
     print(file=sys.stderr, flush=True)

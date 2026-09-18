@@ -7,147 +7,132 @@ Verifies:
 4. data_vs_prior_trajectory and ave_Pmax_trajectory are populated
 """
 
+
 import inspect
-from dataclasses import replace
+from dataclasses import fields, replace
 from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
 import pytest
 
+from recovar.em.refinement.half_inputs import HalfInputState
+
 pytest.importorskip("jax")
 import healpy as hp
 import jax.numpy as jnp
+from helpers.em_arrays import _hermitian_volume, _make_rotations
 
 import recovar.core.fourier_transform_utils as ftu
-import recovar.em.dense_single_volume.iteration_loop as iteration_loop_module
-import recovar.em.dense_single_volume.local_layout as local_layout_module
-import recovar.em.dense_single_volume.relion_replay as relion_replay_module
+import recovar.em.diagnostics.relion_replay as relion_replay_module
+import recovar.em.helpers.expected_accuracy as expected_accuracy_module
+import recovar.em.helpers.orientation_priors as orientation_priors_module
+import recovar.em.local.local_layout as local_layout_module
+import recovar.em.refinement.iteration_loop as iteration_loop_module
+import recovar.em.refinement.projector_preparation as projector_preparation
+import recovar.em.sampling as sampling_module
 import recovar.reconstruction.regularization as regularization_module
 from recovar import core
 from recovar.core.configs import ForwardModelConfig
-from recovar.em.dense_single_volume.em_engine import _batch_parameter_rows, run_em
-from recovar.em.dense_single_volume.helpers.batch_fetch import fetch_indexed_batch as _fetch_indexed_batch
-from recovar.em.dense_single_volume.helpers.convergence import (
-    RefinementState,
-    healpix_angular_step,
-    refine_angular_sampling,
-    should_refine_angular_sampling,
+from recovar.em.classification.k_class import run_dense_k_class_em, run_local_k_class_em
+from recovar.em.classification.k_class_results import (
+    KClassEMResult,
+    _resolve_class_mstep_posterior_sums,
+    _sum_noise_stats,
 )
-from recovar.em.dense_single_volume.helpers.half_spectrum import make_half_image_weights
-from recovar.em.dense_single_volume.helpers.half_volume_mstep import (
+from recovar.em.dense import half_scoring, score_outputs, scoring_policy
+from recovar.em.dense.em_engine import _batch_parameter_rows, run_em
+from recovar.em.diagnostics.local_debug import (
+    current_size_matches_request,
+    iteration_matches_request,
+    maybe_write_debug_score_dump,
+)
+from recovar.em.diagnostics.relion_replay import _replay_control_model_iteration
+from recovar.em.helpers import dtype_policy as dtype_policy_module
+from recovar.em.helpers.batch_fetch import fetch_indexed_batch as _fetch_indexed_batch
+from recovar.em.helpers.convergence import RefinementState, _final_local_sampling_orders, healpix_angular_step
+from recovar.em.helpers.env_flags import parse_env_binary_flag
+from recovar.em.helpers.half_spectrum import make_half_image_weights
+from recovar.em.helpers.half_volume_mstep import (
     enforce_half_volume_x0,
     half_volume_accumulator_shape,
     half_volume_accumulators_to_full,
     relion_backprojector_volume_shape,
 )
-from recovar.em.dense_single_volume.helpers.image_shifts import (
-    apply_relion_integer_pre_shifts,
-    integer_pre_shifts_or_none,
-)
-from recovar.em.dense_single_volume.helpers.local_search import (
-    _local_search_engine_rotation_block_size,
-)
-from recovar.em.dense_single_volume.helpers.orientation_priors import (
+from recovar.em.helpers.image_shifts import apply_relion_integer_pre_shifts, integer_pre_shifts_or_none
+from recovar.em.helpers.orientation_priors import (
     collapse_rotation_posterior_to_direction_prior,
     make_relion_direction_log_prior,
     make_relion_translation_log_prior,
     normalize_direction_prior_per_half,
-    relion_local_translation_prior_center,
     relion_sigma_offset_prior_center,
     relion_translation_prior_center,
     relion_translation_search_base,
 )
-from recovar.em.dense_single_volume.helpers.preprocessing import resolve_image_mask_for_half_preprocess
-from recovar.em.dense_single_volume.helpers.projection import (
-    compute_scale_correction_terms_per_image,
-    relion_scale_correction_pixel_mask,
-)
-from recovar.em.dense_single_volume.helpers.resolution import (
+from recovar.em.helpers.preprocessing import half_translation_phase_table, resolve_image_mask_for_half_preprocess
+from recovar.em.helpers.projection import compute_scale_correction_terms_per_image, relion_scale_correction_pixel_mask
+from recovar.em.helpers.resolution import (
     _bootstrap_current_size_relion,
     bootstrap_current_size_from_ini_high_relion,
     clamp_relion_coarse_image_size,
     compute_coarse_image_size,
+    relion_expectation_coarse_size_order,
+    relion_local_pass1_current_size,
     relion_optics_image_current_sizes,
     shell_index_to_resolution_angstrom,
-    should_skip_adaptive_pass2,
 )
-from recovar.em.dense_single_volume.helpers.score_constraints import DenseScoreConstraints
-from recovar.em.dense_single_volume.helpers.significance import (
-    _capture_offset_free_and_absolute_float32_scores,
-    _compute_k_class_significance_batched,
-    _compute_significance_batched,
-)
-from recovar.em.dense_single_volume.helpers.types import NoiseStats, RelionStats
-from recovar.em.dense_single_volume.iteration_loop import (
-    _align_fourier_volume_sign_to_reference,
-    _combined_class_direction_prior_from_halves,
-    _combined_noise_stats,
-    _estimate_relion_em_batch_sizes,
-    _exhaustive_grid_order_for_state,
-    _relion_expectation_coarse_size_order,
-    _relion_local_pass1_current_size,
-    _normalize_noise_variance_per_half,
-    _replay_control_model_iteration,
-    _rotation_eulers_for_canonical_or_custom_grid,
-    refine_single_volume,
-    update_relion_norm_scale_corrections,
-)
-from recovar.em.dense_single_volume.k_class import (
-    KClassEMResult,
-    _resolve_class_mstep_posterior_sums,
-    _sum_noise_stats,
-    run_dense_k_class_em,
-    run_local_k_class_em,
-)
-from recovar.em.dense_single_volume.local_backprojection import (
+from recovar.em.helpers.types import DenseEMResult, LocalEMResult, NoiseStats, RelionStats
+from recovar.em.local import local_search_iteration
+from recovar.em.local.local_backprojection import (
     compute_local_ctf_sums,
     compute_local_weighted_sums,
     flatten_bucket_rotations,
     flatten_bucket_rows,
 )
-from recovar.em.dense_single_volume.local_debug import (
-    current_size_matches_request,
-    iteration_matches_request,
-    maybe_write_debug_score_dump,
+from recovar.em.local.local_bucket_stages import (
+    EXACT_LOCAL_RECONSTRUCTION_PACK_QUANTUM_ENV,
+    _adjoint_slice_volume_maybe_windowed_row_chunks,
+    _build_reconstruction_pack_indices,
+    _pad_local_big_jit_image_axis,
+    _reorder_bucket_to_indices,
 )
-from recovar.em.dense_single_volume.local_em_engine import (
-    EXACT_LOCAL_BIG_JIT_DEFER_PACKED_MSTEP_ENV,
-    EXACT_LOCAL_BIG_JIT_MATMUL_MAX_GB_ENV,
-    EXACT_LOCAL_AUTO_MICROBATCH_BOOST_ENV,
+from recovar.em.local.local_caches import (
     EXACT_LOCAL_PROCESSED_HALF_CACHE_MAX_GB_ENV,
     EXACT_LOCAL_RAW_CACHE_MAX_GB_ENV,
-    EXACT_LOCAL_RECONSTRUCTION_PACK_QUANTUM_ENV,
-    EXACT_LOCAL_RELION_PROJECTION_CACHE_MAX_GB_ENV,
-    EXACT_LOCAL_SCORE_TILE_FREE_MEMORY_FRACTION,
-    EXACT_LOCAL_SCORE_TILE_LIVE_FACTOR,
     EXACT_LOCAL_SPARSE_BIG_JIT_MSTEP_MAX_GB_ENV,
-    EXACT_LOCAL_TARGET_ROW_PIXELS_ENV,
-    EXACT_LOCAL_XHALF_PROJECTION_TARGET_ROW_PIXELS_ENV,
+)
+from recovar.em.local.local_em_engine import (
+    EXACT_LOCAL_BIG_JIT_DEFER_PACKED_MSTEP_ENV,
+    EXACT_LOCAL_SOURCE_BPREF_FUSED_SERIAL_PARTICLES_ENV,
+    EXACT_LOCAL_SOURCE_BPREF_FUSED_SERIAL_ROTATIONS_ENV,
+    EXACT_LOCAL_SOURCE_BPREF_LAUNCH_SERIAL_ROTATIONS_ENV,
     LOCAL_SCORE_DUMP_TARGET_ONLY_ENV,
-    _build_reconstruction_pack_indices,
-    _exact_local_effective_max_hypotheses_per_microbatch,
-    _exact_local_max_hypotheses_per_microbatch,
-    _exact_local_xhalf_projection_microbatch_cap,
-    _exact_local_xhalf_tail_microbatch_cap,
-    _adjoint_slice_volume_maybe_windowed_row_chunks,
     _local_processed_half_cache_enabled,
     _local_raw_cache_enabled,
-    _pad_local_big_jit_image_axis,
-    _prepare_local_exact_bucket,
-    _reorder_bucket_to_indices,
     run_local_em_exact,
 )
-from recovar.em.dense_single_volume.local_layout import (
+from recovar.em.local.local_layout import (
+    EXACT_LOCAL_BUCKET_RADIX_ENV,
     LocalBucketSpec,
     LocalHypothesisLayout,
+    _exact_bucket_rotation_size,
     _selected_rotation_matrices,
     bucket_local_hypothesis_layout,
     build_local_adaptive_pass2_hypothesis_layout,
     build_local_hypothesis_layout,
     build_pass2_hypothesis_layout,
 )
-from recovar.em.dense_single_volume.local_score_pass import (
+from recovar.em.local.local_physical_grid import (
+    EXACT_LOCAL_SOURCE_BPREF_PARTICLE_CHUNK_SIZE_ENV,
+    _accumulate_relion_physical_particle_grid,
+    _accumulate_relion_vdam_physical_particle_grid,
+    _source_faithful_bpref_particle_chunk_cap,
+    _source_faithful_bpref_particle_chunk_size,
+    _source_faithful_bpref_particle_slices,
+)
+from recovar.em.local.local_preprocessing import prepare_local_bucket
+from recovar.em.local.local_projection_cache import EXACT_LOCAL_RELION_PROJECTION_CACHE_MAX_GB_ENV
+from recovar.em.local.local_score_pass import (
     compute_reconstruction_support,
     compute_reconstruction_support_from_threshold,
     fused_score_normalize_support_abs2_on_demand,
@@ -158,6 +143,32 @@ from recovar.em.dense_single_volume.local_score_pass import (
     score_local_bucket,
     score_local_bucket_abs2_weighted_on_demand,
 )
+from recovar.em.local.local_search_iteration import _LocalSearchIterationResult
+from recovar.em.refinement import finalization_policy
+from recovar.em.refinement import mean_helpers as mean_helpers_module
+from recovar.em.refinement.iteration_loop import (
+    _normalize_noise_variance_per_half,
+    refine_single_volume,
+)
+from recovar.em.refinement.mean_helpers import (
+    _align_fourier_volume_sign_to_reference,
+    _combined_class_direction_prior_from_halves,
+)
+from recovar.em.refinement.noise_updates import (
+    _combined_noise_stats,
+)
+from recovar.em.refinement.refinement_options import (
+    AdaptiveOptions,
+    EngineDebugOptions,
+    KClassOptions,
+    LocalSearchOptions,
+    RefinementBatching,
+    RefinementOptions,
+    RefinementSchedule,
+    RelionParityOptions,
+    ReplayState,
+)
+from recovar.em.relion import relion_ctf
 from recovar.em.sampling import (
     _get_relion_rotation_grid_eulers_float64,
     apply_relion_rotation_perturbation,
@@ -172,6 +183,11 @@ from recovar.em.sampling import (
     relion_angular_sampling_deg,
     rotation_grid_n_in_planes,
     rotation_grid_size,
+)
+from recovar.em.scoring.score_constraints import DenseScoreConstraints
+from recovar.em.scoring.significance import (
+    _capture_offset_free_and_absolute_float32_scores,
+    _compute_k_class_significance_batched,
 )
 
 pytestmark = pytest.mark.unit
@@ -202,50 +218,239 @@ def test_relion_optimizer_average_pmax_uses_k1_mstep_mass():
     assert average == pytest.approx(0.3 / 1.8)
 
 
+def test_relion_optimizer_average_pmax_preserves_double_particle_values():
+    pmax = [
+        np.asarray([0.123456789012345], dtype=np.float64),
+        np.asarray([0.987654321098765], dtype=np.float64),
+    ]
+
+    combined, average, denominator = iteration_loop_module._relion_optimizer_average_pmax(pmax)
+
+    assert combined.dtype == np.float64
+    np.testing.assert_array_equal(combined, np.concatenate(pmax))
+    assert average == pmax[0][0]
+    assert denominator == 1.0
+
+
 def test_diagnostic_float64_pass2_iteration_selector(monkeypatch):
     monkeypatch.delenv("RECOVAR_DIAGNOSTIC_FLOAT64_PASS2_ITERATIONS", raising=False)
-    assert iteration_loop_module._diagnostic_float64_pass2_matches(4) is False
+    assert dtype_policy_module._diagnostic_float64_pass2_matches(4) is False
     monkeypatch.setenv("RECOVAR_DIAGNOSTIC_FLOAT64_PASS2_ITERATIONS", "4, 7")
-    assert iteration_loop_module._diagnostic_float64_pass2_matches(3) is False
-    assert iteration_loop_module._diagnostic_float64_pass2_matches(4) is True
-    assert iteration_loop_module._diagnostic_float64_pass2_matches(7) is True
+    assert dtype_policy_module._diagnostic_float64_pass2_matches(3) is False
+    assert dtype_policy_module._diagnostic_float64_pass2_matches(4) is True
+    assert dtype_policy_module._diagnostic_float64_pass2_matches(7) is True
     monkeypatch.setenv("RECOVAR_DIAGNOSTIC_FLOAT64_PASS2_ITERATIONS", "4,bad")
     with pytest.raises(ValueError, match="comma-separated integers"):
-        iteration_loop_module._diagnostic_float64_pass2_matches(4)
+        dtype_policy_module._diagnostic_float64_pass2_matches(4)
 
 
 def test_local_search_precision_defaults_to_production_float32(monkeypatch):
-    monkeypatch.setitem(iteration_loop_module._DENSE_EM_STATIC_KWARGS, "use_float64_scoring", False)
-    monkeypatch.setitem(iteration_loop_module._DENSE_EM_STATIC_KWARGS, "use_float64_projections", False)
+    monkeypatch.setitem(scoring_policy._DENSE_EM_STATIC_KWARGS, "use_float64_scoring", False)
+    monkeypatch.setitem(scoring_policy._DENSE_EM_STATIC_KWARGS, "use_float64_projections", False)
     monkeypatch.delenv("RECOVAR_DIAGNOSTIC_FLOAT64_PASS2_ITERATIONS", raising=False)
 
-    assert iteration_loop_module._local_search_precision_flags(12, pass_index=1) == (False, False)
-    assert iteration_loop_module._local_search_precision_flags(12, pass_index=2) == (False, False)
+    assert dtype_policy_module._local_search_precision_flags(
+        12,
+        static_em_kwargs=scoring_policy._DENSE_EM_STATIC_KWARGS,
+        pass_index=1,
+    ) == (False, False)
+    assert dtype_policy_module._local_search_precision_flags(
+        12,
+        static_em_kwargs=scoring_policy._DENSE_EM_STATIC_KWARGS,
+        pass_index=2,
+    ) == (False, False)
 
 
 def test_local_search_precision_targeted_diagnostic_upgrades_only_pass2(monkeypatch):
-    monkeypatch.setitem(iteration_loop_module._DENSE_EM_STATIC_KWARGS, "use_float64_scoring", False)
-    monkeypatch.setitem(iteration_loop_module._DENSE_EM_STATIC_KWARGS, "use_float64_projections", False)
+    monkeypatch.setitem(scoring_policy._DENSE_EM_STATIC_KWARGS, "use_float64_scoring", False)
+    monkeypatch.setitem(scoring_policy._DENSE_EM_STATIC_KWARGS, "use_float64_projections", False)
     monkeypatch.setenv("RECOVAR_DIAGNOSTIC_FLOAT64_PASS2_ITERATIONS", "12")
 
-    assert iteration_loop_module._local_search_precision_flags(12, pass_index=1) == (False, False)
-    assert iteration_loop_module._local_search_precision_flags(12, pass_index=2) == (True, True)
-    assert iteration_loop_module._local_search_precision_flags(11, pass_index=2) == (False, False)
+    assert dtype_policy_module._local_search_precision_flags(
+        12,
+        static_em_kwargs=scoring_policy._DENSE_EM_STATIC_KWARGS,
+        pass_index=1,
+    ) == (False, False)
+    assert dtype_policy_module._local_search_precision_flags(
+        12,
+        static_em_kwargs=scoring_policy._DENSE_EM_STATIC_KWARGS,
+        pass_index=2,
+    ) == (True, True)
+    assert dtype_policy_module._local_search_precision_flags(
+        11,
+        static_em_kwargs=scoring_policy._DENSE_EM_STATIC_KWARGS,
+        pass_index=2,
+    ) == (False, False)
 
 
 def test_local_search_precision_global_switches_upgrade_both_passes(monkeypatch):
-    monkeypatch.setitem(iteration_loop_module._DENSE_EM_STATIC_KWARGS, "use_float64_scoring", True)
-    monkeypatch.setitem(iteration_loop_module._DENSE_EM_STATIC_KWARGS, "use_float64_projections", True)
+    monkeypatch.setitem(scoring_policy._DENSE_EM_STATIC_KWARGS, "use_float64_scoring", True)
+    monkeypatch.setitem(scoring_policy._DENSE_EM_STATIC_KWARGS, "use_float64_projections", True)
     monkeypatch.delenv("RECOVAR_DIAGNOSTIC_FLOAT64_PASS2_ITERATIONS", raising=False)
 
-    assert iteration_loop_module._local_search_precision_flags(12, pass_index=1) == (True, True)
-    assert iteration_loop_module._local_search_precision_flags(12, pass_index=2) == (True, True)
+    assert dtype_policy_module._local_search_precision_flags(
+        12,
+        static_em_kwargs=scoring_policy._DENSE_EM_STATIC_KWARGS,
+        pass_index=1,
+    ) == (True, True)
+    assert dtype_policy_module._local_search_precision_flags(
+        12,
+        static_em_kwargs=scoring_policy._DENSE_EM_STATIC_KWARGS,
+        pass_index=2,
+    ) == (True, True)
+
+
+def test_dense_global_scoring_dtype_tracks_global_float64_switches(monkeypatch):
+    """The coarse pass-1 scorer grid has no per-iteration diagnostic path.
+
+    Unlike ``_local_search_precision_flags``, this dtype selector must react
+    to either global switch alone -- there is no pass-2-only diagnostic
+    override to reason about at pass 1.
+    """
+
+    monkeypatch.setitem(scoring_policy._DENSE_EM_STATIC_KWARGS, "use_float64_scoring", False)
+    monkeypatch.setitem(scoring_policy._DENSE_EM_STATIC_KWARGS, "use_float64_projections", False)
+    assert scoring_policy._dense_global_scoring_dtype() == np.float32
+
+    monkeypatch.setitem(scoring_policy._DENSE_EM_STATIC_KWARGS, "use_float64_scoring", True)
+    assert scoring_policy._dense_global_scoring_dtype() == np.float64
+
+    monkeypatch.setitem(scoring_policy._DENSE_EM_STATIC_KWARGS, "use_float64_scoring", False)
+    monkeypatch.setitem(scoring_policy._DENSE_EM_STATIC_KWARGS, "use_float64_projections", True)
+    assert scoring_policy._dense_global_scoring_dtype() == np.float64
+
+
+def test_relion_rotation_grid_float32_honors_explicit_float64_dtype(monkeypatch):
+    """``_relion_rotation_grid_float32``'s working operands follow ``dtype``.
+
+    Regression for the bug the coarse pass-1 grid shared with the already-fixed
+    ``_relion_adaptive_pass1_rotations``/``_relion_mstep_rotations_from_eulers``:
+    an unconditional ``.astype(np.float32)`` on the scorer rotation matrices
+    even when the caller runs float64 scoring, though RELION's own
+    ``ACC_DOUBLE_PRECISION`` build never narrows this matrix.
+    """
+
+    source_eulers = np.asarray(
+        [[13.123456789, 47.987654321, 91.234567891]], dtype=np.float64
+    )
+    monkeypatch.setattr(
+        sampling_module,
+        "_get_relion_rotation_grid_eulers_float64",
+        lambda _order: source_eulers,
+    )
+
+    rotations_f32, eulers_f32 = sampling_module._relion_rotation_grid_float32(2)
+    rotations_f64, eulers_f64 = sampling_module._relion_rotation_grid_float32(2, dtype=np.float64)
+
+    assert rotations_f32.dtype == np.float32
+    assert rotations_f64.dtype == np.float64
+    np.testing.assert_allclose(rotations_f32, rotations_f64, atol=1e-6, rtol=0.0)
+    assert eulers_f32.dtype == np.float32
+    assert eulers_f64.dtype == np.float64
+    np.testing.assert_allclose(eulers_f32, eulers_f64, atol=5e-6, rtol=0.0)
+    np.testing.assert_array_equal(eulers_f64, source_eulers)
+
+
+def test_sealed_sampling_base_grids_honors_explicit_float64_dtype():
+    """A restart from a schema-v3 sealed boundary gets the same dtype control."""
+
+    sealed_state = {
+        "directions_ipix": np.array([0, 1], dtype=np.int64),
+        "rot_angles_deg": np.array([10.0, 190.0], dtype=np.float64),
+        "tilt_angles_deg": np.array([37.0, 63.0], dtype=np.float64),
+        "psi_angles_deg": np.array([0.0, 120.0, 240.0], dtype=np.float64),
+        "translations_x_angstrom": np.array([0.0, 1.5], dtype=np.float64),
+        "translations_y_angstrom": np.array([0.0, -1.5], dtype=np.float64),
+    }
+
+    rotations_f32, eulers_f32, translations_f32 = iteration_loop_module._sealed_sampling_base_grids(
+        sealed_state, voxel_size_angstrom=1.0
+    )
+    rotations_f64, eulers_f64, translations_f64 = iteration_loop_module._sealed_sampling_base_grids(
+        sealed_state, voxel_size_angstrom=1.0, dtype=np.float64
+    )
+
+    assert rotations_f32.dtype == np.float32
+    assert rotations_f64.dtype == np.float64
+    assert translations_f32.dtype == np.float32
+    assert translations_f64.dtype == np.float64
+    np.testing.assert_allclose(rotations_f32, rotations_f64, atol=1e-6, rtol=0.0)
+    assert eulers_f32.dtype == np.float32
+    assert eulers_f64.dtype == np.float64
+    np.testing.assert_allclose(eulers_f32, eulers_f64, atol=1e-6, rtol=0.0)
+
+
+def test_dense_global_prior_helpers_honor_explicit_float64_dtype():
+    """The use_local=False offset/orientation log-prior helpers must not force float32.
+
+    Regression for the same bug class already fixed for rotation matrices:
+    RELION's own pdf_orientation/pdf_offset computation never narrows below
+    RFLOAT/XFLOAT (both double under double-precision builds), so these
+    helpers -- used only on the ``if not use_local:`` dense/global path in
+    ``refine_single_volume`` -- must accept and honor an explicit
+    ``dtype=np.float64`` request instead of silently staying at float32.
+    """
+
+    previous_best_translations = np.asarray([[1.6, -2.4], [0.3, 5.1]], dtype=np.float64)
+    voxel_size = 3.0
+
+    base_f32 = relion_translation_search_base(previous_best_translations)
+    base_f64 = relion_translation_search_base(previous_best_translations, dtype=np.float64)
+    assert base_f32.dtype == np.float32
+    assert base_f64.dtype == np.float64
+    np.testing.assert_allclose(base_f32, base_f64, atol=1e-6, rtol=0.0)
+
+    center_f32 = relion_translation_prior_center(previous_best_translations, voxel_size)
+    center_f64 = relion_translation_prior_center(previous_best_translations, voxel_size, dtype=np.float64)
+    assert center_f32.dtype == np.float32
+    assert center_f64.dtype == np.float64
+    np.testing.assert_allclose(center_f32, center_f64, atol=1e-6, rtol=0.0)
+
+    local_center_f32 = relion_translation_prior_center(previous_best_translations, voxel_size)
+    local_center_f64 = relion_translation_prior_center(
+        previous_best_translations, voxel_size, dtype=np.float64
+    )
+    assert local_center_f32.dtype == np.float32
+    assert local_center_f64.dtype == np.float64
+    np.testing.assert_allclose(local_center_f32, local_center_f64, atol=1e-6, rtol=0.0)
+
+    sigma_center_f32 = relion_sigma_offset_prior_center(previous_best_translations)
+    sigma_center_f64 = relion_sigma_offset_prior_center(previous_best_translations, dtype=np.float64)
+    assert sigma_center_f32.dtype == np.float32
+    assert sigma_center_f64.dtype == np.float64
+    np.testing.assert_allclose(sigma_center_f32, sigma_center_f64, atol=1e-6, rtol=0.0)
+
+    translations = np.asarray([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=np.float64)
+    log_prior_f32 = make_relion_translation_log_prior(
+        translations, voxel_size, sigma_offset_angstrom=10.0, prior_centers=center_f32
+    )
+    log_prior_f64 = make_relion_translation_log_prior(
+        translations,
+        voxel_size,
+        sigma_offset_angstrom=10.0,
+        prior_centers=center_f64,
+        dtype=np.float64,
+    )
+    assert log_prior_f32.dtype == np.float32
+    assert log_prior_f64.dtype == np.float64
+    np.testing.assert_allclose(log_prior_f32, log_prior_f64, atol=1e-5, rtol=0.0)
+
+    direction_prior = np.full(12, 1.0 / 12.0, dtype=np.float64)
+    direction_log_prior_f32 = make_relion_direction_log_prior(direction_prior, healpix_order=0)
+    direction_log_prior_f64 = make_relion_direction_log_prior(direction_prior, healpix_order=0, dtype=np.float64)
+    assert direction_log_prior_f32.dtype == np.float32
+    assert direction_log_prior_f64.dtype == np.float64
+    np.testing.assert_allclose(direction_log_prior_f32, direction_log_prior_f64, atol=1e-5, rtol=0.0)
 
 
 def test_local_search_precision_rejects_unknown_pass(monkeypatch):
     monkeypatch.delenv("RECOVAR_DIAGNOSTIC_FLOAT64_PASS2_ITERATIONS", raising=False)
     with pytest.raises(ValueError, match="pass_index"):
-        iteration_loop_module._local_search_precision_flags(12, pass_index=3)
+        dtype_policy_module._local_search_precision_flags(
+            12,
+            static_em_kwargs=scoring_policy._DENSE_EM_STATIC_KWARGS,
+            pass_index=3,
+        )
 
 # ---------------------------------------------------------------------------
 # Test constants -- 8x8 images for fast unit tests
@@ -283,27 +488,27 @@ def test_significance_offset_free_capture_preserves_margin_lost_after_large_comm
 def test_final_all_data_grid_correct_env_defaults_to_gui_quality(monkeypatch):
     env_name = "RECOVAR_FINAL_ALL_DATA_GRID_CORRECT"
     monkeypatch.delenv(env_name, raising=False)
-    assert iteration_loop_module._final_all_data_grid_correct_enabled() is False
+    assert finalization_policy._final_all_data_grid_correct_enabled(logger=iteration_loop_module.logger) is False
 
     monkeypatch.setenv(env_name, "0")
-    assert iteration_loop_module._final_all_data_grid_correct_enabled() is False
+    assert finalization_policy._final_all_data_grid_correct_enabled(logger=iteration_loop_module.logger) is False
 
     monkeypatch.setenv(env_name, "false")
-    assert iteration_loop_module._final_all_data_grid_correct_enabled() is False
+    assert finalization_policy._final_all_data_grid_correct_enabled(logger=iteration_loop_module.logger) is False
 
     monkeypatch.setenv(env_name, "1")
-    assert iteration_loop_module._final_all_data_grid_correct_enabled() is True
+    assert finalization_policy._final_all_data_grid_correct_enabled(logger=iteration_loop_module.logger) is True
 
     monkeypatch.setenv(env_name, "unexpected")
-    assert iteration_loop_module._final_all_data_grid_correct_enabled() is False
+    assert finalization_policy._final_all_data_grid_correct_enabled(logger=iteration_loop_module.logger) is False
 
 
 def test_final_all_data_after_max_iter_env_defaults_to_disabled(monkeypatch):
     env_name = "RECOVAR_FINAL_ALL_DATA_AFTER_MAX_ITER"
     monkeypatch.delenv(env_name, raising=False)
-    assert iteration_loop_module._final_all_data_after_max_iter_enabled() is False
     assert (
-        iteration_loop_module._should_run_final_all_data_iteration(
+        finalization_policy._should_run_final_all_data_iteration(
+            logger=iteration_loop_module.logger,
             has_converged=False,
             iteration=5,
             max_iter=5,
@@ -313,9 +518,9 @@ def test_final_all_data_after_max_iter_env_defaults_to_disabled(monkeypatch):
     )
 
     monkeypatch.setenv(env_name, "1")
-    assert iteration_loop_module._final_all_data_after_max_iter_enabled() is True
     assert (
-        iteration_loop_module._should_run_final_all_data_iteration(
+        finalization_policy._should_run_final_all_data_iteration(
+            logger=iteration_loop_module.logger,
             has_converged=False,
             iteration=5,
             max_iter=5,
@@ -325,7 +530,8 @@ def test_final_all_data_after_max_iter_env_defaults_to_disabled(monkeypatch):
         is True
     )
     assert (
-        iteration_loop_module._should_run_final_all_data_iteration(
+        finalization_policy._should_run_final_all_data_iteration(
+            logger=iteration_loop_module.logger,
             has_converged=False,
             iteration=5,
             max_iter=5,
@@ -335,7 +541,8 @@ def test_final_all_data_after_max_iter_env_defaults_to_disabled(monkeypatch):
         is False
     )
     assert (
-        iteration_loop_module._should_run_final_all_data_iteration(
+        finalization_policy._should_run_final_all_data_iteration(
+            logger=iteration_loop_module.logger,
             has_converged=True,
             iteration=5,
             max_iter=5,
@@ -346,7 +553,8 @@ def test_final_all_data_after_max_iter_env_defaults_to_disabled(monkeypatch):
     )
 
     assert (
-        iteration_loop_module._should_run_final_all_data_iteration(
+        finalization_policy._should_run_final_all_data_iteration(
+            logger=iteration_loop_module.logger,
             has_converged=False,
             iteration=4,
             max_iter=5,
@@ -355,7 +563,8 @@ def test_final_all_data_after_max_iter_env_defaults_to_disabled(monkeypatch):
         is False
     )
     assert (
-        iteration_loop_module._should_run_final_all_data_iteration(
+        finalization_policy._should_run_final_all_data_iteration(
+            logger=iteration_loop_module.logger,
             has_converged=False,
             iteration=5,
             max_iter=5,
@@ -368,7 +577,7 @@ def test_final_all_data_after_max_iter_env_defaults_to_disabled(monkeypatch):
 def test_final_local_sampling_orders_use_advanced_final_star_parent():
     """100k replay advances final parent hp6->hp7, so os1 must score fine hp8."""
 
-    parent_order, fine_order = iteration_loop_module._final_local_sampling_orders(
+    parent_order, fine_order = _final_local_sampling_orders(
         state_healpix_order=6,
         adaptive_oversampling=1,
         final_sampling_healpix_order=7,
@@ -381,12 +590,12 @@ def test_final_local_sampling_orders_use_advanced_final_star_parent():
 def test_final_local_sampling_orders_preserve_equal_order_and_state_fallback():
     """10k replay stays at hp6, and missing final metadata retains state hp6."""
 
-    assert iteration_loop_module._final_local_sampling_orders(
+    assert _final_local_sampling_orders(
         state_healpix_order=6,
         adaptive_oversampling=1,
         final_sampling_healpix_order=6,
     ) == (6, 7)
-    assert iteration_loop_module._final_local_sampling_orders(
+    assert _final_local_sampling_orders(
         state_healpix_order=6,
         adaptive_oversampling=1,
         final_sampling_healpix_order=None,
@@ -410,26 +619,96 @@ def test_local_debug_current_size_minus_one_is_wildcard():
 def test_k1_skip_significance_pruning_env_defaults_to_disabled(monkeypatch):
     env_name = "RECOVAR_K1_SKIP_SIGNIFICANCE_PRUNING"
     monkeypatch.delenv(env_name, raising=False)
-    assert iteration_loop_module._k1_skip_significance_pruning_enabled() is False
+    assert scoring_policy._k1_skip_significance_pruning_enabled() is False
 
     monkeypatch.setenv(env_name, "0")
-    assert iteration_loop_module._k1_skip_significance_pruning_enabled() is False
+    assert scoring_policy._k1_skip_significance_pruning_enabled() is False
 
     monkeypatch.setenv(env_name, "false")
-    assert iteration_loop_module._k1_skip_significance_pruning_enabled() is False
+    assert scoring_policy._k1_skip_significance_pruning_enabled() is False
 
     monkeypatch.setenv(env_name, "1")
-    assert iteration_loop_module._k1_skip_significance_pruning_enabled() is True
+    assert scoring_policy._k1_skip_significance_pruning_enabled() is True
 
     monkeypatch.setenv(env_name, "unexpected")
-    assert iteration_loop_module._k1_skip_significance_pruning_enabled() is False
+    assert scoring_policy._k1_skip_significance_pruning_enabled() is False
 
 
 def test_kclass_final_reconstruction_does_not_predivide_class_accumulators():
     source = inspect.getsource(iteration_loop_module.refine_single_volume)
+    final_start = source.index("RELION final all-data reconstruction start")
+    final_source = source[final_start:]
 
-    assert "final_ft_ctf[class_idx] /" not in source
-    assert "final_ft_y[class_idx] /" not in source
+    # Require the active class reconstruction, so a wrapper or a moved block
+    # cannot pass merely because neither forbidden expression exists there.
+    assert "final_class_means = jnp.stack(" in final_source
+    assert "final_ft_ctf[class_idx]," in final_source
+    assert "final_ft_y[class_idx]," in final_source
+    assert "final_ft_ctf[class_idx] /" not in final_source
+    assert "final_ft_y[class_idx] /" not in final_source
+
+
+@pytest.mark.parametrize(
+    ("iteration", "perturb_replay_max_iter", "expected_past_cutoff"),
+    [
+        (0, None, False),  # no cutoff: every iteration stays in range
+        (0, 1, False),  # iteration 0 -> recovar iter 1, at the cutoff
+        (1, 1, True),  # iteration 1 -> recovar iter 2, past the cutoff
+        (5, 1, True),  # cutoff stays exceeded on every later pass (monotonic)
+        (0, 0, True),  # cutoff 0 disables replay from the very first iteration
+    ],
+)
+def test_past_perturb_replay_max_iter_matches_one_indexed_cutoff(
+    iteration, perturb_replay_max_iter, expected_past_cutoff
+):
+    assert (
+        relion_replay_module._past_perturb_replay_max_iter(iteration, perturb_replay_max_iter)
+        is expected_past_cutoff
+    )
+
+
+def testrefine_single_volume_clears_perturb_replay_dir_past_cutoff_source():
+    """Regression for the bug where --replay-override-max-iter only gated the
+    explicit ``replay_iteration_overrides`` dict, leaving
+    ``refine_single_volume``'s independent per-iteration
+    sampling/model/optimiser STAR reads (including the "Replay override:
+    optimiser control <- ..." log line) active for every iteration
+    regardless of the cutoff. Asserts the loop body reassigns
+    ``perturb_replay_relion_dir`` itself (the same local variable every
+    downstream per-iteration STAR read in this function consults) via
+    ``_past_perturb_replay_max_iter``, rather than only gating
+    ``iter_replay_override``.
+    """
+    source = inspect.getsource(iteration_loop_module.refine_single_volume)
+    assert "perturb_replay_relion_dir = None" in source
+    assert "_past_perturb_replay_max_iter(" in source
+    assert "replay_saved_healpix_order = None" in source
+    assert source.count("_native_sampling_boundary_for_iteration(") >= 2
+
+
+@pytest.mark.parametrize(
+    ("iteration", "replay_dir", "cutoff", "sealed", "expected_native"),
+    [
+        (0, "/replay", None, None, False),
+        (0, "/replay", 0, None, True),
+        (0, "/replay", 1, None, False),
+        (1, "/replay", 1, None, True),
+        (1, None, 1, None, True),
+        (1, None, 1, object(), False),
+    ],
+)
+def test_native_sampling_boundary_transitions_at_replay_cutoff(
+    iteration, replay_dir, cutoff, sealed, expected_native
+):
+    assert (
+        relion_replay_module._native_sampling_boundary_for_iteration(
+            iteration=iteration,
+            perturb_replay_relion_dir=replay_dir,
+            perturb_replay_max_iter=cutoff,
+            sealed_sampling_state=sealed,
+        )
+        is expected_native
+    )
 
 
 def test_replay_translation_grid_preserves_state_grid_for_subtolerance_star_rounding(monkeypatch, tmp_path):
@@ -459,7 +738,7 @@ def test_replay_translation_grid_preserves_state_grid_for_subtolerance_star_roun
             "offset_step": 1.416667,
         }
 
-    monkeypatch.setattr(iteration_loop_module, "read_relion_sampling_metadata", fake_sampling_metadata)
+    monkeypatch.setattr(relion_replay_module, "read_relion_sampling_metadata", fake_sampling_metadata)
 
     state = State()
     state_grid = get_translation_grid(state.translation_range, state.translation_step)
@@ -478,7 +757,7 @@ def test_replay_translation_grid_preserves_state_grid_for_subtolerance_star_roun
         cryo=Cryo(),
         k_class_enabled=False,
         n_classes=1,
-        relion_half_inputs=iteration_loop_module._RelionHalfInputState.from_initial_values(
+        relion_half_inputs=HalfInputState.from_initial_values(
             previous_best_translations=None,
             previous_best_rotation_eulers=None,
             image_corrections=None,
@@ -494,9 +773,11 @@ def test_replay_translation_grid_preserves_state_grid_for_subtolerance_star_roun
         class_direction_prior_order_per_half=[None, None],
         global_direction_prior_per_half=[None, None],
         global_direction_prior_order_per_half=[None, None],
+        dtype=np.float64,
     )
 
     replay_grid = np.asarray(result.prior_translations)
+    assert replay_grid.dtype == np.float64
     assert replay_grid.shape[0] == 29
     assert get_translation_grid(state.translation_range, state.translation_step).shape[0] == 29
     assert state.translation_range == pytest.approx(3.0)
@@ -509,18 +790,18 @@ def test_k1_translation_grid_matches_relion_ceil_boundary_without_changing_k4(mo
     rounded_range = 4.25 / 1.4166666666666667
     rounded_step = 1.416667 / 1.4166666666666667
 
-    k1_grid = iteration_loop_module._translation_grid_for_class_count(
+    k1_grid = sampling_module._translation_grid_for_class_count(
         rounded_range,
         rounded_step,
         n_classes=1,
     )
-    k4_grid = iteration_loop_module._translation_grid_for_class_count(
+    k4_grid = sampling_module._translation_grid_for_class_count(
         rounded_range,
         rounded_step,
         n_classes=4,
     )
     monkeypatch.setenv("RECOVAR_K1_RELION_EXACT_TRANSLATION_GRID", "0")
-    diagnostic_control_grid = iteration_loop_module._translation_grid_for_class_count(
+    diagnostic_control_grid = sampling_module._translation_grid_for_class_count(
         rounded_range,
         rounded_step,
         n_classes=1,
@@ -540,302 +821,24 @@ def test_k1_translation_grid_matches_relion_ceil_boundary_without_changing_k4(mo
 def test_k1_translation_grid_rejects_invalid_diagnostic_switch(monkeypatch):
     monkeypatch.setenv("RECOVAR_K1_RELION_EXACT_TRANSLATION_GRID", "sometimes")
     with pytest.raises(ValueError, match="must be a boolean value"):
-        iteration_loop_module._translation_grid_for_class_count(3.0, 1.0, n_classes=1)
+        sampling_module._translation_grid_for_class_count(3.0, 1.0, n_classes=1)
 
 
-def _sealed_sampling_fixture():
-    return {
-        "consumer_relion_iteration": 2,
-        "directions_ipix": np.asarray([7, 19, 503], dtype=np.int64),
-        "rot_angles_deg": np.asarray([10.0, 20.0, 30.0], dtype=np.float64),
-        "tilt_angles_deg": np.asarray([40.0, 50.0, 60.0], dtype=np.float64),
-        "psi_angles_deg": np.asarray([0.0, 90.0], dtype=np.float64),
-        "translations_x_angstrom": np.asarray([-2.0, 0.0, 2.0], dtype=np.float64),
-        "translations_y_angstrom": np.asarray([0.0, 1.0, 0.0], dtype=np.float64),
-        "translations_z_angstrom": np.empty(0, dtype=np.float64),
-        "healpix_order_original": 3,
-        "psi_step_deg": 90.0,
-        "offset_range_angstrom": 2.0,
-        "offset_step_angstrom": 1.0,
-        "perturbation_factor": 0.5,
-        "random_perturbation": 0.125,
-        "sigma_rot_deg": 0.0,
-        "sigma_psi_deg": 0.0,
-        "is_3d": True,
-        "is_3d_trans": False,
-        "point_group": 202,
-        "point_group_order": 1,
-        "coarse_size": 56,
-        "full_size": 256,
-        "current_size": 56,
-    }
 
 
-def test_sealed_sampling_directly_materializes_restricted_eulers_and_translations():
-    sampling = _sealed_sampling_fixture()
-
-    _, eulers, translations = iteration_loop_module._sealed_sampling_base_grids(
-        sampling,
-        voxel_size_angstrom=2.0,
-    )
-
-    np.testing.assert_array_equal(
-        eulers,
-        np.asarray(
-            [
-                [10.0, 40.0, 0.0],
-                [20.0, 50.0, 0.0],
-                [30.0, 60.0, 0.0],
-                [10.0, 40.0, 90.0],
-                [20.0, 50.0, 90.0],
-                [30.0, 60.0, 90.0],
-            ],
-            dtype=np.float32,
-        ),
-    )
-    np.testing.assert_array_equal(
-        np.asarray(translations),
-        np.asarray([[-1.0, 0.0], [0.0, 0.5], [1.0, 0.0]], dtype=np.float32),
-    )
-    np.testing.assert_array_equal(
-        iteration_loop_module._sealed_sampling_rotation_ids(sampling),
-        np.asarray([7, 19, 503, 775, 787, 1271], dtype=np.int64),
-    )
-    direction_prior = np.linspace(1.0, 2.0, 768, dtype=np.float32)
-    expected_prior = np.log(
-        np.tile(direction_prior[np.asarray([7, 19, 503])], 2)
-    ).astype(np.float32)
-    np.testing.assert_array_equal(
-        iteration_loop_module._sealed_direction_log_prior(direction_prior, sampling),
-        expected_prior,
-    )
 
 
-def test_sealed_sampling_override_never_reads_external_replay_files(monkeypatch, tmp_path):
-    state = SimpleNamespace(
-        healpix_order=3,
-        max_healpix_order=3,
-        auto_local_healpix_order=4,
-        do_local_search=False,
-        sigma_rot=0.0,
-        sigma_psi=0.0,
-        translation_range=99.0,
-        translation_step=99.0,
-    )
-    monkeypatch.setattr(
-        iteration_loop_module,
-        "read_relion_sampling_metadata",
-        lambda path: pytest.fail(f"unexpected external sampling read: {path}"),
-    )
-    monkeypatch.setattr(
-        iteration_loop_module,
-        "read_relion_model_metadata",
-        lambda path: pytest.fail(f"unexpected external model read: {path}"),
-    )
-
-    result = iteration_loop_module.apply_iter_replay_overrides(
-        iter_replay_override=None,
-        perturb_replay_relion_dir=str(tmp_path / "wrong_prefix_and_iteration"),
-        perturb_replay_relion_prefix="wrong",
-        init_relion_iteration=99,
-        iteration=0,
-        state=state,
-        cs=8,
-        cryo=SimpleNamespace(voxel_size=2.0),
-        k_class_enabled=False,
-        n_classes=1,
-        relion_half_inputs=iteration_loop_module._RelionHalfInputState.from_initial_values(
-            previous_best_translations=None,
-            previous_best_rotation_eulers=None,
-            image_corrections=None,
-            scale_corrections=None,
-        ),
-        previous_best_rotations=[None, None],
-        noise_variance_per_half=[jnp.ones(IMAGE_SIZE), jnp.ones(IMAGE_SIZE)],
-        noise_variance=jnp.ones(IMAGE_SIZE),
-        previous_noise_radial_per_half=[None, None],
-        previous_noise_radial=None,
-        current_sigma_offset_angstrom=10.0,
-        class_direction_prior_per_half=[None, None],
-        class_direction_prior_order_per_half=[None, None],
-        global_direction_prior_per_half=[None, None],
-        global_direction_prior_order_per_half=[None, None],
-        sealed_sampling_state=_sealed_sampling_fixture(),
-    )
-
-    assert result.cs == 56
-    assert result.replay_meta["sealed_v3"] is True
-    np.testing.assert_array_equal(
-        np.asarray(result.prior_translations),
-        np.asarray([[-1.0, 0.0], [0.0, 0.5], [1.0, 0.0]], dtype=np.float32),
-    )
 
 
-def test_frozen_replay_explicitly_suppresses_external_direction_prior_reload(
-    monkeypatch,
-    tmp_path,
-):
-    state = SimpleNamespace(
-        healpix_order=3,
-        max_healpix_order=3,
-        auto_local_healpix_order=4,
-        do_local_search=False,
-        sigma_rot=0.0,
-        sigma_psi=0.0,
-        translation_range=3.0,
-        translation_step=1.0,
-    )
-    (tmp_path / "run_it002_half1_model.star").write_text("sealed control\n")
-    for half in (1, 2):
-        (tmp_path / f"run_it001_half{half}_model.star").write_text("must not read\n")
-    monkeypatch.setattr(
-        iteration_loop_module,
-        "read_relion_sampling_metadata",
-        lambda path: {
-            "random_perturbation": 0.0,
-            "perturbation_factor": 0.0,
-            "healpix_order": 3,
-            "psi_step": 7.5,
-            "offset_range": 3.0,
-            "offset_step": 1.0,
-        },
-    )
-    monkeypatch.setattr(
-        iteration_loop_module,
-        "read_relion_model_metadata",
-        lambda path: {"current_image_size": 8},
-    )
-    monkeypatch.setattr(
-        iteration_loop_module,
-        "read_relion_direction_prior",
-        lambda path: pytest.fail(f"unexpected direction-prior reload: {path}"),
-    )
-    priors = [
-        np.full(768, 1.0 / 768.0, dtype=np.float32),
-        np.full(768, 1.0 / 768.0, dtype=np.float32),
-    ]
-
-    iteration_loop_module.apply_iter_replay_overrides(
-        iter_replay_override={"relion_projector_state": None},
-        perturb_replay_relion_dir=str(tmp_path),
-        init_relion_iteration=0,
-        iteration=1,
-        state=state,
-        cs=8,
-        cryo=SimpleNamespace(voxel_size=1.0),
-        k_class_enabled=False,
-        n_classes=1,
-        relion_half_inputs=iteration_loop_module._RelionHalfInputState.from_initial_values(
-            previous_best_translations=None,
-            previous_best_rotation_eulers=None,
-            image_corrections=None,
-            scale_corrections=None,
-        ),
-        previous_best_rotations=[None, None],
-        noise_variance_per_half=[jnp.ones(IMAGE_SIZE), jnp.ones(IMAGE_SIZE)],
-        noise_variance=jnp.ones(IMAGE_SIZE),
-        previous_noise_radial_per_half=[None, None],
-        previous_noise_radial=None,
-        current_sigma_offset_angstrom=10.0,
-        class_direction_prior_per_half=[None, None],
-        class_direction_prior_order_per_half=[None, None],
-        global_direction_prior_per_half=priors,
-        global_direction_prior_order_per_half=[3, 3],
-        preserve_existing_direction_prior=True,
-    )
-
-    np.testing.assert_array_equal(priors[0], np.full(768, 1.0 / 768.0, dtype=np.float32))
-    np.testing.assert_array_equal(priors[1], np.full(768, 1.0 / 768.0, dtype=np.float32))
 
 
-def _captured_projector_override(projector):
-    return {
-        "projector_half_by_half": [projector, projector.copy()],
-        "projector_r_max_by_half": [4, 4],
-        "current_size": 8,
-        "padding_factor": 2,
-        "volume_shape": [8, 8, 8],
-        "n_classes": 1,
-        "source_manifest_sha256": "a" * 64,
-    }
 
 
-def test_captured_relion_projector_replay_state_is_atomic_and_copied():
-    projector = np.zeros((1, 9, 9, 5), dtype=np.complex64)
-    projector[0, 2, 3, 1] = np.complex64(1.25 - 0.5j)
-
-    state = relion_replay_module._parse_relion_projector_replay_state(
-        _captured_projector_override(projector),
-        n_classes=1,
-    )
-    projector[...] = np.complex64(99.0 + 7.0j)
-
-    assert state is not None
-    assert state.source_manifest_sha256 == "a" * 64
-    assert state.projector_r_max_by_half == (4, 4)
-    assert state.projector_half_by_half[0][0, 2, 3, 1] == np.complex64(1.25 - 0.5j)
-    assert state.projector_half_by_half[0].flags.writeable is False
-    resolved, r_max = iteration_loop_module._validate_captured_relion_projector_for_iteration(
-        state,
-        current_size=8,
-        volume_shape=(8, 8, 8),
-        padding_factor=2,
-        n_classes=1,
-    )
-    assert r_max == [4, 4]
-    assert resolved[0] is state.projector_half_by_half[0]
 
 
-@pytest.mark.parametrize(
-    ("mutation", "error_type", "message"),
-    [
-        (lambda value: value.pop("source_manifest_sha256"), ValueError, "keys must match"),
-        (
-            lambda value: value.__setitem__("source_manifest_sha256", "not-a-sha"),
-            ValueError,
-            "64 lowercase hex digits",
-        ),
-        (
-            lambda value: value.__setitem__("source_manifest_sha256", "A" * 64),
-            ValueError,
-            "64 lowercase hex digits",
-        ),
-        (
-            lambda value: value["projector_half_by_half"].__setitem__(
-                0, value["projector_half_by_half"][0].astype(np.complex128)
-            ),
-            TypeError,
-            "must be complex64",
-        ),
-        (
-            lambda value: value["projector_half_by_half"][0].__setitem__(
-                (0, 0, 0, 0), np.complex64(np.nan + 0j)
-            ),
-            ValueError,
-            "non-finite",
-        ),
-    ],
-)
-def test_captured_relion_projector_replay_state_rejects_corruption(mutation, error_type, message):
-    override = _captured_projector_override(np.zeros((1, 9, 9, 5), dtype=np.complex64))
-    mutation(override)
-    with pytest.raises(error_type, match=message):
-        relion_replay_module._parse_relion_projector_replay_state(override, n_classes=1)
 
 
-def test_captured_relion_projector_replay_state_rejects_live_geometry_mismatch():
-    state = relion_replay_module._parse_relion_projector_replay_state(
-        _captured_projector_override(np.zeros((1, 9, 9, 5), dtype=np.complex64)),
-        n_classes=1,
-    )
-    with pytest.raises(ValueError, match="current_size captured=8 replay=10"):
-        iteration_loop_module._validate_captured_relion_projector_for_iteration(
-            state,
-            current_size=10,
-            volume_shape=(8, 8, 8),
-            padding_factor=2,
-            n_classes=1,
-        )
+
 
 
 def test_local_translation_prior_ignores_stale_replay_grid_shape():
@@ -844,7 +847,7 @@ def test_local_translation_prior_ignores_stale_replay_grid_shape():
     assert current_grid.shape[0] == 29
     assert stale_replay_grid.shape[0] == 25
 
-    chosen, source, mismatched = iteration_loop_module._local_translation_prior_reference_translations(
+    chosen, source, mismatched = half_scoring._local_translation_prior_reference_translations(
         current_translations=current_grid + 0.125,
         base_translations=current_grid,
         replay_prior_translations=stale_replay_grid,
@@ -882,7 +885,7 @@ def test_replay_override_preserves_half_specific_sigma_offsets():
         cryo=Cryo(),
         k_class_enabled=False,
         n_classes=1,
-        relion_half_inputs=iteration_loop_module._RelionHalfInputState.from_initial_values(
+        relion_half_inputs=HalfInputState.from_initial_values(
             previous_best_translations=None,
             previous_best_rotation_eulers=None,
             image_corrections=None,
@@ -919,7 +922,7 @@ def test_replay_override_preserves_native_scale_and_rescales_star_image_correcti
         voxel_size = 1.0
 
     group_ids = [np.asarray([0, 1], dtype=np.int64), np.asarray([1], dtype=np.int64)]
-    relion_half_inputs = iteration_loop_module._RelionHalfInputState.from_initial_values(
+    relion_half_inputs = HalfInputState.from_initial_values(
         previous_best_translations=None,
         previous_best_rotation_eulers=None,
         image_corrections=[np.asarray([9.0, 9.0], dtype=np.float32), np.asarray([8.0], dtype=np.float32)],
@@ -968,7 +971,7 @@ def test_replay_override_preserves_native_scale_and_rescales_star_image_correcti
 
 
 def test_replay_explicit_scoring_scale_preserves_image_to_scale_ratio():
-    relion_half_inputs = iteration_loop_module._RelionHalfInputState.from_initial_values(
+    relion_half_inputs = HalfInputState.from_initial_values(
         previous_best_translations=None,
         previous_best_rotation_eulers=None,
         image_corrections=None,
@@ -1018,7 +1021,7 @@ def test_replay_explicit_scoring_scale_preserves_image_to_scale_ratio():
 
 
 def test_replay_cold_start_falls_back_to_serialized_scale():
-    relion_half_inputs = iteration_loop_module._RelionHalfInputState.from_initial_values(
+    relion_half_inputs = HalfInputState.from_initial_values(
         previous_best_translations=None,
         previous_best_rotation_eulers=None,
         image_corrections=None,
@@ -1066,8 +1069,8 @@ def test_replay_cold_start_falls_back_to_serialized_scale():
 
 
 @pytest.mark.parametrize("with_resident_state", [False, True])
-def test_replay_legacy_paired_image_scale_state_remains_exact(with_resident_state):
-    relion_half_inputs = iteration_loop_module._RelionHalfInputState.from_initial_values(
+def test_replay_explicit_paired_image_scale_state_remains_exact(with_resident_state):
+    relion_half_inputs = HalfInputState.from_initial_values(
         previous_best_translations=None,
         previous_best_rotation_eulers=None,
         image_corrections=(
@@ -1082,11 +1085,18 @@ def test_replay_legacy_paired_image_scale_state_remains_exact(with_resident_stat
         ),
     )
 
+    with pytest.raises(ValueError, match="Replay scale requires"):
+        iteration_loop_module._apply_replay_correction_overrides(
+            relion_half_inputs=relion_half_inputs,
+            replay_override={"scale_corrections": [np.asarray([4.0, 5.0]), None]},
+        )
+
     iteration_loop_module._apply_replay_correction_overrides(
         relion_half_inputs=relion_half_inputs,
         replay_override={
             "image_corrections": [np.asarray([1.0, 2.0]), np.asarray([], dtype=np.float32)],
-            "scale_corrections": [np.asarray([4.0, 5.0]), np.asarray([], dtype=np.float32)],
+            "serialized_scale_corrections": [np.asarray([4.0, 5.0]), np.asarray([], dtype=np.float32)],
+            "scoring_scale_corrections": [np.asarray([4.0, 5.0]), np.asarray([], dtype=np.float32)],
         },
     )
 
@@ -1095,7 +1105,7 @@ def test_replay_legacy_paired_image_scale_state_remains_exact(with_resident_stat
 
 
 def test_final_all_data_replay_uses_shared_live_scale_correction_contract():
-    source = inspect.getsource(iteration_loop_module._run_relion_iteration_loop)
+    source = inspect.getsource(iteration_loop_module.refine_single_volume)
     final_start = source.index("final_replay_last_numbered_state")
     final_end = source.index("final_noise_variance_per_half =", final_start)
     final_replay_source = source[final_start:final_end]
@@ -1104,7 +1114,7 @@ def test_final_all_data_replay_uses_shared_live_scale_correction_contract():
     assert "_final_replay_img_corr" not in final_replay_source
     assert "_final_replay_scale_corr" not in final_replay_source
 
-    relion_half_inputs = iteration_loop_module._RelionHalfInputState.from_initial_values(
+    relion_half_inputs = HalfInputState.from_initial_values(
         previous_best_translations=None,
         previous_best_rotation_eulers=None,
         image_corrections=[np.asarray([9.0, 9.0]), np.asarray([], dtype=np.float32)],
@@ -1135,13 +1145,12 @@ def test_final_all_data_replay_uses_shared_live_scale_correction_contract():
     ],
 )
 def test_final_all_data_replay_ignores_cold_start_only_overrides(overrides, expected):
-    assert iteration_loop_module._has_numbered_replay_iteration_overrides(overrides) is expected
+    assert relion_replay_module._has_numbered_replay_iteration_overrides(overrides) is expected
 
 
 def test_final_all_data_runs_with_cold_start_only_override(
     half_datasets,
     init_volume,
-    rotations,
     translations,
     monkeypatch,
 ):
@@ -1163,17 +1172,14 @@ def test_final_all_data_runs_with_cold_start_only_override(
         init_volume,
         jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
         jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-        rotations,
         translations,
-        disc_type="linear_interp",
-        max_iter=1,
-        image_batch_size=N_IMAGES,
-        rotation_block_size=N_ROTATIONS,
-        init_current_size=4,
-        init_healpix_order=2,
-        max_healpix_order=2,
-        low_resol_join_halves_angstrom=0.0,
-        replay_iteration_overrides=[{}, None],
+        options=RefinementOptions(
+            disc_type="linear_interp",
+            schedule=RefinementSchedule(max_iter=1, init_current_size=4, init_healpix_order=2, max_healpix_order=2),
+            batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=N_ROTATIONS),
+            parity=RelionParityOptions(low_resol_join_halves_angstrom=0.0),
+            replay=ReplayState(replay_iteration_overrides=[{}, None]),
+        ),
     )
 
     assert result["convergence_state"].has_converged is True
@@ -1183,7 +1189,6 @@ def test_final_all_data_runs_with_cold_start_only_override(
 def test_last_numbered_state_does_not_trigger_post_cap_final_all_data(
     half_datasets,
     init_volume,
-    rotations,
     translations,
     monkeypatch,
 ):
@@ -1209,23 +1214,20 @@ def test_last_numbered_state_does_not_trigger_post_cap_final_all_data(
         init_volume,
         jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
         jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-        rotations,
         translations,
-        disc_type="linear_interp",
-        max_iter=1,
-        image_batch_size=N_IMAGES,
-        rotation_block_size=N_ROTATIONS,
-        init_current_size=4,
-        init_healpix_order=2,
-        max_healpix_order=2,
-        low_resol_join_halves_angstrom=0.0,
+        options=RefinementOptions(
+            disc_type="linear_interp",
+            schedule=RefinementSchedule(max_iter=1, init_current_size=4, init_healpix_order=2, max_healpix_order=2),
+            batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=N_ROTATIONS),
+            parity=RelionParityOptions(low_resol_join_halves_angstrom=0.0),
+        ),
     )
 
     assert result["convergence_state"].has_converged is False
     assert result["final_all_data_ran"] is False
 
 
-def _pack_fake_local_search_outputs(
+def _mock_local_search_result(
     base_outputs,
     relion_stats,
     noise_stats,
@@ -1233,14 +1235,76 @@ def _pack_fake_local_search_outputs(
     n_units,
     best_pose_details=(),
 ):
-    outputs = list(base_outputs)
-    outputs.extend(best_pose_details)
-    outputs.append(relion_stats)
-    if kwargs.get("accumulate_noise", False):
-        outputs.append(noise_stats)
-    if kwargs.get("return_profile", False):
-        outputs.append({"reconstruction_sample_indices_by_image": [None] * int(n_units)})
-    return tuple(outputs)
+    best_rotations, best_translations = best_pose_details or (None, None)
+    return _LocalSearchIterationResult(
+        Ft_y=base_outputs[0],
+        Ft_ctf=base_outputs[1],
+        hard_assignment=base_outputs[2],
+        best_pose_rotations=best_rotations,
+        best_pose_translations=best_translations,
+        relion_stats=relion_stats,
+        noise_stats=noise_stats if kwargs.get("accumulate_noise", False) else None,
+        profile_summary=(
+            {"reconstruction_sample_indices_by_image": [None] * int(n_units)}
+            if kwargs.get("return_profile", False) else None
+        ),
+    )
+
+
+
+def _mock_dense_em_result(
+    *,
+    n_images,
+    n_rotations,
+    volume_size,
+    n_shells,
+    hard_assignments=None,
+    Ft_y=None,
+    Ft_ctf=None,
+    sigma2_offset=0.0,
+):
+    """Minimal dense result for controller tests, with explicit per-test overrides."""
+    return DenseEMResult(
+        mean=None,
+        hard_assignments=(
+            np.zeros(n_images, dtype=np.int32)
+            if hard_assignments is None else hard_assignments
+        ),
+        Ft_y=jnp.zeros(volume_size, dtype=jnp.complex64) if Ft_y is None else Ft_y,
+        Ft_ctf=jnp.ones(volume_size, dtype=jnp.complex64) if Ft_ctf is None else Ft_ctf,
+        stats=RelionStats(
+            log_evidence_per_image=jnp.zeros(n_images, dtype=jnp.float32),
+            best_log_score_per_image=jnp.zeros(n_images, dtype=jnp.float32),
+            max_posterior_per_image=jnp.ones(n_images, dtype=jnp.float32),
+            rotation_posterior_sums=jnp.ones(n_rotations, dtype=jnp.float32),
+        ),
+        noise_stats=NoiseStats(
+            wsum_sigma2_noise=jnp.ones(n_shells, dtype=jnp.float32),
+            wsum_img_power=jnp.ones(n_shells, dtype=jnp.float32),
+            wsum_sigma2_offset=sigma2_offset,
+            sumw=float(n_images),
+        ),
+    )
+
+
+def _mock_run_dense_em(
+    experiment_dataset,
+    mean,
+    mean_variance,
+    noise_variance,
+    rotations,
+    translations,
+    disc_type,
+    **kwargs,
+):
+    n_shells = experiment_dataset.image_shape[0] // 2 + 1
+    recon_vol_size = _mock_reconstruction_accumulator_size(experiment_dataset, kwargs)
+    return _mock_dense_em_result(
+        n_images=experiment_dataset.n_units,
+        n_rotations=np.asarray(rotations).shape[0],
+        volume_size=recon_vol_size,
+        n_shells=n_shells,
+    )
 
 
 def _mock_reconstruction_accumulator_size(experiment_dataset, kwargs, *, current_size=None):
@@ -1296,7 +1360,7 @@ def test_relion_raw_image_cache_loads_unique_loaders(monkeypatch):
     monkeypatch.setenv("RECOVAR_EM_RAW_IMAGE_CACHE", "auto")
     monkeypatch.setenv("RECOVAR_EM_RAW_IMAGE_CACHE_MAX_GB", "1")
 
-    iteration_loop_module._maybe_cache_raw_image_loaders([_RawCacheFakeDataset(loader), _RawCacheFakeDataset(loader)])
+    iteration_loop_module.maybe_cache_raw_image_loaders([_RawCacheFakeDataset(loader), _RawCacheFakeDataset(loader)])
 
     assert loader.load_count == 1
     assert loader._cached is not None
@@ -1307,7 +1371,7 @@ def test_relion_raw_image_cache_respects_memory_guard(monkeypatch):
     monkeypatch.setenv("RECOVAR_EM_RAW_IMAGE_CACHE", "auto")
     monkeypatch.setenv("RECOVAR_EM_RAW_IMAGE_CACHE_MAX_GB", "0.001")
 
-    iteration_loop_module._maybe_cache_raw_image_loaders([_RawCacheFakeDataset(loader)])
+    iteration_loop_module.maybe_cache_raw_image_loaders([_RawCacheFakeDataset(loader)])
 
     assert loader.load_count == 0
     assert loader._cached is None
@@ -1317,7 +1381,7 @@ def test_relion_raw_image_cache_can_be_disabled(monkeypatch):
     loader = _RawCacheFakeLoader()
     monkeypatch.setenv("RECOVAR_EM_RAW_IMAGE_CACHE", "off")
 
-    iteration_loop_module._maybe_cache_raw_image_loaders([_RawCacheFakeDataset(loader)])
+    iteration_loop_module.maybe_cache_raw_image_loaders([_RawCacheFakeDataset(loader)])
 
     assert loader.load_count == 0
     assert loader._cached is None
@@ -1368,861 +1432,8 @@ def test_exact_local_processed_half_cache_respects_memory_guard(monkeypatch):
     )
 
 
-def _force_exact_local_standard_gpu_default(monkeypatch):
-    from recovar.em.dense_single_volume import local_em_engine
-
-    monkeypatch.setattr(local_em_engine, "_visible_gpu_memory_bytes", lambda: None)
-
-
-def test_exact_local_microbatch_default_matches_profiled_256_window(monkeypatch):
-    _force_exact_local_standard_gpu_default(monkeypatch)
-    monkeypatch.delenv(EXACT_LOCAL_TARGET_ROW_PIXELS_ENV, raising=False)
-
-    assert _exact_local_max_hypotheses_per_microbatch(None, 8018) == 23696
-
-
-def test_exact_local_microbatch_high_memory_gpu_default(monkeypatch):
-    from recovar.em.dense_single_volume import local_em_engine
-
-    monkeypatch.delenv(EXACT_LOCAL_TARGET_ROW_PIXELS_ENV, raising=False)
-    monkeypatch.delenv(EXACT_LOCAL_BIG_JIT_MATMUL_MAX_GB_ENV, raising=False)
-    monkeypatch.setattr(local_em_engine, "_visible_gpu_memory_bytes", lambda: 80 * 1024**3)
-
-    assert (
-        _exact_local_max_hypotheses_per_microbatch(
-            None,
-            12861,
-            n_trans=36,
-            n_recon_windowed=12723,
-        )
-        == 19905
-    )
-
-
-def test_exact_local_score_only_cap_covers_100k_parent_tile(monkeypatch):
-    from recovar.em.dense_single_volume import local_em_engine
-
-    monkeypatch.delenv(EXACT_LOCAL_TARGET_ROW_PIXELS_ENV, raising=False)
-    monkeypatch.delenv(EXACT_LOCAL_BIG_JIT_MATMUL_MAX_GB_ENV, raising=False)
-    monkeypatch.delenv(EXACT_LOCAL_AUTO_MICROBATCH_BOOST_ENV, raising=False)
-    monkeypatch.setattr(local_em_engine, "_visible_gpu_memory_bytes", lambda: 80 * 1024**3)
-
-    rotation_counts = np.asarray([198], dtype=np.int32)
-    layout = LocalHypothesisLayout(
-        n_global_rotations=198,
-        n_pixels=1,
-        n_psi=1,
-        rotation_offsets=np.asarray([0, 198], dtype=np.int64),
-        rotation_ids_flat=np.arange(198, dtype=np.int32),
-        rotations_flat=np.broadcast_to(np.eye(3, dtype=np.float32), (198, 3, 3)).copy(),
-        rotation_log_priors_flat=np.zeros(198, dtype=np.float32),
-        rotation_counts=rotation_counts,
-        translation_grid=np.zeros((9, 2), dtype=np.float32),
-        translation_log_priors=np.zeros((1, 9), dtype=np.float32),
-    )
-    runtime_free_bytes = int(46.4 * 1024**3)
-    cap = _exact_local_effective_max_hypotheses_per_microbatch(
-        None,
-        12861,
-        n_trans=9,
-        n_recon_windowed=12723,
-        local_layout=layout,
-        image_batch_size=168,
-        rotation_block_size=198,
-        score_only=True,
-        runtime_free_memory_bytes=runtime_free_bytes,
-    )
-    expected_tile_cap = int(
-        runtime_free_bytes
-        * EXACT_LOCAL_SCORE_TILE_FREE_MEMORY_FRACTION
-        // (9 * 12861 * np.dtype(np.float32).itemsize * EXACT_LOCAL_SCORE_TILE_LIVE_FACTOR)
-    )
-
-    assert cap == expected_tile_cap
-    assert cap < 168 * 198
-    assert cap // 198 == 86
-
-
-def test_exact_local_score_only_cap_preserves_smaller_bucket_shape(monkeypatch):
-    from recovar.em.dense_single_volume import local_em_engine
-
-    monkeypatch.delenv(EXACT_LOCAL_TARGET_ROW_PIXELS_ENV, raising=False)
-    monkeypatch.delenv(EXACT_LOCAL_BIG_JIT_MATMUL_MAX_GB_ENV, raising=False)
-    monkeypatch.delenv(EXACT_LOCAL_AUTO_MICROBATCH_BOOST_ENV, raising=False)
-    monkeypatch.setattr(local_em_engine, "_visible_gpu_memory_bytes", lambda: 80 * 1024**3)
-
-    rotation_counts = np.asarray([198], dtype=np.int32)
-    layout = LocalHypothesisLayout(
-        n_global_rotations=198,
-        n_pixels=1,
-        n_psi=1,
-        rotation_offsets=np.asarray([0, 198], dtype=np.int64),
-        rotation_ids_flat=np.arange(198, dtype=np.int32),
-        rotations_flat=np.broadcast_to(np.eye(3, dtype=np.float32), (198, 3, 3)).copy(),
-        rotation_log_priors_flat=np.zeros(198, dtype=np.float32),
-        rotation_counts=rotation_counts,
-        translation_grid=np.zeros((9, 2), dtype=np.float32),
-        translation_log_priors=np.zeros((1, 9), dtype=np.float32),
-    )
-    cap = _exact_local_effective_max_hypotheses_per_microbatch(
-        None,
-        4003,
-        n_trans=9,
-        n_recon_windowed=3923,
-        local_layout=layout,
-        image_batch_size=168,
-        rotation_block_size=198,
-        score_only=True,
-        runtime_free_memory_bytes=int(46.4 * 1024**3),
-    )
-    buckets = bucket_local_hypothesis_layout(
-        layout,
-        image_batch_size=168,
-        rotation_block_size=198,
-        max_hypotheses_per_microbatch=cap,
-    )
-
-    assert cap >= 168 * 198
-    assert len(buckets) == 1
-
-
-def test_exact_local_xhalf_full_bpref_uses_conservative_high_memory_cap(monkeypatch):
-    from recovar.em.dense_single_volume import local_em_engine
-
-    monkeypatch.delenv(EXACT_LOCAL_TARGET_ROW_PIXELS_ENV, raising=False)
-    monkeypatch.delenv(EXACT_LOCAL_BIG_JIT_MATMUL_MAX_GB_ENV, raising=False)
-    monkeypatch.setattr(local_em_engine, "_visible_gpu_memory_bytes", lambda: 80 * 1024**3)
-
-    high_memory_cap = _exact_local_max_hypotheses_per_microbatch(
-        None,
-        8320,
-        n_trans=36,
-        n_recon_windowed=8320,
-    )
-    full_bpref_cap = _exact_local_max_hypotheses_per_microbatch(
-        None,
-        8320,
-        n_trans=36,
-        n_recon_windowed=8320,
-        allow_high_memory_default=False,
-    )
-
-    assert high_memory_cap == 30769
-    assert full_bpref_cap == 17127
-    assert full_bpref_cap < high_memory_cap
-
-
-def test_exact_local_xhalf_current_bpref_uses_conservative_high_memory_cap(monkeypatch):
-    from recovar.em.dense_single_volume import local_em_engine
-
-    monkeypatch.delenv(EXACT_LOCAL_TARGET_ROW_PIXELS_ENV, raising=False)
-    monkeypatch.delenv(EXACT_LOCAL_BIG_JIT_MATMUL_MAX_GB_ENV, raising=False)
-    monkeypatch.setattr(local_em_engine, "_visible_gpu_memory_bytes", lambda: 80 * 1024**3)
-
-    high_memory_cap = _exact_local_max_hypotheses_per_microbatch(
-        None,
-        4003,
-        n_trans=52,
-        n_recon_windowed=3923,
-    )
-    current_bpref_cap = _exact_local_max_hypotheses_per_microbatch(
-        None,
-        4003,
-        n_trans=52,
-        n_recon_windowed=3923,
-        allow_high_memory_default=False,
-    )
-
-    assert high_memory_cap == 63952
-    assert current_bpref_cap == 35933
-    assert current_bpref_cap < high_memory_cap
-
-
-def test_exact_local_microbatch_target_row_pixels_override(monkeypatch):
-    _force_exact_local_standard_gpu_default(monkeypatch)
-    monkeypatch.setenv(EXACT_LOCAL_TARGET_ROW_PIXELS_ENV, "380000000")
-
-    assert _exact_local_max_hypotheses_per_microbatch(None, 8018) == 47393
-
-
-def test_exact_local_microbatch_caps_fused_mstep_matmul(monkeypatch):
-    _force_exact_local_standard_gpu_default(monkeypatch)
-    monkeypatch.delenv(EXACT_LOCAL_TARGET_ROW_PIXELS_ENV, raising=False)
-    monkeypatch.delenv(EXACT_LOCAL_BIG_JIT_MATMUL_MAX_GB_ENV, raising=False)
-
-    assert (
-        _exact_local_max_hypotheses_per_microbatch(
-            None,
-            1091,
-            n_trans=21,
-            n_recon_windowed=1134,
-        )
-        == 65536
-    )
-
-
-def test_exact_local_microbatch_batches_full_parent_256_pass2(monkeypatch):
-    _force_exact_local_standard_gpu_default(monkeypatch)
-    monkeypatch.delenv(EXACT_LOCAL_TARGET_ROW_PIXELS_ENV, raising=False)
-    monkeypatch.delenv(EXACT_LOCAL_BIG_JIT_MATMUL_MAX_GB_ENV, raising=False)
-
-    cap = _exact_local_max_hypotheses_per_microbatch(
-        None,
-        33024,
-        n_trans=84,
-        n_recon_windowed=33024,
-    )
-    assert cap >= 3072
-
-    n_images = 12
-    local_rotations = 1416
-    rotation_counts = np.full(n_images, local_rotations, dtype=np.int32)
-    rotation_offsets = np.concatenate(([0], np.cumsum(rotation_counts))).astype(np.int64)
-    total_rotations = int(rotation_offsets[-1])
-    layout = LocalHypothesisLayout(
-        n_global_rotations=total_rotations,
-        n_pixels=1,
-        n_psi=1,
-        rotation_offsets=rotation_offsets,
-        rotation_ids_flat=np.arange(total_rotations, dtype=np.int32),
-        rotations_flat=np.broadcast_to(np.eye(3, dtype=np.float32), (total_rotations, 3, 3)).copy(),
-        rotation_log_priors_flat=np.zeros(total_rotations, dtype=np.float32),
-        rotation_counts=rotation_counts,
-        translation_grid=np.zeros((84, 2), dtype=np.float32),
-        translation_log_priors=np.zeros((n_images, 84), dtype=np.float32),
-    )
-
-    buckets = bucket_local_hypothesis_layout(
-        layout,
-        image_batch_size=17,
-        rotation_block_size=26,
-        max_hypotheses_per_microbatch=cap,
-    )
-
-    assert max(int(bucket.image_indices.shape[0]) for bucket in buckets) >= 2
-    assert len(buckets) <= (n_images + 1) // 2
-
-
-def test_exact_local_microbatch_boosts_high_res_local_batch_without_full_floor(monkeypatch):
-    _force_exact_local_standard_gpu_default(monkeypatch)
-    monkeypatch.delenv(EXACT_LOCAL_TARGET_ROW_PIXELS_ENV, raising=False)
-    monkeypatch.delenv(EXACT_LOCAL_BIG_JIT_MATMUL_MAX_GB_ENV, raising=False)
-    monkeypatch.delenv(EXACT_LOCAL_AUTO_MICROBATCH_BOOST_ENV, raising=False)
-    monkeypatch.delenv("RECOVAR_LOCAL_BUCKET_QUANTUM", raising=False)
-    monkeypatch.delenv("RECOVAR_EXACT_LOCAL_BUCKET_QUANTUM", raising=False)
-
-    n_images = 13
-    local_rotations = 1536
-    rotation_counts = np.full(n_images, local_rotations, dtype=np.int32)
-    rotation_offsets = np.concatenate(([0], np.cumsum(rotation_counts))).astype(np.int64)
-    total_rotations = int(rotation_offsets[-1])
-    layout = LocalHypothesisLayout(
-        n_global_rotations=total_rotations,
-        n_pixels=1,
-        n_psi=1,
-        rotation_offsets=rotation_offsets,
-        rotation_ids_flat=np.arange(total_rotations, dtype=np.int32),
-        rotations_flat=np.broadcast_to(np.eye(3, dtype=np.float32), (total_rotations, 3, 3)).copy(),
-        rotation_log_priors_flat=np.zeros(total_rotations, dtype=np.float32),
-        rotation_counts=rotation_counts,
-        translation_grid=np.zeros((116, 2), dtype=np.float32),
-        translation_log_priors=np.zeros((n_images, 116), dtype=np.float32),
-    )
-
-    base_cap = _exact_local_max_hypotheses_per_microbatch(
-        None,
-        33024,
-        n_trans=116,
-        n_recon_windowed=33024,
-    )
-    assert base_cap < n_images * local_rotations
-
-    cap = _exact_local_effective_max_hypotheses_per_microbatch(
-        None,
-        33024,
-        n_trans=116,
-        n_recon_windowed=33024,
-        local_layout=layout,
-        image_batch_size=n_images,
-        rotation_block_size=19,
-    )
-
-    assert cap == base_cap * 2
-    assert cap < n_images * local_rotations
-    buckets = bucket_local_hypothesis_layout(
-        layout,
-        image_batch_size=n_images,
-        rotation_block_size=19,
-        max_hypotheses_per_microbatch=cap,
-    )
-    assert {int(bucket.image_indices.shape[0]) for bucket in buckets[:-1]} == {5}
-    assert len(buckets) == 3
-    assert max(int(bucket.image_indices.shape[0]) for bucket in buckets) == 5
-
-
-def test_exact_local_microbatch_boost_can_be_disabled_for_mstep_pass2(monkeypatch):
-    _force_exact_local_standard_gpu_default(monkeypatch)
-    monkeypatch.delenv(EXACT_LOCAL_TARGET_ROW_PIXELS_ENV, raising=False)
-    monkeypatch.delenv(EXACT_LOCAL_BIG_JIT_MATMUL_MAX_GB_ENV, raising=False)
-    monkeypatch.delenv(EXACT_LOCAL_AUTO_MICROBATCH_BOOST_ENV, raising=False)
-    monkeypatch.delenv("RECOVAR_LOCAL_BUCKET_QUANTUM", raising=False)
-    monkeypatch.delenv("RECOVAR_EXACT_LOCAL_BUCKET_QUANTUM", raising=False)
-
-    n_images = 13
-    local_rotations = 1536
-    rotation_counts = np.full(n_images, local_rotations, dtype=np.int32)
-    rotation_offsets = np.concatenate(([0], np.cumsum(rotation_counts))).astype(np.int64)
-    total_rotations = int(rotation_offsets[-1])
-    layout = LocalHypothesisLayout(
-        n_global_rotations=total_rotations,
-        n_pixels=1,
-        n_psi=1,
-        rotation_offsets=rotation_offsets,
-        rotation_ids_flat=np.arange(total_rotations, dtype=np.int32),
-        rotations_flat=np.broadcast_to(np.eye(3, dtype=np.float32), (total_rotations, 3, 3)).copy(),
-        rotation_log_priors_flat=np.zeros(total_rotations, dtype=np.float32),
-        rotation_counts=rotation_counts,
-        translation_grid=np.zeros((116, 2), dtype=np.float32),
-        translation_log_priors=np.zeros((n_images, 116), dtype=np.float32),
-    )
-
-    base_cap = _exact_local_max_hypotheses_per_microbatch(
-        None,
-        33024,
-        n_trans=116,
-        n_recon_windowed=33024,
-    )
-    boosted_cap = _exact_local_effective_max_hypotheses_per_microbatch(
-        None,
-        33024,
-        n_trans=116,
-        n_recon_windowed=33024,
-        local_layout=layout,
-        image_batch_size=n_images,
-        rotation_block_size=19,
-    )
-    capped_pass2_cap = _exact_local_effective_max_hypotheses_per_microbatch(
-        None,
-        33024,
-        n_trans=116,
-        n_recon_windowed=33024,
-        local_layout=layout,
-        image_batch_size=n_images,
-        rotation_block_size=19,
-        allow_auto_boost=False,
-    )
-    bounded_xhalf_cap = _exact_local_effective_max_hypotheses_per_microbatch(
-        None,
-        33024,
-        n_trans=116,
-        n_recon_windowed=33024,
-        local_layout=layout,
-        image_batch_size=n_images,
-        rotation_block_size=19,
-        auto_boost_factor=1.25,
-    )
-
-    assert boosted_cap > base_cap
-    assert capped_pass2_cap == base_cap
-    assert bounded_xhalf_cap == int(np.floor(base_cap * 1.25))
-
-
-def test_exact_local_xhalf_mstep_uses_explicit_microbatch_boost_hook():
-    source = inspect.getsource(run_local_em_exact)
-
-    assert "allow_microbatch_auto_boost = True" in source
-    assert "auto_boost_factor=xhalf_auto_microbatch_boost" in source
-    assert "allow_high_memory_default=not xhalf_bpref_mstep" in source
-
-
-def test_exact_local_microbatch_env_override_keeps_lower_cap(monkeypatch):
-    _force_exact_local_standard_gpu_default(monkeypatch)
-    monkeypatch.setenv(EXACT_LOCAL_TARGET_ROW_PIXELS_ENV, "190000000")
-    monkeypatch.delenv(EXACT_LOCAL_BIG_JIT_MATMUL_MAX_GB_ENV, raising=False)
-    monkeypatch.delenv(EXACT_LOCAL_AUTO_MICROBATCH_BOOST_ENV, raising=False)
-
-    n_images = 13
-    local_rotations = 1536
-    rotation_counts = np.full(n_images, local_rotations, dtype=np.int32)
-    rotation_offsets = np.concatenate(([0], np.cumsum(rotation_counts))).astype(np.int64)
-    total_rotations = int(rotation_offsets[-1])
-    layout = LocalHypothesisLayout(
-        n_global_rotations=total_rotations,
-        n_pixels=1,
-        n_psi=1,
-        rotation_offsets=rotation_offsets,
-        rotation_ids_flat=np.arange(total_rotations, dtype=np.int32),
-        rotations_flat=np.broadcast_to(np.eye(3, dtype=np.float32), (total_rotations, 3, 3)).copy(),
-        rotation_log_priors_flat=np.zeros(total_rotations, dtype=np.float32),
-        rotation_counts=rotation_counts,
-        translation_grid=np.zeros((116, 2), dtype=np.float32),
-        translation_log_priors=np.zeros((n_images, 116), dtype=np.float32),
-    )
-
-    cap = _exact_local_effective_max_hypotheses_per_microbatch(
-        None,
-        33024,
-        n_trans=116,
-        n_recon_windowed=33024,
-        local_layout=layout,
-        image_batch_size=n_images,
-        rotation_block_size=19,
-    )
-
-    assert cap == _exact_local_max_hypotheses_per_microbatch(
-        None,
-        33024,
-        n_trans=116,
-        n_recon_windowed=33024,
-    )
-    assert cap < n_images * local_rotations
-
-
-def test_exact_local_xhalf_tail_microbatch_respects_outer_planner_tile():
-    rotation_counts = np.asarray([128, 766], dtype=np.int32)
-    rotation_offsets = np.asarray([0, 128, 894], dtype=np.int64)
-    layout = LocalHypothesisLayout(
-        n_global_rotations=894,
-        n_pixels=1,
-        n_psi=1,
-        rotation_offsets=rotation_offsets,
-        rotation_ids_flat=np.arange(894, dtype=np.int32),
-        rotations_flat=np.broadcast_to(np.eye(3, dtype=np.float32), (894, 3, 3)).copy(),
-        rotation_log_priors_flat=np.zeros(894, dtype=np.float32),
-        rotation_counts=rotation_counts,
-        translation_grid=np.zeros((116, 2), dtype=np.float32),
-        translation_log_priors=np.zeros((2, 116), dtype=np.float32),
-    )
-
-    cap = _exact_local_xhalf_tail_microbatch_cap(
-        15_500,
-        layout,
-        image_batch_size=37,
-        rotation_block_size=136,
-    )
-
-    assert cap == 37 * 136
-
-
-def test_exact_local_xhalf_tail_microbatch_keeps_cap_for_planned_neighborhoods():
-    rotation_counts = np.asarray([64, 136], dtype=np.int32)
-    rotation_offsets = np.asarray([0, 64, 200], dtype=np.int64)
-    layout = LocalHypothesisLayout(
-        n_global_rotations=200,
-        n_pixels=1,
-        n_psi=1,
-        rotation_offsets=rotation_offsets,
-        rotation_ids_flat=np.arange(200, dtype=np.int32),
-        rotations_flat=np.broadcast_to(np.eye(3, dtype=np.float32), (200, 3, 3)).copy(),
-        rotation_log_priors_flat=np.zeros(200, dtype=np.float32),
-        rotation_counts=rotation_counts,
-        translation_grid=np.zeros((116, 2), dtype=np.float32),
-        translation_log_priors=np.zeros((2, 116), dtype=np.float32),
-    )
-
-    assert (
-        _exact_local_xhalf_tail_microbatch_cap(
-            15_500,
-            layout,
-            image_batch_size=37,
-            rotation_block_size=136,
-        )
-        == 15_500
-    )
-
-
-def test_exact_local_xhalf_projection_cap_matches_case10_proven_bucket_boundary(monkeypatch):
-    monkeypatch.delenv(EXACT_LOCAL_XHALF_PROJECTION_TARGET_ROW_PIXELS_ENV, raising=False)
-    rotation_counts = np.asarray([128, 256, 520], dtype=np.int32)
-    rotation_offsets = np.concatenate(([0], np.cumsum(rotation_counts))).astype(np.int64)
-    total_rotations = int(rotation_offsets[-1])
-    layout = LocalHypothesisLayout(
-        n_global_rotations=total_rotations,
-        n_pixels=1,
-        n_psi=1,
-        rotation_offsets=rotation_offsets,
-        rotation_ids_flat=np.arange(total_rotations, dtype=np.int32),
-        rotations_flat=np.broadcast_to(np.eye(3, dtype=np.float32), (total_rotations, 3, 3)).copy(),
-        rotation_log_priors_flat=np.zeros(total_rotations, dtype=np.float32),
-        rotation_counts=rotation_counts,
-        translation_grid=np.zeros((116, 2), dtype=np.float32),
-        translation_log_priors=np.zeros((3, 116), dtype=np.float32),
-    )
-
-    cap = _exact_local_xhalf_projection_microbatch_cap(
-        14_171,
-        layout,
-        n_projection_pixels=8_258,
-        rotation_block_size=383,
-    )
-    buckets = bucket_local_hypothesis_layout(
-        layout,
-        image_batch_size=37,
-        rotation_block_size=383,
-        max_hypotheses_per_microbatch=cap,
-    )
-
-    assert cap == 40_000_000 // 8_258
-    assert max(
-        int(bucket.bucket_image_count) * int(bucket.bucket_rotation_count) * 8_258
-        for bucket in buckets
-    ) <= 40_000_000
-    assert {int(bucket.bucket_rotation_count) for bucket in buckets} == {128, 256, 766}
-
-
-def test_exact_local_xhalf_projection_cap_preserves_one_exact_neighborhood(monkeypatch):
-    monkeypatch.setenv(EXACT_LOCAL_XHALF_PROJECTION_TARGET_ROW_PIXELS_ENV, "1000")
-    rotation_counts = np.asarray([520], dtype=np.int32)
-    layout = LocalHypothesisLayout(
-        n_global_rotations=520,
-        n_pixels=1,
-        n_psi=1,
-        rotation_offsets=np.asarray([0, 520], dtype=np.int64),
-        rotation_ids_flat=np.arange(520, dtype=np.int32),
-        rotations_flat=np.broadcast_to(np.eye(3, dtype=np.float32), (520, 3, 3)).copy(),
-        rotation_log_priors_flat=np.zeros(520, dtype=np.float32),
-        rotation_counts=rotation_counts,
-        translation_grid=np.zeros((116, 2), dtype=np.float32),
-        translation_log_priors=np.zeros((1, 116), dtype=np.float32),
-    )
-
-    assert (
-        _exact_local_xhalf_projection_microbatch_cap(
-            14_171,
-            layout,
-            n_projection_pixels=8_258,
-            rotation_block_size=383,
-        )
-        == 766
-    )
-
-
-def test_local_search_outer_batch_sizing_uses_current_size_window():
-    source = inspect.getsource(iteration_loop_module._score_half_local)
-
-    assert "current_size_for_batch=cs_for_engine" in source
-
-
-def test_exact_local_microbatch_matmul_cap_can_be_disabled(monkeypatch):
-    _force_exact_local_standard_gpu_default(monkeypatch)
-    monkeypatch.delenv(EXACT_LOCAL_TARGET_ROW_PIXELS_ENV, raising=False)
-    monkeypatch.setenv(EXACT_LOCAL_BIG_JIT_MATMUL_MAX_GB_ENV, "0")
-
-    assert (
-        _exact_local_max_hypotheses_per_microbatch(
-            None,
-            1091,
-            n_trans=21,
-            n_recon_windowed=1134,
-        )
-        == 65536
-    )
-
-
-def test_exact_local_microbatch_target_row_pixels_rejects_invalid(monkeypatch):
-    _force_exact_local_standard_gpu_default(monkeypatch)
-    monkeypatch.setenv(EXACT_LOCAL_TARGET_ROW_PIXELS_ENV, "0")
-
-    with pytest.raises(ValueError, match=EXACT_LOCAL_TARGET_ROW_PIXELS_ENV):
-        _exact_local_max_hypotheses_per_microbatch(None, 8018)
-
-
-# ---------------------------------------------------------------------------
-# Helpers (same as test_fsc_resolution_loop.py)
-# ---------------------------------------------------------------------------
-
-
-def _hermitian_image_2d(image_shape, seed=42):
-    rng = np.random.default_rng(seed)
-    real_img = rng.standard_normal(image_shape).astype(np.float32)
-    ft = np.fft.fftshift(np.fft.fft2(real_img))
-    return jnp.array(ft, dtype=jnp.complex64)
-
-
-def _hermitian_volume(volume_shape, seed=42):
-    rng = np.random.default_rng(seed)
-    real_vol = rng.standard_normal(volume_shape).astype(np.float32)
-    ft = np.fft.fftshift(np.fft.fftn(real_vol))
-    return jnp.array(ft.ravel(), dtype=jnp.complex64)
-
-
-def _make_rotations(n, seed=42):
-    rng = np.random.default_rng(seed)
-    z = rng.standard_normal((n, 3, 3))
-    q, r = np.linalg.qr(z)
-    d = np.sign(np.diagonal(r, axis1=1, axis2=2))
-    q = q * d[:, None, :]
-    det = np.linalg.det(q)
-    q[det < 0] *= -1
-    return q.astype(np.float32)
-
-
-def test_local_search_engine_rotation_block_size_caps_dense_tiles():
-    assert _local_search_engine_rotation_block_size(64) == 64
-    assert _local_search_engine_rotation_block_size(1024) == 1024
-    assert _local_search_engine_rotation_block_size(5000) == 1024
-
-
-def test_relion_em_batch_sizing_preserves_small_safe_requests():
-    plan = _estimate_relion_em_batch_sizes(
-        requested_image_batch_size=4,
-        requested_rotation_block_size=8,
-        n_rot=8,
-        n_trans=5,
-        image_shape=IMAGE_SHAPE,
-        volume_shape=VOLUME_SHAPE,
-        padding_factor=2,
-        n_classes=1,
-        gpu_memory_gb=80.0,
-    )
-
-    assert plan.image_batch_size == 4
-    assert plan.rotation_block_size == 8
-
-
-def test_relion_em_batch_sizing_clamps_highres_projection_tiles():
-    plan = _estimate_relion_em_batch_sizes(
-        requested_image_batch_size=250,
-        requested_rotation_block_size=20000,
-        n_rot=294912,
-        n_trans=137,
-        image_shape=(384, 384),
-        volume_shape=(384, 384, 384),
-        padding_factor=2,
-        n_classes=1,
-        gpu_memory_gb=80.0,
-    )
-
-    assert plan.image_batch_size == 4
-    assert plan.rotation_block_size == 13
-    assert plan.projection_block_gb <= plan.projection_budget_gb
-    assert plan.pose_pixel_tile_gb < 3.0
-    assert plan.active_score_tile_gb <= plan.active_score_tile_budget_gb
-    assert plan.translation_tile_gb <= plan.translation_tile_budget_gb
-
-
-def test_relion_em_batch_sizing_does_not_pad_beyond_actual_rotation_grid():
-    plan = _estimate_relion_em_batch_sizes(
-        requested_image_batch_size=250,
-        requested_rotation_block_size=20000,
-        n_rot=4608,
-        n_trans=29,
-        image_shape=(384, 384),
-        volume_shape=(384, 384, 384),
-        padding_factor=2,
-        n_classes=1,
-        gpu_memory_gb=80.0,
-    )
-
-    assert plan.image_batch_size == 46
-    assert plan.rotation_block_size == 65
-    assert plan.projection_block_gb <= plan.projection_budget_gb
-    assert plan.active_score_tile_gb <= plan.active_score_tile_budget_gb
-
-
-def test_relion_em_batch_sizing_uses_runtime_gpu_occupancy(monkeypatch):
-    monkeypatch.setattr(iteration_loop_module.utils, "get_gpu_memory_total", lambda: 80.0)
-    monkeypatch.setattr(iteration_loop_module.utils, "get_gpu_memory_used", lambda: 60.0)
-
-    plan = _estimate_relion_em_batch_sizes(
-        requested_image_batch_size=250,
-        requested_rotation_block_size=20000,
-        n_rot=4608,
-        n_trans=29,
-        image_shape=(384, 384),
-        volume_shape=(384, 384, 384),
-        padding_factor=2,
-        n_classes=1,
-        gpu_memory_gb=None,
-    )
-
-    assert plan.gpu_used_estimate_gb == pytest.approx(60.0)
-    assert plan.rotation_block_size < 4608
-    assert plan.projection_block_gb <= plan.projection_budget_gb
-
-
-def test_relion_em_batch_sizing_caps_runtime_highres_local_translation_tile(monkeypatch):
-    monkeypatch.setattr(iteration_loop_module.utils, "get_gpu_memory_total", lambda: 80.0)
-    monkeypatch.setattr(iteration_loop_module.utils, "get_gpu_memory_used", lambda: 24.0)
-
-    plan = _estimate_relion_em_batch_sizes(
-        requested_image_batch_size=250,
-        requested_rotation_block_size=4608,
-        n_rot=4608,
-        n_trans=116,
-        image_shape=(384, 384),
-        volume_shape=(384, 384, 384),
-        padding_factor=2,
-        n_classes=1,
-        gpu_memory_gb=None,
-    )
-
-    assert plan.image_batch_size <= 56
-    assert plan.translation_tile_gb <= plan.translation_tile_budget_gb
-    assert plan.gpu_used_estimate_gb == pytest.approx(24.0)
-
-
-def test_relion_em_batch_sizing_caps_dense_big_jit_score_workspace(monkeypatch):
-    monkeypatch.setattr(iteration_loop_module.utils, "get_gpu_memory_total", lambda: 80.0)
-    monkeypatch.setattr(iteration_loop_module.utils, "get_gpu_memory_used", lambda: 41.0)
-
-    plan = _estimate_relion_em_batch_sizes(
-        requested_image_batch_size=64,
-        requested_rotation_block_size=8192,
-        n_rot=36864,
-        n_trans=29,
-        image_shape=(256, 256),
-        volume_shape=(256, 256, 256),
-        padding_factor=2,
-        n_classes=1,
-        gpu_memory_gb=None,
-    )
-
-    assert plan.image_batch_size == 50
-    assert plan.rotation_block_size == 146
-    assert plan.projection_block_gb <= plan.projection_budget_gb
-    assert plan.pose_pixel_tile_gb < 3.0
-    assert plan.active_score_tile_gb <= plan.active_score_tile_budget_gb
-    assert plan.gpu_used_estimate_gb == pytest.approx(41.0)
-
-
-def test_relion_em_batch_sizing_uses_active_window_for_dense_score_workspace(monkeypatch):
-    monkeypatch.setattr(iteration_loop_module.utils, "get_gpu_memory_total", lambda: 80.0)
-    monkeypatch.setattr(iteration_loop_module.utils, "get_gpu_memory_used", lambda: 0.0)
-
-    common = dict(
-        requested_image_batch_size=64,
-        requested_rotation_block_size=8192,
-        n_rot=36864,
-        n_trans=29,
-        image_shape=(256, 256),
-        volume_shape=(256, 256, 256),
-        padding_factor=2,
-        n_classes=1,
-        gpu_memory_gb=None,
-    )
-    low_res = _estimate_relion_em_batch_sizes(**common, current_size=56)
-    high_res = _estimate_relion_em_batch_sizes(**common, current_size=248)
-
-    assert low_res.rotation_block_size == 8192
-    assert high_res.rotation_block_size < 8192
-    assert low_res.score_pixel_count < high_res.score_pixel_count
-
-
-def test_relion_em_batch_sizing_allows_larger_adaptive_pass1_blocks():
-    common = dict(
-        requested_image_batch_size=500,
-        requested_rotation_block_size=5000,
-        n_rot=36864,
-        n_trans=29,
-        image_shape=(256, 256),
-        volume_shape=(256, 256, 256),
-        padding_factor=2,
-        n_classes=1,
-        gpu_memory_gb=80.0,
-    )
-
-    pass1_coarse = _estimate_relion_em_batch_sizes(**common, current_size=100)
-    pass2_fine = _estimate_relion_em_batch_sizes(**common, current_size=154)
-
-    assert pass1_coarse.score_pixel_count < pass2_fine.score_pixel_count
-    assert pass1_coarse.rotation_block_size > pass2_fine.rotation_block_size
-    assert pass1_coarse.pose_pixel_tile_gb <= pass1_coarse.projection_budget_gb
-    assert pass2_fine.pose_pixel_tile_gb <= pass2_fine.projection_budget_gb
-
-
-def test_relion_em_batch_sizing_projection_budget_override_expands_pass1_blocks(monkeypatch):
-    common = dict(
-        requested_image_batch_size=64,
-        requested_rotation_block_size=8192,
-        n_rot=36864,
-        n_trans=29,
-        image_shape=(256, 256),
-        volume_shape=(256, 256, 256),
-        padding_factor=2,
-        n_classes=1,
-        gpu_memory_gb=80.0,
-        current_size=100,
-    )
-
-    monkeypatch.delenv("RECOVAR_RELION_EM_BATCH_PROJECTION_FRACTION", raising=False)
-    default = _estimate_relion_em_batch_sizes(**common)
-
-    monkeypatch.setenv("RECOVAR_RELION_EM_BATCH_PROJECTION_FRACTION", "0.40")
-    expanded = _estimate_relion_em_batch_sizes(**common)
-
-    assert expanded.rotation_block_size > default.rotation_block_size
-    assert expanded.rotation_block_size <= common["requested_rotation_block_size"]
-    assert expanded.pose_pixel_tile_gb <= expanded.projection_budget_gb
-
-
-def test_relion_em_batch_sizing_projection_budget_override_rejects_invalid(monkeypatch):
-    monkeypatch.setenv("RECOVAR_RELION_EM_BATCH_PROJECTION_FRACTION", "0")
-
-    with pytest.raises(ValueError, match="RECOVAR_RELION_EM_BATCH_PROJECTION_FRACTION"):
-        _estimate_relion_em_batch_sizes(
-            requested_image_batch_size=64,
-            requested_rotation_block_size=8192,
-            n_rot=36864,
-            n_trans=29,
-            image_shape=(256, 256),
-            volume_shape=(256, 256, 256),
-            padding_factor=2,
-            n_classes=1,
-            gpu_memory_gb=80.0,
-            current_size=100,
-        )
-
-
-def test_relion_em_batch_sizing_clamps_highres_translation_tiles():
-    plan = _estimate_relion_em_batch_sizes(
-        requested_image_batch_size=250,
-        requested_rotation_block_size=1024,
-        n_rot=1024,
-        n_trans=137,
-        image_shape=(384, 384),
-        volume_shape=(384, 384, 384),
-        padding_factor=2,
-        n_classes=1,
-        gpu_memory_gb=80.0,
-    )
-
-    assert plan.image_batch_size == 9
-    assert plan.rotation_block_size == 13
-    assert plan.pose_pixel_tile_gb < 3.0
-    assert plan.translation_tile_gb <= plan.translation_tile_budget_gb
-
-
-def test_relion_em_batch_sizing_accounts_for_k_classes():
-    single = _estimate_relion_em_batch_sizes(
-        requested_image_batch_size=250,
-        requested_rotation_block_size=20000,
-        n_rot=294912,
-        n_trans=137,
-        image_shape=(384, 384),
-        volume_shape=(384, 384, 384),
-        padding_factor=2,
-        n_classes=1,
-        gpu_memory_gb=80.0,
-    )
-    k4 = _estimate_relion_em_batch_sizes(
-        requested_image_batch_size=250,
-        requested_rotation_block_size=20000,
-        n_rot=294912,
-        n_trans=137,
-        image_shape=(384, 384),
-        volume_shape=(384, 384, 384),
-        padding_factor=2,
-        n_classes=4,
-        gpu_memory_gb=80.0,
-    )
-
-    assert k4.image_batch_size <= single.image_batch_size
-    assert k4.rotation_block_size <= single.rotation_block_size
-
-
 def test_build_local_hypothesis_layout_and_bucketization_preserve_per_image_support(monkeypatch):
-    import recovar.em.dense_single_volume.local_layout as local_layout_mod
+    import recovar.em.local.local_layout as local_layout_mod
 
     call_count = {"value": 0}
 
@@ -2236,7 +1447,6 @@ def test_build_local_hypothesis_layout_and_bucketization_preserve_per_image_supp
         per_image=False,
         grid_metadata=None,
     ):
-        _ = (prior_rotation_indices, sigma_rot, sigma_psi, healpix_order, sigma_cutoff, grid_metadata)
         assert per_image
         image_idx = call_count["value"]
         call_count["value"] += 1
@@ -2356,6 +1566,29 @@ def test_build_pass2_hypothesis_layout_accepts_fine_translation_log_prior():
         layout.translation_log_priors,
         np.broadcast_to(fine_prior[None, :], (2, fine_prior.shape[0])),
     )
+
+
+def test_build_pass2_hypothesis_layout_preserves_float64_operands():
+    delta = 2.0**-40
+    layout = build_pass2_hypothesis_layout(
+        [np.array([0], dtype=np.int32)],
+        n_coarse_rotations=rotation_grid_size(0),
+        n_coarse_translations=1,
+        nside_level=0,
+        translations=np.array([[1.0 + delta, 0.0]], dtype=np.float64),
+        oversampling_order=0,
+        rotation_log_prior=np.full(rotation_grid_size(0), 1.0 + delta, dtype=np.float64),
+        fine_translation_log_prior=np.array([1.0 + delta], dtype=np.float64),
+        dtype=np.float64,
+    )
+
+    assert layout.rotations_flat.dtype == np.float64
+    assert layout.translation_grid.dtype == np.float64
+    assert layout.rotation_log_priors_flat.dtype == np.float64
+    assert layout.translation_log_priors.dtype == np.float64
+    assert layout.translation_grid[0, 0] == 1.0 + delta
+    assert layout.rotation_log_priors_flat[0] == 1.0 + delta
+    assert layout.translation_log_priors[0, 0] == 1.0 + delta
 
 
 def test_build_pass2_hypothesis_layout_rejects_rotation_ids_outside_coarse_grid():
@@ -2593,7 +1826,7 @@ def test_expand_significant_samples_to_full_parent_translations_preserves_rotati
         np.zeros(0, dtype=np.int64),
     ]
 
-    expanded = iteration_loop_module._expand_significant_samples_to_full_parent_translations(
+    expanded = half_scoring._expand_significant_samples_to_full_parent_translations(
         samples,
         n_parent_translations=3,
     )
@@ -2616,7 +1849,7 @@ def test_expand_significant_samples_to_full_parent_translations_preserves_rotati
 def test_local_adaptive_pass2_denominator_support_mode(monkeypatch, value, expected):
     monkeypatch.setenv("RECOVAR_LOCAL_ADAPTIVE_PASS2_DENOMINATOR_SUPPORT", value)
 
-    assert iteration_loop_module._local_adaptive_pass2_denominator_support_mode() == expected
+    assert scoring_policy._local_adaptive_pass2_denominator_support_mode() == expected
 
 
 def test_build_local_adaptive_pass2_hypothesis_layout_accepts_int64_packed_samples():
@@ -2946,7 +2179,6 @@ def test_build_local_hypothesis_layout_parent_expands_relion_coarse_support():
 def test_score_half_local_parent_layout_ignores_global_rotation_prior_for_adaptive_pass2(monkeypatch, rng):
     dataset = MockDataset(2, rng)
     captured = {}
-    rotation_log_prior = np.linspace(-0.75, 0.25, rotation_grid_size(0), dtype=np.float32)
 
     class StopAfterParentLayout(Exception):
         pass
@@ -2968,41 +2200,24 @@ def test_score_half_local_parent_layout_ignores_global_rotation_prior_for_adapti
         rotation_log_prior=None,
         rotation_grid_random_perturbation=0.0,
         rotation_grid_angular_sampling_deg=None,
+        dtype=np.float32,
     ):
-        _ = (
-            prior_rotations,
-            rotation_grid_rotations,
-            sigma_rot,
-            sigma_psi,
-            healpix_order,
-            translations,
-            prior_translations,
-            sigma_offset_angstrom,
-            offset_range_pixels,
-            voxel_size,
-            grid_metadata,
-            translation_prior_reference_translations,
-            rotation_grid_random_perturbation,
-            rotation_grid_angular_sampling_deg,
-        )
         captured["rotation_log_prior"] = (
             None if rotation_log_prior is None else np.asarray(rotation_log_prior, dtype=np.float32).copy()
         )
         raise StopAfterParentLayout
 
-    monkeypatch.setattr(iteration_loop_module, "build_local_search_grid_metadata", lambda _order: {})
-    monkeypatch.setattr(iteration_loop_module, "build_local_hypothesis_layout", fake_build_local_hypothesis_layout)
+    monkeypatch.setattr(half_scoring, "build_local_search_grid_metadata", lambda _order: {})
+    monkeypatch.setattr(half_scoring, "build_local_hypothesis_layout", fake_build_local_hypothesis_layout)
 
     with pytest.raises(StopAfterParentLayout):
-        iteration_loop_module._score_half_local(
+        half_scoring._score_half_local(
             k=0,
             experiment_dataset=dataset,
             means_k=jnp.zeros(VOLUME_SIZE, dtype=jnp.complex64),
-            mean_variance=jnp.ones(VOLUME_SIZE, dtype=jnp.float32),
             noise_variance_k=jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
             previous_best_rotation_eulers_k=np.zeros((dataset.n_units, 3), dtype=np.float32),
             local_search_rotations=np.repeat(np.eye(3, dtype=np.float32)[None, :, :], 2, axis=0),
-            local_search_rotation_eulers=np.zeros((2, 3), dtype=np.float32),
             local_search_order=1,
             sigma_rot=np.deg2rad(1.0),
             sigma_psi=np.deg2rad(1.0),
@@ -3011,7 +2226,6 @@ def test_score_half_local_parent_layout_ignores_global_rotation_prior_for_adapti
             trans_prior_center=np.zeros((dataset.n_units, 2), dtype=np.float32),
             trans_prior_center_for_engine=np.zeros((dataset.n_units, 2), dtype=np.float32),
             current_sigma_offset_angstrom=1.0,
-            current_translation_range=1.0,
             disc_type="linear_interp",
             cs_for_engine=None,
             local_pass1_current_size=4,
@@ -3021,7 +2235,6 @@ def test_score_half_local_parent_layout_ignores_global_rotation_prior_for_adapti
             disable_adjoint_y=False,
             disable_adjoint_ctf=False,
             max_significants=None,
-            state=type("State", (), {"adaptive_oversampling": 1})(),
             iteration=3,
             save_intermediates_dir=None,
             local_search_random_perturbation=0.0,
@@ -3030,25 +2243,21 @@ def test_score_half_local_parent_layout_ignores_global_rotation_prior_for_adapti
             diagnostic_score_only=False,
             local_search_translation_prior_mode="coarse",
             replay_prior_translations=None,
-            rotation_log_prior_k=rotation_log_prior,
             class_log_priors=None,
             k_class_enabled=False,
             collect_local_search_profile=False,
             safe_batch_sizes=lambda *args, **kwargs: (1, 1),
-            class_assignments=[None],
-            class_posterior_per_half=[None],
-            class_full_posterior_per_half=[None],
-            best_pose_rotations=[None],
-            best_pose_rotation_eulers=[None],
-            best_pose_translations=[None],
+            outputs=score_outputs.PerHalfOutputs(),
             local_profile_history=[],
         )
 
     assert captured["rotation_log_prior"] is None
 
 
-@pytest.mark.parametrize("k_class_enabled", [False, True])
-def test_score_half_local_forwards_mstep_grid_to_k1_and_k4_dispatch(monkeypatch, rng, k_class_enabled):
+@pytest.mark.parametrize("n_classes", [1, 2, 4], ids=["K1", "K2", "K4"])
+def test_score_half_local_forwards_mstep_grid_for_each_class_count(monkeypatch, rng, n_classes):
+    """Forward the mean/prior class axes and M-step grids to local scoring."""
+    k_class_enabled = n_classes > 1
     dataset = MockDataset(1, rng)
     score_grid = np.repeat(np.eye(3, dtype=np.float32)[None], 2, axis=0)
     mstep_grid = np.repeat((5.0 * np.eye(3, dtype=np.float32))[None], 2, axis=0)
@@ -3058,24 +2267,26 @@ def test_score_half_local_forwards_mstep_grid_to_k1_and_k4_dispatch(monkeypatch,
         pass
 
     def fake_run_local_search_iteration(*args, **kwargs):
-        _ = args
+        captured["mean_shape"] = args[1].shape
         captured.update(kwargs)
         raise DispatchCaptured
 
-    monkeypatch.setitem(iteration_loop_module._DENSE_EM_STATIC_KWARGS, "use_float64_scoring", True)
-    monkeypatch.setitem(iteration_loop_module._DENSE_EM_STATIC_KWARGS, "use_float64_projections", True)
+    monkeypatch.setitem(scoring_policy._DENSE_EM_STATIC_KWARGS, "use_float64_scoring", True)
+    monkeypatch.setitem(scoring_policy._DENSE_EM_STATIC_KWARGS, "use_float64_projections", True)
     monkeypatch.delenv("RECOVAR_DIAGNOSTIC_FLOAT64_PASS2_ITERATIONS", raising=False)
-    monkeypatch.setattr(iteration_loop_module, "_run_local_search_iteration", fake_run_local_search_iteration)
+    monkeypatch.setattr(half_scoring, "_run_local_search_iteration", fake_run_local_search_iteration)
     with pytest.raises(DispatchCaptured):
-        iteration_loop_module._score_half_local(
+        half_scoring._score_half_local(
             k=0,
             experiment_dataset=dataset,
-            means_k=(jnp.zeros(VOLUME_SIZE, dtype=jnp.complex64) if not k_class_enabled else jnp.zeros((2, VOLUME_SIZE), dtype=jnp.complex64)),
-            mean_variance=jnp.ones(VOLUME_SIZE, dtype=jnp.float32),
+            means_k=(
+                jnp.zeros(VOLUME_SIZE, dtype=jnp.complex64)
+                if not k_class_enabled
+                else jnp.zeros((n_classes, VOLUME_SIZE), dtype=jnp.complex64)
+            ),
             noise_variance_k=jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
             previous_best_rotation_eulers_k=np.zeros((dataset.n_units, 3), dtype=np.float32),
             local_search_rotations=score_grid,
-            local_search_rotation_eulers=np.zeros((2, 3), dtype=np.float32),
             local_search_mstep_rotations=mstep_grid,
             local_search_order=0,
             sigma_rot=np.deg2rad(1.0),
@@ -3085,7 +2296,6 @@ def test_score_half_local_forwards_mstep_grid_to_k1_and_k4_dispatch(monkeypatch,
             trans_prior_center=np.zeros((dataset.n_units, 2), dtype=np.float32),
             trans_prior_center_for_engine=np.zeros((dataset.n_units, 2), dtype=np.float32),
             current_sigma_offset_angstrom=1.0,
-            current_translation_range=1.0,
             disc_type="linear_interp",
             cs_for_engine=None,
             local_pass1_current_size=None,
@@ -3095,7 +2305,6 @@ def test_score_half_local_forwards_mstep_grid_to_k1_and_k4_dispatch(monkeypatch,
             disable_adjoint_y=False,
             disable_adjoint_ctf=False,
             max_significants=-1,
-            state=type("State", (), {"adaptive_oversampling": 0})(),
             iteration=3,
             save_intermediates_dir=None,
             local_search_random_perturbation=0.0,
@@ -3104,24 +2313,22 @@ def test_score_half_local_forwards_mstep_grid_to_k1_and_k4_dispatch(monkeypatch,
             diagnostic_score_only=False,
             local_search_translation_prior_mode="current",
             replay_prior_translations=None,
-            rotation_log_prior_k=None,
-            class_log_priors=np.zeros(2, dtype=np.float32) if k_class_enabled else None,
+            class_log_priors=np.zeros(n_classes, dtype=np.float32) if k_class_enabled else None,
             k_class_enabled=k_class_enabled,
             collect_local_search_profile=False,
             safe_batch_sizes=lambda *args, **kwargs: (1, 16),
-            class_assignments=[None],
-            class_posterior_per_half=[None],
-            class_full_posterior_per_half=[None],
-            best_pose_rotations=[None],
-            best_pose_rotation_eulers=[None],
-            best_pose_translations=[None],
+            outputs=score_outputs.PerHalfOutputs(),
             local_profile_history=[],
         )
 
+    expected_mean_shape = (VOLUME_SIZE,) if n_classes == 1 else (n_classes, VOLUME_SIZE)
+    assert captured["mean_shape"] == expected_mean_shape
+    if k_class_enabled:
+        assert captured["class_log_priors"].shape == (n_classes,)
     np.testing.assert_array_equal(captured["rotation_grid_mstep_rotations"], mstep_grid)
     assert captured["generate_relion_mstep_rotations"] is True
     assert (captured["class_log_priors"] is not None) is k_class_enabled
-    assert captured["return_significant_counts"] is False
+    assert "return_significant_counts" not in captured
     assert captured["use_float64_scoring"] is True
     assert captured["use_float64_projections"] is True
 
@@ -3218,6 +2425,9 @@ def test_lazy_pass2_layouts_request_aligned_relion_mstep_rotations(monkeypatch, 
             outputs.append(child_ids)
         if kwargs.get("return_mstep_rotations"):
             outputs.append(mstep)
+        if kwargs.get("return_source_eulers"):
+            # The adaptive local builder also requests the native RFLOAT source Euler angles.
+            outputs.append(np.zeros((n_rows, 3), dtype=np.float64))
         return tuple(outputs)
 
     monkeypatch.setattr(local_layout_module, "get_oversampled_rotation_grid_from_samples", fake_oversampled_rotations)
@@ -3315,11 +2525,10 @@ def test_selected_rotation_matrices_match_full_perturbed_grid():
         random_perturbation,
         angular_sampling_deg,
     )
-    _, _, full_mstep_rotations = apply_relion_rotation_perturbation_to_eulers(
+    full_mstep_rotations, _ = apply_relion_rotation_perturbation_to_eulers(
         _get_relion_rotation_grid_eulers_float64(healpix_order),
         random_perturbation,
         angular_sampling_deg,
-        return_mstep_rotations=True,
     )
     rotation_ids = np.array([0, 3, 17, rotation_grid_size(healpix_order) - 1], dtype=np.int32)
 
@@ -3353,17 +2562,15 @@ def test_relion_mstep_generation_keeps_source_eulers_float64_until_host_inverse(
     public_eulers = get_relion_rotation_grid_eulers(healpix_order)
     angular_sampling_deg = relion_angular_sampling_deg(healpix_order)
 
-    _, _, exact_mstep = apply_relion_rotation_perturbation_to_eulers(
+    exact_mstep, _ = apply_relion_rotation_perturbation_to_eulers(
         source_eulers,
         0.25,
         angular_sampling_deg,
-        return_mstep_rotations=True,
     )
-    _, _, late_mstep = apply_relion_rotation_perturbation_to_eulers(
+    late_mstep, _ = apply_relion_rotation_perturbation_to_eulers(
         source_eulers.astype(np.float32),
         0.25,
         angular_sampling_deg,
-        return_mstep_rotations=True,
     )
 
     assert source_eulers.dtype == np.float64
@@ -3375,6 +2582,17 @@ def test_relion_mstep_generation_keeps_source_eulers_float64_until_host_inverse(
 def test_exact_local_fine_grid_precompute_auto_policy():
     assert iteration_loop_module._precompute_exact_local_fine_grid_enabled(5)
     assert not iteration_loop_module._precompute_exact_local_fine_grid_enabled(6)
+
+
+def test_exact_local_bucket_radix_can_collapse_adjacent_power_two_shapes(monkeypatch):
+    monkeypatch.setenv(EXACT_LOCAL_BUCKET_RADIX_ENV, "4")
+
+    assert _exact_bucket_rotation_size(32, 5000) == 64
+    assert _exact_bucket_rotation_size(64, 5000) == 64
+    assert _exact_bucket_rotation_size(128, 5000) == 256
+    assert _exact_bucket_rotation_size(256, 5000) == 256
+    assert _exact_bucket_rotation_size(512, 5000) == 1024
+    assert _exact_bucket_rotation_size(1024, 5000) == 1024
 
 
 def test_bucket_local_hypothesis_layout_coarsens_large_exact_neighborhoods_without_4096_floor():
@@ -3589,6 +2807,300 @@ def test_bucket_local_hypothesis_layout_unify_argument_collapses_shape_classes(m
     )
 
 
+def test_bucket_local_hypothesis_layout_can_preserve_physical_image_order(monkeypatch):
+    monkeypatch.delenv("RECOVAR_LOCAL_BUCKET_UNIFY", raising=False)
+    rotation_counts = np.array([16, 64, 16, 64], dtype=np.int32)
+    rotation_offsets = np.concatenate([[0], np.cumsum(rotation_counts)]).astype(np.int64)
+    n_total = int(rotation_counts.sum())
+    layout = LocalHypothesisLayout(
+        n_global_rotations=n_total,
+        n_pixels=16,
+        n_psi=1,
+        rotation_offsets=rotation_offsets,
+        rotation_ids_flat=np.arange(n_total, dtype=np.int32),
+        rotations_flat=np.broadcast_to(
+            np.eye(3, dtype=np.float32),
+            (n_total, 3, 3),
+        ).copy(),
+        rotation_log_priors_flat=np.zeros(n_total, dtype=np.float32),
+        rotation_counts=rotation_counts,
+        translation_grid=np.zeros((1, 2), dtype=np.float32),
+        translation_log_priors=np.zeros((rotation_counts.size, 1), dtype=np.float32),
+    )
+
+    buckets = bucket_local_hypothesis_layout(
+        layout,
+        image_batch_size=4,
+        rotation_block_size=5000,
+        max_hypotheses_per_microbatch=1024,
+        unify_bucket_sizes=False,
+        preserve_image_order=True,
+    )
+
+    np.testing.assert_array_equal(
+        np.concatenate([bucket.image_indices for bucket in buckets]),
+        np.arange(rotation_counts.size, dtype=np.int32),
+    )
+    assert [bucket.bucket_rotation_count for bucket in buckets] == [16, 64, 16, 64]
+
+
+def test_bucket_local_hypothesis_layout_aligns_preserved_chunks_to_pool_three(monkeypatch):
+    monkeypatch.delenv("RECOVAR_LOCAL_BUCKET_UNIFY", raising=False)
+    rotation_counts = np.full(7, 16, dtype=np.int32)
+    rotation_offsets = np.concatenate([[0], np.cumsum(rotation_counts)]).astype(np.int64)
+    n_total = int(rotation_counts.sum())
+    layout = LocalHypothesisLayout(
+        n_global_rotations=n_total,
+        n_pixels=16,
+        n_psi=1,
+        rotation_offsets=rotation_offsets,
+        rotation_ids_flat=np.arange(n_total, dtype=np.int32),
+        rotations_flat=np.broadcast_to(
+            np.eye(3, dtype=np.float32),
+            (n_total, 3, 3),
+        ).copy(),
+        rotation_log_priors_flat=np.zeros(n_total, dtype=np.float32),
+        rotation_counts=rotation_counts,
+        translation_grid=np.zeros((1, 2), dtype=np.float32),
+        translation_log_priors=np.zeros((rotation_counts.size, 1), dtype=np.float32),
+    )
+
+    buckets = bucket_local_hypothesis_layout(
+        layout,
+        image_batch_size=7,
+        rotation_block_size=5000,
+        max_hypotheses_per_microbatch=7 * 16,
+        unify_bucket_sizes=False,
+        preserve_image_order=True,
+    )
+
+    assert [bucket.image_indices.size for bucket in buckets] == [6, 1]
+    np.testing.assert_array_equal(
+        np.concatenate([bucket.image_indices for bucket in buckets]),
+        np.arange(7, dtype=np.int32),
+    )
+
+
+def test_relion_physical_particle_grid_fuses_masked_data_and_weight(monkeypatch):
+    import recovar.cuda_backproject as cuda_backproject
+
+    captured = {}
+
+    def fake_particle_grid(
+        data_volume,
+        weight_volume,
+        data_rows,
+        weight_rows,
+        pixel_indices,
+        rotations,
+        image_shape,
+        volume_shape,
+        max_r,
+    ):
+        captured.update(
+            data_rows=np.asarray(data_rows),
+            weight_rows=np.asarray(weight_rows),
+            pixel_indices=np.asarray(pixel_indices),
+            rotations=np.asarray(rotations),
+            image_shape=image_shape,
+            volume_shape=volume_shape,
+            max_r=max_r,
+        )
+        return data_volume + 1, weight_volume + 2
+
+    monkeypatch.setattr(
+        cuda_backproject,
+        "relion_fused_x_half_backproject_particle_grid_indexed",
+        fake_particle_grid,
+    )
+    data_rows = np.arange(24, dtype=np.float32).reshape(2, 3, 4).astype(np.complex64)
+    weight_rows = np.arange(24, dtype=np.float32).reshape(2, 3, 4)
+    rotations = np.broadcast_to(np.eye(3, dtype=np.float32), (2, 3, 3, 3)).copy()
+    row_mask = np.array([[True, False, True], [False, True, True]])
+
+    data_out, weight_out = _accumulate_relion_physical_particle_grid(
+        data_rows,
+        weight_rows,
+        rotations,
+        row_mask,
+        np.zeros(32, dtype=np.complex64),
+        np.zeros(32, dtype=np.float32),
+        pixel_indices=np.arange(4, dtype=np.int32),
+        image_shape=(8, 8),
+        volume_shape=(7, 7, 7),
+        max_r=3.0,
+    )
+
+    np.testing.assert_array_equal(captured["data_rows"], data_rows * row_mask[..., None])
+    np.testing.assert_array_equal(captured["weight_rows"], weight_rows * row_mask[..., None])
+    np.testing.assert_array_equal(captured["pixel_indices"], np.arange(4, dtype=np.int32))
+    np.testing.assert_array_equal(captured["rotations"], rotations)
+    assert captured["image_shape"] == (8, 8)
+    assert captured["volume_shape"] == (7, 7, 7)
+    assert captured["max_r"] == 3.0
+    np.testing.assert_array_equal(np.asarray(data_out), np.ones(32, dtype=np.complex64))
+    np.testing.assert_array_equal(np.asarray(weight_out), np.full(32, 2, dtype=np.float32))
+
+
+def test_source_faithful_bpref_chunks_only_particle_axis_to_memory_cap():
+    rotation_count = 4096
+    n_recon_pixels = 5100
+    bytes_per_particle = rotation_count * n_recon_pixels * 12
+    cap_gb = 6.0
+    expected = int(cap_gb * 1e9) // bytes_per_particle
+
+    assert _source_faithful_bpref_particle_chunk_size(
+        image_count=300,
+        rotation_count=rotation_count,
+        n_recon_pixels=n_recon_pixels,
+        max_gb=cap_gb,
+    ) == expected
+    assert _source_faithful_bpref_particle_chunk_size(
+        image_count=7,
+        rotation_count=rotation_count,
+        n_recon_pixels=n_recon_pixels,
+        max_gb=cap_gb,
+    ) == 7
+    assert _source_faithful_bpref_particle_chunk_size(
+        image_count=300,
+        rotation_count=rotation_count,
+        n_recon_pixels=n_recon_pixels,
+        max_gb=0.0,
+    ) == 1
+    assert _source_faithful_bpref_particle_chunk_size(
+        image_count=300,
+        rotation_count=rotation_count,
+        n_recon_pixels=n_recon_pixels,
+        max_gb=cap_gb,
+        max_particles=3,
+    ) == 3
+
+
+def test_source_faithful_bpref_particle_chunk_cap_is_explicit(monkeypatch):
+    monkeypatch.delenv(EXACT_LOCAL_SOURCE_BPREF_PARTICLE_CHUNK_SIZE_ENV, raising=False)
+    assert _source_faithful_bpref_particle_chunk_cap() is None
+
+    monkeypatch.setenv(EXACT_LOCAL_SOURCE_BPREF_PARTICLE_CHUNK_SIZE_ENV, "3")
+    assert _source_faithful_bpref_particle_chunk_cap() == 3
+
+    for invalid in ("0", "-1", "three"):
+        monkeypatch.setenv(EXACT_LOCAL_SOURCE_BPREF_PARTICLE_CHUNK_SIZE_ENV, invalid)
+        with pytest.raises(ValueError, match="must be a positive integer"):
+            _source_faithful_bpref_particle_chunk_cap()
+
+
+def test_source_faithful_bpref_particle_slices_preserve_physical_order():
+    assert _source_faithful_bpref_particle_slices(8, None) == ((0, 8),)
+    assert _source_faithful_bpref_particle_slices(8, 3) == (
+        (0, 3),
+        (3, 6),
+        (6, 8),
+    )
+    assert _source_faithful_bpref_particle_slices(2, 3) == ((0, 2),)
+    with pytest.raises(ValueError, match="must be non-empty"):
+        _source_faithful_bpref_particle_slices(0, 3)
+    with pytest.raises(ValueError, match="must be positive"):
+        _source_faithful_bpref_particle_slices(3, 0)
+
+
+def test_source_faithful_bpref_particle_cap_is_wired_into_grouped_vdam():
+    source = inspect.getsource(run_local_em_exact)
+    start = source.index('raise RuntimeError("source VDAM physical operands were not packed")')
+    stop = source.index("elif source_faithful_bpref and sparse_big_jit_backprojection", start)
+    grouped_vdam = source[start:stop]
+
+    assert "_source_faithful_bpref_particle_chunk_cap()" in grouped_vdam
+    assert "_source_faithful_bpref_particle_slices(" in grouped_vdam
+    assert "for particle_start, particle_stop in particle_slices" in grouped_vdam
+    assert "source-faithful BPref particle ordering cannot be combined" in grouped_vdam
+    assert "_accumulate_relion_vdam_physical_particle_grid(" in grouped_vdam
+
+
+def test_fused_serial_vdam_particles_use_one_worker_lane(monkeypatch):
+    from recovar import cuda_backproject
+
+    captured = {}
+
+    def fake_fused(*args, **kwargs):
+        captured.update(kwargs)
+        return args[0], args[1], jnp.zeros((2, 3, 4), dtype=jnp.float32)
+
+    monkeypatch.setattr(
+        cuda_backproject,
+        "relion_vdam_mstep_fused_projector_x_half",
+        fake_fused,
+    )
+    particle_count = 2
+    rotation_count = 3
+    pixel_count = 4
+    translation_count = 2
+    _accumulate_relion_vdam_physical_particle_grid(
+        jnp.ones((particle_count, pixel_count), dtype=jnp.complex64),
+        jnp.ones((particle_count, pixel_count), dtype=jnp.float32),
+        jnp.ones((particle_count, pixel_count), dtype=jnp.float32),
+        jnp.ones(
+            (particle_count, rotation_count, translation_count),
+            dtype=jnp.float32,
+        ),
+        jnp.zeros((translation_count, 2), dtype=jnp.float32),
+        jnp.zeros(
+            (particle_count, rotation_count, pixel_count),
+            dtype=jnp.complex64,
+        ),
+        jnp.broadcast_to(
+            jnp.eye(3, dtype=jnp.float32),
+            (particle_count, rotation_count, 3, 3),
+        ),
+        jnp.ones((particle_count, rotation_count), dtype=bool),
+        jnp.zeros(32, dtype=jnp.complex64),
+        jnp.zeros(32, dtype=jnp.float32),
+        projector_full=jnp.zeros((5, 5, 5), dtype=jnp.complex64),
+        scoring_rotations=jnp.broadcast_to(
+            jnp.eye(3, dtype=jnp.float32),
+            (particle_count, rotation_count, 3, 3),
+        ),
+        projector_r_max=2,
+        pixel_indices=jnp.arange(pixel_count, dtype=jnp.int32),
+        image_shape=(4, 6),
+        volume_shape=(3, 3, 3),
+        max_r=1.0,
+        worker_lane_ids=jnp.asarray([3, 5], dtype=jnp.int32),
+        serial_particle_accumulation=True,
+    )
+
+    np.testing.assert_array_equal(
+        np.asarray(captured["worker_lane_ids"]),
+        np.zeros(particle_count, dtype=np.int32),
+    )
+    assert captured["parallel_worker_replay"] is False
+
+
+def test_fused_serial_vdam_particle_control_is_wired_into_grouped_path():
+    source = inspect.getsource(run_local_em_exact)
+    start = source.index('raise RuntimeError("source VDAM physical operands were not packed")')
+    stop = source.index("elif source_faithful_bpref and sparse_big_jit_backprojection", start)
+    grouped_vdam = source[start:stop]
+
+    assert "EXACT_LOCAL_SOURCE_BPREF_FUSED_SERIAL_PARTICLES_ENV" in grouped_vdam
+    assert "fused serial VDAM BPref particles cannot be combined" in grouped_vdam
+    assert "serial_particle_accumulation=fused_serial_particles" in grouped_vdam
+    assert EXACT_LOCAL_SOURCE_BPREF_FUSED_SERIAL_PARTICLES_ENV.endswith(
+        "FUSED_SERIAL_PARTICLES"
+    )
+    assert "EXACT_LOCAL_SOURCE_BPREF_FUSED_SERIAL_ROTATIONS_ENV" in grouped_vdam
+    assert "EXACT_LOCAL_SOURCE_BPREF_LAUNCH_SERIAL_ROTATIONS_ENV" in grouped_vdam
+    assert "or launch_serial_rotations" in grouped_vdam
+    assert "serial_rotation_replay=serial_rotation_replay" in grouped_vdam
+    assert "persistent_serial_rotation_replay=fused_serial_rotations" in grouped_vdam
+    assert "fused serial VDAM BPref rotations cannot be combined" in grouped_vdam
+    assert EXACT_LOCAL_SOURCE_BPREF_FUSED_SERIAL_ROTATIONS_ENV.endswith(
+        "FUSED_SERIAL_ROTATIONS"
+    )
+    assert EXACT_LOCAL_SOURCE_BPREF_LAUNCH_SERIAL_ROTATIONS_ENV.endswith(
+        "LAUNCH_SERIAL_ROTATIONS"
+    )
+
+
 def test_pad_local_big_jit_image_axis_masks_dummy_rows():
     mstep_rotations = np.broadcast_to(2.0 * np.eye(3, dtype=np.float32), (1, 2, 3, 3)).copy()
     bucket = LocalBucketSpec(
@@ -3633,9 +3145,9 @@ def test_pad_local_big_jit_image_axis_masks_dummy_rows():
 
 
 def test_project_local_bucket_accepts_singleton_class_relion_projector(monkeypatch):
-    from recovar.em.dense_single_volume import local_em_engine
-    from recovar.em.dense_single_volume.helpers.dtype_policy import DensePrecisionPolicy
-    from recovar.em.dense_single_volume.helpers.fourier_window import make_fourier_window_spec
+    from recovar.em.helpers.dtype_policy import DensePrecisionPolicy
+    from recovar.em.helpers.fourier_window import make_fourier_window_spec
+    from recovar.em.local import local_bucket_stages, local_em_engine
 
     bucket = LocalBucketSpec(
         image_indices=np.array([0], dtype=np.int32),
@@ -3654,7 +3166,7 @@ def test_project_local_bucket_accepts_singleton_class_relion_projector(monkeypat
         calls.append((np.asarray(projector_half).shape, tuple(rotations.shape), dict(kwargs)))
         return jnp.ones((rotations.shape[0], image_shape[0] * (image_shape[0] // 2 + 1)), dtype=jnp.complex64), None
 
-    monkeypatch.setattr(local_em_engine, "_compute_relion_projector_projections_block", fake_projector)
+    monkeypatch.setattr(local_bucket_stages, "_compute_relion_projector_projections_block", fake_projector)
 
     block = local_em_engine._project_local_bucket(
         mean_for_proj=jnp.zeros((4, 4, 4), dtype=jnp.complex64),
@@ -3683,6 +3195,7 @@ def test_project_local_bucket_accepts_singleton_class_relion_projector(monkeypat
                 "centered_rows": True,
                 "dense_scale": True,
                 "relion_texture_interp": False,
+                "relion_acc_double_floorf_quirk": False,
             },
         )
     ]
@@ -3691,8 +3204,8 @@ def test_project_local_bucket_accepts_singleton_class_relion_projector(monkeypat
 
 
 def test_relion_projector_indexed_centered_rows_match_full_window(rng):
-    from recovar.em.dense_single_volume.helpers.fourier_window import make_fourier_window_spec
-    from recovar.em.dense_single_volume.helpers.projection import compute_relion_projector_projections_block
+    from recovar.em.helpers.fourier_window import make_fourier_window_spec
+    from recovar.em.helpers.projection import compute_relion_projector_projections_block
 
     image_shape = (8, 8)
     n_half = image_shape[0] * (image_shape[1] // 2 + 1)
@@ -3733,7 +3246,7 @@ def test_relion_projector_indexed_centered_rows_match_full_window(rng):
 
 
 def test_relion_projector_texture_full_embeds_positive_x_half():
-    from recovar.em.dense_single_volume.helpers.projection import relion_projector_half_to_texture_full
+    from recovar.em.helpers.projection import relion_projector_half_to_texture_full
 
     projector_half = (
         np.arange(5 * 5 * 3, dtype=np.float32).reshape(5, 5, 3)
@@ -3747,7 +3260,7 @@ def test_relion_projector_texture_full_embeds_positive_x_half():
 
 
 def test_relion_projector_texture_route_defaults_on_and_can_be_disabled(monkeypatch):
-    from recovar.em.dense_single_volume.helpers import projection as projection_helpers
+    from recovar.em.helpers import projection as projection_helpers
 
     projector_half = jnp.ones((5, 5, 3), dtype=jnp.complex64)
     rotations = jnp.eye(3, dtype=jnp.float32)[None]
@@ -3826,7 +3339,7 @@ def test_relion_projector_texture_route_defaults_on_and_can_be_disabled(monkeypa
 
 
 def test_global_pass1_relion_projector_texture_defaults_to_texture(monkeypatch):
-    from recovar.em.dense_single_volume.helpers import significance
+    from recovar.em.scoring import significance
 
     monkeypatch.delenv("RECOVAR_RELION_GLOBAL_PASS1_PROJECTOR_TEXTURE_INTERP", raising=False)
     monkeypatch.setenv("RECOVAR_RELION_PROJECTOR_TEXTURE_INTERP", "1")
@@ -3840,8 +3353,20 @@ def test_global_pass1_relion_projector_texture_defaults_to_texture(monkeypatch):
         significance._global_pass1_relion_projector_texture_enabled()
 
 
+def test_global_pass1_relion_projector_floorf_quirk_gate(monkeypatch):
+    from recovar.em.scoring import significance
+
+    monkeypatch.delenv("RECOVAR_RELION_ACC_DOUBLE_FLOORF_QUIRK", raising=False)
+    assert not significance._relion_acc_double_floorf_quirk_enabled()
+    monkeypatch.setenv("RECOVAR_RELION_ACC_DOUBLE_FLOORF_QUIRK", "1")
+    assert significance._relion_acc_double_floorf_quirk_enabled()
+    monkeypatch.setenv("RECOVAR_RELION_ACC_DOUBLE_FLOORF_QUIRK", "invalid")
+    with pytest.raises(ValueError, match="RECOVAR_RELION_ACC_DOUBLE_FLOORF_QUIRK"):
+        significance._relion_acc_double_floorf_quirk_enabled()
+
+
 def test_texture_centered_crop_masks_current_image_disk():
-    from recovar.em.dense_single_volume.helpers.projection import _texture_centered_crop_to_full
+    from recovar.em.helpers.projection import _texture_centered_crop_to_full
 
     crop = jnp.ones((1, 4 * 3), dtype=jnp.complex64)
     got = np.asarray(
@@ -3857,6 +3382,16 @@ def test_texture_centered_crop_masks_current_image_disk():
     expected[:, 3, 2] = 0.0
     np.testing.assert_array_equal(got, expected)
 
+    unmasked = np.asarray(
+        _texture_centered_crop_to_full(
+            crop,
+            image_shape=(4, 4),
+            projector_output_size=4,
+            mask_current_image_disk=False,
+        )
+    ).reshape(1, 4, 3)
+    np.testing.assert_array_equal(unmasked, np.ones((1, 4, 3), dtype=np.complex64))
+
 
 @pytest.mark.parametrize(
     ("image_size", "crop_size"),
@@ -3867,10 +3402,7 @@ def test_texture_centered_crop_direct_indices_match_full_scatter(
     image_size,
     crop_size,
 ):
-    from recovar.em.dense_single_volume.helpers.projection import (
-        _texture_centered_crop_at_indices,
-        _texture_centered_crop_to_full,
-    )
+    from recovar.em.helpers.projection import _texture_centered_crop_at_indices, _texture_centered_crop_to_full
 
     crop_pixels = crop_size * (crop_size // 2 + 1)
     crop = (
@@ -3908,7 +3440,7 @@ def test_texture_centered_crop_direct_indices_match_full_scatter(
 
 
 def test_texture_projector_compact_indices_bypass_full_scatter(monkeypatch):
-    from recovar.em.dense_single_volume.helpers import projection as projection_helpers
+    from recovar.em.helpers import projection as projection_helpers
 
     requested = jnp.asarray([6, 7, 9], dtype=jnp.int32)
     monkeypatch.setattr(projection_helpers, "_relion_projector_texture_enabled", lambda *args, **kwargs: True)
@@ -3937,7 +3469,8 @@ def test_texture_projector_compact_indices_bypass_full_scatter(monkeypatch):
 
 
 def test_texture_projector_compact_implementation_never_builds_full_box(monkeypatch):
-    from recovar.em.dense_single_volume.helpers import projection as projection_helpers
+    from recovar import cuda_backproject
+    from recovar.em.helpers import projection as projection_helpers
 
     crop = jnp.asarray([[0.0 + 1.0j, 1.0 + 2.0j, 2.0 + 3.0j, 3.0 + 4.0j]])
     requested = jnp.asarray([6, 7, 9], dtype=jnp.int32)
@@ -3949,6 +3482,11 @@ def test_texture_projector_compact_implementation_never_builds_full_box(monkeypa
     monkeypatch.setattr(
         projection_helpers,
         "project_half_spectrum",
+        lambda *args, **kwargs: crop,
+    )
+    monkeypatch.setattr(
+        cuda_backproject,
+        "project_relion_half_capacity",
         lambda *args, **kwargs: crop,
     )
     monkeypatch.setattr(
@@ -3972,8 +3510,8 @@ def test_texture_projector_compact_implementation_never_builds_full_box(monkeypa
 
 
 def test_local_big_jit_relion_projector_matches_helper(rng):
-    from recovar.em.dense_single_volume.helpers.projection import compute_relion_projector_projections_block
-    from recovar.em.dense_single_volume.local_big_jit import _project_local_half_spectrum
+    from recovar.em.helpers.projection import compute_relion_projector_projections_block
+    from recovar.em.local.local_big_jit import _project_local_half_spectrum
 
     image_shape = (8, 8)
     projector_half = (
@@ -4013,9 +3551,9 @@ def test_local_big_jit_relion_projector_matches_helper(rng):
 
 
 def test_project_local_bucket_windowed_relion_projector_uses_compact_indices(monkeypatch):
-    from recovar.em.dense_single_volume import local_em_engine
-    from recovar.em.dense_single_volume.helpers.dtype_policy import DensePrecisionPolicy
-    from recovar.em.dense_single_volume.helpers.fourier_window import make_fourier_window_spec
+    from recovar.em.helpers.dtype_policy import DensePrecisionPolicy
+    from recovar.em.helpers.fourier_window import make_fourier_window_spec
+    from recovar.em.local import local_bucket_stages, local_em_engine
 
     bucket = LocalBucketSpec(
         image_indices=np.array([0], dtype=np.int32),
@@ -4045,7 +3583,7 @@ def test_project_local_bucket_windowed_relion_projector_uses_compact_indices(mon
         values = jnp.arange(rotations.shape[0] * n_values, dtype=jnp.float32).reshape(rotations.shape[0], n_values)
         return values.astype(jnp.complex64), None
 
-    monkeypatch.setattr(local_em_engine, "_compute_relion_projector_projections_block", fake_projector)
+    monkeypatch.setattr(local_bucket_stages, "_compute_relion_projector_projections_block", fake_projector)
     window_spec = make_fourier_window_spec((8, 8), 6, 40, include_recon_window=True)
 
     block = local_em_engine._project_local_bucket(
@@ -4070,9 +3608,9 @@ def test_project_local_bucket_windowed_relion_projector_uses_compact_indices(mon
 
 
 def test_packed_local_noise_projection_accepts_relion_projector(monkeypatch):
-    from recovar.em.dense_single_volume import local_em_engine
-    from recovar.em.dense_single_volume.helpers.dtype_policy import DensePrecisionPolicy
-    from recovar.em.dense_single_volume.helpers.fourier_window import make_fourier_window_spec
+    from recovar.em.helpers.dtype_policy import DensePrecisionPolicy
+    from recovar.em.helpers.fourier_window import make_fourier_window_spec
+    from recovar.em.local import local_bucket_stages, local_em_engine
 
     calls = []
 
@@ -4082,7 +3620,7 @@ def test_packed_local_noise_projection_accepts_relion_projector(monkeypatch):
         values = jnp.arange(rotations.shape[0] * n_half, dtype=jnp.float32).reshape(rotations.shape[0], n_half)
         return values.astype(jnp.complex64), None
 
-    monkeypatch.setattr(local_em_engine, "_compute_relion_projector_projections_block", fake_projector)
+    monkeypatch.setattr(local_bucket_stages, "_compute_relion_projector_projections_block", fake_projector)
     window_spec = make_fourier_window_spec((4, 4), 4, 12, include_recon_window=True)
 
     packed = local_em_engine._project_packed_noise_rows(
@@ -4114,6 +3652,7 @@ def test_packed_local_noise_projection_accepts_relion_projector(monkeypatch):
                 "centered_rows": True,
                 "dense_scale": True,
                 "relion_texture_interp": True,
+                "relion_acc_double_floorf_quirk": False,
             },
         )
     ]
@@ -4122,7 +3661,7 @@ def test_packed_local_noise_projection_accepts_relion_projector(monkeypatch):
 
 
 def test_local_relion_projection_cache_forwards_texture_selection(monkeypatch):
-    from recovar.em.dense_single_volume import local_em_engine
+    from recovar.em.local import local_projection_cache
 
     bucket = LocalBucketSpec(
         image_indices=np.array([0], dtype=np.int32),
@@ -4141,8 +3680,8 @@ def test_local_relion_projection_cache_forwards_texture_selection(monkeypatch):
         calls.append(dict(kwargs))
         return jnp.ones((rotations.shape[0], 12), dtype=jnp.complex64), None
 
-    monkeypatch.setattr(local_em_engine, "_compute_relion_projector_projections_block", fake_projector)
-    cache = local_em_engine._build_exact_local_relion_projection_cache_for_buckets(
+    monkeypatch.setattr(local_projection_cache, "_compute_relion_projector_projections_block", fake_projector)
+    cache = local_projection_cache.build_cache(
         [bucket],
         jnp.ones((4, 4, 3), dtype=jnp.complex64),
         image_shape=(4, 4),
@@ -4153,7 +3692,6 @@ def test_local_relion_projection_cache_forwards_texture_selection(monkeypatch):
         projection_pixel_indices=None,
         projector_output_size=4,
         cache_row_capacity=2,
-        max_global_rotation_id=1,
         group_index=0,
         n_groups=1,
     )
@@ -4163,55 +3701,57 @@ def test_local_relion_projection_cache_forwards_texture_selection(monkeypatch):
 
 
 def test_packed_local_noise_projection_chunk_rows_env(monkeypatch):
-    from recovar.em.dense_single_volume import local_em_engine
+    from recovar.em.local import local_bucket_stages, local_em_engine
 
-    monkeypatch.delenv(local_em_engine.EXACT_LOCAL_PACKED_NOISE_TARGET_ROW_PIXELS_ENV, raising=False)
+    monkeypatch.delenv(local_bucket_stages.EXACT_LOCAL_PACKED_NOISE_TARGET_ROW_PIXELS_ENV, raising=False)
     assert local_em_engine._packed_noise_projection_chunk_rows(12) == (
-        local_em_engine.EXACT_LOCAL_PACKED_NOISE_TARGET_ROW_PIXELS // 12
+        local_bucket_stages.EXACT_LOCAL_PACKED_NOISE_TARGET_ROW_PIXELS // 12
     )
 
-    monkeypatch.setenv(local_em_engine.EXACT_LOCAL_PACKED_NOISE_TARGET_ROW_PIXELS_ENV, "25")
+    monkeypatch.setenv(local_bucket_stages.EXACT_LOCAL_PACKED_NOISE_TARGET_ROW_PIXELS_ENV, "25")
     assert local_em_engine._packed_noise_projection_chunk_rows(12) == 2
     assert local_em_engine._packed_noise_projection_chunk_rows(12, batch_size=2) == 1
 
-    monkeypatch.setenv(local_em_engine.EXACT_LOCAL_PACKED_NOISE_TARGET_ROW_PIXELS_ENV, "not_an_int")
+    monkeypatch.setenv(local_bucket_stages.EXACT_LOCAL_PACKED_NOISE_TARGET_ROW_PIXELS_ENV, "not_an_int")
     assert local_em_engine._packed_noise_projection_chunk_rows(12) == (
-        local_em_engine.EXACT_LOCAL_PACKED_NOISE_TARGET_ROW_PIXELS // 12
+        local_bucket_stages.EXACT_LOCAL_PACKED_NOISE_TARGET_ROW_PIXELS // 12
     )
 
 
 def test_packed_local_noise_projection_default_cap_is_memory_safe(monkeypatch):
-    from recovar.em.dense_single_volume import local_em_engine
+    from recovar.em.local import local_bucket_stages, local_em_engine
 
-    monkeypatch.delenv(local_em_engine.EXACT_LOCAL_PACKED_NOISE_TARGET_ROW_PIXELS_ENV, raising=False)
+    monkeypatch.delenv(local_bucket_stages.EXACT_LOCAL_PACKED_NOISE_TARGET_ROW_PIXELS_ENV, raising=False)
     assert local_em_engine._packed_noise_projection_chunk_rows(4096, batch_size=64) <= 256
     assert local_em_engine._packed_noise_projection_chunk_rows(74112, batch_size=64) <= 14
 
 
 def test_exact_local_progress_env_and_hook(monkeypatch):
-    from recovar.em.dense_single_volume import local_em_engine
+    from recovar.em.helpers.env_flags import parse_env_nonnegative_int
+    from recovar.em.local import local_em_engine, local_timing
 
-    monkeypatch.delenv(local_em_engine.EXACT_LOCAL_PROGRESS_CHUNKS_ENV, raising=False)
-    assert local_em_engine._optional_nonnegative_int_env(local_em_engine.EXACT_LOCAL_PROGRESS_CHUNKS_ENV) is None
+    monkeypatch.delenv(local_timing.EXACT_LOCAL_PROGRESS_CHUNKS_ENV, raising=False)
+    assert parse_env_nonnegative_int(local_timing.EXACT_LOCAL_PROGRESS_CHUNKS_ENV) is None
 
-    monkeypatch.setenv(local_em_engine.EXACT_LOCAL_PROGRESS_CHUNKS_ENV, "0")
-    assert local_em_engine._optional_nonnegative_int_env(local_em_engine.EXACT_LOCAL_PROGRESS_CHUNKS_ENV) == 0
+    monkeypatch.setenv(local_timing.EXACT_LOCAL_PROGRESS_CHUNKS_ENV, "0")
+    assert parse_env_nonnegative_int(local_timing.EXACT_LOCAL_PROGRESS_CHUNKS_ENV) == 0
 
-    monkeypatch.setenv(local_em_engine.EXACT_LOCAL_PROGRESS_CHUNKS_ENV, "25")
-    assert local_em_engine._optional_nonnegative_int_env(local_em_engine.EXACT_LOCAL_PROGRESS_CHUNKS_ENV) == 25
+    monkeypatch.setenv(local_timing.EXACT_LOCAL_PROGRESS_CHUNKS_ENV, "25")
+    assert parse_env_nonnegative_int(local_timing.EXACT_LOCAL_PROGRESS_CHUNKS_ENV) == 25
 
-    monkeypatch.setenv(local_em_engine.EXACT_LOCAL_PROGRESS_CHUNKS_ENV, "-1")
+    monkeypatch.setenv(local_timing.EXACT_LOCAL_PROGRESS_CHUNKS_ENV, "-1")
     with pytest.raises(ValueError, match="non-negative integer"):
-        local_em_engine._optional_nonnegative_int_env(local_em_engine.EXACT_LOCAL_PROGRESS_CHUNKS_ENV)
+        parse_env_nonnegative_int(local_timing.EXACT_LOCAL_PROGRESS_CHUNKS_ENV)
 
     src = inspect.getsource(local_em_engine.run_local_em_exact)
-    assert "Exact local bucket loop start" in src
-    assert "Exact local bucket loop %s" in src
-    assert "_mark_exact_local_bucket_done(bucket)" in src
+    reporter_src = inspect.getsource(local_timing.LocalBucketProgress)
+    assert "Exact local bucket loop start" in reporter_src
+    assert "Exact local bucket loop %s" in reporter_src
+    assert "local_progress.mark_bucket_done(bucket)" in src
 
 
 def test_exact_local_noise_projection_chunks_packed_tail():
-    from recovar.em.dense_single_volume import local_em_engine
+    from recovar.em.local import local_em_engine
 
     src = inspect.getsource(local_em_engine.run_local_em_exact)
     assert "_packed_noise_projection_chunk_rows" in src
@@ -4220,7 +3760,7 @@ def test_exact_local_noise_projection_chunks_packed_tail():
 
 
 def test_exact_local_cached_noise_projection_chunks_packed_tail():
-    from recovar.em.dense_single_volume import local_em_engine
+    from recovar.em.local import local_em_engine
 
     src = inspect.getsource(local_em_engine.run_local_em_exact)
     marker = "Exact local cached noise projection chunking"
@@ -4229,11 +3769,14 @@ def test_exact_local_cached_noise_projection_chunks_packed_tail():
     cached_chunk_src = cached_chunk_src[: cached_chunk_src.index("if return_profile:")]
     assert "for chunk_start in range(0, packed_rotation_count, chunk_rows)" in cached_chunk_src
     assert "chunk_take_indices = reconstruction_take_indices_jnp[:, chunk_start:chunk_stop]" in cached_chunk_src
-    assert "jnp.take_along_axis(" in cached_chunk_src
+    assert (
+        "chunk_proj_for_noise = _packed_reconstruction_rows(proj_for_noise, chunk_take_indices, chunk_pack_mask)"
+        in cached_chunk_src
+    )
 
 
 def test_exact_local_relion_projector_noise_projection_materializes_once():
-    from recovar.em.dense_single_volume import local_em_engine
+    from recovar.em.local import local_em_engine
 
     src = inspect.getsource(local_em_engine.run_local_em_exact)
     defer_src = src[src.index("can_defer_local_noise_projection = (") :]
@@ -4248,7 +3791,8 @@ def test_exact_local_relion_projector_noise_projection_materializes_once():
 
 
 def test_dense_and_local_noise_mask_asymmetric_current_crop():
-    from recovar.em.dense_single_volume import em_engine, local_em_engine
+    from recovar.em.dense import em_engine
+    from recovar.em.local import local_em_engine
 
     dense_src = inspect.getsource(em_engine.run_em)
     local_src = inspect.getsource(local_em_engine.run_local_em_exact)
@@ -4259,7 +3803,7 @@ def test_dense_and_local_noise_mask_asymmetric_current_crop():
 
 
 def test_relion_projector_cache_reuses_cached_projector_data(monkeypatch, tmp_path):
-    import recovar.em.initial_model.dense_adapter as dense_adapter
+    import recovar.em.relion.relion_projector_setup as projector_setup
 
     calls = []
 
@@ -4268,19 +3812,19 @@ def test_relion_projector_cache_reuses_cached_projector_data(monkeypatch, tmp_pa
         projector_half = np.full((refs_real.shape[0], 3, 3, 2), 7.0 + len(calls), dtype=np.complex64)
         return projector_half, int(current_size // 2)
 
-    monkeypatch.setattr(dense_adapter, "reference_to_relion_projector_half_maps", fake_projector_builder)
+    monkeypatch.setattr(projector_setup, "reference_to_relion_projector_half_maps", fake_projector_builder)
     monkeypatch.setenv("RECOVAR_RELION_PROJECTOR_CACHE_DIR", str(tmp_path))
 
     mean_ft = np.zeros((4, 4, 4), dtype=np.complex64)
     mean_ft[0, 0, 0] = 1.0
-    first = iteration_loop_module._relion_projector_half_maps_for_scoring(
+    first = projector_preparation._relion_projector_half_maps_for_scoring(
         mean_ft.reshape(-1),
         volume_shape=(4, 4, 4),
         current_size=4,
         padding_factor=2,
         n_classes=1,
     )
-    second = iteration_loop_module._relion_projector_half_maps_for_scoring(
+    second = projector_preparation._relion_projector_half_maps_for_scoring(
         mean_ft.reshape(-1),
         volume_shape=(4, 4, 4),
         current_size=4,
@@ -4296,7 +3840,7 @@ def test_relion_projector_cache_reuses_cached_projector_data(monkeypatch, tmp_pa
 
 
 def test_relion_projector_direct_real_reference_bypasses_fourier_roundtrip(monkeypatch):
-    import recovar.em.initial_model.dense_adapter as dense_adapter
+    import recovar.em.relion.relion_projector_setup as projector_setup
 
     captured_real = []
 
@@ -4306,7 +3850,7 @@ def test_relion_projector_direct_real_reference_bypasses_fourier_roundtrip(monke
         return projector_half, int(current_size // 2)
 
     monkeypatch.setattr(
-        dense_adapter,
+        projector_setup,
         "reference_to_relion_projector_half_maps",
         fake_projector_builder,
     )
@@ -4314,7 +3858,7 @@ def test_relion_projector_direct_real_reference_bypasses_fourier_roundtrip(monke
     mean_ft[0, 0, 0] = 7.0 + 3.0j
     exact_real = np.arange(64, dtype=np.float64).reshape(1, 4, 4, 4) / 17.0
 
-    iteration_loop_module._relion_projector_half_maps_for_scoring(
+    projector_preparation._relion_projector_half_maps_for_scoring(
         mean_ft.reshape(-1),
         volume_shape=(4, 4, 4),
         current_size=4,
@@ -4328,7 +3872,7 @@ def test_relion_projector_direct_real_reference_bypasses_fourier_roundtrip(monke
 
 
 def test_half0_local_relion_accumulators_offload_to_host():
-    result = iteration_loop_module.HalfScoreResult(
+    result = score_outputs.HalfScoreResult(
         ha=np.zeros(1, dtype=np.int32),
         Ft_y=jnp.asarray([1.0 + 2.0j, 3.0 + 4.0j], dtype=jnp.complex64),
         Ft_ctf=jnp.asarray([5.0, 6.0], dtype=jnp.float32),
@@ -4338,11 +3882,12 @@ def test_half0_local_relion_accumulators_offload_to_host():
         mstep_accumulator_shape=(3, 3, 3),
     )
 
-    out = iteration_loop_module._maybe_host_offload_half0_local_accumulators(
+    out = score_outputs._maybe_host_offload_half0_local_accumulators(
         half_index=0,
         use_local=True,
         k_class_enabled=False,
         score_result=result,
+        log=iteration_loop_module.logger,
     )
 
     assert out is result
@@ -4353,7 +3898,7 @@ def test_half0_local_relion_accumulators_offload_to_host():
 
 
 def test_half0_local_relion_accumulator_offload_skips_non_x_half():
-    result = iteration_loop_module.HalfScoreResult(
+    result = score_outputs.HalfScoreResult(
         ha=np.zeros(1, dtype=np.int32),
         Ft_y=jnp.asarray([1.0 + 0.0j], dtype=jnp.complex64),
         Ft_ctf=jnp.asarray([1.0], dtype=jnp.float32),
@@ -4362,11 +3907,12 @@ def test_half0_local_relion_accumulator_offload_skips_non_x_half():
         mstep_full_half_axis=None,
     )
 
-    out = iteration_loop_module._maybe_host_offload_half0_local_accumulators(
+    out = score_outputs._maybe_host_offload_half0_local_accumulators(
         half_index=0,
         use_local=True,
         k_class_enabled=False,
         score_result=result,
+        log=iteration_loop_module.logger,
     )
 
     assert out is result
@@ -4374,7 +3920,7 @@ def test_half0_local_relion_accumulator_offload_skips_non_x_half():
 
 
 def test_exact_local_relion_x_half_full_support_mstep_uses_fftw_indices_and_radius():
-    from recovar.em.dense_single_volume import local_em_engine
+    from recovar.em.local import local_em_engine
 
     image_shape = (128, 128)
     half_width = image_shape[1] // 2 + 1
@@ -4394,7 +3940,7 @@ def test_exact_local_relion_x_half_full_support_mstep_uses_fftw_indices_and_radi
 
 
 def test_exact_local_relion_x_half_windowed_mstep_uses_fftw_indices_and_current_radius():
-    from recovar.em.dense_single_volume import local_em_engine
+    from recovar.em.local import local_em_engine
 
     image_shape = (128, 128)
     half_width = image_shape[1] // 2 + 1
@@ -4425,7 +3971,7 @@ def test_exact_local_relion_x_half_windowed_mstep_uses_fftw_indices_and_current_
 
 
 def test_exact_local_fused_posterior_missing_warning_respects_filters():
-    from recovar.em.dense_single_volume import local_em_engine
+    from recovar.em.local import local_em_engine
 
     src = inspect.getsource(local_em_engine.run_local_em_exact)
     assert "debug_fused_posterior_dump_filter_matches = (" in src
@@ -4437,7 +3983,8 @@ def test_exact_local_fused_posterior_missing_warning_respects_filters():
     ) in src
 
 
-def test_local_score_debug_dump_records_attempted_pose_metadata(tmp_path):
+def test_local_score_debug_dump_records_attempted_pose_metadata(tmp_path, monkeypatch):
+    monkeypatch.setenv("RECOVAR_LOCAL_SCORE_DUMP_OPERANDS", "1")
     class _Dataset:
         def original_image_indices_from_local(self, indices):
             _ = indices
@@ -4475,12 +4022,17 @@ def test_local_score_debug_dump_records_attempted_pose_metadata(tmp_path):
             image_pre_shifts=np.array([[2.0, -1.0]], dtype=np.float32),
             scores=np.array([[[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]], dtype=np.float32),
             probs=np.array([[[0.05, 0.10, 0.15], [0.20, 0.25, 0.25]]], dtype=np.float32),
+            reconstruction_probs=np.array(
+                [[[0.05, 0.0, 0.15], [0.0, 0.25, 0.25]]],
+                dtype=np.float32,
+            ),
             log_Z=np.array([7.0], dtype=np.float32),
             best_log_score=np.array([6.0], dtype=np.float32),
             max_posterior=np.array([0.25], dtype=np.float32),
             reconstruction_sample_mask=np.ones((1, 2, 3), dtype=bool),
             reconstruction_rotation_mask=np.ones((1, 2), dtype=bool),
             n_significant_samples=np.array([6], dtype=np.int32),
+            wavg_cutoff_triplet=np.array([[1.25, 2.5, 3.75]], dtype=np.float64),
             current_size=current_size,
             debug_iteration=9,
             dump_dir=tmp_path,
@@ -4498,6 +4050,10 @@ def test_local_score_debug_dump_records_attempted_pose_metadata(tmp_path):
     with np.load(tmp_path / "local_score_it009_image_123.npz") as dump:
         np.testing.assert_array_equal(dump["local_rotation_indices"], np.array([5, 7], dtype=np.int32))
         np.testing.assert_array_equal(dump["debug_iteration"], np.array([9], dtype=np.int32))
+        np.testing.assert_array_equal(
+            dump["debug_wavg_cutoff_triplet_xa_aa_diff2"],
+            np.array([1.25, 2.5, 3.75], dtype=np.float64),
+        )
         assert dump["local_rotation_eulers"].shape == (2, 3)
         assert dump["local_rotation_matrices"].shape == (2, 3, 3)
         np.testing.assert_array_equal(
@@ -4511,9 +4067,15 @@ def test_local_score_debug_dump_records_attempted_pose_metadata(tmp_path):
         np.testing.assert_array_equal(dump["best_score_rotation_global_id"], np.array([7], dtype=np.int32))
         np.testing.assert_array_equal(dump["best_score_translation_index"], np.array([2], dtype=np.int32))
         np.testing.assert_allclose(dump["best_score_translation"], np.array([[0.0, 1.0]], dtype=np.float32))
+        np.testing.assert_array_equal(
+            dump["reconstruction_probs"],
+            np.array([[[0.05, 0.0, 0.15], [0.0, 0.25, 0.25]]], dtype=np.float32),
+        )
 
 
 def test_run_local_search_iteration_exact_engine_uses_model_sigma_for_translation_prior(monkeypatch, rng):
+    from recovar.em.local import local_search_iteration as local_iteration_module
+
     mock_dataset = MockDataset(1, rng)
     captured = {}
 
@@ -4534,6 +4096,7 @@ def test_run_local_search_iteration_exact_engine_uses_model_sigma_for_translatio
         rotation_log_prior=None,
         rotation_grid_random_perturbation=0.0,
         rotation_grid_angular_sampling_deg=None,
+        dtype=np.float32,
     ):
         captured["offset_range_pixels"] = offset_range_pixels
         captured["sigma_offset_angstrom"] = sigma_offset_angstrom
@@ -4550,11 +4113,11 @@ def test_run_local_search_iteration_exact_engine_uses_model_sigma_for_translatio
             n_psi=1,
             rotation_offsets=np.array([0, 1], dtype=np.int64),
             rotation_ids_flat=np.array([0], dtype=np.int32),
-            rotations_flat=np.repeat(np.eye(3, dtype=np.float32)[None, :, :], 1, axis=0),
-            rotation_log_priors_flat=np.zeros(1, dtype=np.float32),
+            rotations_flat=np.repeat(np.eye(3, dtype=dtype)[None, :, :], 1, axis=0),
+            rotation_log_priors_flat=np.zeros(1, dtype=dtype),
             rotation_counts=np.array([1], dtype=np.int32),
-            translation_grid=np.asarray(translations, dtype=np.float32),
-            translation_log_priors=np.zeros((1, np.asarray(translations).shape[0]), dtype=np.float32),
+            translation_grid=np.asarray(translations, dtype=dtype),
+            translation_log_priors=np.zeros((1, np.asarray(translations).shape[0]), dtype=dtype),
         )
 
     def fake_run_local_em_exact(*args, **kwargs):
@@ -4567,51 +4130,45 @@ def test_run_local_search_iteration_exact_engine_uses_model_sigma_for_translatio
         captured["relion_exact_score_translation"] = kwargs.get(
             "relion_exact_score_translation"
         )
-        output = (
-            jnp.zeros(mock_dataset.volume_size, dtype=mock_dataset.dtype),
-            jnp.zeros(mock_dataset.volume_size, dtype=mock_dataset.dtype),
-            np.zeros(mock_dataset.n_units, dtype=np.int32),
-            RelionStats(
+        output = LocalEMResult(
+            Ft_y=jnp.zeros(mock_dataset.volume_size, dtype=mock_dataset.dtype),
+            Ft_ctf=jnp.zeros(mock_dataset.volume_size, dtype=mock_dataset.dtype),
+            hard_assignments=np.zeros(mock_dataset.n_units, dtype=np.int32),
+            stats=RelionStats(
                 log_evidence_per_image=jnp.zeros(mock_dataset.n_units, dtype=jnp.float32),
                 best_log_score_per_image=jnp.zeros(mock_dataset.n_units, dtype=jnp.float32),
                 max_posterior_per_image=jnp.ones(mock_dataset.n_units, dtype=jnp.float32),
                 rotation_posterior_sums=jnp.zeros(1, dtype=jnp.float32),
             ),
-            NoiseStats(
+            noise_stats=NoiseStats(
                 wsum_sigma2_noise=jnp.zeros(mock_dataset.image_shape[0] // 2 + 1, dtype=jnp.float32),
                 wsum_img_power=jnp.zeros(mock_dataset.image_shape[0] // 2 + 1, dtype=jnp.float32),
                 wsum_sigma2_offset=0.0,
                 sumw=0.0,
             ),
         )
-        if kwargs.get("return_significant_counts"):
-            output += (np.full(mock_dataset.n_units, 7, dtype=np.int32),)
         return output
 
-    monkeypatch.setattr(iteration_loop_module, "build_local_hypothesis_layout", fake_build_local_hypothesis_layout)
-    monkeypatch.setattr(iteration_loop_module, "run_local_em_exact", fake_run_local_em_exact)
+    monkeypatch.setattr(local_iteration_module, "build_local_hypothesis_layout", fake_build_local_hypothesis_layout)
+    monkeypatch.setattr(local_iteration_module, "run_local_em_exact", fake_run_local_em_exact)
 
     prior_rotations = np.zeros((1, 3), dtype=np.float32)
     rotation_grid_rotations = get_relion_rotation_grid(0).astype(np.float32)
-    rotation_grid_eulers = get_relion_rotation_grid_eulers(0).astype(np.float32)
     translations = np.array([[0.0, 0.0], [1.0, 0.0]], dtype=np.float32)
     reference_translations = np.array([[0.0, 0.0], [2.0, 0.0]], dtype=np.float32)
 
-    outputs = iteration_loop_module._run_local_search_iteration(
+    outputs = local_search_iteration._run_local_search_iteration(
         mock_dataset,
         jnp.zeros(VOLUME_SIZE, dtype=jnp.complex64),
-        jnp.ones(VOLUME_SIZE, dtype=jnp.float32),
         jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
         prior_rotations,
         rotation_grid_rotations,
-        rotation_grid_eulers,
         healpix_order=0,
         sigma_rot=0.1,
         sigma_psi=0.1,
         translations=translations,
         prior_translations=np.zeros((1, 2), dtype=np.float32),
         sigma_offset_angstrom=1.25,
-        offset_range_pixels=3.5,
         disc_type="linear_interp",
         image_batch_size=1,
         rotation_block_size=4,
@@ -4619,7 +4176,6 @@ def test_run_local_search_iteration_exact_engine_uses_model_sigma_for_translatio
         accumulate_noise=True,
         relion_exact_score_translation=True,
         translation_prior_reference_translations=reference_translations,
-        return_significant_counts=True,
     )
 
     assert captured["offset_range_pixels"] is None
@@ -4637,13 +4193,19 @@ def test_run_local_search_iteration_exact_engine_uses_model_sigma_for_translatio
         reference_translations,
         atol=1e-6,
     )
-    assert len(outputs) == 6
-    np.testing.assert_array_equal(outputs[-1], np.full(mock_dataset.n_units, 7, dtype=np.int32))
+    assert isinstance(outputs, _LocalSearchIterationResult)
+    assert outputs.noise_stats is not None
+    assert outputs.profile_summary is None
+    assert outputs.best_pose_rotations is None
+    assert outputs.best_pose_translations is None
+    assert outputs.class_assignments is None
+    assert outputs.class_posterior_sums is None
+    assert outputs.class_full_posterior_sums is None
 
 
 @pytest.mark.parametrize("k_class_enabled", [False, True])
 def test_run_local_search_iteration_dispatches_aligned_mstep_grid(monkeypatch, rng, k_class_enabled):
-    from recovar.em.dense_single_volume import local_search_iteration as local_iteration_module
+    from recovar.em.local import local_search_iteration as local_iteration_module
 
     dataset = MockDataset(1, rng)
     score_grid = get_relion_rotation_grid(0).astype(np.float32)
@@ -4654,7 +4216,7 @@ def test_run_local_search_iteration_dispatches_aligned_mstep_grid(monkeypatch, r
         pass
 
     def capture_dispatch(*args, **kwargs):
-        captured["layout"] = args[4]
+        captured["layout"] = args[3]
         captured["relion_exact_score_translation"] = kwargs.get(
             "relion_exact_score_translation"
         )
@@ -4663,24 +4225,21 @@ def test_run_local_search_iteration_dispatches_aligned_mstep_grid(monkeypatch, r
     if k_class_enabled:
         monkeypatch.setattr(local_iteration_module, "run_local_k_class_em", capture_dispatch)
     else:
-        monkeypatch.setattr(iteration_loop_module, "run_local_em_exact", capture_dispatch)
+        monkeypatch.setattr(local_iteration_module, "run_local_em_exact", capture_dispatch)
 
     with pytest.raises(DispatchCaptured):
-        iteration_loop_module._run_local_search_iteration(
+        local_search_iteration._run_local_search_iteration(
             dataset,
             jnp.zeros(VOLUME_SIZE, dtype=jnp.complex64),
-            jnp.ones(VOLUME_SIZE, dtype=jnp.float32),
             jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
             np.zeros((1, 3), dtype=np.float32),
             score_grid,
-            get_relion_rotation_grid_eulers(0).astype(np.float32),
             healpix_order=0,
             sigma_rot=0.0,
             sigma_psi=0.0,
             translations=np.zeros((1, 2), dtype=np.float32),
             prior_translations=np.zeros((1, 2), dtype=np.float32),
             sigma_offset_angstrom=1.0,
-            offset_range_pixels=None,
             disc_type="linear_interp",
             image_batch_size=1,
             rotation_block_size=16,
@@ -4722,6 +4281,8 @@ def test_run_local_search_iteration_clamps_highres_local_batches(monkeypatch):
     # suite when the queries return stale or inconsistent values. The 42 GB
     # / 0 GB-used pair is the historical isolation reading that this test
     # was originally calibrated against.
+    from recovar.em.local import local_search_iteration as local_iteration_module
+
     monkeypatch.setattr(iteration_loop_module.utils, "get_gpu_memory_total", lambda: 42.0)
     monkeypatch.setattr(iteration_loop_module.utils, "get_gpu_memory_used", lambda: 0.0)
 
@@ -4754,11 +4315,11 @@ def test_run_local_search_iteration_clamps_highres_local_batches(monkeypatch):
         _ = args
         captured["image_batch_size"] = int(kwargs["image_batch_size"])
         captured["rotation_block_size"] = int(kwargs["rotation_block_size"])
-        return (
-            jnp.zeros(1, dtype=jnp.complex64),
-            jnp.zeros(1, dtype=jnp.complex64),
-            np.zeros(2, dtype=np.int32),
-            RelionStats(
+        return LocalEMResult(
+            Ft_y=jnp.zeros(1, dtype=jnp.complex64),
+            Ft_ctf=jnp.zeros(1, dtype=jnp.complex64),
+            hard_assignments=np.zeros(2, dtype=np.int32),
+            stats=RelionStats(
                 log_evidence_per_image=jnp.zeros(2, dtype=jnp.float32),
                 best_log_score_per_image=jnp.zeros(2, dtype=jnp.float32),
                 max_posterior_per_image=jnp.ones(2, dtype=jnp.float32),
@@ -4766,23 +4327,20 @@ def test_run_local_search_iteration_clamps_highres_local_batches(monkeypatch):
             ),
         )
 
-    monkeypatch.setattr(iteration_loop_module, "run_local_em_exact", fake_run_local_em_exact)
+    monkeypatch.setattr(local_iteration_module, "run_local_em_exact", fake_run_local_em_exact)
 
-    outputs = iteration_loop_module._run_local_search_iteration(
+    outputs = local_search_iteration._run_local_search_iteration(
         HighresDataset(),
         jnp.zeros(1, dtype=jnp.complex64),
-        jnp.ones(1, dtype=jnp.float32),
         jnp.ones(384 * 384, dtype=jnp.float32),
         np.zeros((2, 3), dtype=np.float32),
         np.broadcast_to(np.eye(3, dtype=np.float32), (1024, 3, 3)).copy(),
-        None,
         healpix_order=2,
         sigma_rot=0.1,
         sigma_psi=0.1,
         translations=translation_grid,
         prior_translations=np.zeros((2, 2), dtype=np.float32),
         sigma_offset_angstrom=1.0,
-        offset_range_pixels=None,
         disc_type="linear_interp",
         image_batch_size=250,
         rotation_block_size=5000,
@@ -4795,10 +4353,19 @@ def test_run_local_search_iteration_clamps_highres_local_batches(monkeypatch):
 
     assert captured["image_batch_size"] < 250
     assert captured["rotation_block_size"] == 1024
-    assert len(outputs) == 4
+    assert isinstance(outputs, _LocalSearchIterationResult)
+    assert outputs.noise_stats is None
+    assert outputs.profile_summary is None
+    assert outputs.best_pose_rotations is None
+    assert outputs.best_pose_translations is None
+    assert outputs.class_assignments is None
+    assert outputs.class_posterior_sums is None
+    assert outputs.class_full_posterior_sums is None
 
 
 def test_run_local_search_iteration_relion_xhalf_uses_windowed_batch_guard_by_default(monkeypatch):
+    from recovar.em.local import local_search_iteration as local_iteration_module
+
     monkeypatch.setattr(iteration_loop_module.utils, "get_gpu_memory_total", lambda: 42.0)
     monkeypatch.setattr(iteration_loop_module.utils, "get_gpu_memory_used", lambda: 0.0)
 
@@ -4832,11 +4399,11 @@ def test_run_local_search_iteration_relion_xhalf_uses_windowed_batch_guard_by_de
         _ = args
         captured["image_batch_size"] = int(kwargs["image_batch_size"])
         captured["rotation_block_size"] = int(kwargs["rotation_block_size"])
-        return (
-            jnp.zeros(1, dtype=jnp.complex64),
-            jnp.zeros(1, dtype=jnp.complex64),
-            np.zeros(2, dtype=np.int32),
-            RelionStats(
+        return LocalEMResult(
+            Ft_y=jnp.zeros(1, dtype=jnp.complex64),
+            Ft_ctf=jnp.zeros(1, dtype=jnp.complex64),
+            hard_assignments=np.zeros(2, dtype=np.int32),
+            stats=RelionStats(
                 log_evidence_per_image=jnp.zeros(2, dtype=jnp.float32),
                 best_log_score_per_image=jnp.zeros(2, dtype=jnp.float32),
                 max_posterior_per_image=jnp.ones(2, dtype=jnp.float32),
@@ -4844,24 +4411,21 @@ def test_run_local_search_iteration_relion_xhalf_uses_windowed_batch_guard_by_de
             ),
         )
 
-    monkeypatch.setattr(iteration_loop_module, "run_local_em_exact", fake_run_local_em_exact)
+    monkeypatch.setattr(local_iteration_module, "run_local_em_exact", fake_run_local_em_exact)
     monkeypatch.delenv("RECOVAR_LOCAL_XHALF_BATCH_GUARD", raising=False)
 
-    iteration_loop_module._run_local_search_iteration(
+    local_search_iteration._run_local_search_iteration(
         Dataset256(),
         jnp.zeros(1, dtype=jnp.complex64),
-        jnp.ones(1, dtype=jnp.float32),
         jnp.ones(256 * 129, dtype=jnp.float32),
         np.zeros((2, 3), dtype=np.float32),
         np.broadcast_to(np.eye(3, dtype=np.float32), (local_rotations, 3, 3)).copy(),
-        None,
         healpix_order=4,
         sigma_rot=0.1,
         sigma_psi=0.1,
         translations=layout.translation_grid,
         prior_translations=np.zeros((2, 2), dtype=np.float32),
         sigma_offset_angstrom=1.0,
-        offset_range_pixels=None,
         disc_type="linear_interp",
         image_batch_size=41,
         rotation_block_size=58,
@@ -4879,21 +4443,18 @@ def test_run_local_search_iteration_relion_xhalf_uses_windowed_batch_guard_by_de
     assert captured["rotation_block_size"] == 58
 
     monkeypatch.setenv("RECOVAR_LOCAL_XHALF_BATCH_GUARD", "full")
-    iteration_loop_module._run_local_search_iteration(
+    local_search_iteration._run_local_search_iteration(
         Dataset256(),
         jnp.zeros(1, dtype=jnp.complex64),
-        jnp.ones(1, dtype=jnp.float32),
         jnp.ones(256 * 129, dtype=jnp.float32),
         np.zeros((2, 3), dtype=np.float32),
         np.broadcast_to(np.eye(3, dtype=np.float32), (local_rotations, 3, 3)).copy(),
-        None,
         healpix_order=4,
         sigma_rot=0.1,
         sigma_psi=0.1,
         translations=layout.translation_grid,
         prior_translations=np.zeros((2, 2), dtype=np.float32),
         sigma_offset_angstrom=1.0,
-        offset_range_pixels=None,
         disc_type="linear_interp",
         image_batch_size=41,
         rotation_block_size=58,
@@ -4912,6 +4473,8 @@ def test_run_local_search_iteration_relion_xhalf_uses_windowed_batch_guard_by_de
 
 
 def test_run_local_search_iteration_plumbs_score_only_to_exact_engine(monkeypatch, rng):
+    from recovar.em.local import local_search_iteration as local_iteration_module
+
     mock_dataset = MockDataset(2, rng)
     layout = LocalHypothesisLayout(
         n_global_rotations=3,
@@ -4930,36 +4493,33 @@ def test_run_local_search_iteration_plumbs_score_only_to_exact_engine(monkeypatc
     def fake_run_local_em_exact(*args, **kwargs):
         _ = args
         captured.update(kwargs)
-        return (
-            jnp.zeros(mock_dataset.volume_size, dtype=mock_dataset.dtype),
-            jnp.zeros(mock_dataset.volume_size, dtype=mock_dataset.dtype),
-            np.zeros(mock_dataset.n_units, dtype=np.int32),
-            RelionStats(
+        return LocalEMResult(
+            Ft_y=jnp.zeros(mock_dataset.volume_size, dtype=mock_dataset.dtype),
+            Ft_ctf=jnp.zeros(mock_dataset.volume_size, dtype=mock_dataset.dtype),
+            hard_assignments=np.zeros(mock_dataset.n_units, dtype=np.int32),
+            stats=RelionStats(
                 log_evidence_per_image=jnp.zeros(mock_dataset.n_units, dtype=jnp.float32),
                 best_log_score_per_image=jnp.zeros(mock_dataset.n_units, dtype=jnp.float32),
                 max_posterior_per_image=jnp.ones(mock_dataset.n_units, dtype=jnp.float32),
                 rotation_posterior_sums=jnp.zeros(3, dtype=jnp.float32),
             ),
-            {"score_only": kwargs["score_only"]},
+            profile={"score_only": kwargs["score_only"]},
         )
 
-    monkeypatch.setattr(iteration_loop_module, "run_local_em_exact", fake_run_local_em_exact)
+    monkeypatch.setattr(local_iteration_module, "run_local_em_exact", fake_run_local_em_exact)
 
-    outputs = iteration_loop_module._run_local_search_iteration(
+    outputs = local_search_iteration._run_local_search_iteration(
         mock_dataset,
         jnp.zeros(VOLUME_SIZE, dtype=jnp.complex64),
-        jnp.ones(VOLUME_SIZE, dtype=jnp.float32),
         jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
         np.zeros((2, 3), dtype=np.float32),
         np.broadcast_to(np.eye(3, dtype=np.float32), (3, 3, 3)).copy(),
-        None,
         healpix_order=0,
         sigma_rot=0.1,
         sigma_psi=0.1,
         translations=layout.translation_grid,
         prior_translations=np.zeros((2, 2), dtype=np.float32),
         sigma_offset_angstrom=1.0,
-        offset_range_pixels=None,
         disc_type="linear_interp",
         image_batch_size=2,
         rotation_block_size=8,
@@ -4976,13 +4536,13 @@ def test_run_local_search_iteration_plumbs_score_only_to_exact_engine(monkeypatc
     assert captured["disable_adjoint_y"] is True
     assert captured["disable_adjoint_ctf"] is True
     assert captured["accumulate_noise"] is False
-    assert outputs[-1]["score_only"] is True
+    assert outputs.profile_summary["score_only"] is True
 
 
 def test_local_adaptive_parent_support_probe_is_score_only():
-    source = Path(iteration_loop_module.__file__).read_text()
+    source = Path(half_scoring.__file__).read_text()
     start = source.index("parent_outputs = _run_local_search_iteration(")
-    end = source.index("parent_profile = parent_outputs[-1]", start)
+    end = source.index("parent_profile = parent_outputs.profile_summary", start)
     parent_call = source[start:end]
 
     assert "disable_adjoint_y=True" in parent_call
@@ -4992,6 +4552,8 @@ def test_local_adaptive_parent_support_probe_is_score_only():
 
 
 def test_run_local_search_iteration_plumbs_normalization_log_evidence(monkeypatch, rng):
+    from recovar.em.local import local_search_iteration as local_iteration_module
+
     mock_dataset = MockDataset(2, rng)
     layout = LocalHypothesisLayout(
         n_global_rotations=3,
@@ -5011,11 +4573,11 @@ def test_run_local_search_iteration_plumbs_normalization_log_evidence(monkeypatc
     def fake_run_local_em_exact(*args, **kwargs):
         _ = args
         captured.update(kwargs)
-        return (
-            jnp.zeros(mock_dataset.volume_size, dtype=mock_dataset.dtype),
-            jnp.zeros(mock_dataset.volume_size, dtype=mock_dataset.dtype),
-            np.zeros(mock_dataset.n_units, dtype=np.int32),
-            RelionStats(
+        return LocalEMResult(
+            Ft_y=jnp.zeros(mock_dataset.volume_size, dtype=mock_dataset.dtype),
+            Ft_ctf=jnp.zeros(mock_dataset.volume_size, dtype=mock_dataset.dtype),
+            hard_assignments=np.zeros(mock_dataset.n_units, dtype=np.int32),
+            stats=RelionStats(
                 log_evidence_per_image=jnp.zeros(mock_dataset.n_units, dtype=jnp.float32),
                 best_log_score_per_image=jnp.zeros(mock_dataset.n_units, dtype=jnp.float32),
                 max_posterior_per_image=jnp.ones(mock_dataset.n_units, dtype=jnp.float32),
@@ -5023,23 +4585,20 @@ def test_run_local_search_iteration_plumbs_normalization_log_evidence(monkeypatc
             ),
         )
 
-    monkeypatch.setattr(iteration_loop_module, "run_local_em_exact", fake_run_local_em_exact)
+    monkeypatch.setattr(local_iteration_module, "run_local_em_exact", fake_run_local_em_exact)
 
-    outputs = iteration_loop_module._run_local_search_iteration(
+    outputs = local_search_iteration._run_local_search_iteration(
         mock_dataset,
         jnp.zeros(VOLUME_SIZE, dtype=jnp.complex64),
-        jnp.ones(VOLUME_SIZE, dtype=jnp.float32),
         jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
         np.zeros((2, 3), dtype=np.float32),
         np.broadcast_to(np.eye(3, dtype=np.float32), (3, 3, 3)).copy(),
-        None,
         healpix_order=0,
         sigma_rot=0.1,
         sigma_psi=0.1,
         translations=layout.translation_grid,
         prior_translations=np.zeros((2, 2), dtype=np.float32),
         sigma_offset_angstrom=1.0,
-        offset_range_pixels=None,
         disc_type="linear_interp",
         image_batch_size=2,
         rotation_block_size=8,
@@ -5050,10 +4609,19 @@ def test_run_local_search_iteration_plumbs_normalization_log_evidence(monkeypatc
     )
 
     np.testing.assert_allclose(captured["normalization_log_evidence"], normalization_log_evidence)
-    assert len(outputs) == 4
+    assert isinstance(outputs, _LocalSearchIterationResult)
+    assert outputs.noise_stats is None
+    assert outputs.profile_summary is None
+    assert outputs.best_pose_rotations is None
+    assert outputs.best_pose_translations is None
+    assert outputs.class_assignments is None
+    assert outputs.class_posterior_sums is None
+    assert outputs.class_full_posterior_sums is None
 
 
 def test_run_local_search_iteration_plumbs_stats_use_reconstruction_probs(monkeypatch, rng):
+    from recovar.em.local import local_search_iteration as local_iteration_module
+
     mock_dataset = MockDataset(2, rng)
     layout = LocalHypothesisLayout(
         n_global_rotations=3,
@@ -5072,11 +4640,11 @@ def test_run_local_search_iteration_plumbs_stats_use_reconstruction_probs(monkey
     def fake_run_local_em_exact(*args, **kwargs):
         _ = args
         captured["stats_use_reconstruction_probs"] = kwargs["stats_use_reconstruction_probs"]
-        return (
-            jnp.zeros(mock_dataset.volume_size, dtype=mock_dataset.dtype),
-            jnp.zeros(mock_dataset.volume_size, dtype=mock_dataset.dtype),
-            np.zeros(mock_dataset.n_units, dtype=np.int32),
-            RelionStats(
+        return LocalEMResult(
+            Ft_y=jnp.zeros(mock_dataset.volume_size, dtype=mock_dataset.dtype),
+            Ft_ctf=jnp.zeros(mock_dataset.volume_size, dtype=mock_dataset.dtype),
+            hard_assignments=np.zeros(mock_dataset.n_units, dtype=np.int32),
+            stats=RelionStats(
                 log_evidence_per_image=jnp.zeros(mock_dataset.n_units, dtype=jnp.float32),
                 best_log_score_per_image=jnp.zeros(mock_dataset.n_units, dtype=jnp.float32),
                 max_posterior_per_image=jnp.ones(mock_dataset.n_units, dtype=jnp.float32),
@@ -5084,23 +4652,20 @@ def test_run_local_search_iteration_plumbs_stats_use_reconstruction_probs(monkey
             ),
         )
 
-    monkeypatch.setattr(iteration_loop_module, "run_local_em_exact", fake_run_local_em_exact)
+    monkeypatch.setattr(local_iteration_module, "run_local_em_exact", fake_run_local_em_exact)
 
-    outputs = iteration_loop_module._run_local_search_iteration(
+    outputs = local_search_iteration._run_local_search_iteration(
         mock_dataset,
         jnp.zeros(VOLUME_SIZE, dtype=jnp.complex64),
-        jnp.ones(VOLUME_SIZE, dtype=jnp.float32),
         jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
         np.zeros((2, 3), dtype=np.float32),
         np.broadcast_to(np.eye(3, dtype=np.float32), (3, 3, 3)).copy(),
-        None,
         healpix_order=0,
         sigma_rot=0.1,
         sigma_psi=0.1,
         translations=layout.translation_grid,
         prior_translations=np.zeros((2, 2), dtype=np.float32),
         sigma_offset_angstrom=1.0,
-        offset_range_pixels=None,
         disc_type="linear_interp",
         image_batch_size=2,
         rotation_block_size=8,
@@ -5112,7 +4677,14 @@ def test_run_local_search_iteration_plumbs_stats_use_reconstruction_probs(monkey
     )
 
     assert captured["stats_use_reconstruction_probs"] is True
-    assert len(outputs) == 4
+    assert isinstance(outputs, _LocalSearchIterationResult)
+    assert outputs.noise_stats is None
+    assert outputs.profile_summary is None
+    assert outputs.best_pose_rotations is None
+    assert outputs.best_pose_translations is None
+    assert outputs.class_assignments is None
+    assert outputs.class_posterior_sums is None
+    assert outputs.class_full_posterior_sums is None
 
 
 def test_run_local_search_iteration_rejects_k_class_score_only(rng):
@@ -5131,21 +4703,18 @@ def test_run_local_search_iteration_rejects_k_class_score_only(rng):
     )
 
     with pytest.raises(NotImplementedError, match="K-class local search does not support score_only"):
-        iteration_loop_module._run_local_search_iteration(
+        local_search_iteration._run_local_search_iteration(
             mock_dataset,
             jnp.zeros(VOLUME_SIZE, dtype=jnp.complex64),
-            jnp.ones(VOLUME_SIZE, dtype=jnp.float32),
             jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
             np.zeros((2, 3), dtype=np.float32),
             np.broadcast_to(np.eye(3, dtype=np.float32), (3, 3, 3)).copy(),
-            None,
             healpix_order=0,
             sigma_rot=0.1,
             sigma_psi=0.1,
             translations=layout.translation_grid,
             prior_translations=np.zeros((2, 2), dtype=np.float32),
             sigma_offset_angstrom=1.0,
-            offset_range_pixels=None,
             disc_type="linear_interp",
             image_batch_size=2,
             rotation_block_size=8,
@@ -5161,6 +4730,7 @@ def test_run_local_search_iteration_exact_engine_uses_factorized_prior_metadata_
     rng,
 ):
     from recovar import utils
+    from recovar.em.local import local_search_iteration as local_iteration_module
 
     mock_dataset = MockDataset(1, rng)
     captured = {}
@@ -5182,35 +4752,25 @@ def test_run_local_search_iteration_exact_engine_uses_factorized_prior_metadata_
         rotation_log_prior=None,
         rotation_grid_random_perturbation=0.0,
         rotation_grid_angular_sampling_deg=None,
+        dtype=np.float32,
     ):
-        _ = (
-            prior_rotations,
-            sigma_rot,
-            sigma_psi,
-            healpix_order,
-            prior_translations,
-            sigma_offset_angstrom,
-            offset_range_pixels,
-            voxel_size,
-            translation_prior_reference_translations,
-        )
         captured["grid_metadata_mode"] = grid_metadata["mode"]
         captured["n_pixels"] = int(grid_metadata["n_pixels"])
         captured["n_psi"] = int(grid_metadata["n_psi"])
         captured["rotation_grid_random_perturbation"] = rotation_grid_random_perturbation
         captured["rotation_grid_angular_sampling_deg"] = rotation_grid_angular_sampling_deg
-        captured["scored_rotations"] = np.asarray(rotation_grid_rotations, dtype=np.float32).copy()
+        captured["scored_rotations"] = np.asarray(rotation_grid_rotations, dtype=dtype).copy()
         return LocalHypothesisLayout(
             n_global_rotations=rotation_grid_rotations.shape[0],
             n_pixels=1,
             n_psi=1,
             rotation_offsets=np.array([0, 1], dtype=np.int64),
             rotation_ids_flat=np.array([0], dtype=np.int32),
-            rotations_flat=np.asarray(rotation_grid_rotations[:1], dtype=np.float32),
-            rotation_log_priors_flat=np.zeros(1, dtype=np.float32),
+            rotations_flat=np.asarray(rotation_grid_rotations[:1], dtype=dtype),
+            rotation_log_priors_flat=np.zeros(1, dtype=dtype),
             rotation_counts=np.array([1], dtype=np.int32),
-            translation_grid=np.asarray(translations, dtype=np.float32),
-            translation_log_priors=np.zeros((1, np.asarray(translations).shape[0]), dtype=np.float32),
+            translation_grid=np.asarray(translations, dtype=dtype),
+            translation_log_priors=np.zeros((1, np.asarray(translations).shape[0]), dtype=dtype),
         )
 
     def fake_run_local_em_exact(*args, **kwargs):
@@ -5218,17 +4778,17 @@ def test_run_local_search_iteration_exact_engine_uses_factorized_prior_metadata_
         captured["max_significants"] = kwargs.get("max_significants")
         captured["use_float64_scoring"] = kwargs.get("use_float64_scoring")
         captured["use_float64_normalization"] = kwargs.get("use_float64_normalization")
-        return (
-            jnp.zeros(mock_dataset.volume_size, dtype=mock_dataset.dtype),
-            jnp.zeros(mock_dataset.volume_size, dtype=mock_dataset.dtype),
-            np.zeros(mock_dataset.n_units, dtype=np.int32),
-            RelionStats(
+        return LocalEMResult(
+            Ft_y=jnp.zeros(mock_dataset.volume_size, dtype=mock_dataset.dtype),
+            Ft_ctf=jnp.zeros(mock_dataset.volume_size, dtype=mock_dataset.dtype),
+            hard_assignments=np.zeros(mock_dataset.n_units, dtype=np.int32),
+            stats=RelionStats(
                 log_evidence_per_image=jnp.zeros(mock_dataset.n_units, dtype=jnp.float32),
                 best_log_score_per_image=jnp.zeros(mock_dataset.n_units, dtype=jnp.float32),
                 max_posterior_per_image=jnp.ones(mock_dataset.n_units, dtype=jnp.float32),
                 rotation_posterior_sums=jnp.zeros(rotation_grid_size(1), dtype=jnp.float32),
             ),
-            NoiseStats(
+            noise_stats=NoiseStats(
                 wsum_sigma2_noise=jnp.zeros(mock_dataset.image_shape[0] // 2 + 1, dtype=jnp.float32),
                 wsum_img_power=jnp.zeros(mock_dataset.image_shape[0] // 2 + 1, dtype=jnp.float32),
                 wsum_sigma2_offset=0.0,
@@ -5236,8 +4796,8 @@ def test_run_local_search_iteration_exact_engine_uses_factorized_prior_metadata_
             ),
         )
 
-    monkeypatch.setattr(iteration_loop_module, "build_local_hypothesis_layout", fake_build_local_hypothesis_layout)
-    monkeypatch.setattr(iteration_loop_module, "run_local_em_exact", fake_run_local_em_exact)
+    monkeypatch.setattr(local_iteration_module, "build_local_hypothesis_layout", fake_build_local_hypothesis_layout)
+    monkeypatch.setattr(local_iteration_module, "run_local_em_exact", fake_run_local_em_exact)
 
     healpix_order = 1
     canonical_rotations = get_relion_rotation_grid(healpix_order).astype(np.float32)
@@ -5261,21 +4821,18 @@ def test_run_local_search_iteration_exact_engine_uses_factorized_prior_metadata_
         == "full"
     )
 
-    outputs = iteration_loop_module._run_local_search_iteration(
+    outputs = local_search_iteration._run_local_search_iteration(
         mock_dataset,
         jnp.zeros(VOLUME_SIZE, dtype=jnp.complex64),
-        jnp.ones(VOLUME_SIZE, dtype=jnp.float32),
         jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
         np.zeros((1, 3), dtype=np.float32),
         perturbed_rotations,
-        perturbed_eulers,
         healpix_order=healpix_order,
         sigma_rot=0.1,
         sigma_psi=0.1,
         translations=translations,
         prior_translations=np.zeros((1, 2), dtype=np.float32),
         sigma_offset_angstrom=1.0,
-        offset_range_pixels=2.0,
         disc_type="linear_interp",
         image_batch_size=1,
         rotation_block_size=4,
@@ -5292,7 +4849,14 @@ def test_run_local_search_iteration_exact_engine_uses_factorized_prior_metadata_
     assert captured["rotation_grid_random_perturbation"] == 0.0
     assert captured["rotation_grid_angular_sampling_deg"] is None
     np.testing.assert_allclose(captured["scored_rotations"], perturbed_rotations)
-    assert len(outputs) == 5
+    assert isinstance(outputs, _LocalSearchIterationResult)
+    assert outputs.noise_stats is not None
+    assert outputs.profile_summary is None
+    assert outputs.best_pose_rotations is None
+    assert outputs.best_pose_translations is None
+    assert outputs.class_assignments is None
+    assert outputs.class_posterior_sums is None
+    assert outputs.class_full_posterior_sums is None
 
 
 def test_run_local_em_exact_matches_dense_engine_on_single_image_local_grid(rng):
@@ -5321,7 +4885,6 @@ def test_run_local_em_exact_matches_dense_engine_on_single_image_local_grid(rng)
     exact_outputs = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -5332,7 +4895,7 @@ def test_run_local_em_exact_matches_dense_engine_on_single_image_local_grid(rng)
         reconstruct_significant_only=False,
         return_profile=False,
     )
-    _, ha_dense, Ft_y_dense, Ft_ctf_dense, stats_dense, noise_dense = run_em(
+    em_result = run_em(
         dataset,
         mean,
         mean_variance,
@@ -5350,8 +4913,15 @@ def test_run_local_em_exact_matches_dense_engine_on_single_image_local_grid(rng)
         accumulate_noise=True,
         sparse_pass2=False,
     )
+    _ = em_result.mean
+    ha_dense = em_result.hard_assignments
+    del em_result
 
-    Ft_y_exact, Ft_ctf_exact, ha_exact, stats_exact, noise_exact = exact_outputs
+    Ft_y_exact = exact_outputs.Ft_y
+    Ft_ctf_exact = exact_outputs.Ft_ctf
+    ha_exact = exact_outputs.hard_assignments
+    stats_exact = exact_outputs.stats
+    noise_exact = exact_outputs.noise_stats
     assert np.asarray(Ft_y_exact).size == VOLUME_SIZE
     assert np.asarray(Ft_ctf_exact).size == VOLUME_SIZE
     config = ForwardModelConfig.from_dataset(dataset, disc_type="linear_interp", process_fn=dataset.process_images)
@@ -5369,23 +4939,24 @@ def test_run_local_em_exact_matches_dense_engine_on_single_image_local_grid(rng)
         shifted_score_half,
         shifted_recon_half,
         _batch_norm,
-        ctf2_over_nv_half,
+        ctf2_over_nv_score_half,
+        ctf2_over_nv_recon_half,
         _processed_score_half,
         _real_space_pre_shift_applied,
-    ) = _prepare_local_exact_bucket(
+    ) = prepare_local_bucket(
         dataset,
         batch_data,
         ctf_params,
         bucket.image_indices,
         noise_variance_half,
-        jnp.asarray(local_layout.translation_grid),
+        half_translation_phase_table(jnp.asarray(local_layout.translation_grid), config.image_shape),
         config,
         half_weights,
         score_with_masked_images=True,
     )
     flat_rotations = flatten_bucket_rotations(jnp.asarray(bucket.local_rotations))
     n_half = dataset.image_shape[0] * (dataset.image_shape[1] // 2 + 1)
-    from recovar.em.dense_single_volume.helpers.fourier_window import make_fourier_window_spec
+    from recovar.em.helpers.fourier_window import make_fourier_window_spec
 
     window_spec = make_fourier_window_spec(dataset.image_shape, 6, n_half)
     proj_half_flat = core.slice_volume(
@@ -5412,7 +4983,7 @@ def test_run_local_em_exact_matches_dense_engine_on_single_image_local_grid(rng)
     proj_weighted = proj_half * score_half_weights[None, None, :]
     proj_abs2_weighted = proj_abs2 * score_half_weights[None, None, :]
     shifted_score = window_spec.score_values(shifted_score_half)
-    ctf2_over_nv_score = window_spec.score_values(ctf2_over_nv_half)
+    ctf2_over_nv_score = window_spec.score_values(ctf2_over_nv_score_half)
     scores = score_local_bucket(
         shifted_score.reshape(1, 1, -1),
         ctf2_over_nv_score,
@@ -5424,11 +4995,11 @@ def test_run_local_em_exact_matches_dense_engine_on_single_image_local_grid(rng)
     )
     _log_Z, probs, _best_log_score, _best_argmax, _max_posterior = normalize_local_scores(scores)
     shifted_recon = window_spec.recon_values(shifted_recon_half)
-    ctf2_over_nv_recon = window_spec.recon_values(ctf2_over_nv_half)
+    ctf2_over_nv_recon = window_spec.recon_values(ctf2_over_nv_recon_half)
     shifted_recon_split = shifted_recon.reshape(1, 1, -1)
     manual_summed = compute_local_weighted_sums(probs, shifted_recon_split)
     manual_ctf_probs = compute_local_ctf_sums(probs, ctf2_over_nv_recon)
-    from recovar.em.dense_single_volume.helpers.adjoint import adjoint_slice_volume_maybe_windowed
+    from recovar.em.helpers.adjoint import adjoint_slice_volume_maybe_windowed
 
     Ft_y_manual_half = adjoint_slice_volume_maybe_windowed(
         flatten_bucket_rows(manual_summed),
@@ -5498,7 +5069,6 @@ def test_run_local_em_exact_can_return_half_volume_accumulators(rng, monkeypatch
     monkeypatch.setenv("RECOVAR_DISABLE_CUDA", "1")
     dataset = MockDataset(1, rng)
     mean = _hermitian_volume(VOLUME_SHAPE, seed=117)
-    mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
     noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
     local_rotations = _make_rotations(2, seed=119)
     translations = np.zeros((1, 2), dtype=np.float32)
@@ -5518,7 +5088,6 @@ def test_run_local_em_exact_can_return_half_volume_accumulators(rng, monkeypatch
     full = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -5530,7 +5099,6 @@ def test_run_local_em_exact_can_return_half_volume_accumulators(rng, monkeypatch
     half = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -5542,19 +5110,19 @@ def test_run_local_em_exact_can_return_half_volume_accumulators(rng, monkeypatch
     )
 
     half_shape = ftu.volume_shape_to_half_volume_shape(dataset.volume_shape)
-    assert np.asarray(half[0]).size == int(np.prod(half_shape))
-    assert np.asarray(half[1]).size == int(np.prod(half_shape))
+    assert np.asarray(half.Ft_y).size == int(np.prod(half_shape))
+    assert np.asarray(half.Ft_ctf).size == int(np.prod(half_shape))
     Ft_y_half_full, Ft_ctf_half_full = half_volume_accumulators_to_full(
-        half[0],
-        half[1],
+        half.Ft_y,
+        half.Ft_ctf,
         dataset.volume_shape,
     )
-    np.testing.assert_allclose(np.asarray(Ft_y_half_full), np.asarray(full[0]), rtol=1e-5, atol=1e-5)
-    np.testing.assert_allclose(np.asarray(Ft_ctf_half_full), np.asarray(full[1]), rtol=1e-5, atol=1e-5)
-    np.testing.assert_array_equal(np.asarray(half[2]), np.asarray(full[2]))
+    np.testing.assert_allclose(np.asarray(Ft_y_half_full), np.asarray(full.Ft_y), rtol=1e-5, atol=1e-5)
+    np.testing.assert_allclose(np.asarray(Ft_ctf_half_full), np.asarray(full.Ft_ctf), rtol=1e-5, atol=1e-5)
+    np.testing.assert_array_equal(np.asarray(half.hard_assignments), np.asarray(full.hard_assignments))
     np.testing.assert_allclose(
-        np.asarray(half[3].log_evidence_per_image),
-        np.asarray(full[3].log_evidence_per_image),
+        np.asarray(half.stats.log_evidence_per_image),
+        np.asarray(full.stats.log_evidence_per_image),
         rtol=1e-5,
         atol=1e-5,
     )
@@ -5562,7 +5130,7 @@ def test_run_local_em_exact_can_return_half_volume_accumulators(rng, monkeypatch
 
 def test_sparse_adjoint_row_chunks_match_single_windowed_adjoint(rng, monkeypatch):
     monkeypatch.setenv("RECOVAR_DISABLE_CUDA", "1")
-    from recovar.em.dense_single_volume.helpers.adjoint import adjoint_slice_volume_maybe_windowed
+    from recovar.em.helpers.adjoint import adjoint_slice_volume_maybe_windowed
 
     window_indices = jnp.asarray([0, 1, 2, 5, 8, 13, 21, 30], dtype=jnp.int32)
     n_rows = 5
@@ -5650,23 +5218,23 @@ def test_run_em_dense_can_return_half_volume_accumulators(rng, monkeypatch):
     )
 
     half_shape = ftu.volume_shape_to_half_volume_shape(dataset.volume_shape)
-    assert full[0] is None
-    assert half[0] is None
-    assert np.asarray(full[2]).size == VOLUME_SIZE
-    assert np.asarray(full[3]).size == VOLUME_SIZE
-    assert np.asarray(half[2]).size == int(np.prod(half_shape))
-    assert np.asarray(half[3]).size == int(np.prod(half_shape))
+    assert full.mean is None
+    assert half.mean is None
+    assert np.asarray(full.Ft_y).size == VOLUME_SIZE
+    assert np.asarray(full.Ft_ctf).size == VOLUME_SIZE
+    assert np.asarray(half.Ft_y).size == int(np.prod(half_shape))
+    assert np.asarray(half.Ft_ctf).size == int(np.prod(half_shape))
     Ft_y_half_full, Ft_ctf_half_full = half_volume_accumulators_to_full(
-        half[2],
-        half[3],
+        half.Ft_y,
+        half.Ft_ctf,
         dataset.volume_shape,
     )
-    np.testing.assert_allclose(np.asarray(Ft_y_half_full), np.asarray(full[2]), rtol=1e-5, atol=1e-5)
-    np.testing.assert_allclose(np.asarray(Ft_ctf_half_full), np.asarray(full[3]), rtol=1e-5, atol=1e-5)
-    np.testing.assert_array_equal(np.asarray(half[1]), np.asarray(full[1]))
+    np.testing.assert_allclose(np.asarray(Ft_y_half_full), np.asarray(full.Ft_y), rtol=1e-5, atol=1e-5)
+    np.testing.assert_allclose(np.asarray(Ft_ctf_half_full), np.asarray(full.Ft_ctf), rtol=1e-5, atol=1e-5)
+    np.testing.assert_array_equal(np.asarray(half.hard_assignments), np.asarray(full.hard_assignments))
     np.testing.assert_allclose(
-        np.asarray(half[4].log_evidence_per_image),
-        np.asarray(full[4].log_evidence_per_image),
+        np.asarray(half.stats.log_evidence_per_image),
+        np.asarray(full.stats.log_evidence_per_image),
         rtol=1e-5,
         atol=1e-5,
     )
@@ -5675,7 +5243,6 @@ def test_run_em_dense_can_return_half_volume_accumulators(rng, monkeypatch):
 def test_run_local_em_exact_class_log_prior_shifts_evidence_only(rng):
     dataset = MockDataset(1, rng)
     mean = _hermitian_volume(VOLUME_SHAPE, seed=121)
-    mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
     noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
     local_rotations = _make_rotations(2, seed=129)
     translations = np.zeros((1, 2), dtype=np.float32)
@@ -5694,10 +5261,9 @@ def test_run_local_em_exact_class_log_prior_shifts_evidence_only(rng):
         translation_log_priors=np.zeros((1, 1), dtype=np.float32),
     )
 
-    Ft_y_base, Ft_ctf_base, ha_base, stats_base = run_local_em_exact(
+    local_result = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -5706,10 +5272,14 @@ def test_run_local_em_exact_class_log_prior_shifts_evidence_only(rng):
         current_size=None,
         reconstruct_significant_only=False,
     )
-    Ft_y_prior, Ft_ctf_prior, ha_prior, stats_prior = run_local_em_exact(
+    Ft_y_base = local_result.Ft_y
+    Ft_ctf_base = local_result.Ft_ctf
+    ha_base = local_result.hard_assignments
+    stats_base = local_result.stats
+    del local_result
+    local_result = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -5719,6 +5289,11 @@ def test_run_local_em_exact_class_log_prior_shifts_evidence_only(rng):
         reconstruct_significant_only=False,
         class_log_prior=class_log_prior,
     )
+    Ft_y_prior = local_result.Ft_y
+    Ft_ctf_prior = local_result.Ft_ctf
+    ha_prior = local_result.hard_assignments
+    stats_prior = local_result.stats
+    del local_result
 
     np.testing.assert_array_equal(ha_prior, ha_base)
     np.testing.assert_allclose(np.asarray(Ft_y_prior), np.asarray(Ft_y_base), rtol=1e-5, atol=1e-5)
@@ -5741,7 +5316,6 @@ def test_run_local_em_exact_external_log_evidence_scales_posterior(rng, monkeypa
     monkeypatch.setenv("RECOVAR_DISABLE_LOCAL_BIG_JIT", "1")
     dataset = MockDataset(1, rng)
     mean = _hermitian_volume(VOLUME_SHAPE, seed=131)
-    mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
     noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
     local_rotations = _make_rotations(2, seed=139)
     translations = np.zeros((1, 2), dtype=np.float32)
@@ -5759,10 +5333,9 @@ def test_run_local_em_exact_external_log_evidence_scales_posterior(rng, monkeypa
         translation_log_priors=np.zeros((1, 1), dtype=np.float32),
     )
 
-    Ft_y_base, Ft_ctf_base, ha_base, stats_base = run_local_em_exact(
+    local_result = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -5771,11 +5344,15 @@ def test_run_local_em_exact_external_log_evidence_scales_posterior(rng, monkeypa
         current_size=None,
         reconstruct_significant_only=False,
     )
+    Ft_y_base = local_result.Ft_y
+    Ft_ctf_base = local_result.Ft_ctf
+    ha_base = local_result.hard_assignments
+    stats_base = local_result.stats
+    del local_result
     external_log_evidence = np.asarray(stats_base.log_evidence_per_image, dtype=np.float64) + np.log(2.0)
-    Ft_y_scaled, Ft_ctf_scaled, ha_scaled, stats_scaled = run_local_em_exact(
+    local_result = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -5785,10 +5362,14 @@ def test_run_local_em_exact_external_log_evidence_scales_posterior(rng, monkeypa
         reconstruct_significant_only=False,
         normalization_log_evidence=external_log_evidence,
     )
-    Ft_y_fallback, Ft_ctf_fallback, ha_fallback, stats_fallback = run_local_em_exact(
+    Ft_y_scaled = local_result.Ft_y
+    Ft_ctf_scaled = local_result.Ft_ctf
+    ha_scaled = local_result.hard_assignments
+    stats_scaled = local_result.stats
+    del local_result
+    local_result = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -5799,6 +5380,11 @@ def test_run_local_em_exact_external_log_evidence_scales_posterior(rng, monkeypa
         normalization_log_evidence=external_log_evidence,
         reconstruction_probability_threshold=np.zeros(dataset.n_units, dtype=np.float64),
     )
+    Ft_y_fallback = local_result.Ft_y
+    Ft_ctf_fallback = local_result.Ft_ctf
+    ha_fallback = local_result.hard_assignments
+    stats_fallback = local_result.stats
+    del local_result
 
     np.testing.assert_array_equal(ha_scaled, ha_base)
     np.testing.assert_array_equal(ha_scaled, ha_fallback)
@@ -5826,11 +5412,85 @@ def test_run_local_em_exact_external_log_evidence_scales_posterior(rng, monkeypa
     )
 
 
+@pytest.mark.parametrize(
+    "disable_big_jit",
+    [False, True],
+    ids=["big-jit", "fallback"],
+)
+def test_run_local_em_exact_external_pmax_scales_in_one_score_pass(
+    rng,
+    monkeypatch,
+    disable_big_jit,
+):
+    if disable_big_jit:
+        monkeypatch.setenv("RECOVAR_DISABLE_LOCAL_BIG_JIT", "1")
+    else:
+        monkeypatch.delenv("RECOVAR_DISABLE_LOCAL_BIG_JIT", raising=False)
+    dataset = MockDataset(1, rng)
+    mean = _hermitian_volume(VOLUME_SHAPE, seed=132)
+    noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
+    local_rotations = _make_rotations(2, seed=140)
+    local_layout = LocalHypothesisLayout(
+        n_global_rotations=2,
+        n_pixels=2,
+        n_psi=1,
+        rotation_offsets=np.array([0, 2], dtype=np.int64),
+        rotation_ids_flat=np.array([0, 1], dtype=np.int32),
+        rotations_flat=np.asarray(local_rotations, dtype=np.float32),
+        rotation_log_priors_flat=np.zeros(2, dtype=np.float32),
+        rotation_counts=np.array([2], dtype=np.int32),
+        translation_grid=np.zeros((1, 2), dtype=np.float32),
+        translation_log_priors=np.zeros((1, 1), dtype=np.float32),
+    )
+    common = dict(
+        image_batch_size=1,
+        rotation_block_size=4,
+        current_size=None,
+        reconstruct_significant_only=False,
+    )
+    base_result = run_local_em_exact(
+        dataset,
+        mean,
+        noise_variance,
+        local_layout,
+        "linear_interp",
+        **common,
+    )
+    Ft_y_base = base_result.Ft_y
+    Ft_ctf_base = base_result.Ft_ctf
+    ha_base = base_result.hard_assignments
+    stats_base = base_result.stats
+    target_pmax = np.asarray([0.25], dtype=np.float64)
+    scaled_result = run_local_em_exact(
+        dataset,
+        mean,
+        noise_variance,
+        local_layout,
+        "linear_interp",
+        normalization_max_posterior=target_pmax,
+        **common,
+    )
+    Ft_y_scaled = scaled_result.Ft_y
+    Ft_ctf_scaled = scaled_result.Ft_ctf
+    ha_scaled = scaled_result.hard_assignments
+    stats_scaled = scaled_result.stats
+
+    scale = target_pmax / np.asarray(stats_base.max_posterior_per_image, dtype=np.float64)
+    np.testing.assert_array_equal(ha_scaled, ha_base)
+    np.testing.assert_allclose(np.asarray(Ft_y_scaled), scale[0] * np.asarray(Ft_y_base), rtol=5e-3, atol=1e-5)
+    np.testing.assert_allclose(np.asarray(Ft_ctf_scaled), scale[0] * np.asarray(Ft_ctf_base), rtol=5e-3, atol=1e-5)
+    np.testing.assert_allclose(
+        np.asarray(stats_scaled.max_posterior_per_image),
+        target_pmax,
+        rtol=1e-5,
+        atol=1e-6,
+    )
+
+
 def test_run_local_em_exact_deferred_packed_mstep_matches_fused(rng, monkeypatch):
     monkeypatch.setenv("RECOVAR_DISABLE_LOCAL_BIG_JIT", "1")
     dataset = MockDataset(2, rng)
     mean = _hermitian_volume(VOLUME_SHAPE, seed=137)
-    mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
     noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
     local_rotations = _make_rotations(3, seed=143)
     translations = np.array([[0.0, 0.0], [0.5, -0.5]], dtype=np.float32)
@@ -5848,10 +5508,9 @@ def test_run_local_em_exact_deferred_packed_mstep_matches_fused(rng, monkeypatch
         translation_log_priors=np.zeros((2, 2), dtype=np.float32),
     )
 
-    Ft_y_base, Ft_ctf_base, ha_base, stats_base = run_local_em_exact(
+    local_result = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -5860,11 +5519,15 @@ def test_run_local_em_exact_deferred_packed_mstep_matches_fused(rng, monkeypatch
         current_size=None,
         reconstruct_significant_only=True,
     )
+    Ft_y_base = local_result.Ft_y
+    Ft_ctf_base = local_result.Ft_ctf
+    ha_base = local_result.hard_assignments
+    stats_base = local_result.stats
+    del local_result
     monkeypatch.setenv("RECOVAR_EXACT_LOCAL_DEFER_PACKED_MSTEP", "1")
-    Ft_y_deferred, Ft_ctf_deferred, ha_deferred, stats_deferred = run_local_em_exact(
+    local_result = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -5873,6 +5536,11 @@ def test_run_local_em_exact_deferred_packed_mstep_matches_fused(rng, monkeypatch
         current_size=None,
         reconstruct_significant_only=True,
     )
+    Ft_y_deferred = local_result.Ft_y
+    Ft_ctf_deferred = local_result.Ft_ctf
+    ha_deferred = local_result.hard_assignments
+    stats_deferred = local_result.stats
+    del local_result
 
     np.testing.assert_array_equal(ha_deferred, ha_base)
     np.testing.assert_allclose(np.asarray(Ft_y_deferred), np.asarray(Ft_y_base), rtol=1e-5, atol=1e-6)
@@ -5900,7 +5568,7 @@ def test_dense_k_class_identical_means_split_global_posterior(rng):
     rotations = _make_rotations(2, seed=149)
     translations = np.zeros((1, 2), dtype=np.float32)
 
-    _, ha_base, Ft_y_base, Ft_ctf_base, stats_base = run_em(
+    em_result = run_em(
         dataset,
         mean,
         mean_variance,
@@ -5915,6 +5583,12 @@ def test_dense_k_class_identical_means_split_global_posterior(rng):
         return_stats=True,
         sparse_pass2=False,
     )
+    _ = em_result.mean
+    ha_base = em_result.hard_assignments
+    Ft_y_base = em_result.Ft_y
+    Ft_ctf_base = em_result.Ft_ctf
+    stats_base = em_result.stats
+    del em_result
     result = run_dense_k_class_em(
         dataset,
         means,
@@ -5957,7 +5631,6 @@ def test_local_k_class_identical_means_split_global_posterior(rng):
     dataset = MockDataset(2, rng)
     mean = _hermitian_volume(VOLUME_SHAPE, seed=151)
     means = jnp.stack([mean, mean], axis=0)
-    mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
     noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
     local_rotations = _make_rotations(2, seed=159)
     translations = np.zeros((1, 2), dtype=np.float32)
@@ -5974,10 +5647,9 @@ def test_local_k_class_identical_means_split_global_posterior(rng):
         translation_log_priors=np.zeros((2, 1), dtype=np.float32),
     )
 
-    Ft_y_base, Ft_ctf_base, ha_base, stats_base = run_local_em_exact(
+    local_result = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -5986,10 +5658,14 @@ def test_local_k_class_identical_means_split_global_posterior(rng):
         current_size=None,
         reconstruct_significant_only=False,
     )
+    Ft_y_base = local_result.Ft_y
+    Ft_ctf_base = local_result.Ft_ctf
+    ha_base = local_result.hard_assignments
+    stats_base = local_result.stats
+    del local_result
     result = run_local_k_class_em(
         dataset,
         means,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -6026,7 +5702,6 @@ def test_local_k_class_norm_correction_counts_shared_high_shell_once(rng):
     dataset = MockDataset(2, rng)
     mean = _hermitian_volume(VOLUME_SHAPE, seed=160)
     means = jnp.stack([mean, mean], axis=0)
-    mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
     noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
     local_rotations = _make_rotations(2, seed=161)
     local_layout = LocalHypothesisLayout(
@@ -6049,29 +5724,30 @@ def test_local_k_class_norm_correction_counts_shared_high_shell_once(rng):
         reconstruct_significant_only=False,
     )
 
-    *_, single_noise = run_local_em_exact(
+    local_result = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
         **engine_kwargs,
     )
-    *_, single_without_shared_high = run_local_em_exact(
+    single_noise = local_result.noise_stats
+    del local_result
+    local_result = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
         include_unweighted_norm_high_shell=False,
         **engine_kwargs,
     )
+    single_without_shared_high = local_result.noise_stats
+    del local_result
     result = run_local_k_class_em(
         dataset,
         means,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -6080,16 +5756,24 @@ def test_local_k_class_norm_correction_counts_shared_high_shell_once(rng):
 
     assert single_noise.wsum_norm_correction is not None
     assert single_without_shared_high.wsum_norm_correction is not None
+    assert result.noise_stats is not None
+    assert all(stats.wsum_norm_correction is not None for stats in result.noise_stats)
     assert result.aggregate_noise_stats is not None
     assert result.aggregate_noise_stats.wsum_norm_correction is not None
     aggregate_norm = np.asarray(result.aggregate_noise_stats.wsum_norm_correction)
     single_norm = np.asarray(single_noise.wsum_norm_correction)
     shared_high = single_norm - np.asarray(single_without_shared_high.wsum_norm_correction)
     duplicated_high = single_norm + shared_high
+    per_class_norm = np.stack([np.asarray(stats.wsum_norm_correction) for stats in result.noise_stats], axis=0)
     assert np.all(shared_high > 0.0)
+    # The identical classes have identical posterior-weighted residual terms;
+    # only class 0 receives RELION's unweighted high-shell contribution.  Test
+    # that decomposition directly.  Comparing the whole K-class aggregate to
+    # the single-class result also compares two independently normalized
+    # posteriors and is sensitive to backend-dependent float32 rounding.
     np.testing.assert_allclose(
-        aggregate_norm,
-        single_norm,
+        per_class_norm[0] - per_class_norm[1],
+        shared_high,
         rtol=5e-5,
         atol=1e-3,
     )
@@ -6099,7 +5783,6 @@ def test_local_k_class_norm_correction_counts_shared_high_shell_once(rng):
 def test_run_local_em_exact_can_report_significant_support_rotation_stats(rng):
     dataset = MockDataset(2, rng)
     mean = _hermitian_volume(VOLUME_SHAPE, seed=163)
-    mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
     noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
     translations = np.zeros((1, 2), dtype=np.float32)
     rotations_flat = np.broadcast_to(np.eye(3, dtype=np.float32), (4, 3, 3)).copy()
@@ -6119,7 +5802,6 @@ def test_run_local_em_exact_can_report_significant_support_rotation_stats(rng):
     base = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -6133,7 +5815,6 @@ def test_run_local_em_exact_can_report_significant_support_rotation_stats(rng):
     support_stats = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -6147,10 +5828,10 @@ def test_run_local_em_exact_can_report_significant_support_rotation_stats(rng):
         return_significant_counts=True,
     )
 
-    stats_base = base[3]
-    stats_support = support_stats[3]
-    noise_support = support_stats[4]
-    significant_counts = support_stats[5]
+    stats_base = base.stats
+    stats_support = support_stats.stats
+    noise_support = support_stats.noise_stats
+    significant_counts = support_stats.significant_counts
     np.testing.assert_allclose(
         np.sum(np.asarray(stats_base.rotation_posterior_sums)),
         dataset.n_images,
@@ -6170,7 +5851,6 @@ def test_run_local_em_exact_can_report_significant_support_rotation_stats(rng):
 def test_run_local_em_exact_collects_unpruned_probability_values_for_global_threshold(rng):
     dataset = MockDataset(1, rng)
     mean = _hermitian_volume(VOLUME_SHAPE, seed=167)
-    mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
     noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
     translations = np.zeros((1, 2), dtype=np.float32)
     rotations_flat = np.broadcast_to(np.eye(3, dtype=np.float32), (3, 3, 3)).copy()
@@ -6190,7 +5870,6 @@ def test_run_local_em_exact_collects_unpruned_probability_values_for_global_thre
     outputs = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -6203,7 +5882,7 @@ def test_run_local_em_exact_collects_unpruned_probability_values_for_global_thre
         return_reconstruction_probability_values=True,
     )
 
-    values = outputs[-1]["reconstruction_probability_values_by_image"][0]
+    values = outputs.profile["reconstruction_probability_values_by_image"][0]
     assert values.size == 3
     np.testing.assert_allclose(np.sum(values), 1.0, rtol=5e-3, atol=1e-5)
 
@@ -6211,7 +5890,6 @@ def test_run_local_em_exact_collects_unpruned_probability_values_for_global_thre
 def test_run_local_em_exact_collects_global_reconstruction_sample_ids(rng):
     dataset = MockDataset(1, rng)
     mean = _hermitian_volume(VOLUME_SHAPE, seed=171)
-    mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
     noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
     translations = np.zeros((1, 2), dtype=np.float32)
     rotations_flat = np.broadcast_to(np.eye(3, dtype=np.float32), (3, 3, 3)).copy()
@@ -6231,7 +5909,6 @@ def test_run_local_em_exact_collects_global_reconstruction_sample_ids(rng):
     outputs = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -6244,14 +5921,13 @@ def test_run_local_em_exact_collects_global_reconstruction_sample_ids(rng):
         return_reconstruction_sample_indices=True,
     )
 
-    sample_ids = outputs[-1]["reconstruction_sample_indices_by_image"][0]
+    sample_ids = outputs.profile["reconstruction_sample_indices_by_image"][0]
     np.testing.assert_array_equal(sample_ids, np.array([7], dtype=np.int32))
 
 
 def test_run_local_em_exact_collapses_fine_children_to_parent_posterior_ids(rng):
     dataset = MockDataset(1, rng)
     mean = _hermitian_volume(VOLUME_SHAPE, seed=173)
-    mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
     noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
     translations = np.zeros((1, 2), dtype=np.float32)
     rotations_flat = np.broadcast_to(np.eye(3, dtype=np.float32), (3, 3, 3)).copy()
@@ -6272,7 +5948,6 @@ def test_run_local_em_exact_collapses_fine_children_to_parent_posterior_ids(rng)
     outputs = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -6285,9 +5960,9 @@ def test_run_local_em_exact_collapses_fine_children_to_parent_posterior_ids(rng)
         return_reconstruction_sample_indices=True,
     )
 
-    hard_assignment = np.asarray(outputs[2])
-    stats = outputs[3]
-    sample_ids = outputs[-1]["reconstruction_sample_indices_by_image"][0]
+    hard_assignment = np.asarray(outputs.hard_assignments)
+    stats = outputs.stats
+    sample_ids = outputs.profile["reconstruction_sample_indices_by_image"][0]
     np.testing.assert_array_equal(hard_assignment, np.array([7], dtype=np.int32))
     np.testing.assert_array_equal(sample_ids, np.array([1], dtype=np.int64))
     posterior_sums = np.asarray(stats.rotation_posterior_sums)
@@ -6297,11 +5972,10 @@ def test_run_local_em_exact_collapses_fine_children_to_parent_posterior_ids(rng)
 
 
 def test_local_k_class_can_report_noise_support_class_sums(monkeypatch):
-    import recovar.em.dense_single_volume.k_class as k_class_module
+    import recovar.em.classification.k_class as k_class_module
 
     dataset = type("Dataset", (), {"n_images": 2, "n_units": 2})()
     means = jnp.zeros((2, 4), dtype=jnp.complex64)
-    mean_variance = jnp.ones((2, 4), dtype=jnp.float32)
     noise_variance = jnp.ones(4, dtype=jnp.float32)
     local_layout = LocalHypothesisLayout(
         n_global_rotations=1,
@@ -6322,17 +5996,17 @@ def test_local_k_class_can_report_noise_support_class_sums(monkeypatch):
     def fake_run_local_em_exact(*args, **kwargs):
         class_index = len(calls)
         calls.append(kwargs)
-        return (
-            jnp.full(4, class_index + 1, dtype=jnp.complex64),
-            jnp.full(4, class_index + 1, dtype=jnp.float32),
-            jnp.zeros(2, dtype=jnp.int32),
-            RelionStats(
+        return LocalEMResult(
+            Ft_y=jnp.full(4, class_index + 1, dtype=jnp.complex64),
+            Ft_ctf=jnp.full(4, class_index + 1, dtype=jnp.float32),
+            hard_assignments=jnp.zeros(2, dtype=jnp.int32),
+            stats=RelionStats(
                 log_evidence_per_image=jnp.asarray(class_log_evidence[class_index], dtype=jnp.float32),
                 best_log_score_per_image=jnp.full(2, class_index, dtype=jnp.float32),
                 max_posterior_per_image=jnp.full(2, 0.5, dtype=jnp.float32),
                 rotation_posterior_sums=jnp.asarray([support_sumw[class_index]], dtype=jnp.float32),
             ),
-            NoiseStats(
+            noise_stats=NoiseStats(
                 wsum_sigma2_noise=jnp.ones(1, dtype=jnp.float32),
                 wsum_img_power=jnp.ones(1, dtype=jnp.float32),
                 wsum_sigma2_offset=0.0,
@@ -6345,7 +6019,6 @@ def test_local_k_class_can_report_noise_support_class_sums(monkeypatch):
     result = run_local_k_class_em(
         dataset,
         means,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -6391,11 +6064,10 @@ def test_k1_mstep_preserves_retained_pose_support_mass():
 
 
 def test_local_k_class_uses_global_reconstruction_threshold(monkeypatch):
-    import recovar.em.dense_single_volume.k_class as k_class_module
+    import recovar.em.classification.k_class as k_class_module
 
     dataset = type("Dataset", (), {"n_images": 1, "n_units": 1})()
     means = jnp.zeros((2, 4), dtype=jnp.complex64)
-    mean_variance = jnp.ones((2, 4), dtype=jnp.float32)
     noise_variance = jnp.ones(4, dtype=jnp.float32)
     local_layout = LocalHypothesisLayout(
         n_global_rotations=1,
@@ -6429,14 +6101,14 @@ def test_local_k_class_uses_global_reconstruction_threshold(monkeypatch):
             max_posterior_per_image=jnp.ones(1, dtype=jnp.float32),
             rotation_posterior_sums=jnp.ones(1, dtype=jnp.float32),
         )
-        base = (
-            jnp.full(4, class_index + 1, dtype=jnp.complex64),
-            jnp.full(4, class_index + 1, dtype=jnp.float32),
-            jnp.zeros(1, dtype=jnp.int32),
-            stats,
+        base = LocalEMResult(
+            Ft_y=jnp.full(4, class_index + 1, dtype=jnp.complex64),
+            Ft_ctf=jnp.full(4, class_index + 1, dtype=jnp.float32),
+            hard_assignments=jnp.zeros(1, dtype=jnp.int32),
+            stats=stats,
         )
         if kwargs.get("return_profile"):
-            return base + ({"reconstruction_probability_values_by_image": support_values[class_index]},)
+            return replace(base, profile={"reconstruction_probability_values_by_image": support_values[class_index]})
         return base
 
     monkeypatch.setattr(k_class_module, "run_local_em_exact", fake_run_local_em_exact)
@@ -6444,7 +6116,6 @@ def test_local_k_class_uses_global_reconstruction_threshold(monkeypatch):
     run_local_k_class_em(
         dataset,
         means,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -6468,7 +6139,6 @@ def test_local_search_iteration_k_class_returns_class_details(rng):
     dataset = MockDataset(2, rng)
     mean = _hermitian_volume(VOLUME_SHAPE, seed=161)
     means = jnp.stack([mean, mean], axis=0)
-    mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
     noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
     local_rotations = _make_rotations(2, seed=169)
     translations = np.zeros((1, 2), dtype=np.float32)
@@ -6485,21 +6155,18 @@ def test_local_search_iteration_k_class_returns_class_details(rng):
         translation_log_priors=np.zeros((2, 1), dtype=np.float32),
     )
 
-    outputs = iteration_loop_module._run_local_search_iteration(
+    outputs = local_search_iteration._run_local_search_iteration(
         dataset,
         means,
-        mean_variance,
         noise_variance,
         np.zeros((2, 3), dtype=np.float32),
         local_rotations,
-        None,
         1,
         0.0,
         0.0,
         translations,
         np.zeros((2, 2), dtype=np.float32),
         1.0,
-        None,
         "linear_interp",
         2,
         4,
@@ -6514,28 +6181,23 @@ def test_local_search_iteration_k_class_returns_class_details(rng):
         pass2_layout=local_layout,
         return_best_pose_details=True,
         class_log_priors=np.log(np.array([0.5, 0.5], dtype=np.float64)),
-        return_class_details=True,
     )
 
-    (
-        Ft_y,
-        Ft_ctf,
-        hard_assignment,
-        best_rotations,
-        best_translations,
-        best_rotation_ids,
-        stats,
-        noise_stats,
-        class_assignments_out,
-        class_posterior_sums,
-        class_full_posterior_sums,
-    ) = outputs
+    Ft_y = outputs.Ft_y
+    Ft_ctf = outputs.Ft_ctf
+    hard_assignment = outputs.hard_assignment
+    best_rotations = outputs.best_pose_rotations
+    best_translations = outputs.best_pose_translations
+    stats = outputs.relion_stats
+    noise_stats = outputs.noise_stats
+    class_assignments_out = outputs.class_assignments
+    class_posterior_sums = outputs.class_posterior_sums
+    class_full_posterior_sums = outputs.class_full_posterior_sums
     assert np.asarray(Ft_y).shape == (2, VOLUME_SIZE)
     assert np.asarray(Ft_ctf).shape == (2, VOLUME_SIZE)
     assert np.asarray(hard_assignment).shape == (2,)
     assert np.asarray(best_rotations).shape == (2, 3, 3)
     assert np.asarray(best_translations).shape == (2, 2)
-    assert np.asarray(best_rotation_ids).shape == (2,)
     assert np.asarray(stats.log_evidence_per_image).shape == (2,)
     assert noise_stats is not None
     assert np.asarray(noise_stats.wsum_scale_correction_xa).shape == (5,)
@@ -6550,12 +6212,11 @@ def test_local_search_iteration_k_class_returns_class_details(rng):
 def test_local_search_iteration_k_class_keeps_mstep_and_full_class_mass_separate(monkeypatch, rng):
     from types import SimpleNamespace
 
-    import recovar.em.dense_single_volume.local_search_iteration as local_search_iteration
+    import recovar.em.local.local_search_iteration as local_search_iteration
 
     dataset = MockDataset(2, rng)
     mean = _hermitian_volume(VOLUME_SHAPE, seed=171)
     means = jnp.stack([mean, mean], axis=0)
-    mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32)
     noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
     local_rotations = _make_rotations(2, seed=173)
     translations = np.zeros((1, 2), dtype=np.float32)
@@ -6601,21 +6262,18 @@ def test_local_search_iteration_k_class_keeps_mstep_and_full_class_mass_separate
 
     monkeypatch.setattr(local_search_iteration, "run_local_k_class_em", fake_run_local_k_class_em)
 
-    outputs = iteration_loop_module._run_local_search_iteration(
+    outputs = local_search_iteration._run_local_search_iteration(
         dataset,
         means,
-        mean_variance,
         noise_variance,
         np.zeros((2, 3), dtype=np.float32),
         local_rotations,
-        None,
         1,
         0.0,
         0.0,
         translations,
         np.zeros((2, 2), dtype=np.float32),
         1.0,
-        None,
         "linear_interp",
         2,
         4,
@@ -6629,12 +6287,11 @@ def test_local_search_iteration_k_class_keeps_mstep_and_full_class_mass_separate
         reconstruct_significant_only=True,
         stats_use_reconstruction_probs=True,
         class_log_priors=np.log(np.array([0.5, 0.5], dtype=np.float64)),
-        return_class_details=True,
     )
 
     assert captured["class_posterior_sums_from_noise"] is True
-    np.testing.assert_allclose(np.asarray(outputs[-2]), [1.2, 0.8], rtol=1e-6, atol=1e-6)
-    np.testing.assert_allclose(np.asarray(outputs[-1]), [1.7, 0.3], rtol=1e-6, atol=1e-6)
+    np.testing.assert_allclose(np.asarray(outputs.class_posterior_sums), [1.2, 0.8], rtol=1e-6, atol=1e-6)
+    np.testing.assert_allclose(np.asarray(outputs.class_full_posterior_sums), [1.7, 0.3], rtol=1e-6, atol=1e-6)
 
 
 def test_native_half_preprocess_requires_mask_for_masked_score(rng):
@@ -6704,7 +6361,6 @@ def test_weighted_abs2_on_demand_scores_match_materialized(rng):
 def test_run_local_em_exact_windowed_path_computes_reconstruction_abs2_without_full_buffer(rng):
     dataset = MockDataset(1, rng)
     mean = _hermitian_volume(VOLUME_SHAPE, seed=201)
-    mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
     noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
     local_rotations = _make_rotations(2, seed=109)
     translations = np.zeros((1, 2), dtype=np.float32)
@@ -6727,7 +6383,6 @@ def test_run_local_em_exact_windowed_path_computes_reconstruction_abs2_without_f
     outputs = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -6739,7 +6394,10 @@ def test_run_local_em_exact_windowed_path_computes_reconstruction_abs2_without_f
         return_profile=False,
     )
 
-    Ft_y_exact, Ft_ctf_exact, ha_exact, stats_exact = outputs
+    Ft_y_exact = outputs.Ft_y
+    Ft_ctf_exact = outputs.Ft_ctf
+    ha_exact = outputs.hard_assignments
+    stats_exact = outputs.stats
     assert Ft_y_exact.shape == (VOLUME_SIZE,)
     assert Ft_ctf_exact.shape == (VOLUME_SIZE,)
     assert ha_exact.shape == (1,)
@@ -6779,7 +6437,6 @@ def test_run_local_em_exact_windowed_with_pre_shifts_matches_dense_engine(rng):
     exact_outputs = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -6796,7 +6453,7 @@ def test_run_local_em_exact_windowed_with_pre_shifts_matches_dense_engine(rng):
         image_pre_shifts=np.array([[0.5, -1.0]], dtype=np.float32),
     )
 
-    _, ha_dense, Ft_y_dense, Ft_ctf_dense, stats_dense, noise_dense = run_em(
+    em_result = run_em(
         dataset,
         mean,
         mean_variance,
@@ -6819,8 +6476,17 @@ def test_run_local_em_exact_windowed_with_pre_shifts_matches_dense_engine(rng):
         image_pre_shifts=np.array([[0.5, -1.0]], dtype=np.float32),
         current_size=6,
     )
+    _ = em_result.mean
+    ha_dense = em_result.hard_assignments
+    Ft_y_dense = em_result.Ft_y
+    Ft_ctf_dense = em_result.Ft_ctf
+    del em_result
 
-    Ft_y_exact, Ft_ctf_exact, ha_exact, stats_exact, noise_exact = exact_outputs
+    Ft_y_exact = exact_outputs.Ft_y
+    Ft_ctf_exact = exact_outputs.Ft_ctf
+    ha_exact = exact_outputs.hard_assignments
+    stats_exact = exact_outputs.stats
+    noise_exact = exact_outputs.noise_stats
     np.testing.assert_array_equal(ha_exact, ha_dense)
     assert np.asarray(Ft_y_exact).shape == np.asarray(Ft_y_dense).shape
     assert np.asarray(Ft_ctf_exact).shape == np.asarray(Ft_ctf_dense).shape
@@ -6842,7 +6508,6 @@ def test_run_local_em_exact_windowed_with_pre_shifts_matches_dense_engine(rng):
 def test_run_local_em_exact_batched_matches_single_image_chunks(rng):
     dataset = MockDataset(3, rng)
     mean = _hermitian_volume(VOLUME_SHAPE, seed=231)
-    mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
     noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
     all_rotations = _make_rotations(6, seed=233)
     translations = np.array(
@@ -6885,7 +6550,6 @@ def test_run_local_em_exact_batched_matches_single_image_chunks(rng):
     batched = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -6904,7 +6568,6 @@ def test_run_local_em_exact_batched_matches_single_image_chunks(rng):
     single = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -6921,8 +6584,18 @@ def test_run_local_em_exact_batched_matches_single_image_chunks(rng):
         image_pre_shifts=np.array([[1.0, -1.0], [-1.0, 1.0], [0.0, 0.0]], dtype=np.float32),
     )
 
-    Ft_y_b, Ft_ctf_b, ha_b, stats_b, noise_b, profile_b = batched
-    Ft_y_s, Ft_ctf_s, ha_s, stats_s, noise_s, profile_s = single
+    Ft_y_b = batched.Ft_y
+    Ft_ctf_b = batched.Ft_ctf
+    ha_b = batched.hard_assignments
+    stats_b = batched.stats
+    noise_b = batched.noise_stats
+    profile_b = batched.profile
+    Ft_y_s = single.Ft_y
+    Ft_ctf_s = single.Ft_ctf
+    ha_s = single.hard_assignments
+    stats_s = single.stats
+    noise_s = single.noise_stats
+    profile_s = single.profile
     assert int(profile_b["n_chunks"]) < int(profile_s["n_chunks"])
     np.testing.assert_array_equal(ha_b, ha_s)
     np.testing.assert_allclose(np.asarray(Ft_y_b), np.asarray(Ft_y_s), atol=1e-5, rtol=1e-5)
@@ -6970,7 +6643,6 @@ def test_run_local_em_exact_batched_matches_single_image_chunks(rng):
 def test_run_local_em_exact_default_path_matches_debug_split_path(monkeypatch, rng, tmp_path):
     dataset = MockDataset(3, rng)
     mean = _hermitian_volume(VOLUME_SHAPE, seed=531)
-    mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
     noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
     all_rotations = _make_rotations(6, seed=533)
     translations = np.array(
@@ -7032,7 +6704,6 @@ def test_run_local_em_exact_default_path_matches_debug_split_path(monkeypatch, r
     default = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -7044,15 +6715,24 @@ def test_run_local_em_exact_default_path_matches_debug_split_path(monkeypatch, r
     split = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
         **common_kwargs,
     )
 
-    Ft_y_default, Ft_ctf_default, hard_default, stats_default, noise_default, profile_default = default
-    Ft_y_split, Ft_ctf_split, hard_split, stats_split, noise_split, profile_split = split
+    Ft_y_default = default.Ft_y
+    Ft_ctf_default = default.Ft_ctf
+    hard_default = default.hard_assignments
+    stats_default = default.stats
+    noise_default = default.noise_stats
+    profile_default = default.profile
+    Ft_y_split = split.Ft_y
+    Ft_ctf_split = split.Ft_ctf
+    hard_split = split.hard_assignments
+    stats_split = split.stats
+    noise_split = split.noise_stats
+    profile_split = split.profile
     assert int(profile_default["big_jit_bucket_count"]) > 0
     assert int(profile_split["big_jit_bucket_count"]) == 0
     assert bool(profile_default["fused_score_mstep_enabled"]) is True
@@ -7114,12 +6794,8 @@ def test_run_local_em_exact_default_path_matches_debug_split_path(monkeypatch, r
     assert noise_default.sumw == pytest.approx(noise_split.sumw, abs=1e-5)
 
 
-def test_run_local_em_exact_big_jit_bucket_matches_debug_split(monkeypatch, rng, tmp_path):
-    dataset = RawRealImageDataset(3, rng)
-    mean = _hermitian_volume(VOLUME_SHAPE, seed=551)
-    mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
-    noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
-    all_rotations = _make_rotations(5, seed=553)
+def _three_image_local_layout(all_rotations):
+    """Small ragged pose layout shared by fused/split local-search checks."""
     translations = np.array([[0.0, 0.0], [0.5, -0.5]], dtype=np.float32)
     rotation_ids = [
         np.array([0, 1, 2], dtype=np.int32),
@@ -7129,7 +6805,7 @@ def test_run_local_em_exact_big_jit_bucket_matches_debug_split(monkeypatch, rng,
     rotation_counts = np.asarray([ids.size for ids in rotation_ids], dtype=np.int32)
     rotation_offsets = np.concatenate(([0], np.cumsum(rotation_counts))).astype(np.int64)
     rotation_ids_flat = np.concatenate(rotation_ids).astype(np.int32)
-    local_layout = LocalHypothesisLayout(
+    return LocalHypothesisLayout(
         n_global_rotations=all_rotations.shape[0],
         n_pixels=6,
         n_psi=1,
@@ -7144,6 +6820,14 @@ def test_run_local_em_exact_big_jit_bucket_matches_debug_split(monkeypatch, rng,
             dtype=np.float32,
         ),
     )
+
+
+def test_run_local_em_exact_big_jit_bucket_matches_debug_split(monkeypatch, rng, tmp_path):
+    dataset = RawRealImageDataset(3, rng)
+    mean = _hermitian_volume(VOLUME_SHAPE, seed=551)
+    noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
+    all_rotations = _make_rotations(5, seed=553)
+    local_layout = _three_image_local_layout(all_rotations)
     common_kwargs = dict(
         image_batch_size=3,
         rotation_block_size=8,
@@ -7168,7 +6852,6 @@ def test_run_local_em_exact_big_jit_bucket_matches_debug_split(monkeypatch, rng,
     big = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -7180,15 +6863,24 @@ def test_run_local_em_exact_big_jit_bucket_matches_debug_split(monkeypatch, rng,
     split = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
         **common_kwargs,
     )
 
-    Ft_y_big, Ft_ctf_big, hard_big, stats_big, noise_big, profile_big = big
-    Ft_y_split, Ft_ctf_split, hard_split, stats_split, noise_split, profile_split = split
+    Ft_y_big = big.Ft_y
+    Ft_ctf_big = big.Ft_ctf
+    hard_big = big.hard_assignments
+    stats_big = big.stats
+    noise_big = big.noise_stats
+    profile_big = big.profile
+    Ft_y_split = split.Ft_y
+    Ft_ctf_split = split.Ft_ctf
+    hard_split = split.hard_assignments
+    stats_split = split.stats
+    noise_split = split.noise_stats
+    profile_split = split.profile
     assert int(profile_big["big_jit_bucket_count"]) == 1
     assert int(profile_split["big_jit_bucket_count"]) == 0
     np.testing.assert_array_equal(hard_big, hard_split)
@@ -7235,36 +6927,152 @@ def test_run_local_em_exact_big_jit_bucket_matches_debug_split(monkeypatch, rng,
         np.testing.assert_array_equal(sample_big, sample_split)
 
 
-def test_run_local_em_exact_score_only_big_jit_matches_debug_split(monkeypatch, rng, tmp_path):
-    dataset = RawRealImageDataset(3, rng)
-    mean = _hermitian_volume(VOLUME_SHAPE, seed=561)
-    mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
-    noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
-    all_rotations = _make_rotations(5, seed=563)
-    translations = np.array([[0.0, 0.0], [0.5, -0.5]], dtype=np.float32)
-    rotation_ids = [
-        np.array([0, 1, 2], dtype=np.int32),
-        np.array([1, 3], dtype=np.int32),
-        np.array([0, 2, 4], dtype=np.int32),
+@pytest.mark.parametrize("score_only", [False, True])
+def test_run_local_em_exact_big_jit_cache_ignores_bound_dataset_process_method(
+    monkeypatch,
+    score_only,
+):
+    import jax
+
+    from recovar.em.local import local_big_jit, local_bucket_stages
+
+    for function in (
+        local_big_jit.run_local_bucket_big_jit,
+        local_big_jit._preprocess_half,
+    ):
+        assert "process_fn" not in inspect.getsource(function)
+
+    class _BoundProcessRawRealImageDataset(RawRealImageDataset):
+        def __init__(self, n_images, rng):
+            super().__init__(n_images, rng)
+            # A real dataset wrapper exposes preprocessing as an instance-bound
+            # method. Equivalent wrappers therefore have distinct method
+            # identities even though their numeric preprocessing is identical.
+            self.bound_process_call_count = 0
+            self.process_images = self._bound_process_images
+
+        def _bound_process_images(self, batch, apply_image_mask=False):
+            self.bound_process_call_count += 1
+            return _raw_real_process(batch, apply_image_mask=apply_image_mask)
+
+    datasets = [
+        _BoundProcessRawRealImageDataset(1, np.random.default_rng(559)),
+        _BoundProcessRawRealImageDataset(1, np.random.default_rng(559)),
     ]
-    rotation_counts = np.asarray([ids.size for ids in rotation_ids], dtype=np.int32)
-    rotation_offsets = np.concatenate(([0], np.cumsum(rotation_counts))).astype(np.int64)
-    rotation_ids_flat = np.concatenate(rotation_ids).astype(np.int32)
+    # Isolate process_fn as the only static-config identity difference.
+    datasets[1].ctf_evaluator = datasets[0].ctf_evaluator
+    assert datasets[0].process_images.__func__ is datasets[1].process_images.__func__
+    assert datasets[0].process_images.__self__ is datasets[0]
+    assert datasets[1].process_images.__self__ is datasets[1]
+    assert datasets[0].process_images != datasets[1].process_images
+    np.testing.assert_array_equal(datasets[0]._images, datasets[1]._images)
+
+    all_rotations = _make_rotations(1, seed=560)
     local_layout = LocalHypothesisLayout(
-        n_global_rotations=all_rotations.shape[0],
+        n_global_rotations=1,
         n_pixels=6,
         n_psi=1,
-        rotation_offsets=rotation_offsets,
-        rotation_ids_flat=rotation_ids_flat,
-        rotations_flat=np.asarray(all_rotations[rotation_ids_flat], dtype=np.float32),
-        rotation_log_priors_flat=np.linspace(0.0, -0.7, rotation_ids_flat.size, dtype=np.float32),
-        rotation_counts=rotation_counts,
-        translation_grid=translations,
-        translation_log_priors=np.array(
-            [[0.0, -0.5], [-0.2, 0.1], [0.3, -0.4]],
-            dtype=np.float32,
-        ),
+        rotation_offsets=np.array([0, 1], dtype=np.int64),
+        rotation_ids_flat=np.array([0], dtype=np.int32),
+        rotations_flat=np.asarray(all_rotations, dtype=np.float32),
+        rotation_log_priors_flat=np.zeros(1, dtype=np.float32),
+        rotation_counts=np.ones(1, dtype=np.int32),
+        translation_grid=np.zeros((1, 2), dtype=np.float32),
+        translation_log_priors=np.zeros((1, 1), dtype=np.float32),
     )
+    mean = _hermitian_volume(VOLUME_SHAPE, seed=561)
+    noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
+    common_kwargs = dict(
+        image_batch_size=1,
+        rotation_block_size=1,
+        current_size=6,
+        accumulate_noise=not score_only,
+        reconstruct_significant_only=True,
+        return_profile=True,
+        score_with_masked_images=False,
+        disable_adjoint_y=score_only,
+        disable_adjoint_ctf=score_only,
+        score_only=score_only,
+    )
+    monkeypatch.delenv("RECOVAR_DISABLE_LOCAL_BIG_JIT", raising=False)
+    monkeypatch.delenv("RECOVAR_LOCAL_SCORE_DUMP_DIR", raising=False)
+    monkeypatch.delenv("RECOVAR_LOCAL_SCORE_DUMP_GLOBAL_INDICES", raising=False)
+    monkeypatch.delenv("RECOVAR_LOCAL_SCORE_DUMP_FORCE_SPLIT", raising=False)
+
+    function = local_big_jit.run_local_bucket_big_jit
+    function.clear_cache()
+    try:
+        cache_size_before = function._cache_size()
+        first = run_local_em_exact(
+            datasets[0],
+            mean,
+            noise_variance,
+            local_layout,
+            "linear_interp",
+            **common_kwargs,
+        )
+        cache_size_after_first = function._cache_size()
+        second = run_local_em_exact(
+            datasets[1],
+            mean,
+            noise_variance,
+            local_layout,
+            "linear_interp",
+            **common_kwargs,
+        )
+        cache_size_after_second = function._cache_size()
+
+        assert int(first.profile["big_jit_bucket_count"]) == 1
+        assert int(second.profile["big_jit_bucket_count"]) == 1
+        assert cache_size_after_first == cache_size_before + 1
+        assert cache_size_after_second == cache_size_after_first
+        assert [dataset.bound_process_call_count for dataset in datasets] == [0, 0]
+
+        # Replay the previous static-key behavior at the same numeric boundary.
+        # This checks all scientific outputs, including M-step/noise carries,
+        # independently of the cache-reuse assertion above.
+        function_signature = inspect.signature(function)
+
+        def with_bound_process(*args, **kwargs):
+            bound = function_signature.bind(*args, **kwargs)
+            bound.arguments["config"] = bound.arguments["config"].replace(
+                process_fn=datasets[0].process_images
+            )
+            return function(*bound.args, **bound.kwargs)
+
+        monkeypatch.setattr(local_bucket_stages, "run_local_bucket_big_jit", with_bound_process)
+        reference = run_local_em_exact(
+            datasets[0],
+            mean,
+            noise_variance,
+            local_layout,
+            "linear_interp",
+            **common_kwargs,
+        )
+        for actual in (first, second):
+            for field in fields(reference):
+                if field.name == "profile":
+                    continue  # Runtime measurements are intentionally different.
+                value = getattr(actual, field.name)
+                expected = getattr(reference, field.name)
+                assert jax.tree.structure(value) == jax.tree.structure(expected)
+                for leaf, expected_leaf in zip(jax.tree.leaves(value), jax.tree.leaves(expected), strict=True):
+                    np.testing.assert_array_equal(np.asarray(leaf), np.asarray(expected_leaf), strict=True)
+    finally:
+        function.clear_cache()
+
+
+@pytest.mark.parametrize("use_big_jit", [True, False])
+def test_run_local_em_exact_score_only_big_jit_matches_debug_split(monkeypatch, rng, tmp_path, use_big_jit):
+    if use_big_jit:
+        monkeypatch.delenv("RECOVAR_DISABLE_LOCAL_BIG_JIT", raising=False)
+    else:
+        monkeypatch.setenv("RECOVAR_DISABLE_LOCAL_BIG_JIT", "1")
+    dataset = RawRealImageDataset(3, rng)
+    mean = _hermitian_volume(VOLUME_SHAPE, seed=561)
+    noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
+    all_rotations = _make_rotations(5, seed=563)
+    local_layout = _three_image_local_layout(all_rotations)
     common_kwargs = dict(
         image_batch_size=3,
         rotation_block_size=8,
@@ -7287,7 +7095,6 @@ def test_run_local_em_exact_score_only_big_jit_matches_debug_split(monkeypatch, 
     big = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -7299,16 +7106,23 @@ def test_run_local_em_exact_score_only_big_jit_matches_debug_split(monkeypatch, 
     split = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
         **common_kwargs,
     )
 
-    Ft_y_big, Ft_ctf_big, hard_big, stats_big, profile_big = big
-    Ft_y_split, Ft_ctf_split, hard_split, stats_split, profile_split = split
-    assert int(profile_big["big_jit_bucket_count"]) == 1
+    Ft_y_big = big.Ft_y
+    Ft_ctf_big = big.Ft_ctf
+    hard_big = big.hard_assignments
+    stats_big = big.stats
+    profile_big = big.profile
+    Ft_y_split = split.Ft_y
+    Ft_ctf_split = split.Ft_ctf
+    hard_split = split.hard_assignments
+    stats_split = split.stats
+    profile_split = split.profile
+    assert int(profile_big["big_jit_bucket_count"]) == int(use_big_jit)
     assert int(profile_split["big_jit_bucket_count"]) == 0
     assert bool(profile_big["score_only"]) is True
     assert bool(profile_split["score_only"]) is True
@@ -7342,33 +7156,9 @@ def test_run_local_em_exact_score_only_big_jit_matches_debug_split(monkeypatch, 
 def test_local_score_debug_dump_defaults_to_big_jit(monkeypatch, rng, tmp_path):
     dataset = RawRealImageDataset(3, rng)
     mean = _hermitian_volume(VOLUME_SHAPE, seed=562)
-    mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
     noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
     all_rotations = _make_rotations(5, seed=564)
-    translations = np.array([[0.0, 0.0], [0.5, -0.5]], dtype=np.float32)
-    rotation_ids = [
-        np.array([0, 1, 2], dtype=np.int32),
-        np.array([1, 3], dtype=np.int32),
-        np.array([0, 2, 4], dtype=np.int32),
-    ]
-    rotation_counts = np.asarray([ids.size for ids in rotation_ids], dtype=np.int32)
-    rotation_offsets = np.concatenate(([0], np.cumsum(rotation_counts))).astype(np.int64)
-    rotation_ids_flat = np.concatenate(rotation_ids).astype(np.int32)
-    local_layout = LocalHypothesisLayout(
-        n_global_rotations=all_rotations.shape[0],
-        n_pixels=6,
-        n_psi=1,
-        rotation_offsets=rotation_offsets,
-        rotation_ids_flat=rotation_ids_flat,
-        rotations_flat=np.asarray(all_rotations[rotation_ids_flat], dtype=np.float32),
-        rotation_log_priors_flat=np.linspace(0.0, -0.7, rotation_ids_flat.size, dtype=np.float32),
-        rotation_counts=rotation_counts,
-        translation_grid=translations,
-        translation_log_priors=np.array(
-            [[0.0, -0.5], [-0.2, 0.1], [0.3, -0.4]],
-            dtype=np.float32,
-        ),
-    )
+    local_layout = _three_image_local_layout(all_rotations)
 
     score_dump_dir = tmp_path / "score_dump"
     fused_dump_dir = tmp_path / "fused_dump"
@@ -7376,13 +7166,13 @@ def test_local_score_debug_dump_defaults_to_big_jit(monkeypatch, rng, tmp_path):
     monkeypatch.setenv("RECOVAR_LOCAL_SCORE_DUMP_GLOBAL_INDICES", "0")
     monkeypatch.setenv("RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_DIR", str(fused_dump_dir))
     monkeypatch.setenv("RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_GLOBAL_INDICES", "0")
+    monkeypatch.setenv("RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_SCORES", "1")
     monkeypatch.delenv("RECOVAR_LOCAL_SCORE_DUMP_FORCE_SPLIT", raising=False)
     monkeypatch.delenv("RECOVAR_LOCAL_SCORE_DUMP_OPERANDS", raising=False)
 
     result = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -7401,7 +7191,11 @@ def test_local_score_debug_dump_defaults_to_big_jit(monkeypatch, rng, tmp_path):
         score_only=True,
     )
 
-    _, _, _, _, profile = result
+    _ = result.Ft_y
+    _ = result.Ft_ctf
+    _ = result.hard_assignments
+    _ = result.stats
+    profile = result.profile
     assert int(profile["big_jit_bucket_count"]) == 1
     assert int(profile["big_jit_debug_bucket_count"]) == 1
     score_dumps = sorted(score_dump_dir.glob("local_score_it*_image_0*.npz"))
@@ -7415,38 +7209,24 @@ def test_local_score_debug_dump_defaults_to_big_jit(monkeypatch, rng, tmp_path):
     with np.load(fused_dumps[0]) as dump:
         assert dump["posterior"].shape == (1, 3, 2)
         assert dump["best_score"].shape == (1,)
+        assert dump["pass2_scores_raw"].shape == (1, 3, 2)
+        assert dump["pass2_scores_total"].shape == (1, 3, 2)
+        np.testing.assert_allclose(
+            dump["pass2_scores_total"],
+            dump["pass2_scores_raw"]
+            + dump["rotation_log_prior"][:, :, None]
+            + dump["translation_log_prior"][:, None, :],
+            atol=1e-6,
+            rtol=1e-6,
+        )
 
 
 def test_local_score_debug_dump_operands_stay_on_big_jit(monkeypatch, rng, tmp_path):
     dataset = RawRealImageDataset(3, rng)
     mean = _hermitian_volume(VOLUME_SHAPE, seed=563)
-    mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
     noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
     all_rotations = _make_rotations(5, seed=565)
-    translations = np.array([[0.0, 0.0], [0.5, -0.5]], dtype=np.float32)
-    rotation_ids = [
-        np.array([0, 1, 2], dtype=np.int32),
-        np.array([1, 3], dtype=np.int32),
-        np.array([0, 2, 4], dtype=np.int32),
-    ]
-    rotation_counts = np.asarray([ids.size for ids in rotation_ids], dtype=np.int32)
-    rotation_offsets = np.concatenate(([0], np.cumsum(rotation_counts))).astype(np.int64)
-    rotation_ids_flat = np.concatenate(rotation_ids).astype(np.int32)
-    local_layout = LocalHypothesisLayout(
-        n_global_rotations=all_rotations.shape[0],
-        n_pixels=6,
-        n_psi=1,
-        rotation_offsets=rotation_offsets,
-        rotation_ids_flat=rotation_ids_flat,
-        rotations_flat=np.asarray(all_rotations[rotation_ids_flat], dtype=np.float32),
-        rotation_log_priors_flat=np.linspace(0.0, -0.7, rotation_ids_flat.size, dtype=np.float32),
-        rotation_counts=rotation_counts,
-        translation_grid=translations,
-        translation_log_priors=np.array(
-            [[0.0, -0.5], [-0.2, 0.1], [0.3, -0.4]],
-            dtype=np.float32,
-        ),
-    )
+    local_layout = _three_image_local_layout(all_rotations)
     common_kwargs = dict(
         image_batch_size=3,
         rotation_block_size=8,
@@ -7470,7 +7250,6 @@ def test_local_score_debug_dump_operands_stay_on_big_jit(monkeypatch, rng, tmp_p
     big = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -7483,7 +7262,6 @@ def test_local_score_debug_dump_operands_stay_on_big_jit(monkeypatch, rng, tmp_p
     split = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -7496,7 +7274,6 @@ def test_local_score_debug_dump_operands_stay_on_big_jit(monkeypatch, rng, tmp_p
     run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -7505,8 +7282,8 @@ def test_local_score_debug_dump_operands_stay_on_big_jit(monkeypatch, rng, tmp_p
         **common_kwargs,
     )
 
-    profile_big = big[-1]
-    profile_split = split[-1]
+    profile_big = big.profile
+    profile_split = split.profile
     assert int(profile_big["big_jit_bucket_count"]) == 1
     assert int(profile_big["big_jit_debug_bucket_count"]) == 1
     assert int(profile_split["big_jit_bucket_count"]) == 0
@@ -7545,33 +7322,9 @@ def test_local_score_debug_dump_does_not_filter_science_buckets_by_default(
 ):
     dataset = RawRealImageDataset(3, rng)
     mean = _hermitian_volume(VOLUME_SHAPE, seed=566)
-    mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
     noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
     all_rotations = _make_rotations(5, seed=567)
-    translations = np.array([[0.0, 0.0], [0.5, -0.5]], dtype=np.float32)
-    rotation_ids = [
-        np.array([0, 1, 2], dtype=np.int32),
-        np.array([1, 3], dtype=np.int32),
-        np.array([0, 2, 4], dtype=np.int32),
-    ]
-    rotation_counts = np.asarray([ids.size for ids in rotation_ids], dtype=np.int32)
-    rotation_offsets = np.concatenate(([0], np.cumsum(rotation_counts))).astype(np.int64)
-    rotation_ids_flat = np.concatenate(rotation_ids).astype(np.int32)
-    local_layout = LocalHypothesisLayout(
-        n_global_rotations=all_rotations.shape[0],
-        n_pixels=6,
-        n_psi=1,
-        rotation_offsets=rotation_offsets,
-        rotation_ids_flat=rotation_ids_flat,
-        rotations_flat=np.asarray(all_rotations[rotation_ids_flat], dtype=np.float32),
-        rotation_log_priors_flat=np.linspace(0.0, -0.7, rotation_ids_flat.size, dtype=np.float32),
-        rotation_counts=rotation_counts,
-        translation_grid=translations,
-        translation_log_priors=np.array(
-            [[0.0, -0.5], [-0.2, 0.1], [0.3, -0.4]],
-            dtype=np.float32,
-        ),
-    )
+    local_layout = _three_image_local_layout(all_rotations)
 
     common_kwargs = dict(
         image_batch_size=1,
@@ -7601,7 +7354,6 @@ def test_local_score_debug_dump_does_not_filter_science_buckets_by_default(
     baseline = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -7621,15 +7373,18 @@ def test_local_score_debug_dump_does_not_filter_science_buckets_by_default(
     result = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
         **common_kwargs,
     )
 
-    _, _, hard_assignment, stats, profile = result
-    np.testing.assert_array_equal(hard_assignment, baseline[2])
+    _ = result.Ft_y
+    _ = result.Ft_ctf
+    hard_assignment = result.hard_assignments
+    stats = result.stats
+    profile = result.profile
+    np.testing.assert_array_equal(hard_assignment, baseline.hard_assignments)
     for field in (
         "log_evidence_per_image",
         "max_posterior_per_image",
@@ -7637,7 +7392,7 @@ def test_local_score_debug_dump_does_not_filter_science_buckets_by_default(
     ):
         np.testing.assert_allclose(
             np.asarray(getattr(stats, field)),
-            np.asarray(getattr(baseline[3], field)),
+            np.asarray(getattr(baseline.stats, field)),
             atol=1e-6,
             rtol=1e-6,
         )
@@ -7661,14 +7416,13 @@ def test_local_score_debug_dump_does_not_filter_science_buckets_by_default(
     target_only_result = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
         **common_kwargs,
     )
 
-    target_only_profile = target_only_result[-1]
+    target_only_profile = target_only_result.profile
     assert int(target_only_profile["n_chunks"]) == 1
     assert int(target_only_profile["big_jit_bucket_count"]) == 1
     assert int(target_only_profile["big_jit_debug_bucket_count"]) == 1
@@ -7687,33 +7441,9 @@ def test_local_score_debug_dump_does_not_filter_science_buckets_by_default(
 def test_local_score_debug_force_split_only_splits_target_bucket(monkeypatch, rng, tmp_path):
     dataset = RawRealImageDataset(3, rng)
     mean = _hermitian_volume(VOLUME_SHAPE, seed=568)
-    mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
     noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
     all_rotations = _make_rotations(5, seed=570)
-    translations = np.array([[0.0, 0.0], [0.5, -0.5]], dtype=np.float32)
-    rotation_ids = [
-        np.array([0, 1, 2], dtype=np.int32),
-        np.array([1, 3], dtype=np.int32),
-        np.array([0, 2, 4], dtype=np.int32),
-    ]
-    rotation_counts = np.asarray([ids.size for ids in rotation_ids], dtype=np.int32)
-    rotation_offsets = np.concatenate(([0], np.cumsum(rotation_counts))).astype(np.int64)
-    rotation_ids_flat = np.concatenate(rotation_ids).astype(np.int32)
-    local_layout = LocalHypothesisLayout(
-        n_global_rotations=all_rotations.shape[0],
-        n_pixels=6,
-        n_psi=1,
-        rotation_offsets=rotation_offsets,
-        rotation_ids_flat=rotation_ids_flat,
-        rotations_flat=np.asarray(all_rotations[rotation_ids_flat], dtype=np.float32),
-        rotation_log_priors_flat=np.linspace(0.0, -0.7, rotation_ids_flat.size, dtype=np.float32),
-        rotation_counts=rotation_counts,
-        translation_grid=translations,
-        translation_log_priors=np.array(
-            [[0.0, -0.5], [-0.2, 0.1], [0.3, -0.4]],
-            dtype=np.float32,
-        ),
-    )
+    local_layout = _three_image_local_layout(all_rotations)
     score_dump_dir = tmp_path / "score_dump"
     monkeypatch.setenv("RECOVAR_LOCAL_SCORE_DUMP_DIR", str(score_dump_dir))
     monkeypatch.setenv("RECOVAR_LOCAL_SCORE_DUMP_GLOBAL_INDICES", "2")
@@ -7724,7 +7454,6 @@ def test_local_score_debug_force_split_only_splits_target_bucket(monkeypatch, rn
     result = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -7743,7 +7472,11 @@ def test_local_score_debug_force_split_only_splits_target_bucket(monkeypatch, rn
         score_only=True,
     )
 
-    _, _, _, _, profile = result
+    _ = result.Ft_y
+    _ = result.Ft_ctf
+    _ = result.hard_assignments
+    _ = result.stats
+    profile = result.profile
     assert int(profile["n_chunks"]) > 1
     assert int(profile["big_jit_bucket_count"]) == int(profile["n_chunks"]) - 1
     assert int(profile["big_jit_debug_bucket_count"]) == 0
@@ -7772,9 +7505,18 @@ def test_local_score_debug_recon_projection_materialization_is_bucket_scoped():
     assert "jax.clear_caches()" in src
 
 
-def test_local_fused_posterior_debug_does_not_request_scores_without_score_dump():
+def test_local_fused_posterior_debug_requests_scores_only_with_explicit_flag():
     src = inspect.getsource(run_local_em_exact)
-    assert "return_big_jit_debug_scores = bool(score_debug_bucket_matches)" in src
+    assert "debug_fused_posterior_dump_scores = bool(" in src
+    assert 'and parse_env_true_flag("RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_SCORES")' in src
+    debug_scores_block = src[
+        src.index("return_big_jit_debug_scores = bool(") :
+        src.index("return_big_jit_debug_operands = bool(")
+    ]
+    assert "score_debug_bucket_matches" in debug_scores_block
+    assert "bpref_contribution_capture_active" in debug_scores_block
+    assert "fused_debug_bucket_matches" in debug_scores_block
+    assert "debug_fused_posterior_dump_scores" in debug_scores_block
     assert "return_debug_scores=return_big_jit_debug_scores" in src
     assert "if return_big_jit_debug_scores" in src
     assert "if fused_debug_bucket_matches and debug_fused_posterior_dump_targets:" in src
@@ -7782,7 +7524,7 @@ def test_local_fused_posterior_debug_does_not_request_scores_without_score_dump(
 
 
 def test_local_big_jit_windowed_translation_slices_before_tiling():
-    from recovar.em.dense_single_volume import local_big_jit
+    from recovar.em.local import local_big_jit
 
     src = inspect.getsource(local_big_jit.run_local_bucket_big_jit)
     assert "def _translate_weighted_half_window" in src
@@ -7793,7 +7535,7 @@ def test_local_big_jit_windowed_translation_slices_before_tiling():
 
 
 def test_local_big_jit_relion_translation_is_scoped_to_score_operand():
-    from recovar.em.dense_single_volume import local_big_jit
+    from recovar.em.local import local_big_jit
 
     src = inspect.getsource(local_big_jit.run_local_bucket_big_jit)
     translate_block = src[
@@ -7808,6 +7550,67 @@ def test_local_big_jit_relion_translation_is_scoped_to_score_operand():
     assert "shifted_recon_half = (" in shift_block
 
 
+def test_local_big_jit_float64_relion_translation_covers_mstep_operand():
+    from recovar.em.local import local_big_jit
+
+    src = inspect.getsource(local_big_jit.run_local_bucket_big_jit)
+    assert "cuda_backproject.relion_translate_score_f64" in src
+    assert "relion_score_translation_angles is not None and use_float64_scoring" in src
+
+
+def test_local_big_jit_source_ordered_vdam_mstep_is_strictly_guarded():
+    from recovar.em.local import local_big_jit, local_em_engine
+
+    src = inspect.getsource(local_big_jit.run_local_bucket_big_jit)
+    source_ordered_block = src[
+        src.index("source_ordered_vdam_mstep = bool(") :
+        src.index("flat_summed = summed.reshape(")
+    ]
+    for guard in (
+        "relion_sequential_mstep_reduction",
+        "mstep_subtract_ctf_projection",
+        "relion_exact_bpref_operands",
+        "use_relion_cuda_preprocess",
+        "not apply_fourier_pre_shift",
+        "relion_score_translation_angles is not None",
+    ):
+        assert guard in source_ordered_block
+    for fused_guard in (
+        "not return_mstep_tensors",
+        "not disable_adjoint_y",
+        "not disable_adjoint_ctf",
+    ):
+        assert fused_guard in source_ordered_block
+    assert "cuda_backproject.relion_vdam_mstep_fused_x_half(" in source_ordered_block
+    assert "cuda_backproject.relion_vdam_mstep_denominator_f32(" in source_ordered_block
+    assert "elif return_source_vdam_operands:" in source_ordered_block
+    assert "not disable_adjoint_y or not disable_adjoint_ctf" in source_ordered_block
+    assert "summed = jnp.zeros_like(proj_for_noise)" not in source_ordered_block
+    assert "elif mstep_subtract_ctf_projection:" in source_ordered_block
+
+    engine_src = inspect.getsource(local_em_engine.run_local_em_exact)
+    for route_guard in (
+        "return_source_vdam_operands = bool(",
+        "return_big_jit_mstep_tensors",
+        "source_faithful_bpref",
+        "not disable_adjoint_y",
+        "not disable_adjoint_ctf",
+        "_accumulate_relion_vdam_physical_particle_grid(",
+        "relion_projector_half_to_texture_full(",
+        "projector_full=source_vdam_projector_full",
+        "packed_rotations_np, particle_start, particle_stop",
+    ):
+        assert route_guard in engine_src
+    source_capture_block = engine_src[
+        engine_src.index("elif return_big_jit_mstep_tensors and return_source_vdam_operands:") :
+        engine_src.index("elif return_big_jit_mstep_tensors:", engine_src.index("elif return_big_jit_mstep_tensors and return_source_vdam_operands:"))
+    ]
+    assert "if bpref_contribution_capture_active:" in source_capture_block
+    assert "cuda_backproject.relion_vdam_mstep_sums_f32(" in source_capture_block
+    assert "inline_projector_data_volumes" in engine_src
+    assert "_accumulate_relion_vdam_physical_particle_grid(" in engine_src
+
+
 def test_local_exact_relion_translation_requires_half_spectrum_scoring():
     with pytest.raises(
         ValueError,
@@ -7818,7 +7621,6 @@ def test_local_exact_relion_translation_requires_half_spectrum_scoring():
             None,
             None,
             None,
-            None,
             "linear_interp",
             image_batch_size=1,
             rotation_block_size=1,
@@ -7827,25 +7629,10 @@ def test_local_exact_relion_translation_requires_half_spectrum_scoring():
         )
 
 
-def test_local_exact_relion_translation_rejects_float64_scoring():
-    with pytest.raises(
-        ValueError,
-        match="float32 scoring path",
-    ):
-        run_local_em_exact(
-            None,
-            None,
-            None,
-            None,
-            None,
-            "linear_interp",
-            image_batch_size=1,
-            rotation_block_size=1,
-            current_size=None,
-            half_spectrum_scoring=True,
-            relion_exact_score_translation=True,
-            use_float64_scoring=True,
-        )
+def test_local_exact_relion_translation_supports_float64_scoring():
+    src = inspect.getsource(run_local_em_exact)
+    assert "exact RELION score translation is a float32 scoring path" not in src
+    assert "dtype=np.float64 if use_float64_scoring else np.float32" in src
 
 
 def test_run_local_em_exact_windowed_relion_projector_big_jit_matches_split(monkeypatch, rng):
@@ -7854,33 +7641,9 @@ def test_run_local_em_exact_windowed_relion_projector_big_jit_matches_split(monk
     dataset = RawRealImageDataset(3, rng)
     mean = _hermitian_volume(VOLUME_SHAPE, seed=565)
     relion_projector_half = centered_full_to_relion_half(mean.reshape(VOLUME_SHAPE))[None]
-    mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
     noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
     all_rotations = _make_rotations(5, seed=567)
-    translations = np.array([[0.0, 0.0], [0.5, -0.5]], dtype=np.float32)
-    rotation_ids = [
-        np.array([0, 1, 2], dtype=np.int32),
-        np.array([1, 3], dtype=np.int32),
-        np.array([0, 2, 4], dtype=np.int32),
-    ]
-    rotation_counts = np.asarray([ids.size for ids in rotation_ids], dtype=np.int32)
-    rotation_offsets = np.concatenate(([0], np.cumsum(rotation_counts))).astype(np.int64)
-    rotation_ids_flat = np.concatenate(rotation_ids).astype(np.int32)
-    local_layout = LocalHypothesisLayout(
-        n_global_rotations=all_rotations.shape[0],
-        n_pixels=6,
-        n_psi=1,
-        rotation_offsets=rotation_offsets,
-        rotation_ids_flat=rotation_ids_flat,
-        rotations_flat=np.asarray(all_rotations[rotation_ids_flat], dtype=np.float32),
-        rotation_log_priors_flat=np.linspace(0.0, -0.7, rotation_ids_flat.size, dtype=np.float32),
-        rotation_counts=rotation_counts,
-        translation_grid=translations,
-        translation_log_priors=np.array(
-            [[0.0, -0.5], [-0.2, 0.1], [0.3, -0.4]],
-            dtype=np.float32,
-        ),
-    )
+    local_layout = _three_image_local_layout(all_rotations)
     common_kwargs = dict(
         image_batch_size=3,
         rotation_block_size=8,
@@ -7900,7 +7663,6 @@ def test_run_local_em_exact_windowed_relion_projector_big_jit_matches_split(monk
     big = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -7911,15 +7673,24 @@ def test_run_local_em_exact_windowed_relion_projector_big_jit_matches_split(monk
     split = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
         **common_kwargs,
     )
 
-    Ft_y_big, Ft_ctf_big, hard_big, stats_big, noise_big, profile_big = big
-    Ft_y_split, Ft_ctf_split, hard_split, stats_split, noise_split, profile_split = split
+    Ft_y_big = big.Ft_y
+    Ft_ctf_big = big.Ft_ctf
+    hard_big = big.hard_assignments
+    stats_big = big.stats
+    noise_big = big.noise_stats
+    profile_big = big.profile
+    Ft_y_split = split.Ft_y
+    Ft_ctf_split = split.Ft_ctf
+    hard_split = split.hard_assignments
+    stats_split = split.stats
+    noise_split = split.noise_stats
+    profile_split = split.profile
     assert int(profile_big["big_jit_bucket_count"]) == 1
     assert int(profile_split["big_jit_bucket_count"]) == 0
     assert profile_big["projection_mode"].item() == "relion_projector"
@@ -7937,33 +7708,9 @@ def test_run_local_em_exact_relion_projection_cache_matches_uncached_big_jit(mon
     dataset = RawRealImageDataset(3, rng)
     mean = _hermitian_volume(VOLUME_SHAPE, seed=568)
     relion_projector_half = centered_full_to_relion_half(mean.reshape(VOLUME_SHAPE))[None]
-    mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
     noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
     all_rotations = _make_rotations(5, seed=569)
-    translations = np.array([[0.0, 0.0], [0.5, -0.5]], dtype=np.float32)
-    rotation_ids = [
-        np.array([0, 1, 2], dtype=np.int32),
-        np.array([1, 3], dtype=np.int32),
-        np.array([0, 2, 4], dtype=np.int32),
-    ]
-    rotation_counts = np.asarray([ids.size for ids in rotation_ids], dtype=np.int32)
-    rotation_offsets = np.concatenate(([0], np.cumsum(rotation_counts))).astype(np.int64)
-    rotation_ids_flat = np.concatenate(rotation_ids).astype(np.int32)
-    local_layout = LocalHypothesisLayout(
-        n_global_rotations=all_rotations.shape[0],
-        n_pixels=6,
-        n_psi=1,
-        rotation_offsets=rotation_offsets,
-        rotation_ids_flat=rotation_ids_flat,
-        rotations_flat=np.asarray(all_rotations[rotation_ids_flat], dtype=np.float32),
-        rotation_log_priors_flat=np.linspace(0.0, -0.7, rotation_ids_flat.size, dtype=np.float32),
-        rotation_counts=rotation_counts,
-        translation_grid=translations,
-        translation_log_priors=np.array(
-            [[0.0, -0.5], [-0.2, 0.1], [0.3, -0.4]],
-            dtype=np.float32,
-        ),
-    )
+    local_layout = _three_image_local_layout(all_rotations)
     common_kwargs = dict(
         image_batch_size=3,
         rotation_block_size=8,
@@ -7984,7 +7731,6 @@ def test_run_local_em_exact_relion_projection_cache_matches_uncached_big_jit(mon
     cached = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -7995,15 +7741,22 @@ def test_run_local_em_exact_relion_projection_cache_matches_uncached_big_jit(mon
     uncached = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
         **common_kwargs,
     )
 
-    Ft_y_cached, Ft_ctf_cached, hard_cached, stats_cached, profile_cached = cached
-    Ft_y_uncached, Ft_ctf_uncached, hard_uncached, stats_uncached, profile_uncached = uncached
+    Ft_y_cached = cached.Ft_y
+    Ft_ctf_cached = cached.Ft_ctf
+    hard_cached = cached.hard_assignments
+    stats_cached = cached.stats
+    profile_cached = cached.profile
+    Ft_y_uncached = uncached.Ft_y
+    Ft_ctf_uncached = uncached.Ft_ctf
+    hard_uncached = uncached.hard_assignments
+    stats_uncached = uncached.stats
+    profile_uncached = uncached.profile
     assert int(profile_cached["big_jit_bucket_count"]) == 1
     assert bool(profile_cached["relion_projection_cache_enabled"])
     assert int(profile_cached["relion_projection_cache_rows"]) == all_rotations.shape[0]
@@ -8017,7 +7770,6 @@ def test_run_local_em_exact_relion_projection_cache_matches_uncached_big_jit(mon
 def _sparse_big_jit_local_case(rng):
     dataset = RawRealImageDataset(3, rng)
     mean = _hermitian_volume(VOLUME_SHAPE, seed=571)
-    mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
     noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
     all_rotations = _make_rotations(6, seed=573)
     translations = np.array([[0.0, 0.0], [0.5, -0.5]], dtype=np.float32)
@@ -8044,7 +7796,69 @@ def _sparse_big_jit_local_case(rng):
             dtype=np.float32,
         ),
     )
-    return dataset, mean, mean_variance, noise_variance, local_layout
+    return dataset, mean, noise_variance, local_layout
+
+
+@pytest.mark.parametrize(
+    "stable,current_size,reconstruction_size,expected_sizes,expected_shapes",
+    [
+        (False, None, None, (8, 8), (19, 19)),
+        (False, 6, None, (6, 6), (15, 15)),
+        (False, 6, 4, (4, 4), (11, 11)),
+        (True, 4, None, (4, 6), (11, 15)),
+        (True, 6, None, (6, 6), (15, 15)),
+        (True, None, None, (8, 8), (19, 19)),
+    ],
+)
+def test_local_bpref_plans_logical_and_physical_shapes(
+    monkeypatch, rng, stable, current_size, reconstruction_size, expected_sizes, expected_shapes,
+):
+    from recovar.em.local import local_em_engine as engine
+
+    case = _sparse_big_jit_local_case(rng)
+    original = engine.relion_backprojector_volume_shape
+    calls = []
+
+    class ShapesCaptured(Exception):
+        pass
+
+    def observe(volume_shape, padding_factor, *, current_size):
+        assert volume_shape == (8, 8, 8)
+        assert padding_factor == 2
+        shape = original(volume_shape, padding_factor, current_size=current_size)
+        calls.append((current_size, shape))
+        if len(calls) == 2:
+            # Stop at allocation planning, before any native scoring or scatter.
+            raise ShapesCaptured
+        return shape
+
+    monkeypatch.setattr(engine, "relion_backprojector_volume_shape", observe)
+    with pytest.raises(ShapesCaptured):
+        engine.run_local_em_exact(
+            *case, "linear_interp", image_batch_size=2, rotation_block_size=8,
+            current_size=current_size, reconstruction_current_size=reconstruction_size,
+            reconstruction_padding_factor=2, mstep_relion_x_half=True,
+            stable_fourier_window_shapes=stable,
+            relion_exact_fine_diff2=True, relion_exact_bpref_operands=True,
+            relion_wavg_sequential_cuda=True, accumulate_noise=True,
+            preserve_bpref_particle_order=True, half_spectrum_scoring=True,
+            relion_projector_half=jnp.zeros((5, 5, 3), dtype=jnp.complex64),
+        )
+    assert calls == [(size, (side,) * 3) for size, side in zip(expected_sizes, expected_shapes)]
+
+
+def _assert_significance_stats_allclose(actual, expected):
+    """Compare every statistic, including the nonnumeric selector audit."""
+    assert actual.keys() == expected.keys()
+    assert actual["coarse_selector_audit"] == expected["coarse_selector_audit"]
+    for key in actual.keys() - {"coarse_selector_audit"}:
+        np.testing.assert_allclose(
+            np.asarray(actual[key]),
+            np.asarray(expected[key]),
+            rtol=1e-6,
+            atol=1e-6,
+            err_msg=key,
+        )
 
 
 def _assert_relion_stats_allclose(actual, expected):
@@ -8093,7 +7907,7 @@ def _assert_noise_stats_allclose(actual, expected):
 
 
 def test_local_bucket_preserves_distinct_mstep_rotations(rng):
-    _, _, _, _, local_layout = _sparse_big_jit_local_case(rng)
+    _, _, _, local_layout = _sparse_big_jit_local_case(rng)
     distinct_mstep_rotations = np.roll(np.asarray(local_layout.rotations_flat), 1, axis=0)
     distinct_layout = replace(local_layout, mstep_rotations_flat=distinct_mstep_rotations)
 
@@ -8129,7 +7943,7 @@ def test_local_bucket_preserves_distinct_mstep_rotations(rng):
 
 @pytest.mark.parametrize("route", ["in_kernel_big_jit", "sparse_big_jit", "deferred_big_jit", "split"])
 def test_local_mstep_rotation_override_changes_only_adjoint_outputs(monkeypatch, rng, route):
-    dataset, mean, mean_variance, noise_variance, local_layout = _sparse_big_jit_local_case(rng)
+    dataset, mean, noise_variance, local_layout = _sparse_big_jit_local_case(rng)
     distinct_layout = replace(
         local_layout,
         mstep_rotations_flat=np.roll(np.asarray(local_layout.rotations_flat), 1, axis=0),
@@ -8161,7 +7975,6 @@ def test_local_mstep_rotation_override_changes_only_adjoint_outputs(monkeypatch,
     baseline = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -8170,15 +7983,22 @@ def test_local_mstep_rotation_override_changes_only_adjoint_outputs(monkeypatch,
     overridden = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         distinct_layout,
         "linear_interp",
         **kwargs,
     )
 
-    Ft_y_baseline, Ft_ctf_baseline, hard_baseline, stats_baseline, profile_baseline = baseline
-    Ft_y_overridden, Ft_ctf_overridden, hard_overridden, stats_overridden, profile_overridden = overridden
+    Ft_y_baseline = baseline.Ft_y
+    Ft_ctf_baseline = baseline.Ft_ctf
+    hard_baseline = baseline.hard_assignments
+    stats_baseline = baseline.stats
+    profile_baseline = baseline.profile
+    Ft_y_overridden = overridden.Ft_y
+    Ft_ctf_overridden = overridden.Ft_ctf
+    hard_overridden = overridden.hard_assignments
+    stats_overridden = overridden.stats
+    profile_overridden = overridden.profile
     if route == "split":
         assert int(profile_baseline["big_jit_bucket_count"]) == 0
         assert int(profile_overridden["big_jit_bucket_count"]) == 0
@@ -8192,14 +8012,13 @@ def test_local_mstep_rotation_override_changes_only_adjoint_outputs(monkeypatch,
 
 
 def test_run_local_em_exact_significant_support_uses_sparse_big_jit_packed_backprojection(monkeypatch, rng):
-    dataset, mean, mean_variance, noise_variance, local_layout = _sparse_big_jit_local_case(rng)
+    dataset, mean, noise_variance, local_layout = _sparse_big_jit_local_case(rng)
 
     monkeypatch.delenv("RECOVAR_LOCAL_SCORE_DUMP_DIR", raising=False)
     monkeypatch.delenv("RECOVAR_LOCAL_SCORE_DUMP_GLOBAL_INDICES", raising=False)
     outputs = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -8214,14 +8033,14 @@ def test_run_local_em_exact_significant_support_uses_sparse_big_jit_packed_backp
         max_significants=-1,
     )
 
-    profile = outputs[-1]
+    profile = outputs.profile
     assert int(profile["big_jit_bucket_count"]) > 0
     assert int(profile["sparse_big_jit_bucket_count"]) > 0
     assert int(profile["sum_reconstruction_rows"]) < int(profile["sum_padded_rows"])
 
 
 def test_run_local_em_exact_over_cap_significant_support_defaults_to_deferred_big_jit(monkeypatch, rng):
-    dataset, mean, mean_variance, noise_variance, local_layout = _sparse_big_jit_local_case(rng)
+    dataset, mean, noise_variance, local_layout = _sparse_big_jit_local_case(rng)
     kwargs = dict(
         image_batch_size=3,
         rotation_block_size=8,
@@ -8241,7 +8060,6 @@ def test_run_local_em_exact_over_cap_significant_support_defaults_to_deferred_bi
     sparse = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -8252,25 +8070,149 @@ def test_run_local_em_exact_over_cap_significant_support_defaults_to_deferred_bi
     deferred = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
         **kwargs,
     )
 
-    profile = deferred[-1]
+    profile = deferred.profile
     assert int(profile["big_jit_bucket_count"]) > 0
     assert int(profile["sparse_big_jit_bucket_count"]) > 0
-    np.testing.assert_array_equal(deferred[2], sparse[2])
-    np.testing.assert_allclose(np.asarray(deferred[0]), np.asarray(sparse[0]), rtol=1e-5, atol=1e-6)
-    np.testing.assert_allclose(np.asarray(deferred[1]), np.asarray(sparse[1]), rtol=1e-5, atol=1e-6)
-    _assert_relion_stats_allclose(deferred[3], sparse[3])
-    _assert_noise_stats_allclose(deferred[4], sparse[4])
+    np.testing.assert_array_equal(deferred.hard_assignments, sparse.hard_assignments)
+    np.testing.assert_allclose(np.asarray(deferred.Ft_y), np.asarray(sparse.Ft_y), rtol=1e-5, atol=1e-6)
+    np.testing.assert_allclose(np.asarray(deferred.Ft_ctf), np.asarray(sparse.Ft_ctf), rtol=1e-5, atol=1e-6)
+    _assert_relion_stats_allclose(deferred.stats, sparse.stats)
+    _assert_noise_stats_allclose(deferred.noise_stats, sparse.noise_stats)
+
+
+@pytest.mark.parametrize("deferred", [False, True], ids=["ordinary", "deferred"])
+@pytest.mark.parametrize("current_size,expected_cutoff", [(None, 4), (6, 3)])
+def test_local_noise_calls_use_logical_cutoff(monkeypatch, rng, deferred, current_size, expected_cutoff):
+    from recovar.em.local import local_em_engine as engine
+
+    case = _sparse_big_jit_local_case(rng)
+    for key in ("RECOVAR_LOCAL_SCORE_DUMP_DIR", "RECOVAR_LOCAL_SCORE_DUMP_GLOBAL_INDICES",
+                EXACT_LOCAL_BIG_JIT_DEFER_PACKED_MSTEP_ENV):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("RECOVAR_DISABLE_LOCAL_BIG_JIT", "0" if deferred else "1")
+    monkeypatch.setenv(EXACT_LOCAL_SPARSE_BIG_JIT_MSTEP_MAX_GB_ENV, "0")
+    original = engine._noise_image_power_shells_and_per_image
+    calls = []
+
+    def observe(*args, **kwargs):
+        assert args[4] == expected_cutoff
+        assert kwargs["shell_count"] == 5
+        calls.append((args[0].shape[0], kwargs["current_size"]))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(engine, "_noise_image_power_shells_and_per_image", observe)
+    result = engine.run_local_em_exact(
+        *case, "linear_interp", image_batch_size=2, rotation_block_size=8,
+        current_size=current_size, accumulate_noise=True,
+        reconstruct_significant_only=True, return_profile=True,
+        score_with_masked_images=False, half_spectrum_scoring=False,
+        max_significants=-1,
+    )
+    assert calls == [(2, current_size), (1, current_size)]
+    assert int(result.profile["big_jit_bucket_count"]) == (2 if deferred else 0)
+    assert np.all(np.isfinite(result.noise_stats.wsum_norm_correction))
+    assert np.any(result.noise_stats.wsum_norm_correction > 0)
+
+
+@pytest.mark.parametrize("deferred", [False, True])
+@pytest.mark.parametrize("spectrum_norm", [False, True])
+@pytest.mark.parametrize("normalization_float64", [False, True], ids=["norm32", "norm64"])
+def test_skip_deferred_zero_norm_preserves_real_local_outputs(
+    monkeypatch, rng, deferred, spectrum_norm, normalization_float64,
+):
+    import jax
+
+    from recovar.em.local import local_em_engine as engine
+
+    case = _sparse_big_jit_local_case(rng)
+    for key in ("RECOVAR_LOCAL_SCORE_DUMP_DIR", "RECOVAR_LOCAL_SCORE_DUMP_GLOBAL_INDICES",
+                "RECOVAR_DISABLE_LOCAL_BIG_JIT", EXACT_LOCAL_BIG_JIT_DEFER_PACKED_MSTEP_ENV):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv(EXACT_LOCAL_SPARSE_BIG_JIT_MSTEP_MAX_GB_ENV, "0" if deferred else "1000")
+    original = engine._invoke_local_bucket_big_jit
+    captured = []
+
+    def observe(*args, **kwargs):
+        result = original(*args, **kwargs)
+        # Inspect the real compiled return, not a simulated zero operand.
+        assert kwargs["return_deferred_mstep_inputs"] is deferred
+        assert kwargs["accumulate_noise"] is (not deferred)
+        norm = np.asarray(result.core.bucket_norm_correction)
+        expected_dtype = np.float64 if (spectrum_norm or normalization_float64) and not deferred else np.float32
+        assert norm.dtype == np.dtype(expected_dtype)
+        if deferred:
+            assert norm.tobytes() == np.zeros_like(norm).tobytes()
+        else:
+            assert np.any(norm != 0)
+        captured.append(norm.copy())
+        return result
+
+    monkeypatch.setattr(engine, "_invoke_local_bucket_big_jit", observe)
+    original_stats = engine.make_noise_stats
+    raw_norms = []
+
+    def observe_stats(**kwargs):
+        raw = np.asarray(kwargs["wsum_norm_correction"])
+        assert raw.dtype == np.dtype(np.float64 if spectrum_norm else np.float32)
+        raw_norms.append(raw.copy())
+        return original_stats(**kwargs)
+
+    monkeypatch.setattr(engine, "make_noise_stats", observe_stats)
+    results = []
+    for enabled in ("0", "1"):
+        monkeypatch.setenv(engine.EXACT_LOCAL_SKIP_DEFERRED_ZERO_NORM_ENV, enabled)
+        results.append(engine.run_local_em_exact(
+            *case, "linear_interp", image_batch_size=2, rotation_block_size=8,
+            current_size=6, accumulate_noise=True, reconstruct_significant_only=True,
+            return_profile=True, score_with_masked_images=False,
+            half_spectrum_scoring=False, max_significants=-1,
+            source_faithful_spectrum_norm=spectrum_norm,
+            use_float64_normalization=normalization_float64,
+        ))
+    assert len(captured) == 4  # Two real buckets in each treatment.
+    assert all(int(result.profile["big_jit_bucket_count"]) == 2 for result in results)
+    assert np.any(np.asarray(results[0].noise_stats.wsum_norm_correction) != 0)
+    # Publication preserves the carry dtype, including the float64 spectrum sum.
+    assert len(raw_norms) == 2 and raw_norms[0].tobytes() == raw_norms[1].tobytes()
+    assert results[0].noise_stats.wsum_norm_correction.dtype == np.dtype(np.float64 if spectrum_norm else np.float32)
+    first, first_tree = jax.tree_util.tree_flatten(
+        tuple(getattr(results[0], field.name) for field in fields(results[0]) if field.name != "profile")
+    )
+    second, second_tree = jax.tree_util.tree_flatten(
+        tuple(getattr(results[1], field.name) for field in fields(results[1]) if field.name != "profile")
+    )
+    assert first_tree == second_tree
+    for left, right in zip(first, second, strict=True):
+        left, right = np.asarray(left), np.asarray(right)
+        assert left.dtype == right.dtype and left.shape == right.shape
+        assert left.tobytes() == right.tobytes()
+
+
+@pytest.mark.parametrize("token, expected", [(None, False), ("0", False), ("1", True), (" 1 ", True)])
+def test_skip_deferred_zero_norm_selector(monkeypatch, token, expected):
+    from recovar.em.local import local_em_engine as engine
+    monkeypatch.delenv(engine.EXACT_LOCAL_SKIP_DEFERRED_ZERO_NORM_ENV, raising=False)
+    if token is not None:
+        monkeypatch.setenv(engine.EXACT_LOCAL_SKIP_DEFERRED_ZERO_NORM_ENV, token)
+    assert parse_env_binary_flag(engine.EXACT_LOCAL_SKIP_DEFERRED_ZERO_NORM_ENV) is expected
+
+
+@pytest.mark.parametrize("token", ["", "2", "true", "false", "-1"])
+def test_skip_deferred_zero_norm_rejects_invalid_selector(monkeypatch, token):
+    from recovar.em.local import local_em_engine as engine
+    monkeypatch.setenv(engine.EXACT_LOCAL_SKIP_DEFERRED_ZERO_NORM_ENV, token)
+    with pytest.raises(ValueError, match="RECOVAR_EXACT_LOCAL_SKIP_DEFERRED_ZERO_NORM"):
+        parse_env_binary_flag(engine.EXACT_LOCAL_SKIP_DEFERRED_ZERO_NORM_ENV)
 
 
 def test_run_local_em_exact_deferred_big_jit_no_noise_matches_sparse_big_jit(monkeypatch, rng):
-    dataset, mean, mean_variance, noise_variance, local_layout = _sparse_big_jit_local_case(rng)
+    dataset, mean, noise_variance, local_layout = _sparse_big_jit_local_case(rng)
     kwargs = dict(
         image_batch_size=3,
         rotation_block_size=8,
@@ -8290,7 +8232,6 @@ def test_run_local_em_exact_deferred_big_jit_no_noise_matches_sparse_big_jit(mon
     sparse = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -8301,31 +8242,29 @@ def test_run_local_em_exact_deferred_big_jit_no_noise_matches_sparse_big_jit(mon
     deferred = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
         **kwargs,
     )
 
-    sparse_profile = sparse[-1]
-    deferred_profile = deferred[-1]
+    sparse_profile = sparse.profile
+    deferred_profile = deferred.profile
     assert int(sparse_profile["big_jit_bucket_count"]) > 0
     assert int(deferred_profile["big_jit_bucket_count"]) > 0
     assert int(sparse_profile["sparse_big_jit_bucket_count"]) > 0
     assert int(deferred_profile["sparse_big_jit_bucket_count"]) > 0
-    assert len(sparse) == 5
-    assert len(deferred) == 5
-    np.testing.assert_array_equal(deferred[2], sparse[2])
-    np.testing.assert_allclose(np.asarray(deferred[0]), np.asarray(sparse[0]), rtol=1e-5, atol=1e-6)
-    np.testing.assert_allclose(np.asarray(deferred[1]), np.asarray(sparse[1]), rtol=1e-5, atol=1e-6)
-    _assert_relion_stats_allclose(deferred[3], sparse[3])
+    assert sparse.noise_stats is None
+    assert deferred.noise_stats is None
+    np.testing.assert_array_equal(deferred.hard_assignments, sparse.hard_assignments)
+    np.testing.assert_allclose(np.asarray(deferred.Ft_y), np.asarray(sparse.Ft_y), rtol=1e-5, atol=1e-6)
+    np.testing.assert_allclose(np.asarray(deferred.Ft_ctf), np.asarray(sparse.Ft_ctf), rtol=1e-5, atol=1e-6)
+    _assert_relion_stats_allclose(deferred.stats, sparse.stats)
 
 
 def test_run_local_em_exact_processed_half_cache_matches_uncached_split(monkeypatch, rng):
     dataset = MockDataset(3, rng)
     mean = _hermitian_volume(VOLUME_SHAPE, seed=581)
-    mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
     noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
     all_rotations = _make_rotations(6, seed=583)
     translations = np.array([[0.0, 0.0], [0.5, -0.5]], dtype=np.float32)
@@ -8371,7 +8310,6 @@ def test_run_local_em_exact_processed_half_cache_matches_uncached_split(monkeypa
     uncached = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -8381,15 +8319,24 @@ def test_run_local_em_exact_processed_half_cache_matches_uncached_split(monkeypa
     cached = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
         **common_kwargs,
     )
 
-    Ft_y_uncached, Ft_ctf_uncached, hard_uncached, stats_uncached, noise_uncached, profile_uncached = uncached
-    Ft_y_cached, Ft_ctf_cached, hard_cached, stats_cached, noise_cached, profile_cached = cached
+    Ft_y_uncached = uncached.Ft_y
+    Ft_ctf_uncached = uncached.Ft_ctf
+    hard_uncached = uncached.hard_assignments
+    stats_uncached = uncached.stats
+    noise_uncached = uncached.noise_stats
+    profile_uncached = uncached.profile
+    Ft_y_cached = cached.Ft_y
+    Ft_ctf_cached = cached.Ft_ctf
+    hard_cached = cached.hard_assignments
+    stats_cached = cached.stats
+    noise_cached = cached.noise_stats
+    profile_cached = cached.profile
     assert bool(profile_uncached["processed_half_cache_enabled"]) is False
     assert bool(profile_cached["processed_half_cache_enabled"]) is True
     np.testing.assert_array_equal(hard_uncached, hard_cached)
@@ -8476,45 +8423,6 @@ def test_compute_reconstruction_support_from_global_threshold_drops_low_class_ta
     np.testing.assert_array_equal(np.asarray(sig_rots[1]), np.array([True, True]))
 
 
-def test_tracked_local_engine_todo_ids_are_resolved():
-    repo_root = Path(__file__).resolve().parents[2]
-    iteration_loop_path = repo_root / "recovar" / "em" / "dense_single_volume" / "iteration_loop.py"
-    em_engine_path = repo_root / "recovar" / "em" / "dense_single_volume" / "em_engine.py"
-    half_spectrum_path = repo_root / "recovar" / "em" / "dense_single_volume" / "helpers" / "half_spectrum.py"
-    docs_path = repo_root / "docs" / "relion_local_engine_refactor.md"
-
-    iteration_text = iteration_loop_path.read_text(encoding="utf-8")
-    em_engine_text = em_engine_path.read_text(encoding="utf-8")
-    half_spectrum_text = half_spectrum_path.read_text(encoding="utf-8")
-    docs_text = docs_path.read_text(encoding="utf-8")
-
-    documented_ids = [
-        "RELION_LOCAL_ENGINE/T001",
-        "RELION_LOCAL_ENGINE/T002",
-        "RELION_LOCAL_ENGINE/T003",
-        "RELION_LOCAL_ENGINE/T004",
-        "DENSE_ENGINE_BOUNDARY/E001",
-        "DENSE_ENGINE_BOUNDARY/E002",
-        "DENSE_ENGINE_BOUNDARY/E003",
-        "DENSE_ENGINE_BOUNDARY/E004",
-        "DENSE_ENGINE_BOUNDARY/E005",
-        "DENSE_ENGINE_BOUNDARY/E006",
-    ]
-    for todo_id in documented_ids:
-        assert todo_id in docs_text
-        assert f"`{todo_id}` | RESOLVED" in docs_text
-
-    active_code = "\n".join([iteration_text, em_engine_text, half_spectrum_text])
-    assert "TODO(RELION_LOCAL_ENGINE" not in active_code
-    assert "TODO(DENSE_ENGINE_BOUNDARY" not in active_code
-    assert "TODO(RELION-parity-debt" not in active_code
-
-
-def test_local_engine_selector_is_removed():
-    assert "local_engine" not in inspect.signature(refine_single_volume).parameters
-    assert "local_engine" not in inspect.signature(iteration_loop_module._run_local_search_iteration).parameters
-
-
 def _identity_ctf(params, image_shape=None, voxel_size=None, *, half_image=False):
     if half_image:
         h, w = image_shape if image_shape is not None else IMAGE_SHAPE
@@ -8571,6 +8479,9 @@ class MockDataset:
         class _Backend:
             image_mask = np.asarray(_unit_image_mask(np.float32), dtype=np.float32)
             image_mask_mode = "multiply"
+
+            def set_relion_image_mask(self, pixel_size: float, particle_diameter_ang: float, width_mask_edge_px: float = 5.0):
+                self.image_mask_mode = "relion_background_fill"
 
         class _ImageSource:
             process_images = staticmethod(_raw_real_process)
@@ -8708,13 +8619,14 @@ def test_coarse_gaussian_routes_relion_cuda_norm_and_shift_before_fft(rng):
 
     dataset.process_images_half = capture_process
     with pytest.raises(_CapturedStrictPreprocess):
-        _compute_significance_batched(
+        _compute_k_class_significance_batched(
             dataset,
-            _hermitian_volume(VOLUME_SHAPE, seed=885),
+            _hermitian_volume(VOLUME_SHAPE, seed=885)[None, :],
             jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
             _make_rotations(1, seed=886),
             np.zeros((1, 2), dtype=np.float32),
             "linear_interp",
+            class_log_priors=np.zeros(1, dtype=np.float64),
             adaptive_fraction=1.0,
             max_significants=1,
             image_batch_size=1,
@@ -8758,6 +8670,9 @@ class RawRealImageDataset:
         class _Backend:
             image_mask = None
             image_mask_mode = "multiply"
+
+            def set_relion_image_mask(self, pixel_size: float, particle_diameter_ang: float, width_mask_edge_px: float = 5.0):
+                self.image_mask_mode = "relion_background_fill"
 
         class _ImageSource:
             process_images = staticmethod(_raw_real_process)
@@ -8835,6 +8750,22 @@ def translations():
     return jnp.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=jnp.float32)
 
 
+@pytest.fixture(autouse=True)
+def _clear_parity_dump_env(monkeypatch):
+    """Isolate these tests from ambient RELION-parity-dump debugging env vars.
+
+    ``_parity_dump.is_active()`` reads ``RECOVAR_PARITY_DUMP_DIR`` directly, and
+    it feeds the ``need_unreg_means`` gate in ``refine_single_volume`` via
+    an ``or`` -- so a var left exported in a developer's shell from an earlier
+    parity-debugging session silently changes reconstruction call counts and
+    intermediate-file output for every test here, regardless of what each
+    test's own ``options`` request. ``monkeypatch.delenv`` restores whatever
+    value (or absence) existed once the test finishes.
+    """
+    monkeypatch.delenv("RECOVAR_PARITY_DUMP_DIR", raising=False)
+    monkeypatch.delenv("RECOVAR_PARITY_TIMING_DIR", raising=False)
+
+
 # ===========================================================================
 # Test 1: RELION-parity smoke test -- runs without error
 # ===========================================================================
@@ -8843,6 +8774,53 @@ def translations():
 class TestRelionModeSmokeTest:
     """Call refine_single_volume and verify it runs."""
 
+    @pytest.mark.parametrize("voxel_size", [1.0, 2.0])
+    def test_k1_coldstart_supplies_gaussian_translation_prior(
+        self, half_datasets, init_volume, rotations, translations, monkeypatch, voxel_size,
+    ):
+        """Zero initial offsets still have native accelerated pdf_offset, not a flat prior."""
+        monkeypatch.setenv("RECOVAR_DISABLE_CUDA", "1")
+        monkeypatch.setattr(
+            sampling_module, "_relion_rotation_grid_float32",
+            lambda order, dtype: (np.asarray(rotations, dtype=dtype), np.zeros((N_ROTATIONS, 3), dtype=dtype)),
+        )
+        for dataset in half_datasets:
+            dataset.voxel_size = voxel_size
+
+        class PriorChecked(Exception):
+            pass
+
+        def check_first_engine_call(dataset, mean, *args, **kwargs):
+            # Native acc_ml_optimiser_impl.h uses Angstrom sampling translations
+            # and multiplies their squared distance by pixel_size**2 again.
+            # This fixture uses exactly representable distances and sigma=10 A.
+            base = np.asarray(translations, dtype=np.float32)
+            expected = -0.5 * np.sum(base**2, axis=-1) * voxel_size**4 / 100.0
+            prior = np.asarray(kwargs["translation_log_prior"])
+            assert prior.dtype == np.float32
+            np.testing.assert_array_equal(prior, expected)
+            assert np.any(prior < 0.0)
+            raise PriorChecked
+
+        monkeypatch.setattr(half_scoring, "run_em", check_first_engine_call)
+        with pytest.raises(PriorChecked):
+            refine_single_volume(
+                half_datasets, init_volume,
+                jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
+                jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
+                 translations,
+                options=RefinementOptions(
+                    disc_type="linear_interp",
+                    schedule=RefinementSchedule(
+                        max_iter=1, init_current_size=4, init_healpix_order=2,
+                        max_healpix_order=2, init_translation_sigma_angstrom=10.0,
+                    ),
+                    batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=N_ROTATIONS),
+                    parity=RelionParityOptions(low_resol_join_halves_angstrom=0.0),
+                ),
+            )
+
+
     def test_relion_bootstrap_current_size_matches_benchmark_case(self):
         """128px, 4.25A/px, ini_high=30A should bootstrap from 36 -> 56."""
         assert _bootstrap_current_size_relion(36, 128) == 56
@@ -8850,34 +8828,15 @@ class TestRelionModeSmokeTest:
     def test_relion_bootstrap_current_size_from_ini_high_matches_benchmark_case(self):
         assert bootstrap_current_size_from_ini_high_relion(128, 4.25, 30.0) == 56
 
-    def test_firstiter_cc_ini_high_tau2_taper_matches_relion_squared_cosine(self):
-        taper = iteration_loop_module._firstiter_cc_ini_high_tau2_taper(
-            65,
-            128,
-            4.25,
-            30.0,
-            filter_edgewidth=2,
-        )
-
-        radius = 128 * 4.25 / 30.0 - 1.0
-        radius_p = radius + 2.0
-        expected18 = (0.5 - 0.5 * np.cos(np.pi * (radius_p - 18.0) / 2.0)) ** 2
-        expected19 = (0.5 - 0.5 * np.cos(np.pi * (radius_p - 19.0) / 2.0)) ** 2
-        assert taper[17] == 1.0
-        np.testing.assert_allclose(taper[18], expected18, rtol=0, atol=1e-15)
-        np.testing.assert_allclose(taper[19], expected19, rtol=0, atol=1e-15)
-        np.testing.assert_array_equal(taper[20:], 0.0)
-
     def test_firstiter_cc_reconstructs_before_tau2_reporting_taper(
         self,
         half_datasets,
         init_volume,
-        rotations,
         translations,
         monkeypatch,
     ):
         """The ini_high tau2 taper changes reported state, not reconstruction."""
-        from recovar.em.dense_single_volume import mean_helpers as mean_helpers_module
+        from recovar.em.refinement import mean_helpers as mean_helpers_module
 
         untapered_tau = [7.0, 11.0]
         taper = np.asarray([1.0, 0.5, 0.0, 0.0, 0.0], dtype=np.float64)
@@ -8926,19 +8885,23 @@ class TestRelionModeSmokeTest:
             init_volume,
             jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-            rotations,
             translations,
-            disc_type="linear_interp",
-            max_iter=1,
-            image_batch_size=N_IMAGES,
-            rotation_block_size=N_ROTATIONS,
-            init_current_size=4,
-            init_healpix_order=2,
-            max_healpix_order=2,
-            low_resol_join_halves_angstrom=0.0,
-            emulate_relion_firstiter_cc=True,
-            relion_firstiter_ini_high_angstrom=8.0,
-            skip_final_iteration=True,
+            options=RefinementOptions(
+                disc_type="linear_interp",
+                schedule=RefinementSchedule(
+                    max_iter=1,
+                    init_current_size=4,
+                    init_healpix_order=2,
+                    max_healpix_order=2,
+                    skip_final_iteration=True,
+                ),
+                batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=N_ROTATIONS),
+                parity=RelionParityOptions(
+                    low_resol_join_halves_angstrom=0.0,
+                    emulate_relion_firstiter_cc=True,
+                    relion_firstiter_ini_high_angstrom=8.0,
+                ),
+            ),
         )
 
         assert len(reconstruction_tau) == 2
@@ -9040,7 +9003,7 @@ class TestRelionModeSmokeTest:
         oversampling_order = 1
         fine_order = updated_parent_order + oversampling_order
 
-        pass1_size = _relion_local_pass1_current_size(
+        pass1_size = relion_local_pass1_current_size(
             pre_update_healpix_order=incoming_order,
             pixel_size=3.28,
             ori_size=128,
@@ -9074,14 +9037,14 @@ class TestRelionModeSmokeTest:
 
     def test_replay_coarse_size_uses_previous_saved_order_not_live_post_mstep_state(self):
         assert (
-            _relion_expectation_coarse_size_order(
+            relion_expectation_coarse_size_order(
                 state_healpix_order=4,
                 replay_saved_healpix_order=3,
             )
             == 3
         )
         assert (
-            _relion_expectation_coarse_size_order(
+            relion_expectation_coarse_size_order(
                 state_healpix_order=4,
                 replay_saved_healpix_order=None,
             )
@@ -9227,126 +9190,6 @@ class TestRelionModeSmokeTest:
         np.testing.assert_allclose(np.asarray(got.wsum_noise_a2), [0.5, 1.0, 1.5])
         np.testing.assert_allclose(np.asarray(got.wsum_noise_xa), [2.0, 4.0, 6.0])
 
-    def test_relion_norm_scale_update_matches_relion_formula(self):
-        """Native updater reconstructs RELION's normcorr/group-scale state."""
-        stats = NoiseStats(
-            wsum_sigma2_noise=jnp.array([0.0], dtype=jnp.float32),
-            wsum_img_power=jnp.array([0.0], dtype=jnp.float32),
-            wsum_sigma2_offset=0.0,
-            sumw=4.0,
-            wsum_norm_correction=jnp.array([2.0, 8.0, 18.0, 0.5], dtype=jnp.float32),
-            wsum_scale_correction_xa=jnp.array([1.0, 100.0, 1.0], dtype=jnp.float32),
-            wsum_scale_correction_aa=jnp.array([1.0, 10.0, 0.0], dtype=jnp.float32),
-        )
-        group_ids = np.array([0, 1, 1, 2], dtype=np.int64)
-        old_group_scale = np.array([1.0, 2.0, 4.0], dtype=np.float64)
-        old_scale = old_group_scale[group_ids]
-        old_image_corr = np.array([2.0, 1.0, 4.0, 4.0], dtype=np.float64)
-
-        got = update_relion_norm_scale_corrections(
-            noise_stats_per_half=[stats, stats],
-            image_corrections_per_half=[old_image_corr, old_image_corr],
-            scale_corrections_per_half=[old_scale, old_scale],
-            group_ids_per_half=[group_ids, group_ids],
-            group_scale_corrections_per_half=[old_group_scale, old_group_scale],
-        )
-
-        expected_normcorr = np.array([1.0, 8.0, 3.0, 1.0], dtype=np.float64)
-        expected_avg_norm = float(np.mean(expected_normcorr))
-        scale_target = np.array([1.0, 10.0, 1.0], dtype=np.float64)
-        clipped = np.array([1.0, 5.0, 1.0], dtype=np.float64)
-        expected_group_scale = clipped / ((1.0 * clipped[0] + 2.0 * clipped[1] + clipped[2]) / 4.0)
-        expected_scale = expected_group_scale[group_ids]
-        expected_image_corr = (expected_avg_norm / expected_normcorr) * expected_scale
-
-        np.testing.assert_allclose(np.asarray(got.norm_corrections_per_half[0]), expected_normcorr, rtol=1e-6)
-        assert got.avg_norm_correction_per_half[0] == pytest.approx(expected_avg_norm)
-        np.testing.assert_allclose(np.asarray(got.group_scale_corrections_per_half[0]), expected_group_scale, rtol=1e-6)
-        np.testing.assert_allclose(np.asarray(got.scale_corrections_per_half[0]), expected_scale, rtol=1e-6)
-        np.testing.assert_allclose(np.asarray(got.image_corrections_per_half[0]), expected_image_corr, rtol=1e-6)
-
-    def test_relion_norm_update_divides_by_retained_posterior_mass(self):
-        """RELION divides its unweighted normcorr sum by significant support mass."""
-        stats = NoiseStats(
-            wsum_sigma2_noise=jnp.array([0.0], dtype=jnp.float32),
-            wsum_img_power=jnp.array([0.0], dtype=jnp.float32),
-            wsum_sigma2_offset=0.0,
-            sumw=3.5,
-            wsum_norm_correction=jnp.array([2.0, 8.0, 18.0, 0.5], dtype=jnp.float32),
-        )
-        group_ids = np.zeros(4, dtype=np.int64)
-        old_scale = np.ones(4, dtype=np.float64)
-        old_image_corr = np.array([2.0, 0.5, 2.0, 1.0], dtype=np.float64)
-
-        got = update_relion_norm_scale_corrections(
-            noise_stats_per_half=[stats, stats],
-            image_corrections_per_half=[old_image_corr, old_image_corr],
-            scale_corrections_per_half=[old_scale, old_scale],
-            group_ids_per_half=[group_ids, group_ids],
-            do_scale_correction=False,
-        )
-
-        expected_normcorr = np.array([1.0, 8.0, 3.0, 1.0], dtype=np.float64)
-        expected_avg_norm = float(np.sum(expected_normcorr) / stats.sumw)
-        expected_image_corr = expected_avg_norm / expected_normcorr
-        np.testing.assert_allclose(np.asarray(got.norm_corrections_per_half[0]), expected_normcorr, rtol=1e-6)
-        assert got.avg_norm_correction_per_half[0] == pytest.approx(expected_avg_norm)
-        np.testing.assert_allclose(np.asarray(got.image_corrections_per_half[0]), expected_image_corr, rtol=1e-6)
-
-    def test_relion_norm_scale_update_accepts_single_active_class3d_half(self):
-        """Class3D-style single-half runs still update active-half corrections."""
-        active = NoiseStats(
-            wsum_sigma2_noise=jnp.array([0.0], dtype=jnp.float32),
-            wsum_img_power=jnp.array([0.0], dtype=jnp.float32),
-            wsum_sigma2_offset=0.0,
-            sumw=2.0,
-            wsum_norm_correction=jnp.array([2.0, 8.0], dtype=jnp.float32),
-            wsum_scale_correction_xa=jnp.array([2.0], dtype=jnp.float32),
-            wsum_scale_correction_aa=jnp.array([1.0], dtype=jnp.float32),
-        )
-        empty = NoiseStats(
-            wsum_sigma2_noise=jnp.array([0.0], dtype=jnp.float32),
-            wsum_img_power=jnp.array([0.0], dtype=jnp.float32),
-            wsum_sigma2_offset=0.0,
-            sumw=0.0,
-        )
-
-        got = update_relion_norm_scale_corrections(
-            noise_stats_per_half=[active, empty],
-            group_ids_per_half=[np.zeros(2, dtype=np.int64), np.zeros(0, dtype=np.int64)],
-        )
-
-        np.testing.assert_allclose(np.asarray(got.norm_corrections_per_half[0]), [2.0, 4.0], rtol=1e-6)
-        assert got.avg_norm_correction_per_half[0] == pytest.approx(3.0)
-        np.testing.assert_allclose(np.asarray(got.group_scale_corrections_per_half[0]), [1.0], rtol=1e-6)
-        np.testing.assert_allclose(np.asarray(got.image_corrections_per_half[0]), [1.5, 0.75], rtol=1e-6)
-        assert np.asarray(got.image_corrections_per_half[1]).shape == (0,)
-        assert np.asarray(got.scale_corrections_per_half[1]).shape == (0,)
-
-    def test_relion_norm_scale_update_preserves_explicit_absent_groups(self):
-        """Half-local missing groups retain RELION's full model-group axis."""
-        stats = NoiseStats(
-            wsum_sigma2_noise=jnp.array([0.0], dtype=jnp.float32),
-            wsum_img_power=jnp.array([0.0], dtype=jnp.float32),
-            wsum_sigma2_offset=0.0,
-            sumw=2.0,
-            wsum_norm_correction=jnp.ones(2, dtype=jnp.float32),
-            wsum_scale_correction_xa=jnp.array([2.0, 0.0, 4.0, 0.0, 0.0], dtype=jnp.float32),
-            wsum_scale_correction_aa=jnp.array([1.0, 0.0, 2.0, 0.0, 0.0], dtype=jnp.float32),
-        )
-        group_ids = np.asarray([0, 2], dtype=np.int64)
-
-        got = update_relion_norm_scale_corrections(
-            noise_stats_per_half=[stats, stats],
-            group_ids_per_half=[group_ids, group_ids],
-            group_count_per_half=[5, 5],
-            do_norm_correction=False,
-        )
-
-        assert np.asarray(got.group_scale_corrections_per_half[0]).shape == (5,)
-        assert np.asarray(got.scale_corrections_per_half[0]).shape == (2,)
-        np.testing.assert_allclose(np.asarray(got.group_scale_corrections_per_half[0])[[1, 3, 4]], 0.5)
-
     def test_scale_statistics_use_relion_data_vs_prior_shell_support(self):
         # RELION represents redundant/out-of-band pixels with the positive
         # sentinel ``n_shells``, not only negative indices.
@@ -9374,95 +9217,6 @@ class TestRelionModeSmokeTest:
 
         np.testing.assert_allclose(np.asarray(xa), [5.0], rtol=0, atol=0)
         np.testing.assert_allclose(np.asarray(aa), [2.0], rtol=0, atol=0)
-
-    def test_relion_norm_scale_update_skips_firstiter_cc_scale_only(self):
-        """RELION firstiter-CC still updates normcorr but keeps old scales."""
-        stats = NoiseStats(
-            wsum_sigma2_noise=jnp.array([0.0], dtype=jnp.float32),
-            wsum_img_power=jnp.array([0.0], dtype=jnp.float32),
-            wsum_sigma2_offset=0.0,
-            sumw=2.0,
-            wsum_norm_correction=jnp.array([2.0, 8.0], dtype=jnp.float32),
-            wsum_scale_correction_xa=jnp.array([100.0, 1.0], dtype=jnp.float32),
-            wsum_scale_correction_aa=jnp.array([10.0, 1.0], dtype=jnp.float32),
-        )
-        group_ids = np.array([0, 1], dtype=np.int64)
-        old_group_scale = np.array([1.0, 2.0], dtype=np.float64)
-        old_scale = old_group_scale[group_ids]
-        old_image_corr = np.array([1.0, 1.0], dtype=np.float64)
-
-        got = update_relion_norm_scale_corrections(
-            noise_stats_per_half=[stats, stats],
-            image_corrections_per_half=[old_image_corr, old_image_corr],
-            scale_corrections_per_half=[old_scale, old_scale],
-            group_ids_per_half=[group_ids, group_ids],
-            group_scale_corrections_per_half=[old_group_scale, old_group_scale],
-            relion_firstiter_cc_this_iter=True,
-        )
-
-        expected_normcorr = np.array([2.0, 8.0], dtype=np.float64)
-        expected_avg_norm = 5.0
-        expected_image_corr = (expected_avg_norm / expected_normcorr) * old_scale
-        np.testing.assert_allclose(np.asarray(got.group_scale_corrections_per_half[0]), old_group_scale)
-        np.testing.assert_allclose(np.asarray(got.scale_corrections_per_half[0]), old_scale)
-        np.testing.assert_allclose(np.asarray(got.image_corrections_per_half[0]), expected_image_corr, rtol=1e-6)
-
-    def test_relion_norm_scale_update_changes_two_native_groups_differently(self):
-        stats = NoiseStats(
-            wsum_sigma2_noise=jnp.array([0.0], dtype=jnp.float32),
-            wsum_img_power=jnp.array([0.0], dtype=jnp.float32),
-            wsum_sigma2_offset=0.0,
-            sumw=4.0,
-            wsum_norm_correction=jnp.ones(4, dtype=jnp.float32),
-            wsum_scale_correction_xa=jnp.array([2.0, 6.0], dtype=jnp.float32),
-            wsum_scale_correction_aa=jnp.array([1.0, 2.0], dtype=jnp.float32),
-        )
-        group_ids = np.asarray([0, 1, 0, 1], dtype=np.int64)
-        old_scale = np.ones(4, dtype=np.float64)
-
-        got = update_relion_norm_scale_corrections(
-            noise_stats_per_half=[stats, stats],
-            scale_corrections_per_half=[old_scale, old_scale],
-            group_ids_per_half=[group_ids, group_ids],
-            do_norm_correction=False,
-        )
-
-        group_scale = np.asarray(got.group_scale_corrections_per_half[0], dtype=np.float64)
-        assert group_scale.shape == (2,)
-        assert group_scale[0] != pytest.approx(group_scale[1])
-        np.testing.assert_allclose(
-            np.asarray(got.scale_corrections_per_half[0], dtype=np.float64),
-            group_scale[group_ids],
-            rtol=1e-6,
-        )
-
-    def test_relion_norm_scale_update_preserves_zero_norm_residual_rows(self):
-        """Images with no posterior norm mass keep their previous finite correction."""
-        stats = NoiseStats(
-            wsum_sigma2_noise=jnp.array([0.0], dtype=jnp.float32),
-            wsum_img_power=jnp.array([0.0], dtype=jnp.float32),
-            wsum_sigma2_offset=0.0,
-            sumw=2.0,
-            wsum_norm_correction=jnp.array([12.5, 0.0, 12.5], dtype=jnp.float32),
-        )
-        group_ids = np.zeros(3, dtype=np.int64)
-        old_scale = np.ones(3, dtype=np.float64)
-        old_image_corr = np.array([1.0, 2.0, 1.0], dtype=np.float64)
-
-        got = update_relion_norm_scale_corrections(
-            noise_stats_per_half=[stats, stats],
-            image_corrections_per_half=[old_image_corr, old_image_corr],
-            scale_corrections_per_half=[old_scale, old_scale],
-            group_ids_per_half=[group_ids, group_ids],
-            avg_norm_correction_per_half=[5.0, 5.0],
-            do_scale_correction=False,
-        )
-
-        np.testing.assert_allclose(np.asarray(got.image_corrections_per_half[0]), old_image_corr, rtol=1e-6)
-        np.testing.assert_allclose(np.asarray(got.norm_corrections_per_half[0]), [5.0, 2.5, 5.0], rtol=1e-6)
-        assert got.avg_norm_correction_per_half[0] == pytest.approx(5.0)
-        assert got.zero_norm_residual_counts == [1, 1]
-        assert np.all(np.isfinite(np.asarray(got.image_corrections_per_half[0])))
 
     def test_relion_noise_stats_carry_optional_norm_scale_fields(self):
         stats0 = NoiseStats(
@@ -9496,7 +9250,6 @@ class TestRelionModeSmokeTest:
         self,
         half_datasets,
         init_volume,
-        rotations,
         translations,
     ):
         """RELION-parity refinement completes 2 iterations on a tiny dataset."""
@@ -9505,15 +9258,17 @@ class TestRelionModeSmokeTest:
             init_volume,
             jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-            rotations,
             translations,
-            disc_type="linear_interp",
-            max_iter=2,
-            image_batch_size=N_IMAGES,
-            rotation_block_size=N_ROTATIONS,
-            init_current_size=16,
-            init_healpix_order=2,
-            max_healpix_order=3,
+            options=RefinementOptions(
+                disc_type="linear_interp",
+                schedule=RefinementSchedule(
+                    max_iter=2,
+                    init_current_size=16,
+                    init_healpix_order=2,
+                    max_healpix_order=3,
+                ),
+                batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=N_ROTATIONS),
+            ),
         )
 
         # Basic return dict structure
@@ -9536,7 +9291,6 @@ class TestRelionModeSmokeTest:
         self,
         half_datasets,
         init_volume,
-        rotations,
         translations,
     ):
         """RELION does not run final all-data iteration just because max_iter ended."""
@@ -9545,16 +9299,13 @@ class TestRelionModeSmokeTest:
             init_volume,
             jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-            rotations,
             translations,
-            disc_type="linear_interp",
-            max_iter=1,
-            image_batch_size=N_IMAGES,
-            rotation_block_size=N_ROTATIONS,
-            init_current_size=4,
-            init_healpix_order=2,
-            max_healpix_order=2,
-            low_resol_join_halves_angstrom=0.0,
+            options=RefinementOptions(
+                disc_type="linear_interp",
+                schedule=RefinementSchedule(max_iter=1, init_current_size=4, init_healpix_order=2, max_healpix_order=2),
+                batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=N_ROTATIONS),
+                parity=RelionParityOptions(low_resol_join_halves_angstrom=0.0),
+            ),
         )
 
         assert result["convergence_state"].has_converged is False
@@ -9565,7 +9316,6 @@ class TestRelionModeSmokeTest:
         self,
         half_datasets,
         init_volume,
-        rotations,
         translations,
         monkeypatch,
     ):
@@ -9589,17 +9339,16 @@ class TestRelionModeSmokeTest:
             init_volume,
             jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-            rotations,
             translations,
-            disc_type="linear_interp",
-            max_iter=1,
-            image_batch_size=N_IMAGES,
-            rotation_block_size=N_ROTATIONS,
-            init_current_size=4,
-            init_healpix_order=2,
-            max_healpix_order=2,
-            low_resol_join_halves_angstrom=40.0,
-            relion_firstiter_ini_high_angstrom=30.0,
+            options=RefinementOptions(
+                disc_type="linear_interp",
+                schedule=RefinementSchedule(max_iter=1, init_current_size=4, init_healpix_order=2, max_healpix_order=2),
+                batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=N_ROTATIONS),
+                parity=RelionParityOptions(
+                    low_resol_join_halves_angstrom=40.0,
+                    relion_firstiter_ini_high_angstrom=30.0,
+                ),
+            ),
         )
 
         expected_resolution = shell_index_to_resolution_angstrom(1, IMAGE_SHAPE[0], half_datasets[0].voxel_size)
@@ -9610,14 +9359,15 @@ class TestRelionModeSmokeTest:
         self,
         half_datasets,
         init_volume,
-        rotations,
         translations,
         monkeypatch,
     ):
         """The final joined reconstruction still scores each half against its own map."""
         original_update = iteration_loop_module.update_refinement_state
-        original_run_em = iteration_loop_module.run_em
+        original_run_em = half_scoring.run_em
+        original_reconstruct = iteration_loop_module._reconstruct_volume_eager
         run_em_mean_ids = []
+        reconstruction_calls = []
         expected_accuracy_current_sizes = []
 
         def force_convergence_after_first_iter(*args, **kwargs):
@@ -9629,6 +9379,11 @@ class TestRelionModeSmokeTest:
             _ = dataset
             run_em_mean_ids.append(id(mean))
             return original_run_em(dataset, mean, *args, **kwargs)
+
+        def spy_reconstruct(*args, **kwargs):
+            volume = original_reconstruct(*args, **kwargs)
+            reconstruction_calls.append((kwargs, volume))
+            return volume
 
         def fake_expected_accuracy(**kwargs):
             expected_accuracy_current_sizes.append(int(kwargs["current_image_size"]))
@@ -9649,14 +9404,15 @@ class TestRelionModeSmokeTest:
             "update_refinement_state",
             force_convergence_after_first_iter,
         )
-        monkeypatch.setattr(iteration_loop_module, "run_em", spy_run_em)
+        monkeypatch.setattr(half_scoring, "run_em", spy_run_em)
+        monkeypatch.setattr(iteration_loop_module, "_reconstruct_volume_eager", spy_reconstruct)
         monkeypatch.setattr(
-            iteration_loop_module,
+            expected_accuracy_module,
             "relion_half1_trial_order",
             lambda n_particles, *_args, **_kwargs: np.arange(n_particles, dtype=np.int64),
         )
         monkeypatch.setattr(
-            iteration_loop_module,
+            expected_accuracy_module,
             "estimate_relion_expected_accuracy",
             fake_expected_accuracy,
         )
@@ -9666,18 +9422,17 @@ class TestRelionModeSmokeTest:
             init_volume,
             jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-            rotations,
             translations,
-            disc_type="linear_interp",
-            max_iter=2,
-            image_batch_size=N_IMAGES,
-            rotation_block_size=N_ROTATIONS,
-            init_current_size=4,
-            init_healpix_order=2,
-            max_healpix_order=2,
-            low_resol_join_halves_angstrom=0.0,
-            perturb_seed=17,
-            optimizer_random_seed=17,
+            options=RefinementOptions(
+                disc_type="linear_interp",
+                schedule=RefinementSchedule(max_iter=2, init_current_size=4, init_healpix_order=2, max_healpix_order=2),
+                batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=N_ROTATIONS),
+                parity=RelionParityOptions(
+                    low_resol_join_halves_angstrom=0.0,
+                    perturb_seed=17,
+                    optimizer_random_seed=17,
+                ),
+            ),
         )
 
         assert result["convergence_state"].has_converged is True
@@ -9688,11 +9443,23 @@ class TestRelionModeSmokeTest:
         assert result["final_all_data_expected_accuracy_status"] == "ok"
         assert result["final_all_data_acc_rot"] == pytest.approx(1.25)
 
+        # Final reconstruction produces a merged map, two regularized halves,
+        # then two unfiltered halves, all at Nyquist. Check executed calls so
+        # grouping half pairs cannot silently omit or reorder a saved product.
+        final_calls = reconstruction_calls[-5:]
+        assert len(final_calls) == 5
+        assert [call[0]["tau"] is None for call in final_calls] == [False, False, False, True, True]
+        assert all(call[0]["current_size"] == IMAGE_SHAPE[0] for call in final_calls)
+        assert all(call[0]["use_spherical_mask"] is True for call in final_calls[-2:])
+        assert all(call[0]["grid_correct"] is True for call in final_calls[-2:])
+        products = [result["mean"], *result["means"], *result["unfiltered_means"]]
+        for product, (_, reconstructed) in zip(products, final_calls, strict=True):
+            np.testing.assert_array_equal(np.asarray(product), np.asarray(reconstructed).reshape(-1))
+
     def test_relion_final_iteration_tau2_uses_half_accumulators(
         self,
         half_datasets,
         init_volume,
-        rotations,
         translations,
         monkeypatch,
     ):
@@ -9725,23 +9492,13 @@ class TestRelionModeSmokeTest:
             n_shells = experiment_dataset.image_shape[0] // 2 + 1
             recon_vol_size = _mock_reconstruction_accumulator_size(experiment_dataset, kwargs)
             ctf_value = ctf_values[idx]
-            return (
-                None,
-                np.zeros(n_images, dtype=np.int32),
-                jnp.ones(recon_vol_size, dtype=jnp.complex64),
-                jnp.full(recon_vol_size, ctf_value, dtype=jnp.complex64),
-                RelionStats(
-                    log_evidence_per_image=jnp.zeros(n_images, dtype=jnp.float32),
-                    best_log_score_per_image=jnp.zeros(n_images, dtype=jnp.float32),
-                    max_posterior_per_image=jnp.ones(n_images, dtype=jnp.float32),
-                    rotation_posterior_sums=jnp.ones(np.asarray(rotations_arg).shape[0], dtype=jnp.float32),
-                ),
-                NoiseStats(
-                    wsum_sigma2_noise=jnp.ones(n_shells, dtype=jnp.float32),
-                    wsum_img_power=jnp.ones(n_shells, dtype=jnp.float32),
-                    wsum_sigma2_offset=0.0,
-                    sumw=float(n_images),
-                ),
+            return _mock_dense_em_result(
+                n_images=n_images,
+                n_rotations=np.asarray(rotations_arg).shape[0],
+                volume_size=recon_vol_size,
+                n_shells=n_shells,
+                Ft_y=jnp.ones(recon_vol_size, dtype=jnp.complex64),
+                Ft_ctf=jnp.full(recon_vol_size, ctf_value, dtype=jnp.complex64),
             )
 
         def spy_tau2(Ft_ctf_0, Ft_ctf_1, fsc, *args, **kwargs):
@@ -9759,7 +9516,7 @@ class TestRelionModeSmokeTest:
             "update_refinement_state",
             force_convergence_after_first_iter,
         )
-        monkeypatch.setattr(iteration_loop_module, "run_em", fake_run_em)
+        monkeypatch.setattr(half_scoring, "run_em", fake_run_em)
         monkeypatch.setattr(regularization_module, "compute_relion_tau2_from_weights", spy_tau2)
 
         result = refine_single_volume(
@@ -9767,16 +9524,13 @@ class TestRelionModeSmokeTest:
             init_volume,
             jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-            rotations,
             translations,
-            disc_type="linear_interp",
-            max_iter=2,
-            image_batch_size=N_IMAGES,
-            rotation_block_size=N_ROTATIONS,
-            init_current_size=4,
-            init_healpix_order=2,
-            max_healpix_order=2,
-            low_resol_join_halves_angstrom=0.0,
+            options=RefinementOptions(
+                disc_type="linear_interp",
+                schedule=RefinementSchedule(max_iter=2, init_current_size=4, init_healpix_order=2, max_healpix_order=2),
+                batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=N_ROTATIONS),
+                parity=RelionParityOptions(low_resol_join_halves_angstrom=0.0),
+            ),
         )
 
         assert result["convergence_state"].has_converged is True
@@ -9796,7 +9550,7 @@ class TestRelionModeSmokeTest:
     ):
         """The final K=1 all-data E-step uses the previous iter's pdf_direction."""
         original_update = iteration_loop_module.update_refinement_state
-        original_run_em = iteration_loop_module.run_em
+        original_run_em = half_scoring.run_em
         custom_eulers = np.zeros((N_ROTATIONS, 3), dtype=np.float32)
         learned_direction_priors = [
             np.array([0.7, 0.3], dtype=np.float32),
@@ -9820,12 +9574,12 @@ class TestRelionModeSmokeTest:
         def fake_rotation_grid_size(_order):
             return N_ROTATIONS
 
-        def fake_collapse_rotation_posterior_to_direction_prior(rotation_posterior_sums, healpix_order):
+        def fake_collapse_rotation_posterior_to_direction_prior(rotation_posterior_sums, healpix_order, dtype=np.float32):
             collapse_calls.append((np.asarray(rotation_posterior_sums).shape, int(healpix_order)))
-            return learned_direction_priors[len(collapse_calls) - 1]
+            return np.asarray(learned_direction_priors[len(collapse_calls) - 1], dtype=dtype)
 
-        def fake_make_relion_direction_log_prior(direction_prior, healpix_order):
-            prior = np.asarray(direction_prior, dtype=np.float32)
+        def fake_make_relion_direction_log_prior(direction_prior, healpix_order, dtype=np.float32):
+            prior = np.asarray(direction_prior, dtype=dtype)
             make_prior_calls.append((prior.copy(), int(healpix_order)))
             if np.array_equal(prior, learned_direction_priors[0]):
                 return expected_rotation_log_priors[0]
@@ -9844,23 +9598,31 @@ class TestRelionModeSmokeTest:
             "update_refinement_state",
             force_convergence_after_first_iter,
         )
-        monkeypatch.setattr(iteration_loop_module, "run_em", spy_run_em)
+        monkeypatch.setattr(half_scoring, "run_em", spy_run_em)
         monkeypatch.setattr(iteration_loop_module, "rotation_grid_size", fake_rotation_grid_size)
+        monkeypatch.setattr(half_scoring, "rotation_grid_size", fake_rotation_grid_size)
         monkeypatch.setattr(
-            iteration_loop_module,
+            sampling_module,
             "_relion_rotation_grid_float32",
-            lambda _order: (
+            lambda _order, dtype=None: (
                 np.asarray(rotations, dtype=np.float32),
                 custom_eulers,
             ),
         )
+        # The learned-prior update lives in mean_helpers; scoring expansion is
+        # owned by orientation_priors.relion_direction_log_priors_for_half.
         monkeypatch.setattr(
-            iteration_loop_module,
+            mean_helpers_module,
             "collapse_rotation_posterior_to_direction_prior",
             fake_collapse_rotation_posterior_to_direction_prior,
         )
         monkeypatch.setattr(
-            iteration_loop_module,
+            mean_helpers_module,
+            "make_relion_direction_log_prior",
+            fake_make_relion_direction_log_prior,
+        )
+        monkeypatch.setattr(
+            orientation_priors_module,
             "make_relion_direction_log_prior",
             fake_make_relion_direction_log_prior,
         )
@@ -9870,16 +9632,13 @@ class TestRelionModeSmokeTest:
             init_volume,
             jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-            rotations,
             translations,
-            disc_type="linear_interp",
-            max_iter=2,
-            image_batch_size=N_IMAGES,
-            rotation_block_size=N_ROTATIONS,
-            init_current_size=4,
-            init_healpix_order=2,
-            max_healpix_order=2,
-            low_resol_join_halves_angstrom=0.0,
+            options=RefinementOptions(
+                disc_type="linear_interp",
+                schedule=RefinementSchedule(max_iter=2, init_current_size=4, init_healpix_order=2, max_healpix_order=2),
+                batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=N_ROTATIONS),
+                parity=RelionParityOptions(low_resol_join_halves_angstrom=0.0),
+            ),
         )
 
         assert result["convergence_state"].has_converged is True
@@ -9897,13 +9656,12 @@ class TestRelionModeSmokeTest:
         self,
         half_datasets,
         init_volume,
-        rotations,
         translations,
         monkeypatch,
     ):
         """The final all-data E-step still uses RELION's pdf_offset prior."""
         original_update = iteration_loop_module.update_refinement_state
-        original_run_em = iteration_loop_module.run_em
+        original_run_em = half_scoring.run_em
         run_em_translation_priors = []
         run_em_translation_prior_centers = []
 
@@ -9925,23 +9683,20 @@ class TestRelionModeSmokeTest:
             "update_refinement_state",
             force_convergence_after_first_iter,
         )
-        monkeypatch.setattr(iteration_loop_module, "run_em", spy_run_em)
+        monkeypatch.setattr(half_scoring, "run_em", spy_run_em)
 
         result = refine_single_volume(
             half_datasets,
             init_volume,
             jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-            rotations,
             translations,
-            disc_type="linear_interp",
-            max_iter=2,
-            image_batch_size=N_IMAGES,
-            rotation_block_size=N_ROTATIONS,
-            init_current_size=4,
-            init_healpix_order=2,
-            max_healpix_order=2,
-            low_resol_join_halves_angstrom=0.0,
+            options=RefinementOptions(
+                disc_type="linear_interp",
+                schedule=RefinementSchedule(max_iter=2, init_current_size=4, init_healpix_order=2, max_healpix_order=2),
+                batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=N_ROTATIONS),
+                parity=RelionParityOptions(low_resol_join_halves_angstrom=0.0),
+            ),
         )
 
         assert result["convergence_state"].has_converged is True
@@ -9960,13 +9715,12 @@ class TestRelionModeSmokeTest:
         self,
         half_datasets,
         init_volume,
-        rotations,
         translations,
         monkeypatch,
     ):
         """The joined final E-step retains each random subset's noise model."""
         original_update = iteration_loop_module.update_refinement_state
-        original_run_em = iteration_loop_module.run_em
+        original_run_em = half_scoring.run_em
         replay_noise_h1 = np.linspace(2.0, 3.0, IMAGE_SIZE, dtype=np.float32)
         replay_noise_h2 = np.linspace(5.0, 6.0, IMAGE_SIZE, dtype=np.float32)
         run_em_noise = []
@@ -9985,27 +9739,26 @@ class TestRelionModeSmokeTest:
             "update_refinement_state",
             force_convergence_after_first_iter,
         )
-        monkeypatch.setattr(iteration_loop_module, "run_em", spy_run_em)
+        monkeypatch.setattr(half_scoring, "run_em", spy_run_em)
 
         result = refine_single_volume(
             half_datasets,
             init_volume,
             jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-            rotations,
             translations,
-            disc_type="linear_interp",
-            max_iter=2,
-            image_batch_size=N_IMAGES,
-            rotation_block_size=N_ROTATIONS,
-            init_current_size=4,
-            init_healpix_order=2,
-            max_healpix_order=2,
-            low_resol_join_halves_angstrom=0.0,
-            replay_iteration_overrides=[
-                None,
-                {"noise_variance": [replay_noise_h1, replay_noise_h2]},
-            ],
+            options=RefinementOptions(
+                disc_type="linear_interp",
+                schedule=RefinementSchedule(max_iter=2, init_current_size=4, init_healpix_order=2, max_healpix_order=2),
+                batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=N_ROTATIONS),
+                parity=RelionParityOptions(low_resol_join_halves_angstrom=0.0),
+                replay=ReplayState(
+                    replay_iteration_overrides=[
+                        None,
+                        {"noise_variance": [replay_noise_h1, replay_noise_h2]},
+                    ]
+                ),
+            ),
         )
 
         assert result["convergence_state"].has_converged is True
@@ -10019,13 +9772,12 @@ class TestRelionModeSmokeTest:
         self,
         half_datasets,
         init_volume,
-        rotations,
         translations,
         monkeypatch,
     ):
         """The final all-data E-step follows RELION local-search state."""
         original_update = iteration_loop_module.update_refinement_state
-        original_run_em = iteration_loop_module.run_em
+        original_run_em = half_scoring.run_em
         run_em_calls = []
         local_calls = []
 
@@ -10035,16 +9787,13 @@ class TestRelionModeSmokeTest:
         def fake_rotation_grid_n_in_planes(_order):
             return 1
 
-        def fake_relion_rotation_grid_float32(order):
+        def fake_relion_rotation_grid_float32(order, dtype=None):
+            del dtype
             n_rotations = fake_rotation_grid_size(order)
             return (
                 np.repeat(np.eye(3, dtype=np.float32)[None, :, :], n_rotations, axis=0),
                 np.zeros((n_rotations, 3), dtype=np.float32),
             )
-
-        def fake_get_relion_rotation_grid(order, *args, **kwargs):
-            del args, kwargs
-            return fake_relion_rotation_grid_float32(order)[0]
 
         def fake_get_relion_rotation_grid_eulers(order, *args, **kwargs):
             del args, kwargs
@@ -10055,15 +9804,14 @@ class TestRelionModeSmokeTest:
             random_perturbation,
             angular_sampling_deg,
             *,
-            return_mstep_rotations=False,
+            dtype=np.float32,
         ):
             _ = (random_perturbation, angular_sampling_deg)
             n_rows = int(np.asarray(eulers).shape[0])
-            score = np.repeat(np.eye(3, dtype=np.float32)[None], n_rows, axis=0)
-            public_eulers = np.asarray(eulers, dtype=np.float32)
-            if return_mstep_rotations:
-                mstep = np.repeat((13.0 * np.eye(3, dtype=np.float32))[None], n_rows, axis=0)
-                return score, public_eulers, mstep
+            score = np.repeat(np.eye(3, dtype=dtype)[None], n_rows, axis=0)
+            public_eulers = np.asarray(eulers, dtype=dtype)
+            if np.asarray(eulers).dtype == np.float64:
+                score = np.repeat((13.0 * np.eye(3, dtype=np.float32))[None], n_rows, axis=0)
             return score, public_eulers
 
         def force_converged_local_after_first_iter(*args, **kwargs):
@@ -10080,18 +9828,15 @@ class TestRelionModeSmokeTest:
         def fake_local_search(
             experiment_dataset,
             mean,
-            mean_variance,
             noise_variance,
             prior_rotations,
             rotation_grid_rotations,
-            rotation_grid_eulers,
             healpix_order,
             sigma_rot,
             sigma_psi,
             translations,
             prior_translations,
             sigma_offset_angstrom,
-            offset_range_pixels,
             disc_type,
             image_batch_size,
             rotation_block_size,
@@ -10099,15 +9844,12 @@ class TestRelionModeSmokeTest:
             **kwargs,
         ):
             _ = (
-                mean_variance,
                 noise_variance,
                 rotation_grid_rotations,
-                rotation_grid_eulers,
                 sigma_rot,
                 sigma_psi,
                 translations,
                 sigma_offset_angstrom,
-                offset_range_pixels,
                 disc_type,
                 image_batch_size,
                 rotation_block_size,
@@ -10144,7 +9886,6 @@ class TestRelionModeSmokeTest:
             best_pose_details = (
                 np.repeat(np.eye(3, dtype=np.float32)[None, :, :], experiment_dataset.n_units, axis=0),
                 np.zeros((experiment_dataset.n_units, 2), dtype=np.float32),
-                np.zeros(experiment_dataset.n_units, dtype=np.int64),
             )
             relion_stats = RelionStats(
                 log_evidence_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
@@ -10161,7 +9902,7 @@ class TestRelionModeSmokeTest:
                 wsum_sigma2_offset=1.0,
                 sumw=float(experiment_dataset.n_units),
             )
-            return _pack_fake_local_search_outputs(
+            return _mock_local_search_result(
                 base_outputs,
                 relion_stats,
                 noise_stats,
@@ -10175,26 +9916,21 @@ class TestRelionModeSmokeTest:
             "update_refinement_state",
             force_converged_local_after_first_iter,
         )
-        monkeypatch.setattr(iteration_loop_module, "run_em", spy_run_em)
+        monkeypatch.setattr(half_scoring, "run_em", spy_run_em)
         monkeypatch.setattr(iteration_loop_module, "rotation_grid_size", fake_rotation_grid_size)
-        monkeypatch.setattr(iteration_loop_module, "get_relion_rotation_grid", fake_get_relion_rotation_grid)
+        monkeypatch.setattr(half_scoring, "rotation_grid_size", fake_rotation_grid_size)
         monkeypatch.setattr(
-            iteration_loop_module,
-            "get_relion_rotation_grid_eulers",
-            fake_get_relion_rotation_grid_eulers,
-        )
-        monkeypatch.setattr(
-            iteration_loop_module,
+            sampling_module,
             "_relion_rotation_grid_float32",
             fake_relion_rotation_grid_float32,
         )
         monkeypatch.setattr(
-            iteration_loop_module,
+            sampling_module,
             "_get_relion_rotation_grid_eulers_float64",
             lambda order: fake_get_relion_rotation_grid_eulers(order).astype(np.float64),
         )
         monkeypatch.setattr(
-            iteration_loop_module,
+            sampling_module,
             "apply_relion_rotation_perturbation_to_eulers",
             fake_apply_relion_rotation_perturbation_to_eulers,
         )
@@ -10208,24 +9944,21 @@ class TestRelionModeSmokeTest:
             "rotation_grid_n_in_planes",
             fake_rotation_grid_n_in_planes,
         )
-        monkeypatch.setattr(iteration_loop_module, "_run_local_search_iteration", fake_local_search)
+        monkeypatch.setattr(half_scoring, "_run_local_search_iteration", fake_local_search)
 
         result = refine_single_volume(
             half_datasets,
             init_volume,
             jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-            rotations,
             translations,
-            disc_type="linear_interp",
-            max_iter=2,
-            image_batch_size=N_IMAGES,
-            rotation_block_size=N_ROTATIONS,
-            init_current_size=4,
-            init_healpix_order=2,
-            max_healpix_order=4,
-            auto_local_healpix_order=4,
-            low_resol_join_halves_angstrom=0.0,
+            options=RefinementOptions(
+                disc_type="linear_interp",
+                schedule=RefinementSchedule(max_iter=2, init_current_size=4, init_healpix_order=2, max_healpix_order=4),
+                batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=N_ROTATIONS),
+                local_search=LocalSearchOptions(auto_local_healpix_order=4),
+                parity=RelionParityOptions(low_resol_join_halves_angstrom=0.0),
+            ),
         )
 
         assert result["convergence_state"].has_converged is True
@@ -10255,7 +9988,6 @@ class TestRelionModeSmokeTest:
         self,
         half_datasets,
         init_volume,
-        rotations,
         translations,
         monkeypatch,
     ):
@@ -10278,18 +10010,17 @@ class TestRelionModeSmokeTest:
             init_volume,
             jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-            rotations,
             translations,
-            disc_type="linear_interp",
-            max_iter=2,
-            image_batch_size=N_IMAGES,
-            rotation_block_size=N_ROTATIONS,
-            init_current_size=4,
-            init_healpix_order=2,
-            max_healpix_order=2,
-            low_resol_join_halves_angstrom=0.0,
-            n_classes=2,
-            init_class_log_priors=np.log(np.array([0.5, 0.5], dtype=np.float64)),
+            options=RefinementOptions(
+                disc_type="linear_interp",
+                schedule=RefinementSchedule(max_iter=2, init_current_size=4, init_healpix_order=2, max_healpix_order=2),
+                batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=N_ROTATIONS),
+                parity=RelionParityOptions(low_resol_join_halves_angstrom=0.0),
+                k_class=KClassOptions(
+                    n_classes=2,
+                    init_class_log_priors=np.log(np.array([0.5, 0.5], dtype=np.float64)),
+                ),
+            ),
         )
 
         assert result["convergence_state"].has_converged is True
@@ -10303,7 +10034,6 @@ class TestRelionModeSmokeTest:
         self,
         half_datasets,
         init_volume,
-        rotations,
         translations,
         monkeypatch,
     ):
@@ -10406,8 +10136,8 @@ class TestRelionModeSmokeTest:
             "update_refinement_state",
             force_convergence_after_first_iter,
         )
-        monkeypatch.setattr(iteration_loop_module, "run_dense_k_class_em", fail_direct_dense_k_class)
-        monkeypatch.setattr(iteration_loop_module, "run_dense_k_class_em_adaptive", fake_adaptive_k_class)
+        monkeypatch.setattr(half_scoring, "run_dense_k_class_em", fail_direct_dense_k_class)
+        monkeypatch.setattr(half_scoring, "run_dense_k_class_em_adaptive", fake_adaptive_k_class)
         monkeypatch.setattr(iteration_loop_module, "compute_coarse_image_size", lambda *_args, **_kwargs: 4)
         monkeypatch.setattr(iteration_loop_module, "clamp_relion_coarse_image_size", lambda coarse, *_args: int(coarse))
 
@@ -10416,19 +10146,18 @@ class TestRelionModeSmokeTest:
             init_volume,
             jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-            rotations,
             translations,
-            disc_type="linear_interp",
-            max_iter=2,
-            image_batch_size=N_IMAGES,
-            rotation_block_size=N_ROTATIONS,
-            init_current_size=4,
-            init_healpix_order=1,
-            max_healpix_order=1,
-            adaptive_oversampling=1,
-            low_resol_join_halves_angstrom=0.0,
-            n_classes=2,
-            init_class_log_priors=np.log(np.array([0.5, 0.5], dtype=np.float64)),
+            options=RefinementOptions(
+                disc_type="linear_interp",
+                schedule=RefinementSchedule(max_iter=2, init_current_size=4, init_healpix_order=1, max_healpix_order=1),
+                batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=N_ROTATIONS),
+                adaptive=AdaptiveOptions(adaptive_oversampling=1),
+                parity=RelionParityOptions(low_resol_join_halves_angstrom=0.0),
+                k_class=KClassOptions(
+                    n_classes=2,
+                    init_class_log_priors=np.log(np.array([0.5, 0.5], dtype=np.float64)),
+                ),
+            ),
         )
 
         assert result["convergence_state"].has_converged is True
@@ -10444,7 +10173,6 @@ class TestRelionModeSmokeTest:
         self,
         half_datasets,
         init_volume,
-        rotations,
         translations,
         monkeypatch,
     ):
@@ -10523,7 +10251,7 @@ class TestRelionModeSmokeTest:
                 significant_counts=jnp.ones(n_images, dtype=jnp.int32),
             )
 
-        monkeypatch.setattr(iteration_loop_module, "run_dense_k_class_em_adaptive", fake_adaptive_k_class)
+        monkeypatch.setattr(half_scoring, "run_dense_k_class_em_adaptive", fake_adaptive_k_class)
         monkeypatch.setattr(iteration_loop_module, "compute_coarse_image_size", lambda *_args, **_kwargs: 4)
         monkeypatch.setattr(iteration_loop_module, "clamp_relion_coarse_image_size", lambda coarse, *_args: int(coarse))
 
@@ -10534,20 +10262,24 @@ class TestRelionModeSmokeTest:
                 init_volume,
                 jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
                 jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-                rotations,
                 translations,
-                disc_type="linear_interp",
-                max_iter=1,
-                image_batch_size=N_IMAGES,
-                rotation_block_size=N_ROTATIONS,
-                init_current_size=4,
-                init_healpix_order=1,
-                max_healpix_order=1,
-                adaptive_oversampling=1,
-                low_resol_join_halves_angstrom=0.0,
-                n_classes=2,
-                init_class_log_priors=np.log(np.array([0.5, 0.5], dtype=np.float64)),
-                skip_final_iteration=True,
+                options=RefinementOptions(
+                    disc_type="linear_interp",
+                    schedule=RefinementSchedule(
+                        max_iter=1,
+                        init_current_size=4,
+                        init_healpix_order=1,
+                        max_healpix_order=1,
+                        skip_final_iteration=True,
+                    ),
+                    batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=N_ROTATIONS),
+                    adaptive=AdaptiveOptions(adaptive_oversampling=1),
+                    parity=RelionParityOptions(low_resol_join_halves_angstrom=0.0),
+                    k_class=KClassOptions(
+                        n_classes=2,
+                        init_class_log_priors=np.log(np.array([0.5, 0.5], dtype=np.float64)),
+                    ),
+                ),
             )
             return list(adaptive_calls)
 
@@ -10561,7 +10293,6 @@ class TestRelionModeSmokeTest:
         self,
         half_datasets,
         init_volume,
-        rotations,
         translations,
     ):
         """RELION mode produces finite volumes and valid assignments."""
@@ -10570,15 +10301,17 @@ class TestRelionModeSmokeTest:
             init_volume,
             jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-            rotations,
             translations,
-            disc_type="linear_interp",
-            max_iter=2,
-            image_batch_size=N_IMAGES,
-            rotation_block_size=N_ROTATIONS,
-            init_current_size=16,
-            init_healpix_order=2,
-            max_healpix_order=3,
+            options=RefinementOptions(
+                disc_type="linear_interp",
+                schedule=RefinementSchedule(
+                    max_iter=2,
+                    init_current_size=16,
+                    init_healpix_order=2,
+                    max_healpix_order=3,
+                ),
+                batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=N_ROTATIONS),
+            ),
         )
 
         # Final mean should be finite
@@ -10595,7 +10328,6 @@ class TestRelionModeSmokeTest:
         self,
         half_datasets,
         init_volume,
-        rotations,
         translations,
     ):
         """Dense non-adaptive RELION loop supports an explicit class axis."""
@@ -10604,17 +10336,21 @@ class TestRelionModeSmokeTest:
             init_volume,
             jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-            rotations,
             translations,
-            disc_type="linear_interp",
-            max_iter=1,
-            image_batch_size=N_IMAGES,
-            rotation_block_size=N_ROTATIONS,
-            init_current_size=16,
-            init_healpix_order=2,
-            max_healpix_order=3,
-            n_classes=2,
-            init_class_log_priors=np.log(np.array([0.5, 0.5], dtype=np.float64)),
+            options=RefinementOptions(
+                disc_type="linear_interp",
+                schedule=RefinementSchedule(
+                    max_iter=1,
+                    init_current_size=16,
+                    init_healpix_order=2,
+                    max_healpix_order=3,
+                ),
+                batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=N_ROTATIONS),
+                k_class=KClassOptions(
+                    n_classes=2,
+                    init_class_log_priors=np.log(np.array([0.5, 0.5], dtype=np.float64)),
+                ),
+            ),
         )
 
         assert np.all(np.isfinite(np.asarray(result["mean"])))
@@ -10623,7 +10359,7 @@ class TestRelionModeSmokeTest:
         assert np.asarray(result["means"][1]).shape == (2, VOLUME_SIZE)
         np.testing.assert_allclose(np.asarray(result["means"][0]), np.asarray(result["means"][1]))
         np.testing.assert_allclose(np.sum(result["class_weights"]), 1.0, rtol=1e-6, atol=1e-6)
-        assert len(result["class_weight_trajectory"]) == 1
+        assert len(result["class_mstep_weight_trajectory"]) == 1
         assert len(result["class_assignment_history"]) == 1
         np.testing.assert_array_equal(
             result["class_assignment_history"][0],
@@ -10642,18 +10378,18 @@ class TestRelionModeSmokeTest:
         self,
         half_datasets,
         init_volume,
-        rotations,
         translations,
     ):
         """ave_Pmax should use half 1's engine posterior maxima, as RELION MPI does."""
+        sigma_offset_angstrom = 10.0
         init_noise = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
         init_tau = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0
 
-        relion_rotations, _ = iteration_loop_module._relion_rotation_grid_float32(2)
+        relion_rotations, _ = sampling_module._relion_rotation_grid_float32(2)
         expected_per_half = []
         expected_mass_per_half = []
         for dataset in half_datasets:
-            _, _, _, _, stats, noise_stats = run_em(
+            em_result = run_em(
                 dataset,
                 init_volume,
                 init_tau,
@@ -10661,18 +10397,30 @@ class TestRelionModeSmokeTest:
                 relion_rotations,
                 translations,
                 "linear_interp",
+                # Match the controller's explicit cold-start Gaussian input.
+                translation_log_prior=(
+                    -0.5 * np.sum(np.asarray(translations, dtype=np.float32) ** 2, axis=-1)
+                    * dataset.voxel_size ** 4 / sigma_offset_angstrom ** 2
+                ),
                 image_batch_size=N_IMAGES,
                 rotation_block_size=N_ROTATIONS,
                 current_size=16,
                 score_with_masked_images=True,
                 half_spectrum_scoring=True,
-                projection_padding_factor=iteration_loop_module.PROJECTION_PADDING_FACTOR,
-                reconstruction_padding_factor=iteration_loop_module.PADDING_FACTOR,
+                projection_padding_factor=scoring_policy.PROJECTION_PADDING_FACTOR,
+                reconstruction_padding_factor=scoring_policy.PADDING_FACTOR,
                 do_gridding_correction=True,
-                square_window=iteration_loop_module.RELION_FOURIER_WINDOW_SQUARE,
+                square_window=scoring_policy.RELION_FOURIER_WINDOW_SQUARE,
                 return_stats=True,
                 accumulate_noise=True,
             )
+            _ = em_result.mean
+            _ = em_result.hard_assignments
+            _ = em_result.Ft_y
+            _ = em_result.Ft_ctf
+            stats = em_result.stats
+            noise_stats = em_result.noise_stats
+            del em_result
             expected_per_half.append(np.asarray(stats.max_posterior_per_image))
             expected_mass_per_half.append(float(np.asarray(noise_stats.sumw)))
         expected_ave_pmax = float(np.sum(expected_per_half[0], dtype=np.float64) / expected_mass_per_half[0])
@@ -10682,16 +10430,19 @@ class TestRelionModeSmokeTest:
             init_volume,
             init_noise,
             init_tau,
-            rotations,
             translations,
-            disc_type="linear_interp",
-            max_iter=1,
-            image_batch_size=N_IMAGES,
-            rotation_block_size=N_ROTATIONS,
-            init_current_size=16,
-            adaptive_oversampling=0,
-            init_healpix_order=2,
-            max_healpix_order=3,
+            options=RefinementOptions(
+                disc_type="linear_interp",
+                schedule=RefinementSchedule(
+                    max_iter=1,
+                    init_translation_sigma_angstrom=sigma_offset_angstrom,
+                    init_current_size=16,
+                    init_healpix_order=2,
+                    max_healpix_order=3,
+                ),
+                batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=N_ROTATIONS),
+                adaptive=AdaptiveOptions(adaptive_oversampling=0),
+            ),
         )
 
         assert result["ave_Pmax_trajectory"] == pytest.approx(
@@ -10715,7 +10466,7 @@ class TestRelionModeSmokeTest:
         monkeypatch,
     ):
         """Adaptive RELION mode should pass the explicit particle diameter through."""
-        import recovar.em.dense_single_volume.iteration_loop as refine_mod
+        import recovar.em.refinement.iteration_loop as refine_mod
 
         recorded = {"particle_diameter": None}
         original_compute_coarse_image_size = refine_mod.compute_coarse_image_size
@@ -10735,18 +10486,19 @@ class TestRelionModeSmokeTest:
             init_volume,
             jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-            _make_rotations(20, seed=123),
             translations,
-            disc_type="linear_interp",
-            max_iter=1,
-            image_batch_size=N_IMAGES,
-            rotation_block_size=20,
-            init_current_size=16,
-            adaptive_oversampling=1,
-            nside_level=1,
-            init_healpix_order=1,
-            max_healpix_order=2,
-            particle_diameter_ang=200.0,
+            options=RefinementOptions(
+                disc_type="linear_interp",
+                schedule=RefinementSchedule(
+                    max_iter=1,
+                    init_current_size=16,
+                    init_healpix_order=1,
+                    max_healpix_order=2,
+                    particle_diameter_ang=200.0,
+                ),
+                batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=20),
+                adaptive=AdaptiveOptions(adaptive_oversampling=1),
+            ),
         )
 
         assert recorded["particle_diameter"] == pytest.approx(200.0)
@@ -10903,16 +10655,6 @@ class TestRelionModeSmokeTest:
             atol=1e-6,
         )
 
-    def test_relion_local_translation_prior_center_keeps_angstrom_sampling_units(self):
-        prev = np.array([[0.0, -1.0], [1.0, 0.0], [-0.82310355, -0.82310355]], dtype=np.float32)
-        expected = np.array([[0.0, 1.0 / 4.25], [-1.0 / 4.25, 0.0], [1.0 / 4.25, 1.0 / 4.25]], dtype=np.float32)
-        np.testing.assert_allclose(
-            relion_local_translation_prior_center(prev, voxel_size=4.25),
-            expected,
-            rtol=1e-6,
-            atol=1e-6,
-        )
-
     def test_relion_sigma_offset_prior_center_matches_store_weighted_sums_units(self):
         prev = np.array([[0.0, -1.0], [1.0, 0.0], [-0.82310355, -0.82310355]], dtype=np.float32)
         expected = np.array([[0.0, 1.0], [-1.0, 0.0], [1.0, 1.0]], dtype=np.float32)
@@ -10994,7 +10736,7 @@ class TestRelionModeSmokeTest:
             image_batch_size=N_IMAGES,
             rotation_block_size=1,
             return_stats=True,
-        )[4]
+        ).stats
         biased_prior = np.log(np.array([100.0, 1.0, 1.0], dtype=np.float32))
         biased_stats = run_em(
             half_datasets[0],
@@ -11008,7 +10750,7 @@ class TestRelionModeSmokeTest:
             rotation_block_size=1,
             translation_log_prior=biased_prior,
             return_stats=True,
-        )[4]
+        ).stats
         assert np.allclose(
             np.asarray(uniform_stats.max_posterior_per_image),
             1.0 / 3.0,
@@ -11028,22 +10770,23 @@ class TestRelionModeSmokeTest:
     ):
         """Rotation priors should work even when the last block is padded."""
         rotations = _make_rotations(5, seed=19)
-        sig_rot_any, n_sig, ha = _compute_significance_batched(
+        sig_rot_any, n_sig, ha, _, _, _ = _compute_k_class_significance_batched(
             half_datasets[0],
-            init_volume,
+            init_volume[None, :],
             jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
             rotations,
             translations,
             "linear_interp",
-            0.999,
-            -1,
+            class_log_priors=np.zeros(1, dtype=np.float64),
+            adaptive_fraction=0.999,
+            max_significants=-1,
             image_batch_size=N_IMAGES,
             rotation_block_size=rotations.shape[0] + 1,
             current_size=None,
             rotation_log_prior=np.zeros(rotations.shape[0], dtype=np.float32),
         )
 
-        assert sig_rot_any.shape == (rotations.shape[0],)
+        assert sig_rot_any.shape == (1, rotations.shape[0])
         assert n_sig.shape == (half_datasets[0].n_units,)
         assert ha.shape == (half_datasets[0].n_units,)
 
@@ -11053,12 +10796,29 @@ class TestRelionModeSmokeTest:
         monkeypatch,
     ):
         """Strict coarse scoring must call the manual PPref leaf directly."""
-        from recovar.em.dense_single_volume.helpers import projection as projection_helpers
+        from recovar.em.helpers import projection as projection_helpers
 
         manual_calls = []
 
-        def fake_manual(projector_half, rotations, image_shape, r_max, padding_factor, output_size):
-            manual_calls.append((projector_half.shape, rotations.shape, r_max, padding_factor, output_size))
+        def fake_manual(
+            projector_half,
+            rotations,
+            image_shape,
+            r_max,
+            padding_factor,
+            output_size,
+            relion_acc_double_floorf_quirk,
+        ):
+            manual_calls.append(
+                (
+                    projector_half.shape,
+                    rotations.shape,
+                    r_max,
+                    padding_factor,
+                    output_size,
+                    relion_acc_double_floorf_quirk,
+                )
+            )
             n_half = int(image_shape[0] * (image_shape[1] // 2 + 1))
             return jnp.ones((rotations.shape[0], n_half), dtype=jnp.complex64)
 
@@ -11099,21 +10859,31 @@ class TestRelionModeSmokeTest:
         )
 
         assert manual_calls
+        assert all(not call[-1] for call in manual_calls)
 
+    @pytest.mark.parametrize("current_size", [4, 6])
+    @pytest.mark.parametrize("score_mode", ["gaussian", "normalized_cc"])
+    @pytest.mark.parametrize("stable_fourier_window_shapes", [False, True])
     def test_k_class_significance_texture_ppref_requests_compact_score_rows(
         self,
         half_datasets,
         monkeypatch,
+        current_size,
+        score_mode,
+        stable_fourier_window_shapes,
     ):
         """Windowed texture scoring must not materialize full projection rows."""
-        from recovar.em.dense_single_volume.helpers import projection as projection_helpers
-        from recovar.em.dense_single_volume.helpers.fourier_window import make_fourier_window_spec
+        from recovar.em.helpers import projection as projection_helpers
+        from recovar.em.helpers.fourier_window import make_fourier_window_spec
 
         calls = []
 
         def fake_texture(projector_half, rotations, image_shape, **kwargs):
             pixel_indices = kwargs.get("pixel_indices")
-            assert pixel_indices is not None
+            assert isinstance(pixel_indices, np.ndarray)
+            assert kwargs["projector_output_size"] == current_size
+            expected_mask_size = current_size if stable_fourier_window_shapes else None
+            assert kwargs["current_image_mask_size"] == expected_mask_size
             calls.append(np.asarray(pixel_indices, dtype=np.int32))
             n_pixels = int(pixel_indices.shape[0])
             projection = jnp.ones(
@@ -11130,7 +10900,6 @@ class TestRelionModeSmokeTest:
 
         dataset = half_datasets[0]
         rotations = _make_rotations(3, seed=201)
-        current_size = 6
         _compute_k_class_significance_batched(
             dataset,
             jnp.zeros((1, VOLUME_SIZE), dtype=jnp.complex64),
@@ -11144,6 +10913,8 @@ class TestRelionModeSmokeTest:
             image_batch_size=dataset.n_units,
             rotation_block_size=2,
             current_size=current_size,
+            score_mode=score_mode,
+            stable_fourier_window_shapes=stable_fourier_window_shapes,
             half_spectrum_scoring=True,
             relion_projector_half=jnp.zeros((1, 3, 3, 2), dtype=jnp.complex64),
             relion_projector_r_max=1,
@@ -11157,6 +10928,8 @@ class TestRelionModeSmokeTest:
                 IMAGE_SHAPE,
                 current_size,
                 IMAGE_SHAPE[0] * (IMAGE_SHAPE[1] // 2 + 1),
+                score_square=score_mode == "normalized_cc",
+                score_include_dc=score_mode == "normalized_cc",
             ).score_indices,
             dtype=np.int32,
         )
@@ -11176,6 +10949,7 @@ class TestRelionModeSmokeTest:
         """Exercise the opt-in K=1 coarse scorer through significance."""
 
         import jax
+
         from recovar import cuda_backproject
 
         monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
@@ -11264,7 +11038,7 @@ class TestRelionModeSmokeTest:
         image_pre_shifts = np.array([[1.5, -0.5], [-1.0, 1.25]], dtype=np.float32)
         current_size = 6
 
-        _, expected_ha, _, _ = run_em(
+        em_result = run_em(
             dataset,
             init_volume,
             init_tau,
@@ -11283,15 +11057,21 @@ class TestRelionModeSmokeTest:
             projection_padding_factor=2,
             use_float64_scoring=True,
         )
+        _ = em_result.mean
+        expected_ha = em_result.hard_assignments
+        _ = em_result.Ft_y
+        _ = em_result.Ft_ctf
+        del em_result
 
         monkeypatch.setenv("RECOVAR_SIGNIFICANCE_SCORE_CACHE", "off")
-        _, _, actual_ha = _compute_significance_batched(
+        _, _, actual_ha, _, _, _ = _compute_k_class_significance_batched(
             dataset,
-            init_volume,
+            init_volume[None, :],
             init_noise,
             rotations,
             translations,
             "linear_interp",
+            class_log_priors=np.zeros(1, dtype=np.float64),
             adaptive_fraction=0.999,
             max_significants=-1,
             image_batch_size=dataset.n_units,
@@ -11309,13 +11089,14 @@ class TestRelionModeSmokeTest:
         np.testing.assert_array_equal(np.asarray(actual_ha), np.asarray(expected_ha))
 
         monkeypatch.setenv("RECOVAR_SIGNIFICANCE_SCORE_CACHE", "force")
-        cached_result = _compute_significance_batched(
+        cached_result = _compute_k_class_significance_batched(
             dataset,
-            init_volume,
+            init_volume[None, :],
             init_noise,
             rotations,
             translations,
             "linear_interp",
+            class_log_priors=np.zeros(1, dtype=np.float64),
             adaptive_fraction=0.999,
             max_significants=-1,
             image_batch_size=dataset.n_units,
@@ -11328,17 +11109,16 @@ class TestRelionModeSmokeTest:
             half_spectrum_scoring=True,
             projection_padding_factor=2,
             use_float64_scoring=True,
-            return_significant_sample_indices=True,
-            return_full_stats=True,
         )
         monkeypatch.setenv("RECOVAR_SIGNIFICANCE_SCORE_CACHE", "off")
-        uncached_result = _compute_significance_batched(
+        uncached_result = _compute_k_class_significance_batched(
             dataset,
-            init_volume,
+            init_volume[None, :],
             init_noise,
             rotations,
             translations,
             "linear_interp",
+            class_log_priors=np.zeros(1, dtype=np.float64),
             adaptive_fraction=0.999,
             max_significants=-1,
             image_batch_size=dataset.n_units,
@@ -11351,23 +11131,15 @@ class TestRelionModeSmokeTest:
             half_spectrum_scoring=True,
             projection_padding_factor=2,
             use_float64_scoring=True,
-            return_significant_sample_indices=True,
-            return_full_stats=True,
         )
-        for cached, uncached in zip(cached_result[:3], uncached_result[:3]):
+        for cached, uncached in zip(cached_result[:4], uncached_result[:4]):
             np.testing.assert_array_equal(np.asarray(cached), np.asarray(uncached))
-        for cached_sig, uncached_sig in zip(cached_result[3], uncached_result[3]):
+        for cached_sig, uncached_sig in zip(cached_result[4][0], uncached_result[4][0]):
             if cached_sig is None or uncached_sig is None:
                 assert cached_sig is uncached_sig
             else:
                 np.testing.assert_array_equal(cached_sig, uncached_sig)
-        for key, cached in cached_result[4].items():
-            np.testing.assert_allclose(
-                np.asarray(cached),
-                np.asarray(uncached_result[4][key]),
-                rtol=1e-6,
-                atol=1e-6,
-            )
+        _assert_significance_stats_allclose(cached_result[5], uncached_result[5])
 
     def test_k_class_significance_score_cache_matches_uncached_path(
         self,
@@ -11436,13 +11208,60 @@ class TestRelionModeSmokeTest:
                     assert cached_sig is uncached_sig
                 else:
                     np.testing.assert_array_equal(cached_sig, uncached_sig)
-        for key, cached in cached_result[5].items():
-            np.testing.assert_allclose(
-                np.asarray(cached),
-                np.asarray(uncached_result[5][key]),
-                rtol=1e-6,
-                atol=1e-6,
-            )
+        _assert_significance_stats_allclose(cached_result[5], uncached_result[5])
+
+    def test_k_class_significance_tail_padding_preserves_outputs(
+        self,
+        half_datasets,
+        init_volume,
+    ):
+        dataset = half_datasets[0]
+        means = jnp.stack([init_volume, init_volume * jnp.asarray(1.01, dtype=init_volume.dtype)])
+        rotations = _make_rotations(3, seed=312)
+        translations = jnp.array([[0.0, 0.0], [1.0, -1.0]], dtype=jnp.float32)
+        common_kwargs = dict(
+            class_log_priors=np.log(np.array([0.55, 0.45], dtype=np.float64)),
+            adaptive_fraction=0.999,
+            max_significants=-1,
+            rotation_block_size=2,
+            current_size=6,
+            score_with_masked_images=True,
+            translation_log_prior=np.asarray([[0.0, -0.1], [-0.2, 0.0]], dtype=np.float32),
+            image_pre_shifts=np.asarray([[0.25, -0.5], [-0.75, 0.5]], dtype=np.float32),
+            half_spectrum_scoring=True,
+            return_class_best=True,
+            return_class_second=True,
+        )
+
+        unpadded = _compute_k_class_significance_batched(
+            dataset,
+            means,
+            jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
+            rotations,
+            translations,
+            "linear_interp",
+            image_batch_size=dataset.n_units,
+            pad_final_image_batch=False,
+            **common_kwargs,
+        )
+        padded = _compute_k_class_significance_batched(
+            dataset,
+            means,
+            jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
+            rotations,
+            translations,
+            "linear_interp",
+            image_batch_size=dataset.n_units + 1,
+            pad_final_image_batch=True,
+            **common_kwargs,
+        )
+
+        for expected, actual in zip(unpadded[:4], padded[:4]):
+            np.testing.assert_array_equal(np.asarray(actual), np.asarray(expected))
+        for expected_by_class, actual_by_class in zip(unpadded[4], padded[4]):
+            for expected, actual in zip(expected_by_class, actual_by_class):
+                np.testing.assert_array_equal(np.asarray(actual), np.asarray(expected))
+        _assert_significance_stats_allclose(padded[5], unpadded[5])
 
     def test_k_class_pass1_fused_matches_unfused_significance(
         self,
@@ -11514,13 +11333,7 @@ class TestRelionModeSmokeTest:
                     assert fused_sig is unfused_sig
                 else:
                     np.testing.assert_array_equal(fused_sig, unfused_sig)
-        for key, fused in fused_result[5].items():
-            np.testing.assert_allclose(
-                np.asarray(fused),
-                np.asarray(unfused_result[5][key]),
-                rtol=1e-6,
-                atol=1e-6,
-            )
+        _assert_significance_stats_allclose(fused_result[5], unfused_result[5])
 
     def test_k_class_firstiter_cc_significance_matches_per_class_run_em(
         self,
@@ -11583,8 +11396,8 @@ class TestRelionModeSmokeTest:
                 relion_firstiter_winner_take_all=True,
                 **common_kwargs,
             )
-            expected_hard.append(np.asarray(result[1], dtype=np.int32))
-            expected_best.append(np.asarray(result[4].best_log_score_per_image, dtype=np.float32))
+            expected_hard.append(np.asarray(result.hard_assignments, dtype=np.int32))
+            expected_best.append(np.asarray(result.stats.best_log_score_per_image, dtype=np.float32))
 
         *_, full_stats = _compute_k_class_significance_batched(
             dataset,
@@ -11699,10 +11512,9 @@ class TestRelionModeSmokeTest:
         """The direct-texture replay replaces every bounded native winner."""
 
         import recovar.cuda_backproject as cuda_backproject
-        import recovar.em.dense_single_volume.helpers.projection as projection_module
-        import recovar.em.dense_single_volume.helpers.scoring as scoring_module
-        import recovar.em.dense_single_volume.helpers.significance as significance_module
-        import recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed as sparse_module
+        import recovar.em.helpers.projection as projection_module
+        import recovar.em.scoring.scoring as scoring_module
+        import recovar.em.scoring.significance as significance_module
 
         dataset = half_datasets[0]
         dataset.image_source.backend.relion_fourier_backend = "relion_cuda"
@@ -11721,7 +11533,7 @@ class TestRelionModeSmokeTest:
         monkeypatch.setattr(cuda_backproject, "custom_cuda_requested", lambda: True)
         monkeypatch.setattr(cuda_backproject, "cuda_available", lambda: True)
         monkeypatch.setattr(
-            sparse_module,
+            relion_ctf,
             "_relion_exact_ctf_half_from_source_star",
             lambda _dataset, indices, image_shape: jnp.ones(
                 (
@@ -11912,8 +11724,8 @@ class TestRelionModeSmokeTest:
                 rotation_log_prior=rotation_log_prior[class_index],
                 **common_kwargs,
             )
-            expected_hard.append(np.asarray(result[1], dtype=np.int32))
-            expected_best.append(np.asarray(result[4].best_log_score_per_image, dtype=np.float32))
+            expected_hard.append(np.asarray(result.hard_assignments, dtype=np.int32))
+            expected_best.append(np.asarray(result.stats.best_log_score_per_image, dtype=np.float32))
 
         *_, full_stats = _compute_k_class_significance_batched(
             dataset,
@@ -12047,7 +11859,6 @@ class TestRelionModeSmokeTest:
         self,
         half_datasets,
         init_volume,
-        rotations,
         translations,
     ):
         """Convergence state is a RefinementState with correct fields."""
@@ -12056,16 +11867,18 @@ class TestRelionModeSmokeTest:
             init_volume,
             jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-            rotations,
             translations,
-            disc_type="linear_interp",
-            max_iter=2,
-            image_batch_size=N_IMAGES,
-            rotation_block_size=N_ROTATIONS,
-            init_current_size=16,
-            init_healpix_order=2,
-            max_healpix_order=3,
-            auto_local_healpix_order=3,
+            options=RefinementOptions(
+                disc_type="linear_interp",
+                schedule=RefinementSchedule(
+                    max_iter=2,
+                    init_current_size=16,
+                    init_healpix_order=2,
+                    max_healpix_order=3,
+                ),
+                batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=N_ROTATIONS),
+                local_search=LocalSearchOptions(auto_local_healpix_order=3),
+            ),
         )
 
         state = result["convergence_state"]
@@ -12076,116 +11889,23 @@ class TestRelionModeSmokeTest:
         # ave_Pmax should be in [0, 1]
         assert 0.0 <= state.ave_Pmax <= 1.0
 
-    def test_refinement_state_uses_configured_auto_local_healpix_order(self):
-        default_state = RefinementState(healpix_order=3)
-        assert not default_state.should_do_local_search
-        assert not default_state.do_local_search
-
-        local_state = RefinementState(healpix_order=3, auto_local_healpix_order=3)
-        assert local_state.should_do_local_search
-        assert local_state.do_local_search
-
-    def test_refine_angular_sampling_uses_configured_auto_local_healpix_order(self):
-        state = RefinementState(
-            healpix_order=2,
-            adaptive_oversampling=1,
-            translation_range=10.0,
-            translation_step=2.0,
-            max_healpix_order=7,
-            auto_local_healpix_order=3,
-        )
-
-        refined = refine_angular_sampling(state)
-
-        assert refined.healpix_order == 3
-        assert refined.auto_local_healpix_order == 3
-        assert refined.do_local_search
-        assert refined.sigma_rot > 0.0
-        assert refined.sigma_psi > 0.0
-
-    def test_low_pmax_refinement_guard_is_opt_in(self, monkeypatch):
-        state = RefinementState(
-            healpix_order=4,
-            max_healpix_order=7,
-            auto_local_healpix_order=4,
-            current_resolution=36.0,
-            previous_resolution=36.0,
-            nr_iter_wo_resol_gain=4,
-            nr_iter_wo_large_hidden_variable_changes=1,
-            smallest_changes_optimal_orientations=2.0,
-            smallest_changes_optimal_offsets_angstrom=0.5,
-            smallest_changes_optimal_classes=0,
-            ave_Pmax=0.10,
-            acc_rot=float("inf"),
-        )
-
-        monkeypatch.delenv("RECOVAR_EM_LOW_PMAX_REFINE_GUARD", raising=False)
-        assert should_refine_angular_sampling(state)
-
-        monkeypatch.setenv("RECOVAR_EM_LOW_PMAX_REFINE_GUARD", "1")
-        assert not should_refine_angular_sampling(state)
-
-        confident = RefinementState(
-            healpix_order=4,
-            max_healpix_order=7,
-            auto_local_healpix_order=4,
-            current_resolution=36.0,
-            previous_resolution=36.0,
-            nr_iter_wo_resol_gain=4,
-            nr_iter_wo_large_hidden_variable_changes=1,
-            smallest_changes_optimal_orientations=2.0,
-            smallest_changes_optimal_offsets_angstrom=0.5,
-            smallest_changes_optimal_classes=0,
-            ave_Pmax=0.30,
-            acc_rot=float("inf"),
-        )
-        assert should_refine_angular_sampling(confident)
-
-    def test_low_pmax_refinement_guard_can_cover_prelocal_transition(self, monkeypatch):
-        state = RefinementState(
-            healpix_order=3,
-            max_healpix_order=7,
-            auto_local_healpix_order=4,
-            current_resolution=36.0,
-            previous_resolution=36.0,
-            nr_iter_wo_resol_gain=4,
-            nr_iter_wo_large_hidden_variable_changes=1,
-            smallest_changes_optimal_orientations=2.0,
-            smallest_changes_optimal_offsets_angstrom=0.5,
-            smallest_changes_optimal_classes=0,
-            ave_Pmax=0.10,
-            acc_rot=float("inf"),
-        )
-        assert not state.do_local_search
-
-        monkeypatch.setenv("RECOVAR_EM_LOW_PMAX_REFINE_GUARD", "1")
-        monkeypatch.delenv("RECOVAR_EM_LOW_PMAX_REFINE_REQUIRE_LOCAL", raising=False)
-        assert should_refine_angular_sampling(state)
-
-        monkeypatch.setenv("RECOVAR_EM_LOW_PMAX_REFINE_REQUIRE_LOCAL", "0")
-        assert not should_refine_angular_sampling(state)
-
-    def test_local_search_keeps_exhaustive_grid_at_last_prelocal_order(self):
-        state = RefinementState(healpix_order=4, auto_local_healpix_order=4)
-
-        assert state.do_local_search
-        assert _exhaustive_grid_order_for_state(state) == 3
-
-        nonlocal_state = RefinementState(healpix_order=4, auto_local_healpix_order=5)
-        assert not nonlocal_state.do_local_search
-        assert _exhaustive_grid_order_for_state(nonlocal_state) == 4
-
+    @pytest.mark.parametrize("double_scoring", [False, True])
+    @pytest.mark.parametrize("per_half", [False, True])
     def test_relion_mode_uses_tau2_from_weights_for_prior(
         self,
         half_datasets,
         init_volume,
-        rotations,
         translations,
         monkeypatch,
+        tmp_path,
+        per_half,
+        double_scoring,
     ):
         """RELION mode should compute tau2 from Ft_ctf weights + FSC (RELION order)."""
         from recovar.reconstruction import regularization
 
+        monkeypatch.setitem(iteration_loop_module._DENSE_EM_STATIC_KWARGS, "use_float64_scoring", double_scoring)
+        monkeypatch.setenv("RECOVAR_USE_FLOAT64_SCORING", "1" if double_scoring else "0")
         called = {"tau2": 0}
 
         original_tau2 = regularization.compute_relion_tau2_from_weights
@@ -12196,32 +11916,68 @@ class TestRelionModeSmokeTest:
 
         monkeypatch.setattr(regularization, "compute_relion_tau2_from_weights", wrap_tau2)
 
+        scoring_priors = []
+        scoring_rotations = []
+        scoring_grids = []
+        monkeypatch.setattr(
+            iteration_loop_module, "_relion_adaptive_pass1_rotations",
+            lambda eulers, *args, **kwargs: sampling_module._relion_euler_angles_to_matrix(eulers).astype(np.float32),
+        )
+        score_half = iteration_loop_module._score_half_dense_in_bpref_scope
+
+        def record_scoring_prior(**kwargs):
+            scoring_priors.append(np.asarray(kwargs["mean_variance"]))
+            scoring_rotations.append(kwargs["coarse_scoring_rotations"])
+            scoring_grids.append((kwargs["effective_rotations"], kwargs["current_translations"]))
+            return score_half(**kwargs)
+
+        monkeypatch.setattr(iteration_loop_module, "_score_half_dense_in_bpref_scope", record_scoring_prior)
+        initial_tau2 = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0
+        if per_half:
+            initial_tau2 = jnp.stack([initial_tau2, 2 * initial_tau2])
+
         grid_size = int(np.sqrt(IMAGE_SIZE))
         refine_single_volume(
             half_datasets,
             init_volume,
             jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
-            jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-            rotations,
+            initial_tau2,
             translations,
-            disc_type="linear_interp",
-            max_iter=1,
-            image_batch_size=N_IMAGES,
-            rotation_block_size=N_ROTATIONS,
-            init_current_size=16,
-            adaptive_oversampling=0,
-            init_healpix_order=2,
-            max_healpix_order=3,
-            init_fsc=np.ones(grid_size // 2),
+            options=RefinementOptions(
+                disc_type="linear_interp",
+                schedule=RefinementSchedule(
+                    max_iter=1,
+                    init_current_size=16,
+                    init_healpix_order=2,
+                    max_healpix_order=3,
+                    init_fsc=np.ones(grid_size // 2),
+                ),
+                batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=N_ROTATIONS),
+                adaptive=AdaptiveOptions(adaptive_oversampling=0),
+                parity=RelionParityOptions(use_per_half_mean_variance=per_half),
+                debug=EngineDebugOptions(save_intermediates_dir=str(tmp_path)),
+            ),
         )
 
         assert called["tau2"] >= 1
+        assert len(scoring_priors) == 2
+        for half, prior in enumerate(scoring_priors):
+            with np.load(tmp_path / f"manifest_iter0_half{half}.npz") as manifest:
+                np.testing.assert_array_equal(manifest["mean_variance"], prior)
+                assert bool(manifest["use_float64_scoring"]) == double_scoring
+                coarse = scoring_rotations[half]
+                assert (coarse is None) == double_scoring
+                expected = np.array([]) if coarse is None else np.asarray(coarse)
+                np.testing.assert_array_equal(manifest["coarse_scoring_rotations"], expected)
+                assert manifest["coarse_scoring_rotations"].dtype == expected.dtype
+                for key, grid in zip(("effective_rotations", "current_translations"), scoring_grids[half]):
+                    np.testing.assert_array_equal(manifest[key], np.asarray(grid))
+                    assert manifest[key].dtype == grid.dtype
 
     def test_k1_solvent_corrected_fsc_disabled_uses_raw_tau2_fsc(
         self,
         half_datasets,
         init_volume,
-        rotations,
         translations,
         monkeypatch,
     ):
@@ -12264,17 +12020,19 @@ class TestRelionModeSmokeTest:
             init_volume,
             jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-            rotations,
             translations,
-            disc_type="linear_interp",
-            max_iter=1,
-            image_batch_size=N_IMAGES,
-            rotation_block_size=N_ROTATIONS,
-            init_current_size=16,
-            adaptive_oversampling=0,
-            init_healpix_order=2,
-            max_healpix_order=3,
-            particle_diameter_ang=200.0,
+            options=RefinementOptions(
+                disc_type="linear_interp",
+                schedule=RefinementSchedule(
+                    max_iter=1,
+                    init_current_size=16,
+                    init_healpix_order=2,
+                    max_healpix_order=3,
+                    particle_diameter_ang=200.0,
+                ),
+                batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=N_ROTATIONS),
+                adaptive=AdaptiveOptions(adaptive_oversampling=0),
+            ),
         )
 
         assert len(tau2_fsc_inputs) == 2
@@ -12287,7 +12045,6 @@ class TestRelionModeSmokeTest:
         self,
         half_datasets,
         init_volume,
-        rotations,
         translations,
         monkeypatch,
     ):
@@ -12336,18 +12093,20 @@ class TestRelionModeSmokeTest:
             init_volume,
             jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-            rotations,
             translations,
-            disc_type="linear_interp",
-            max_iter=1,
-            image_batch_size=N_IMAGES,
-            rotation_block_size=N_ROTATIONS,
-            init_current_size=16,
-            adaptive_oversampling=0,
-            init_healpix_order=2,
-            max_healpix_order=3,
-            particle_diameter_ang=200.0,
-            do_solvent_fsc_correction=True,
+            options=RefinementOptions(
+                disc_type="linear_interp",
+                schedule=RefinementSchedule(
+                    max_iter=1,
+                    init_current_size=16,
+                    init_healpix_order=2,
+                    max_healpix_order=3,
+                    particle_diameter_ang=200.0,
+                ),
+                batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=N_ROTATIONS),
+                adaptive=AdaptiveOptions(adaptive_oversampling=0),
+                parity=RelionParityOptions(do_solvent_fsc_correction=True),
+            ),
         )
 
         assert len(tau2_fsc_inputs) == 2
@@ -12355,266 +12114,11 @@ class TestRelionModeSmokeTest:
             np.testing.assert_allclose(tau2_fsc, corrected_fsc, atol=1e-7)
         np.testing.assert_allclose(np.asarray(result["fsc_history"][0]), raw_fsc, atol=1e-7)
 
-    def test_k1_current_size_scheduling_raw_fsc_matches_gui_default(self):
-        """GUI-default K=1 scheduling uses raw FSC-derived DVP."""
-        raw_fsc = np.ones(129, dtype=np.float32) * 0.9
-        raw_fsc[0] = 1.0
-        raw_fsc[28:] = 0.0
-
-        dvp = iteration_loop_module._k1_data_vs_prior_for_scheduling(
-            raw_fsc=raw_fsc,
-            corrected_data_vs_prior=None,
-            current_size=56,
-            grid_size=256,
-            tau2_fudge=1.0,
-        )
-        shell = regularization_module.resolution_from_data_vs_prior(
-            dvp,
-            allow_high_res_recovery=True,
-        )
-        current_size = regularization_module.compute_current_size_relion(
-            shell,
-            256,
-            ave_Pmax=1.0,
-            has_high_fsc_at_limit=True,
-        )
-
-        assert shell == 27
-        assert current_size == 118
-
-    def test_k1_current_size_scheduling_keeps_boundary_shell(self):
-        """Raw-FSC and corrected-DVP scheduling must agree at current_size//2."""
-        current_size = 56
-        boundary_shell = current_size // 2
-        raw_fsc = np.zeros(129, dtype=np.float32)
-        corrected_dvp = np.zeros_like(raw_fsc)
-        raw_fsc[:boundary_shell] = 0.05
-        corrected_dvp[:boundary_shell] = 0.05
-        raw_fsc[boundary_shell] = 0.9
-        corrected_dvp[boundary_shell] = 10.0
-
-        raw_dvp = iteration_loop_module._k1_data_vs_prior_for_scheduling(
-            raw_fsc=raw_fsc,
-            corrected_data_vs_prior=None,
-            current_size=current_size,
-            grid_size=256,
-            tau2_fudge=1.0,
-        )
-        corrected = iteration_loop_module._k1_data_vs_prior_for_scheduling(
-            raw_fsc=raw_fsc,
-            corrected_data_vs_prior=corrected_dvp,
-            current_size=current_size,
-            grid_size=256,
-            tau2_fudge=1.0,
-        )
-
-        assert raw_dvp[boundary_shell] > 1.0
-        assert corrected[boundary_shell] > 1.0
-        assert raw_dvp[boundary_shell + 1] < 1.0
-        assert corrected[boundary_shell + 1] == 0.0
-        assert regularization_module.resolution_from_data_vs_prior(
-            raw_dvp,
-            allow_high_res_recovery=True,
-        ) == boundary_shell
-        assert regularization_module.resolution_from_data_vs_prior(
-            corrected,
-            allow_high_res_recovery=True,
-        ) == boundary_shell
-
-    def test_current_resolution_state_keeps_boundary_shell(self):
-        """The post-M-step DVP state must retain RELION's inclusive boundary shell."""
-        current_size = 68
-        boundary_shell = current_size // 2
-        data_vs_prior = np.zeros((2, 65), dtype=np.float32)
-        data_vs_prior[:, : boundary_shell + 2] = 0.25
-        data_vs_prior[:, boundary_shell] = 10.0
-
-        truncated = iteration_loop_module._truncate_data_vs_prior_for_current_size(
-            data_vs_prior,
-            current_size=current_size,
-            grid_size=128,
-        )
-
-        np.testing.assert_array_equal(
-            truncated[:, : boundary_shell + 1],
-            data_vs_prior[:, : boundary_shell + 1],
-        )
-        assert np.all(truncated[:, boundary_shell + 1 :] == 0.0)
-        assert all(
-            regularization_module.resolution_from_data_vs_prior(
-                half_dvp,
-                allow_high_res_recovery=True,
-            )
-            == boundary_shell
-            for half_dvp in truncated
-        )
-
-    @pytest.mark.parametrize(
-        ("current_size", "grid_size", "boundary_fsc", "expected_next_size"),
-        [
-            (68, 128, 0.9487659, 100),
-            (100, 256, 0.5574918, 164),
-        ],
-    )
-    def test_current_resolution_boundary_reproduces_matrix_growth(
-        self,
-        current_size,
-        grid_size,
-        boundary_fsc,
-        expected_next_size,
-    ):
-        """Cases 2, 3, and 33 grow from RELION's supported boundary shell."""
-        boundary_shell = current_size // 2
-        fsc = np.zeros(grid_size // 2 + 1, dtype=np.float32)
-        fsc[: boundary_shell + 1] = boundary_fsc
-        fsc[0] = 1.0
-        data_vs_prior = regularization_module.fsc_to_relion_ssnr(fsc, tau2_fudge=1.0)
-
-        truncated = iteration_loop_module._truncate_data_vs_prior_for_current_size(
-            data_vs_prior,
-            current_size=current_size,
-            grid_size=grid_size,
-        )
-        resolution_shell = regularization_module.resolution_from_data_vs_prior(
-            truncated,
-            allow_high_res_recovery=True,
-        )
-        next_size = regularization_module.compute_current_size_relion(
-            resolution_shell,
-            grid_size,
-            ave_Pmax=1.0,
-            has_high_fsc_at_limit=True,
-            incr_size=10,
-        )
-
-        assert resolution_shell == boundary_shell
-        assert next_size == expected_next_size
-
-    def test_k1_growth_fsc_keeps_case15_size68_boundary_shell(self):
-        """Case 15 iter 8 must scan shell 34 and grow 68 -> 78 like RELION."""
-        fsc = np.zeros(65, dtype=np.float32)
-        fsc[1:25] = 0.6
-        fsc[25:34] = 0.18
-        fsc[33] = 0.184406
-        fsc[34] = 0.159366
-
-        growth_fsc = iteration_loop_module._truncate_fsc_for_current_size_growth(
-            fsc,
-            current_size=68,
-            grid_size=128,
-        )
-        incr_size, has_high_fsc = regularization_module.update_relion_growth_state_from_fsc(
-            growth_fsc,
-            68,
-            incr_size=10,
-            has_high_fsc_at_limit=False,
-        )
-        next_size = regularization_module.compute_current_size_relion(
-            24,
-            128,
-            ave_Pmax=0.521225,
-            has_high_fsc_at_limit=has_high_fsc,
-            incr_size=incr_size,
-        )
-
-        assert growth_fsc[34] == pytest.approx(0.159366)
-        assert growth_fsc[35] == 0.0
-        assert regularization_module.first_shell_below_threshold(growth_fsc, 0.5) == 25
-        assert regularization_module.first_shell_below_threshold(growth_fsc, 0.143) == 35
-        assert incr_size == 15
-        assert has_high_fsc is False
-        assert next_size == 78
-
-    def test_firstiter_cc_scheduling_uses_ini_high_shell(self):
-        """RELION iter-1 firstiter_cc grows from ini_high, not DVP."""
-        shell = iteration_loop_module._firstiter_cc_ini_high_resolution_shell(256, 2.125, 30.0)
-        current_size = regularization_module.compute_current_size_relion(
-            shell,
-            256,
-            ave_Pmax=1.0,
-            has_high_fsc_at_limit=True,
-        )
-        assert shell == 18
-        assert current_size == 100
-
-        raw_fsc = np.ones(129, dtype=np.float32) * 0.9
-        raw_fsc[0] = 1.0
-        raw_fsc[28:] = 0.0
-        dvp = iteration_loop_module._k1_data_vs_prior_for_scheduling(
-            raw_fsc=raw_fsc,
-            corrected_data_vs_prior=None,
-            current_size=56,
-            grid_size=256,
-            tau2_fudge=1.0,
-        )
-        assert regularization_module.resolution_from_data_vs_prior(dvp, allow_high_res_recovery=True) == 27
-        assert dvp[29] < 1.0
-
-    def test_firstiter_cc_scheduling_override_is_class_count_independent(self):
-        """The ini_high rule also applies to Class3D/K-class iteration 1."""
-        shell = iteration_loop_module._firstiter_cc_scheduling_resolution_shell(
-            10,
-            emulate_relion_firstiter_cc=True,
-            ini_high_angstrom=60.0,
-            relion_iteration=1,
-            grid_size=256,
-            voxel_size=2.125,
-        )
-        current_size = regularization_module.compute_current_size_relion(
-            shell,
-            256,
-            ave_Pmax=1.0,
-            has_high_fsc_at_limit=False,
-            incr_size=10,
-        )
-
-        assert shell == 9
-        assert current_size == 38
-        assert iteration_loop_module.shell_index_to_resolution_angstrom(
-            shell,
-            256,
-            2.125,
-        ) == pytest.approx(60.4444444444)
-
-    def test_firstiter_cc_scheduling_override_is_only_physical_iteration_one(self):
-        common = {
-            "resolution_shell": 10,
-            "grid_size": 256,
-            "voxel_size": 2.125,
-        }
-        assert (
-            iteration_loop_module._firstiter_cc_scheduling_resolution_shell(
-                **common,
-                emulate_relion_firstiter_cc=True,
-                ini_high_angstrom=60.0,
-                relion_iteration=2,
-            )
-            == 10
-        )
-        assert (
-            iteration_loop_module._firstiter_cc_scheduling_resolution_shell(
-                **common,
-                emulate_relion_firstiter_cc=False,
-                ini_high_angstrom=60.0,
-                relion_iteration=1,
-            )
-            == 10
-        )
-        assert (
-            iteration_loop_module._firstiter_cc_scheduling_resolution_shell(
-                **common,
-                emulate_relion_firstiter_cc=True,
-                ini_high_angstrom=None,
-                relion_iteration=1,
-            )
-            == 10
-        )
-
     def test_firstiter_cc_lowpass_runs_before_solvent_flatten(self, monkeypatch):
         """RELION applies iter-1 ini_high low-pass before solvent flatten."""
         from types import SimpleNamespace
 
-        from recovar.em.dense_single_volume import mean_helpers as mean_helpers_module
+        from recovar.em.refinement import mean_helpers as mean_helpers_module
 
         events = []
         reconstruct_calls = []
@@ -12653,7 +12157,6 @@ class TestRelionModeSmokeTest:
             mean_signal_variance_shells=None,
             mean_signal_variance_per_half=[jnp.ones(VOLUME_SIZE), jnp.ones(VOLUME_SIZE)],
             n_classes=1,
-            k_class_enabled=False,
             cs=8,
             iteration=0,
             grid_size=8,
@@ -12678,7 +12181,7 @@ class TestRelionModeSmokeTest:
         """K-class M-step reconstruction should index RELION tau2 as shells."""
         from types import SimpleNamespace
 
-        from recovar.em.dense_single_volume import mean_helpers as mean_helpers_module
+        from recovar.em.refinement import mean_helpers as mean_helpers_module
 
         calls = []
 
@@ -12711,7 +12214,6 @@ class TestRelionModeSmokeTest:
             mean_signal_variance_shells=tau_shells,
             mean_signal_variance_per_half=None,
             n_classes=n_classes,
-            k_class_enabled=True,
             cs=8,
             iteration=0,
             grid_size=8,
@@ -12740,7 +12242,6 @@ class TestRelionModeSmokeTest:
         self,
         half_datasets,
         init_volume,
-        rotations,
         translations,
         tmp_path,
     ):
@@ -12752,17 +12253,19 @@ class TestRelionModeSmokeTest:
             init_volume,
             jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-            rotations,
             translations,
-            disc_type="linear_interp",
-            max_iter=1,
-            image_batch_size=N_IMAGES,
-            rotation_block_size=N_ROTATIONS,
-            init_current_size=16,
-            adaptive_oversampling=0,
-            init_healpix_order=2,
-            max_healpix_order=3,
-            save_intermediates_dir=str(out_dir),
+            options=RefinementOptions(
+                disc_type="linear_interp",
+                schedule=RefinementSchedule(
+                    max_iter=1,
+                    init_current_size=16,
+                    init_healpix_order=2,
+                    max_healpix_order=3,
+                ),
+                batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=N_ROTATIONS),
+                adaptive=AdaptiveOptions(adaptive_oversampling=0),
+                debug=EngineDebugOptions(save_intermediates_dir=str(out_dir)),
+            ),
         )
 
         assert len(result["current_sizes"]) == 1
@@ -12773,7 +12276,6 @@ class TestRelionModeSmokeTest:
         self,
         half_datasets,
         init_volume,
-        rotations,
         translations,
         tmp_path,
     ):
@@ -12785,18 +12287,22 @@ class TestRelionModeSmokeTest:
             init_volume,
             jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-            rotations,
             translations,
-            disc_type="linear_interp",
-            max_iter=1,
-            image_batch_size=N_IMAGES,
-            rotation_block_size=N_ROTATIONS,
-            init_current_size=16,
-            adaptive_oversampling=0,
-            init_healpix_order=2,
-            max_healpix_order=3,
-            save_intermediates_dir=str(out_dir),
-            save_intermediates_skip_unregularized=True,
+            options=RefinementOptions(
+                disc_type="linear_interp",
+                schedule=RefinementSchedule(
+                    max_iter=1,
+                    init_current_size=16,
+                    init_healpix_order=2,
+                    max_healpix_order=3,
+                ),
+                batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=N_ROTATIONS),
+                adaptive=AdaptiveOptions(adaptive_oversampling=0),
+                debug=EngineDebugOptions(
+                    save_intermediates_dir=str(out_dir),
+                    save_intermediates_skip_unregularized=True,
+                ),
+            ),
         )
 
         assert len(result["current_sizes"]) == 1
@@ -12809,33 +12315,32 @@ class TestRelionModeSmokeTest:
         self,
         half_datasets,
         init_volume,
-        rotations,
         translations,
         monkeypatch,
     ):
         """RELION mode should derive current_size from FSC-derived SSNR logic."""
-        import recovar.em.dense_single_volume.iteration_loop as refine_mod
-
         def fail_old_dvp(*args, **kwargs):
             raise AssertionError("RELION mode should not call compute_data_vs_prior")
 
-        monkeypatch.setattr(refine_mod, "compute_data_vs_prior", fail_old_dvp, raising=False)
+        monkeypatch.setattr(regularization_module, "compute_data_vs_prior", fail_old_dvp)
 
         result = refine_single_volume(
             half_datasets,
             init_volume,
             jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-            rotations,
             translations,
-            disc_type="linear_interp",
-            max_iter=2,
-            image_batch_size=N_IMAGES,
-            rotation_block_size=N_ROTATIONS,
-            init_current_size=16,
-            adaptive_oversampling=0,
-            init_healpix_order=2,
-            max_healpix_order=3,
+            options=RefinementOptions(
+                disc_type="linear_interp",
+                schedule=RefinementSchedule(
+                    max_iter=2,
+                    init_current_size=16,
+                    init_healpix_order=2,
+                    max_healpix_order=3,
+                ),
+                batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=N_ROTATIONS),
+                adaptive=AdaptiveOptions(adaptive_oversampling=0),
+            ),
         )
 
         assert len(result["current_sizes"]) == 2
@@ -12844,7 +12349,6 @@ class TestRelionModeSmokeTest:
         self,
         half_datasets,
         init_volume,
-        rotations,
         translations,
     ):
         """RELION-specific trajectories have correct lengths."""
@@ -12853,15 +12357,17 @@ class TestRelionModeSmokeTest:
             init_volume,
             jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-            rotations,
             translations,
-            disc_type="linear_interp",
-            max_iter=2,
-            image_batch_size=N_IMAGES,
-            rotation_block_size=N_ROTATIONS,
-            init_current_size=16,
-            init_healpix_order=2,
-            max_healpix_order=3,
+            options=RefinementOptions(
+                disc_type="linear_interp",
+                schedule=RefinementSchedule(
+                    max_iter=2,
+                    init_current_size=16,
+                    init_healpix_order=2,
+                    max_healpix_order=3,
+                ),
+                batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=N_ROTATIONS),
+            ),
         )
 
         n_iters = len(result["current_sizes"])
@@ -12871,33 +12377,6 @@ class TestRelionModeSmokeTest:
         # data_vs_prior is populated starting from iteration 1
         assert len(result["data_vs_prior_trajectory"]) <= n_iters
 
-    def test_should_skip_adaptive_pass2_threshold(self):
-        """Adaptive pass 2 should be skipped when mean significant fraction >= 0.5."""
-        skip, frac = should_skip_adaptive_pass2(
-            np.array([60, 60], dtype=np.int32),
-            n_rotations=20,
-            n_translations=3,
-        )
-        assert skip is True
-        assert frac == pytest.approx(1.0)
-
-        skip, frac = should_skip_adaptive_pass2(
-            np.array([12, 18], dtype=np.int32),
-            n_rotations=20,
-            n_translations=3,
-        )
-        assert skip is False
-        assert frac == pytest.approx(0.25)
-
-        skip, frac = should_skip_adaptive_pass2(
-            np.array([60, 60], dtype=np.int32),
-            n_rotations=20,
-            n_translations=3,
-            threshold=-1.0,
-        )
-        assert skip is False
-        assert frac == pytest.approx(0.0)
-
     def test_relion_mode_updates_sigma_offset_from_posterior_noise_stats(
         self,
         half_datasets,
@@ -12906,7 +12385,6 @@ class TestRelionModeSmokeTest:
         monkeypatch,
     ):
         """Posterior-weighted offset variance should drive sigma_offset in RELION mode."""
-        import recovar.em.dense_single_volume.iteration_loop as refine_mod
 
         for ds in half_datasets:
             ds.voxel_size = 8.5
@@ -12931,43 +12409,33 @@ class TestRelionModeSmokeTest:
             n_images = experiment_dataset.n_units
             n_shells = experiment_dataset.image_shape[0] // 2 + 1
             recon_vol_size = _mock_reconstruction_accumulator_size(experiment_dataset, kwargs)
-            return (
-                None,
-                np.zeros(n_images, dtype=np.int32),
-                jnp.zeros(recon_vol_size, dtype=jnp.complex64),
-                jnp.ones(recon_vol_size, dtype=jnp.complex64),
-                RelionStats(
-                    log_evidence_per_image=jnp.zeros(n_images, dtype=jnp.float32),
-                    best_log_score_per_image=jnp.zeros(n_images, dtype=jnp.float32),
-                    max_posterior_per_image=jnp.ones(n_images, dtype=jnp.float32),
-                    rotation_posterior_sums=jnp.ones(np.asarray(rotations).shape[0], dtype=jnp.float32),
-                ),
-                NoiseStats(
-                    wsum_sigma2_noise=jnp.ones(n_shells, dtype=jnp.float32),
-                    wsum_img_power=jnp.ones(n_shells, dtype=jnp.float32),
-                    wsum_sigma2_offset=offset_wsum,
-                    sumw=float(n_images),
-                ),
+            return _mock_dense_em_result(
+                n_images=n_images,
+                n_rotations=np.asarray(rotations).shape[0],
+                volume_size=recon_vol_size,
+                n_shells=n_shells,
+                sigma2_offset=offset_wsum,
             )
 
-        monkeypatch.setattr(refine_mod, "run_em", fake_run_em)
+        monkeypatch.setattr(half_scoring, "run_em", fake_run_em)
 
         result = refine_single_volume(
             half_datasets,
             init_volume,
             jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-            rotations_many,
             translations,
-            disc_type="linear_interp",
-            max_iter=1,
-            image_batch_size=N_IMAGES,
-            rotation_block_size=len(rotations_many),
-            init_current_size=16,
-            adaptive_oversampling=0,
-            nside_level=1,
-            init_healpix_order=1,
-            max_healpix_order=2,
+            options=RefinementOptions(
+                disc_type="linear_interp",
+                schedule=RefinementSchedule(
+                    max_iter=1,
+                    init_current_size=16,
+                    init_healpix_order=1,
+                    max_healpix_order=2,
+                ),
+                batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=len(rotations_many)),
+                adaptive=AdaptiveOptions(adaptive_oversampling=0),
+            ),
         )
 
         expected_per_half = [
@@ -12986,7 +12454,6 @@ class TestRelionModeSmokeTest:
         monkeypatch,
     ):
         """RELION mode must score each half-set with its own sigma2_noise."""
-        import recovar.em.dense_single_volume.iteration_loop as refine_mod
 
         rotations_many = _make_rotations(20, seed=777)
         half1_noise = np.arange(IMAGE_SIZE, dtype=np.float32) + 1.0
@@ -13008,58 +12475,51 @@ class TestRelionModeSmokeTest:
             n_images = experiment_dataset.n_units
             n_shells = experiment_dataset.image_shape[0] // 2 + 1
             recon_vol_size = _mock_reconstruction_accumulator_size(experiment_dataset, kwargs)
-            return (
-                None,
-                np.zeros(n_images, dtype=np.int32),
-                jnp.zeros(recon_vol_size, dtype=jnp.complex64),
-                jnp.ones(recon_vol_size, dtype=jnp.complex64),
-                RelionStats(
-                    log_evidence_per_image=jnp.zeros(n_images, dtype=jnp.float32),
-                    best_log_score_per_image=jnp.zeros(n_images, dtype=jnp.float32),
-                    max_posterior_per_image=jnp.ones(n_images, dtype=jnp.float32),
-                    rotation_posterior_sums=jnp.ones(np.asarray(rotations).shape[0], dtype=jnp.float32),
-                ),
-                NoiseStats(
-                    wsum_sigma2_noise=jnp.ones(n_shells, dtype=jnp.float32),
-                    wsum_img_power=jnp.ones(n_shells, dtype=jnp.float32),
-                    wsum_sigma2_offset=0.0,
-                    sumw=float(n_images),
-                ),
+            return _mock_dense_em_result(
+                n_images=n_images,
+                n_rotations=np.asarray(rotations).shape[0],
+                volume_size=recon_vol_size,
+                n_shells=n_shells,
             )
 
-        monkeypatch.setattr(refine_mod, "run_em", fake_run_em)
+        monkeypatch.setattr(half_scoring, "run_em", fake_run_em)
 
         refine_single_volume(
             half_datasets,
             init_volume,
             np.stack([half1_noise, half2_noise]),
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-            rotations_many,
             translations,
-            disc_type="linear_interp",
-            max_iter=1,
-            image_batch_size=N_IMAGES,
-            rotation_block_size=len(rotations_many),
-            init_current_size=8,
-            adaptive_oversampling=0,
-            init_healpix_order=1,
-            max_healpix_order=2,
-            skip_final_iteration=True,
+            options=RefinementOptions(
+                disc_type="linear_interp",
+                schedule=RefinementSchedule(
+                    max_iter=1,
+                    init_current_size=8,
+                    init_healpix_order=1,
+                    max_healpix_order=2,
+                    skip_final_iteration=True,
+                ),
+                batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=len(rotations_many)),
+                adaptive=AdaptiveOptions(adaptive_oversampling=0),
+            ),
         )
 
         assert len(captured_noise) == 2
         np.testing.assert_allclose(captured_noise[0], half1_noise)
         np.testing.assert_allclose(captured_noise[1], half2_noise)
 
+    @pytest.mark.parametrize("oversampling,preserve_order", [(1, False), (0, True)])
     def test_k1_adaptive_significant_counts_do_not_replace_exact_accuracy(
         self,
         half_datasets,
         init_volume,
         translations,
         monkeypatch,
+        oversampling,
+        preserve_order,
     ):
         """K=1 adaptive counts remain diagnostic when exact accuracy is unavailable."""
-        import recovar.em.dense_single_volume.iteration_loop as refine_mod
+        import recovar.em.refinement.iteration_loop as refine_mod
 
         monkeypatch.delenv("RECOVAR_EM_USE_APPROX_ACC_ROT_FOR_CONVERGENCE", raising=False)
         counts_by_half = [
@@ -13071,9 +12531,9 @@ class TestRelionModeSmokeTest:
         rotations_many = _make_rotations(20, seed=333)
 
         monkeypatch.setattr(
-            refine_mod,
+            sampling_module,
             "_relion_rotation_grid_float32",
-            lambda _order: (rotations_many, np.zeros((len(rotations_many), 3), dtype=np.float32)),
+            lambda _order, dtype=None: (rotations_many, np.zeros((len(rotations_many), 3), dtype=np.float32)),
         )
         monkeypatch.setattr(
             refine_mod,
@@ -13122,6 +12582,7 @@ class TestRelionModeSmokeTest:
                 trans_parent_map,
                 disc_type,
             )
+            assert kwargs.get("preserve_bpref_particle_order", False) == preserve_order
             half_idx = call_idx["value"]
             call_idx["value"] += 1
             fine_mstep_prune_values.append(kwargs.get("relion_fine_mstep_prune"))
@@ -13173,25 +12634,27 @@ class TestRelionModeSmokeTest:
                 significant_counts=jnp.asarray(counts, dtype=jnp.int32),
             )
 
-        monkeypatch.setattr(refine_mod, "_build_firstiter_cc_pass2_grids", fake_build_pass2_grids)
-        monkeypatch.setattr(refine_mod, "run_dense_k_class_em_adaptive", fake_adaptive_k1)
+        monkeypatch.setattr(half_scoring, "build_adaptive_pass2_grids", fake_build_pass2_grids)
+        monkeypatch.setattr(half_scoring, "run_dense_k_class_em_adaptive", fake_adaptive_k1)
 
         result = refine_single_volume(
             half_datasets,
             init_volume,
             jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-            rotations_many,
             translations,
-            disc_type="linear_interp",
-            max_iter=1,
-            image_batch_size=N_IMAGES,
-            rotation_block_size=20,
-            relion_current_sizes=[8],
-            adaptive_oversampling=1,
-            init_healpix_order=1,
-            max_healpix_order=1,
-            skip_final_iteration=True,
+            options=RefinementOptions(
+                disc_type="linear_interp",
+                schedule=RefinementSchedule(
+                    max_iter=1,
+                    init_healpix_order=1,
+                    max_healpix_order=1,
+                    skip_final_iteration=True,
+                ),
+                batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=20),
+                adaptive=AdaptiveOptions(relion_current_sizes=[8], adaptive_oversampling=oversampling),
+                parity=RelionParityOptions(preserve_bpref_particle_order=preserve_order),
+            ),
         )
 
         assert call_idx["value"] == 2
@@ -13212,17 +12675,16 @@ class TestRelionModeSmokeTest:
         monkeypatch,
     ):
         """The accepted K=1 os=0 path must remain on direct dense EM."""
-        import recovar.em.dense_single_volume.iteration_loop as refine_mod
 
         def fail_adaptive(*_args, **_kwargs):
             raise AssertionError("adaptive_oversampling=0 entered the adaptive K-class engine")
 
         rotations_many = _make_rotations(20, seed=334)
-        monkeypatch.setattr(refine_mod, "run_dense_k_class_em_adaptive", fail_adaptive)
+        monkeypatch.setattr(half_scoring, "run_dense_k_class_em_adaptive", fail_adaptive)
         monkeypatch.setattr(
-            refine_mod,
+            sampling_module,
             "_relion_rotation_grid_float32",
-            lambda _order: (rotations_many, np.zeros((len(rotations_many), 3), dtype=np.float32)),
+            lambda _order, dtype=None: (rotations_many, np.zeros((len(rotations_many), 3), dtype=np.float32)),
         )
 
         result = refine_single_volume(
@@ -13230,17 +12692,18 @@ class TestRelionModeSmokeTest:
             init_volume,
             jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-            rotations_many,
             translations,
-            disc_type="linear_interp",
-            max_iter=1,
-            image_batch_size=N_IMAGES,
-            rotation_block_size=20,
-            relion_current_sizes=[8],
-            adaptive_oversampling=0,
-            init_healpix_order=1,
-            max_healpix_order=1,
-            skip_final_iteration=True,
+            options=RefinementOptions(
+                disc_type="linear_interp",
+                schedule=RefinementSchedule(
+                    max_iter=1,
+                    init_healpix_order=1,
+                    max_healpix_order=1,
+                    skip_final_iteration=True,
+                ),
+                batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=20),
+                adaptive=AdaptiveOptions(relion_current_sizes=[8], adaptive_oversampling=0),
+            ),
         )
 
         assert np.asarray(result["mean"]).shape == (VOLUME_SIZE,)
@@ -13253,7 +12716,6 @@ class TestRelionModeSmokeTest:
         monkeypatch,
     ):
         """K-class significant counts are diagnostics, not convergence inputs."""
-        import recovar.em.dense_single_volume.iteration_loop as refine_mod
 
         monkeypatch.delenv("RECOVAR_EM_USE_APPROX_ACC_ROT_FOR_CONVERGENCE", raising=False)
         counts_by_half = [
@@ -13368,8 +12830,8 @@ class TestRelionModeSmokeTest:
                 ),
             )
 
-        monkeypatch.setattr(refine_mod, "_build_firstiter_cc_pass2_grids", fake_build_pass2_grids)
-        monkeypatch.setattr(refine_mod, "run_dense_k_class_em_adaptive", fake_adaptive_k_class)
+        monkeypatch.setattr(half_scoring, "build_adaptive_pass2_grids", fake_build_pass2_grids)
+        monkeypatch.setattr(half_scoring, "run_dense_k_class_em_adaptive", fake_adaptive_k_class)
         monkeypatch.setattr(iteration_loop_module, "compute_coarse_image_size", lambda *_args, **_kwargs: 4)
         monkeypatch.setattr(iteration_loop_module, "clamp_relion_coarse_image_size", lambda coarse, *_args: int(coarse))
 
@@ -13378,20 +12840,23 @@ class TestRelionModeSmokeTest:
             init_volume,
             jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-            _make_rotations(20, seed=334),
             translations,
-            disc_type="linear_interp",
-            max_iter=1,
-            image_batch_size=N_IMAGES,
-            rotation_block_size=20,
-            relion_current_sizes=[8],
-            adaptive_oversampling=1,
-            init_healpix_order=1,
-            max_healpix_order=1,
-            low_resol_join_halves_angstrom=0.0,
-            n_classes=2,
-            init_class_log_priors=np.log(np.array([0.5, 0.5], dtype=np.float64)),
-            skip_final_iteration=True,
+            options=RefinementOptions(
+                disc_type="linear_interp",
+                schedule=RefinementSchedule(
+                    max_iter=1,
+                    init_healpix_order=1,
+                    max_healpix_order=1,
+                    skip_final_iteration=True,
+                ),
+                batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=20),
+                adaptive=AdaptiveOptions(relion_current_sizes=[8], adaptive_oversampling=1),
+                parity=RelionParityOptions(low_resol_join_halves_angstrom=0.0),
+                k_class=KClassOptions(
+                    n_classes=2,
+                    init_class_log_priors=np.log(np.array([0.5, 0.5], dtype=np.float64)),
+                ),
+            ),
         )
 
         assert call_idx["value"] == 2
@@ -13419,230 +12884,6 @@ class TestRelionModeSmokeTest:
             atol=1e-6,
         )
 
-    def test_approx_acc_rot_convergence_policy_guards_confident_prelocal_runs(self, monkeypatch):
-        import recovar.em.dense_single_volume.iteration_loop as refine_mod
-        from recovar.em.dense_single_volume.helpers.convergence import RefinementState
-
-        for name in (
-            "RECOVAR_EM_USE_APPROX_ACC_ROT_FOR_CONVERGENCE",
-            "RECOVAR_EM_DISABLE_APPROX_ACC_ROT_FOR_CONVERGENCE",
-            "RECOVAR_EM_APPROX_ACC_ROT_MAX_AVE_PMAX",
-            "RECOVAR_EM_APPROX_ACC_ROT_MIN_ITER",
-        ):
-            monkeypatch.delenv(name, raising=False)
-
-        state = RefinementState(
-            healpix_order=3,
-            auto_local_healpix_order=4,
-            current_resolution=23.65,
-            particle_diameter_angstrom=200.0,
-        )
-
-        allow, reason = refine_mod._approx_acc_rot_policy_for_convergence(
-            state=state,
-            iteration_number=5,
-            ave_pmax=0.96,
-            new_resolution_angstrom=23.65,
-        )
-
-        assert not allow
-        assert "high-pmax" in reason
-
-    def test_approx_acc_rot_convergence_policy_is_diagnostic_by_default(self, monkeypatch):
-        import recovar.em.dense_single_volume.iteration_loop as refine_mod
-        from recovar.em.dense_single_volume.helpers.convergence import RefinementState
-
-        for name in (
-            "RECOVAR_EM_USE_APPROX_ACC_ROT_FOR_CONVERGENCE",
-            "RECOVAR_EM_DISABLE_APPROX_ACC_ROT_FOR_CONVERGENCE",
-            "RECOVAR_EM_APPROX_ACC_ROT_MAX_AVE_PMAX",
-            "RECOVAR_EM_APPROX_ACC_ROT_MIN_ITER",
-        ):
-            monkeypatch.delenv(name, raising=False)
-
-        state = RefinementState(
-            healpix_order=3,
-            auto_local_healpix_order=4,
-            current_resolution=36.27,
-            particle_diameter_angstrom=200.0,
-        )
-
-        allow, reason = refine_mod._approx_acc_rot_policy_for_convergence(
-            state=state,
-            iteration_number=5,
-            ave_pmax=0.77,
-            new_resolution_angstrom=36.27,
-        )
-
-        assert not allow
-        assert reason == "diagnostic-only-default"
-
-    def test_approx_acc_rot_convergence_policy_env_overrides(self, monkeypatch):
-        import recovar.em.dense_single_volume.iteration_loop as refine_mod
-        from recovar.em.dense_single_volume.helpers.convergence import RefinementState
-
-        state = RefinementState(
-            healpix_order=3,
-            auto_local_healpix_order=4,
-            current_resolution=20.0,
-        )
-
-        monkeypatch.setenv("RECOVAR_EM_DISABLE_APPROX_ACC_ROT_FOR_CONVERGENCE", "1")
-        monkeypatch.delenv("RECOVAR_EM_USE_APPROX_ACC_ROT_FOR_CONVERGENCE", raising=False)
-        allow, reason = refine_mod._approx_acc_rot_policy_for_convergence(
-            state=state,
-            iteration_number=5,
-            ave_pmax=0.5,
-            new_resolution_angstrom=20.0,
-        )
-        assert not allow
-        assert reason == "disabled-by-env"
-
-        monkeypatch.setenv("RECOVAR_EM_USE_APPROX_ACC_ROT_FOR_CONVERGENCE", "1")
-        monkeypatch.delenv("RECOVAR_EM_DISABLE_APPROX_ACC_ROT_FOR_CONVERGENCE", raising=False)
-        allow, reason = refine_mod._approx_acc_rot_policy_for_convergence(
-            state=state,
-            iteration_number=1,
-            ave_pmax=1.0,
-            new_resolution_angstrom=10.0,
-        )
-        assert allow
-        assert reason == "forced-by-env"
-
-
-class TestRelionDefault:
-    def test_default_mode_is_relion(
-        self,
-        half_datasets,
-        init_volume,
-        rotations,
-        translations,
-        monkeypatch,
-    ):
-        """Calling without mode= uses the RELION path."""
-        sentinel = {"convergence_state": object()}
-        called = {"ran_relion": False}
-
-        def fake_relion_loop(**kwargs):
-            called["ran_relion"] = True
-            assert kwargs["experiment_datasets"] is half_datasets
-            assert kwargs["relion_current_sizes"] is None
-            assert kwargs["init_healpix_order"] == 2
-            return sentinel
-
-        monkeypatch.setattr(
-            iteration_loop_module,
-            "_run_relion_iteration_loop",
-            fake_relion_loop,
-        )
-
-        result = refine_single_volume(
-            half_datasets,
-            init_volume,
-            jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
-            jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-            rotations,
-            translations,
-            disc_type="linear_interp",
-            max_iter=1,
-            image_batch_size=N_IMAGES,
-            rotation_block_size=N_ROTATIONS,
-            init_current_size=16,
-            init_healpix_order=2,
-            max_healpix_order=3,
-        )
-
-        assert result is sentinel
-        assert called == {"ran_relion": True}
-
-    def test_refinement_options_struct_overrides_kwargs(
-        self,
-        half_datasets,
-        init_volume,
-        rotations,
-        translations,
-        monkeypatch,
-    ):
-        """Passing ``options=RefinementOptions(...)`` overrides individual kwargs."""
-        from recovar.em.dense_single_volume import (
-            KClassOptions,
-            ReplayState,
-            RefinementOptions,
-            RefinementSchedule,
-            RelionParityOptions,
-        )
-
-        sentinel = {"convergence_state": object()}
-        captured: dict = {}
-
-        def fake_relion_loop(**kwargs):
-            captured.update(kwargs)
-            return sentinel
-
-        monkeypatch.setattr(
-            iteration_loop_module,
-            "_run_relion_iteration_loop",
-            fake_relion_loop,
-        )
-
-        opts = RefinementOptions(
-            schedule=RefinementSchedule(max_iter=7, init_healpix_order=3, max_healpix_order=4),
-            parity=RelionParityOptions(
-                tau2_fudge=4.0,
-                perturb_replay_relion_prefix="custom",
-                emulate_relion_firstiter_cc=True,
-                do_solvent_fsc_correction=True,
-                image_fourier_backend="jax_gpu",
-            ),
-            k_class=KClassOptions(n_classes=4),
-            replay=ReplayState(init_group_count=[7, 8]),
-        )
-        result = refine_single_volume(
-            half_datasets,
-            init_volume,
-            jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
-            jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-            rotations,
-            translations,
-            # These individual kwargs would normally win, but the struct overrides.
-            max_iter=1,
-            init_healpix_order=2,
-            max_healpix_order=3,
-            tau2_fudge=1.0,
-            emulate_relion_firstiter_cc=False,
-            n_classes=1,
-            image_batch_size=N_IMAGES,
-            rotation_block_size=N_ROTATIONS,
-            init_current_size=16,
-            options=opts,
-        )
-
-        assert result is sentinel
-        assert captured["max_iter"] == 7
-        assert captured["init_healpix_order"] == 3
-        assert captured["max_healpix_order"] == 4
-        assert captured["tau2_fudge"] == 4.0
-        assert captured["perturb_replay_relion_prefix"] == "custom"
-        assert captured["emulate_relion_firstiter_cc"] is True
-        assert captured["do_solvent_fsc_correction"] is True
-        assert captured["image_fourier_backend"] == "jax_gpu"
-        assert captured["n_classes"] == 4
-        assert captured["init_group_count"] == [7, 8]
-
-    def test_canonical_rotation_grid_reuses_relion_euler_table(self, monkeypatch):
-        """The auto-refine setup path must not convert canonical grids via SciPy."""
-        order = 1
-        canonical_rotations = np.asarray(get_relion_rotation_grid(order), dtype=np.float32)
-        expected_eulers = np.asarray(get_relion_rotation_grid_eulers(order), dtype=np.float32)
-
-        def fail_r_to_relion(*_args, **_kwargs):
-            raise AssertionError("generic R_to_relion should not be called for canonical grids")
-
-        monkeypatch.setattr(iteration_loop_module.utils, "R_to_relion", fail_r_to_relion)
-
-        got = _rotation_eulers_for_canonical_or_custom_grid(canonical_rotations, order)
-        np.testing.assert_allclose(got, expected_eulers, rtol=0.0, atol=0.0)
-
 
 # ===========================================================================
 # Test 3: Local search oversampling regression
@@ -13652,11 +12893,8 @@ class TestRelionDefault:
 def test_fused_score_normalize_mstep_matches_split_path():
     import jax
 
-    from recovar.em.dense_single_volume.local_backprojection import (
-        compute_local_ctf_sums,
-        compute_local_weighted_sums,
-    )
-    from recovar.em.dense_single_volume.local_score_pass import (
+    from recovar.em.local.local_backprojection import compute_local_ctf_sums, compute_local_weighted_sums
+    from recovar.em.local.local_score_pass import (
         compute_reconstruction_support,
         fused_score_normalize_mstep_abs2_on_demand,
         normalize_local_scores,
@@ -13780,7 +13018,7 @@ def test_fused_score_normalize_mstep_matches_split_path():
 def test_local_big_jit_sample_mask_none_matches_full_support():
     import jax
 
-    from recovar.em.dense_single_volume.local_big_jit import _score_normalize_support
+    from recovar.em.local.local_big_jit import _score_normalize_support
 
     rng = np.random.default_rng(123)
     batch_size, n_rot, n_trans, n_score = 2, 4, 3, 5
@@ -13854,7 +13092,7 @@ def test_local_search_uses_lazy_parent_expanded_fine_rotation_grid_when_oversamp
     monkeypatch,
 ):
     """Adaptive local search expands RELION coarse parents without materializing the full fine grid."""
-    import recovar.em.dense_single_volume.iteration_loop as refine_mod
+    import recovar.em.refinement.iteration_loop as refine_mod
 
     order_sizes = {4: 4, 5: 9}
     grid_calls = []
@@ -13876,18 +13114,15 @@ def test_local_search_uses_lazy_parent_expanded_fine_rotation_grid_when_oversamp
     def fake_grouped_local_search(
         experiment_dataset,
         mean,
-        mean_variance,
         noise_variance,
         prior_rotations,
         rotation_grid_rotations,
-        rotation_grid_eulers,
         healpix_order,
         sigma_rot,
         sigma_psi,
         translations,
         prior_translations,
         sigma_offset_angstrom,
-        offset_range_pixels,
         disc_type,
         image_batch_size,
         rotation_block_size,
@@ -13898,7 +13133,6 @@ def test_local_search_uses_lazy_parent_expanded_fine_rotation_grid_when_oversamp
             {
                 "healpix_order": int(healpix_order),
                 "rotations_is_none": rotation_grid_rotations is None,
-                "eulers_is_none": rotation_grid_eulers is None,
                 "rotation_grid_random_perturbation": kwargs.get("rotation_grid_random_perturbation"),
                 "rotation_grid_angular_sampling_deg": kwargs.get("rotation_grid_angular_sampling_deg"),
                 "local_parent_oversampling_order": kwargs.get("local_parent_oversampling_order"),
@@ -13924,28 +13158,32 @@ def test_local_search_uses_lazy_parent_expanded_fine_rotation_grid_when_oversamp
             wsum_sigma2_offset=0.0,
             sumw=float(experiment_dataset.n_units),
         )
-        outputs = list(base_outputs)
+        best_pose_details = ()
         if kwargs.get("return_best_pose_details"):
             best_rots = np.repeat(np.eye(3, dtype=np.float32)[None, :, :], experiment_dataset.n_units, axis=0)
             best_trans = np.zeros((experiment_dataset.n_units, 2), dtype=np.float32)
-            best_ids = np.zeros(experiment_dataset.n_units, dtype=np.int32)
-            outputs.extend([best_rots, best_trans, best_ids])
-        outputs.append(relion_stats)
-        if kwargs.get("accumulate_noise", False):
-            outputs.append(noise_stats)
-        if kwargs.get("return_profile", False):
-            outputs.append({"reconstruction_sample_indices_by_image": [None] * experiment_dataset.n_units})
-        return tuple(outputs)
+            best_pose_details = (best_rots, best_trans)
+        return _mock_local_search_result(
+            base_outputs, relion_stats, noise_stats, kwargs,
+            experiment_dataset.n_units, best_pose_details,
+        )
 
     monkeypatch.setattr(refine_mod, "rotation_grid_size", fake_rotation_grid_size)
+    monkeypatch.setattr(half_scoring, "rotation_grid_size", fake_rotation_grid_size)
     monkeypatch.setattr(refine_mod, "_precompute_exact_local_fine_grid_enabled", lambda order: False)
-    monkeypatch.setattr(refine_mod, "get_relion_rotation_grid", fake_get_grid)
-    monkeypatch.setattr(refine_mod, "get_relion_rotation_grid_eulers", fake_get_grid_eulers)
-    monkeypatch.setattr(refine_mod, "_run_local_search_iteration", fake_grouped_local_search)
     monkeypatch.setattr(
-        refine_mod,
+        sampling_module,
+        "_relion_rotation_grid_float32",
+        lambda order, *, dtype=np.float32: (
+            fake_get_grid(order).astype(dtype),
+            fake_get_grid_eulers(order).astype(dtype),
+        ),
+    )
+    monkeypatch.setattr(half_scoring, "_run_local_search_iteration", fake_grouped_local_search)
+    monkeypatch.setattr(
+        mean_helpers_module,
         "collapse_rotation_posterior_to_direction_prior",
-        lambda rotation_posterior_sums, healpix_order: (
+        lambda rotation_posterior_sums, healpix_order, *, dtype=np.float32: (
             np.ones(
                 max(1, fake_rotation_grid_size(healpix_order)),
                 dtype=np.float64,
@@ -13961,18 +13199,14 @@ def test_local_search_uses_lazy_parent_expanded_fine_rotation_grid_when_oversamp
         init_volume,
         jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
         jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-        _make_rotations(order_sizes[4], seed=99),
         translations,
-        disc_type="linear_interp",
-        max_iter=1,
-        image_batch_size=N_IMAGES,
-        rotation_block_size=order_sizes[4],
-        init_current_size=16,
-        adaptive_oversampling=1,
-        nside_level=4,
-        init_healpix_order=4,
-        max_healpix_order=4,
-        init_previous_best_rotation_eulers=[prev_h1, prev_h2],
+        options=RefinementOptions(
+            disc_type="linear_interp",
+            schedule=RefinementSchedule(max_iter=1, init_current_size=16, init_healpix_order=4, max_healpix_order=4),
+            batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=order_sizes[4]),
+            adaptive=AdaptiveOptions(adaptive_oversampling=1),
+            replay=ReplayState(init_previous_best_rotation_eulers=[prev_h1, prev_h2]),
+        ),
     )
 
     assert not any(kind == "rot" and order == 5 for kind, order in grid_calls)
@@ -13985,7 +13219,6 @@ def test_local_search_uses_lazy_parent_expanded_fine_rotation_grid_when_oversamp
     for call in fine_calls:
         assert call["healpix_order"] == 5
         assert call["rotations_is_none"]
-        assert call["eulers_is_none"]
         assert call["rotation_grid_random_perturbation"] == 0.0
         assert call["rotation_grid_angular_sampling_deg"] == pytest.approx(
             relion_angular_sampling_deg(5, adaptive_oversampling=0),
@@ -14001,7 +13234,7 @@ def test_local_search_applies_perturbation_to_generated_fine_rotation_grid(
     monkeypatch,
 ):
     """Selected-only fine local grids must carry the RELION perturbation metadata."""
-    import recovar.em.dense_single_volume.iteration_loop as refine_mod
+    import recovar.em.refinement.iteration_loop as refine_mod
 
     order_sizes = {4: 4, 5: 9}
     perturb_calls = []
@@ -14019,7 +13252,6 @@ def test_local_search_applies_perturbation_to_generated_fine_rotation_grid(
         return np.zeros((order_sizes[order], 3), dtype=np.float32)
 
     def fake_advance_relion_perturbation(current, perturb_factor, rng):
-        _ = (current, perturb_factor, rng)
         return 0.25
 
     def fake_apply_relion_rotation_perturbation(rotations, random_perturbation, angular_sampling_deg):
@@ -14039,7 +13271,7 @@ def test_local_search_applies_perturbation_to_generated_fine_rotation_grid(
         random_perturbation,
         angular_sampling_deg,
         *,
-        return_mstep_rotations=False,
+        dtype=np.float32,
     ):
         perturb_calls.append(
             {
@@ -14048,13 +13280,12 @@ def test_local_search_applies_perturbation_to_generated_fine_rotation_grid(
                 "angular_sampling_deg": float(angular_sampling_deg),
             }
         )
-        sentinel_rotations = np.zeros((np.asarray(eulers).shape[0], 3, 3), dtype=np.float32)
+        sentinel_rotations = np.zeros((np.asarray(eulers).shape[0], 3, 3), dtype=dtype)
         sentinel_rotations[:, 0, 0] = 7.0
-        sentinel_eulers = np.full((np.asarray(eulers).shape[0], 3), 5.0, dtype=np.float32)
-        if return_mstep_rotations:
-            sentinel_mstep_rotations = np.zeros_like(sentinel_rotations)
-            sentinel_mstep_rotations[:, 1, 1] = 11.0
-            return sentinel_rotations, sentinel_eulers, sentinel_mstep_rotations
+        sentinel_eulers = np.full((np.asarray(eulers).shape[0], 3), 5.0, dtype=dtype)
+        if np.asarray(eulers).dtype == np.float64:
+            sentinel_rotations = np.zeros_like(sentinel_rotations)
+            sentinel_rotations[:, 1, 1] = 11.0
         return sentinel_rotations, sentinel_eulers
 
     def fake_r_to_relion(rotations, degrees=True):
@@ -14064,47 +13295,25 @@ def test_local_search_applies_perturbation_to_generated_fine_rotation_grid(
     def fake_grouped_local_search(
         experiment_dataset,
         mean,
-        mean_variance,
         noise_variance,
         prior_rotations,
         rotation_grid_rotations,
-        rotation_grid_eulers,
         healpix_order,
         sigma_rot,
         sigma_psi,
         translations,
         prior_translations,
         sigma_offset_angstrom,
-        offset_range_pixels,
         disc_type,
         image_batch_size,
         rotation_block_size,
         current_size,
         **kwargs,
     ):
-        _ = (
-            experiment_dataset,
-            mean,
-            mean_variance,
-            noise_variance,
-            prior_rotations,
-            sigma_rot,
-            sigma_psi,
-            translations,
-            prior_translations,
-            sigma_offset_angstrom,
-            offset_range_pixels,
-            disc_type,
-            image_batch_size,
-            rotation_block_size,
-            current_size,
-            kwargs,
-        )
         local_calls.append(
             {
                 "healpix_order": int(healpix_order),
                 "rotations_is_none": rotation_grid_rotations is None,
-                "eulers_is_none": rotation_grid_eulers is None,
                 "rotation_grid_random_perturbation": kwargs.get("rotation_grid_random_perturbation"),
                 "rotation_grid_angular_sampling_deg": kwargs.get("rotation_grid_angular_sampling_deg"),
                 "generate_relion_mstep_rotations": kwargs.get("generate_relion_mstep_rotations"),
@@ -14133,9 +13342,8 @@ def test_local_search_applies_perturbation_to_generated_fine_rotation_grid(
         if kwargs.get("return_best_pose_details"):
             best_rots = np.repeat(np.eye(3, dtype=np.float32)[None, :, :], half_datasets[0].n_units, axis=0)
             best_trans = np.zeros((half_datasets[0].n_units, 2), dtype=np.float32)
-            best_ids = np.zeros(half_datasets[0].n_units, dtype=np.int32)
-            best_pose_details = (best_rots, best_trans, best_ids)
-        return _pack_fake_local_search_outputs(
+            best_pose_details = (best_rots, best_trans)
+        return _mock_local_search_result(
             base_outputs,
             relion_stats,
             noise_stats,
@@ -14145,27 +13353,34 @@ def test_local_search_applies_perturbation_to_generated_fine_rotation_grid(
         )
 
     monkeypatch.setattr(refine_mod, "rotation_grid_size", fake_rotation_grid_size)
+    monkeypatch.setattr(half_scoring, "rotation_grid_size", fake_rotation_grid_size)
     monkeypatch.setattr(refine_mod, "_precompute_exact_local_fine_grid_enabled", lambda order: False)
-    monkeypatch.setattr(refine_mod, "get_relion_rotation_grid", fake_get_grid)
-    monkeypatch.setattr(refine_mod, "get_relion_rotation_grid_eulers", fake_get_grid_eulers)
     monkeypatch.setattr(
-        refine_mod,
+        sampling_module,
+        "_relion_rotation_grid_float32",
+        lambda order, *, dtype=np.float32: (
+            fake_get_grid(order).astype(dtype),
+            fake_get_grid_eulers(order).astype(dtype),
+        ),
+    )
+    monkeypatch.setattr(
+        sampling_module,
         "_get_relion_rotation_grid_eulers_float64",
         lambda order: fake_get_grid_eulers(order).astype(np.float64),
     )
-    monkeypatch.setattr(refine_mod, "advance_relion_perturbation", fake_advance_relion_perturbation)
+    monkeypatch.setattr(sampling_module, "advance_relion_perturbation", fake_advance_relion_perturbation)
     monkeypatch.setattr(refine_mod, "apply_relion_rotation_perturbation", fake_apply_relion_rotation_perturbation)
     monkeypatch.setattr(
-        refine_mod,
+        sampling_module,
         "apply_relion_rotation_perturbation_to_eulers",
         fake_apply_relion_rotation_perturbation_to_eulers,
     )
     monkeypatch.setattr(refine_mod.utils, "R_to_relion", fake_r_to_relion)
-    monkeypatch.setattr(refine_mod, "_run_local_search_iteration", fake_grouped_local_search)
+    monkeypatch.setattr(half_scoring, "_run_local_search_iteration", fake_grouped_local_search)
     monkeypatch.setattr(
-        refine_mod,
+        mean_helpers_module,
         "collapse_rotation_posterior_to_direction_prior",
-        lambda rotation_posterior_sums, healpix_order: (
+        lambda rotation_posterior_sums, healpix_order, *, dtype=np.float32: (
             np.ones(12 * (2 ** int(healpix_order)) ** 2, dtype=np.float64)
             / (12 * (2 ** int(healpix_order)) ** 2)
         ),
@@ -14178,19 +13393,15 @@ def test_local_search_applies_perturbation_to_generated_fine_rotation_grid(
         init_volume,
         jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
         jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-        _make_rotations(order_sizes[4], seed=111),
         translations,
-        disc_type="linear_interp",
-        max_iter=1,
-        image_batch_size=N_IMAGES,
-        rotation_block_size=order_sizes[4],
-        init_current_size=16,
-        adaptive_oversampling=1,
-        nside_level=4,
-        init_healpix_order=4,
-        max_healpix_order=4,
-        perturb_factor=0.5,
-        init_previous_best_rotation_eulers=[prev_h1, prev_h2],
+        options=RefinementOptions(
+            disc_type="linear_interp",
+            schedule=RefinementSchedule(max_iter=1, init_current_size=16, init_healpix_order=4, max_healpix_order=4),
+            batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=order_sizes[4]),
+            adaptive=AdaptiveOptions(adaptive_oversampling=1),
+            parity=RelionParityOptions(perturb_factor=0.5),
+            replay=ReplayState(init_previous_best_rotation_eulers=[prev_h1, prev_h2]),
+        ),
     )
 
     assert any(
@@ -14203,7 +13414,6 @@ def test_local_search_applies_perturbation_to_generated_fine_rotation_grid(
     fine_calls = [call for call in local_calls if call["healpix_order"] == 5]
     assert fine_calls
     assert fine_calls[0]["rotations_is_none"]
-    assert fine_calls[0]["eulers_is_none"]
     assert fine_calls[0]["rotation_grid_random_perturbation"] == pytest.approx(0.25)
     assert fine_calls[0]["rotation_grid_angular_sampling_deg"] == pytest.approx(
         relion_angular_sampling_deg(5, adaptive_oversampling=0),
@@ -14218,7 +13428,7 @@ def test_local_search_uses_negative_previous_offsets_for_translation_prior(
     monkeypatch,
 ):
     """Local-search priors use RELION's pdf_offset units, not pre-shift pixels."""
-    import recovar.em.dense_single_volume.iteration_loop as refine_mod
+    import recovar.em.refinement.iteration_loop as refine_mod
 
     order_sizes = {4: 4, 5: 9}
     prev_h1 = np.array([[0.5, -0.25], [1.0, 0.75]], dtype=np.float32)
@@ -14236,78 +13446,24 @@ def test_local_search_uses_negative_previous_offsets_for_translation_prior(
         order = int(order)
         return np.zeros((order_sizes[order], 3), dtype=np.float32)
 
-    def fake_run_em(
-        experiment_dataset,
-        mean,
-        mean_variance,
-        noise_variance,
-        rotations,
-        translations,
-        disc_type,
-        **kwargs,
-    ):
-        _ = (mean, mean_variance, noise_variance, translations, disc_type, kwargs)
-        n_shells = experiment_dataset.image_shape[0] // 2 + 1
-        recon_vol_size = _mock_reconstruction_accumulator_size(experiment_dataset, kwargs)
-        return (
-            None,
-            np.zeros(experiment_dataset.n_units, dtype=np.int32),
-            jnp.zeros(recon_vol_size, dtype=jnp.complex64),
-            jnp.ones(recon_vol_size, dtype=jnp.complex64),
-            RelionStats(
-                log_evidence_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
-                best_log_score_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
-                max_posterior_per_image=jnp.ones(experiment_dataset.n_units, dtype=jnp.float32),
-                rotation_posterior_sums=jnp.ones(np.asarray(rotations).shape[0], dtype=jnp.float32),
-            ),
-            NoiseStats(
-                wsum_sigma2_noise=jnp.ones(n_shells, dtype=jnp.float32),
-                wsum_img_power=jnp.ones(n_shells, dtype=jnp.float32),
-                wsum_sigma2_offset=0.0,
-                sumw=float(experiment_dataset.n_units),
-            ),
-        )
-
     def fake_grouped_local_search(
         experiment_dataset,
         mean,
-        mean_variance,
         noise_variance,
         prior_rotations,
         rotation_grid_rotations,
-        rotation_grid_eulers,
         healpix_order,
         sigma_rot,
         sigma_psi,
         translations,
         prior_translations,
         sigma_offset_angstrom,
-        offset_range_pixels,
         disc_type,
         image_batch_size,
         rotation_block_size,
         current_size,
         **kwargs,
     ):
-        _ = (
-            mean,
-            mean_variance,
-            noise_variance,
-            prior_rotations,
-            rotation_grid_rotations,
-            rotation_grid_eulers,
-            healpix_order,
-            sigma_rot,
-            sigma_psi,
-            translations,
-            sigma_offset_angstrom,
-            offset_range_pixels,
-            disc_type,
-            image_batch_size,
-            rotation_block_size,
-            current_size,
-            kwargs,
-        )
         local_prior_translations.append(np.asarray(prior_translations, dtype=np.float32).copy())
         n_shells = experiment_dataset.image_shape[0] // 2 + 1
         recon_vol_size = _mock_reconstruction_accumulator_size(experiment_dataset, kwargs)
@@ -14332,9 +13488,8 @@ def test_local_search_uses_negative_previous_offsets_for_translation_prior(
         if kwargs.get("return_best_pose_details"):
             best_rots = np.repeat(np.eye(3, dtype=np.float32)[None, :, :], experiment_dataset.n_units, axis=0)
             best_trans = np.zeros((experiment_dataset.n_units, 2), dtype=np.float32)
-            best_ids = np.zeros(experiment_dataset.n_units, dtype=np.int32)
-            best_pose_details = (best_rots, best_trans, best_ids)
-        return _pack_fake_local_search_outputs(
+            best_pose_details = (best_rots, best_trans)
+        return _mock_local_search_result(
             base_outputs,
             relion_stats,
             noise_stats,
@@ -14344,15 +13499,22 @@ def test_local_search_uses_negative_previous_offsets_for_translation_prior(
         )
 
     monkeypatch.setattr(refine_mod, "rotation_grid_size", fake_rotation_grid_size)
+    monkeypatch.setattr(half_scoring, "rotation_grid_size", fake_rotation_grid_size)
     monkeypatch.setattr(refine_mod, "_precompute_exact_local_fine_grid_enabled", lambda order: False)
-    monkeypatch.setattr(refine_mod, "get_relion_rotation_grid", fake_get_grid)
-    monkeypatch.setattr(refine_mod, "get_relion_rotation_grid_eulers", fake_get_grid_eulers)
-    monkeypatch.setattr(refine_mod, "run_em", fake_run_em)
-    monkeypatch.setattr(refine_mod, "_run_local_search_iteration", fake_grouped_local_search)
     monkeypatch.setattr(
-        refine_mod,
+        sampling_module,
+        "_relion_rotation_grid_float32",
+        lambda order, *, dtype=np.float32: (
+            fake_get_grid(order).astype(dtype),
+            fake_get_grid_eulers(order).astype(dtype),
+        ),
+    )
+    monkeypatch.setattr(half_scoring, "run_em", _mock_run_dense_em)
+    monkeypatch.setattr(half_scoring, "_run_local_search_iteration", fake_grouped_local_search)
+    monkeypatch.setattr(
+        mean_helpers_module,
         "collapse_rotation_posterior_to_direction_prior",
-        lambda rotation_posterior_sums, healpix_order: (
+        lambda rotation_posterior_sums, healpix_order, *, dtype=np.float32: (
             np.ones(
                 max(1, fake_rotation_grid_size(healpix_order)),
                 dtype=np.float64,
@@ -14369,19 +13531,17 @@ def test_local_search_uses_negative_previous_offsets_for_translation_prior(
         init_volume,
         jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
         jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-        _make_rotations(order_sizes[4], seed=123),
         translations,
-        disc_type="linear_interp",
-        max_iter=1,
-        image_batch_size=N_IMAGES,
-        rotation_block_size=order_sizes[4],
-        init_current_size=16,
-        adaptive_oversampling=1,
-        nside_level=4,
-        init_healpix_order=4,
-        max_healpix_order=4,
-        init_previous_best_rotation_eulers=[prev_eulers_h1, prev_eulers_h2],
-        init_previous_best_translations=[prev_h1.copy(), prev_h2.copy()],
+        options=RefinementOptions(
+            disc_type="linear_interp",
+            schedule=RefinementSchedule(max_iter=1, init_current_size=16, init_healpix_order=4, max_healpix_order=4),
+            batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=order_sizes[4]),
+            adaptive=AdaptiveOptions(adaptive_oversampling=1),
+            replay=ReplayState(
+                init_previous_best_rotation_eulers=[prev_eulers_h1, prev_eulers_h2],
+                init_previous_best_translations=[prev_h1.copy(), prev_h2.copy()],
+            ),
+        ),
     )
 
     assert len(local_prior_translations) == 4
@@ -14399,7 +13559,7 @@ def test_local_search_coarse_translation_prior_mode_uses_unperturbed_base_grid(
     translations,
     monkeypatch,
 ):
-    import recovar.em.dense_single_volume.iteration_loop as refine_mod
+    import recovar.em.refinement.iteration_loop as refine_mod
 
     order_sizes = {4: 4, 5: 9}
     prev_h1 = np.zeros((half_datasets[0].n_units, 2), dtype=np.float32)
@@ -14417,79 +13577,24 @@ def test_local_search_coarse_translation_prior_mode_uses_unperturbed_base_grid(
         order = int(order)
         return np.zeros((order_sizes[order], 3), dtype=np.float32)
 
-    def fake_run_em(
-        experiment_dataset,
-        mean,
-        mean_variance,
-        noise_variance,
-        rotations,
-        translations,
-        disc_type,
-        **kwargs,
-    ):
-        _ = (mean, mean_variance, noise_variance, translations, disc_type, kwargs)
-        n_shells = experiment_dataset.image_shape[0] // 2 + 1
-        recon_vol_size = _mock_reconstruction_accumulator_size(experiment_dataset, kwargs)
-        return (
-            None,
-            np.zeros(experiment_dataset.n_units, dtype=np.int32),
-            jnp.zeros(recon_vol_size, dtype=jnp.complex64),
-            jnp.ones(recon_vol_size, dtype=jnp.complex64),
-            RelionStats(
-                log_evidence_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
-                best_log_score_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
-                max_posterior_per_image=jnp.ones(experiment_dataset.n_units, dtype=jnp.float32),
-                rotation_posterior_sums=jnp.ones(np.asarray(rotations).shape[0], dtype=jnp.float32),
-            ),
-            NoiseStats(
-                wsum_sigma2_noise=jnp.ones(n_shells, dtype=jnp.float32),
-                wsum_img_power=jnp.ones(n_shells, dtype=jnp.float32),
-                wsum_sigma2_offset=0.0,
-                sumw=float(experiment_dataset.n_units),
-            ),
-        )
-
     def fake_grouped_local_search(
         experiment_dataset,
         mean,
-        mean_variance,
         noise_variance,
         prior_rotations,
         rotation_grid_rotations,
-        rotation_grid_eulers,
         healpix_order,
         sigma_rot,
         sigma_psi,
         translations,
         prior_translations,
         sigma_offset_angstrom,
-        offset_range_pixels,
         disc_type,
         image_batch_size,
         rotation_block_size,
         current_size,
         **kwargs,
     ):
-        _ = (
-            experiment_dataset,
-            mean,
-            mean_variance,
-            noise_variance,
-            prior_rotations,
-            rotation_grid_rotations,
-            rotation_grid_eulers,
-            healpix_order,
-            sigma_rot,
-            sigma_psi,
-            translations,
-            prior_translations,
-            sigma_offset_angstrom,
-            offset_range_pixels,
-            disc_type,
-            image_batch_size,
-            rotation_block_size,
-            current_size,
-        )
         recorded_translation_reference_grids.append(
             np.asarray(kwargs["translation_prior_reference_translations"], dtype=np.float32).copy()
         )
@@ -14512,29 +13617,33 @@ def test_local_search_coarse_translation_prior_mode_uses_unperturbed_base_grid(
             wsum_sigma2_offset=0.0,
             sumw=float(experiment_dataset.n_units),
         )
-        outputs = list(base_outputs)
+        best_pose_details = ()
         if kwargs.get("return_best_pose_details"):
             best_rots = np.repeat(np.eye(3, dtype=np.float32)[None, :, :], experiment_dataset.n_units, axis=0)
             best_trans = np.zeros((experiment_dataset.n_units, 2), dtype=np.float32)
-            best_ids = np.zeros(experiment_dataset.n_units, dtype=np.int32)
-            outputs.extend([best_rots, best_trans, best_ids])
-        outputs.append(relion_stats)
-        if kwargs.get("accumulate_noise", False):
-            outputs.append(noise_stats)
-        if kwargs.get("return_profile", False):
-            outputs.append({"reconstruction_sample_indices_by_image": [None] * experiment_dataset.n_units})
-        return tuple(outputs)
+            best_pose_details = (best_rots, best_trans)
+        return _mock_local_search_result(
+            base_outputs, relion_stats, noise_stats, kwargs,
+            experiment_dataset.n_units, best_pose_details,
+        )
 
     monkeypatch.setattr(refine_mod, "rotation_grid_size", fake_rotation_grid_size)
+    monkeypatch.setattr(half_scoring, "rotation_grid_size", fake_rotation_grid_size)
     monkeypatch.setattr(refine_mod, "_precompute_exact_local_fine_grid_enabled", lambda order: False)
-    monkeypatch.setattr(refine_mod, "get_relion_rotation_grid", fake_get_grid)
-    monkeypatch.setattr(refine_mod, "get_relion_rotation_grid_eulers", fake_get_grid_eulers)
-    monkeypatch.setattr(refine_mod, "run_em", fake_run_em)
-    monkeypatch.setattr(refine_mod, "_run_local_search_iteration", fake_grouped_local_search)
     monkeypatch.setattr(
-        refine_mod,
+        sampling_module,
+        "_relion_rotation_grid_float32",
+        lambda order, *, dtype=np.float32: (
+            fake_get_grid(order).astype(dtype),
+            fake_get_grid_eulers(order).astype(dtype),
+        ),
+    )
+    monkeypatch.setattr(half_scoring, "run_em", _mock_run_dense_em)
+    monkeypatch.setattr(half_scoring, "_run_local_search_iteration", fake_grouped_local_search)
+    monkeypatch.setattr(
+        mean_helpers_module,
         "collapse_rotation_posterior_to_direction_prior",
-        lambda rotation_posterior_sums, healpix_order: (
+        lambda rotation_posterior_sums, healpix_order, *, dtype=np.float32: (
             np.ones(12 * (2 ** int(healpix_order)) ** 2, dtype=np.float64)
             / (12 * (2 ** int(healpix_order)) ** 2)
         ),
@@ -14548,22 +13657,19 @@ def test_local_search_coarse_translation_prior_mode_uses_unperturbed_base_grid(
         init_volume,
         jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
         jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-        _make_rotations(order_sizes[4], seed=123),
         translations,
-        disc_type="linear_interp",
-        max_iter=1,
-        image_batch_size=N_IMAGES,
-        rotation_block_size=order_sizes[4],
-        init_current_size=16,
-        adaptive_oversampling=1,
-        nside_level=4,
-        init_healpix_order=4,
-        max_healpix_order=4,
-        init_previous_best_rotation_eulers=[prev_eulers_h1, prev_eulers_h2],
-        init_previous_best_translations=[prev_h1.copy(), prev_h2.copy()],
-        perturb_factor=0.5,
-        perturb_seed=0,
-        local_search_translation_prior_mode="coarse",
+        options=RefinementOptions(
+            disc_type="linear_interp",
+            schedule=RefinementSchedule(max_iter=1, init_current_size=16, init_healpix_order=4, max_healpix_order=4),
+            batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=order_sizes[4]),
+            adaptive=AdaptiveOptions(adaptive_oversampling=1),
+            replay=ReplayState(
+                init_previous_best_rotation_eulers=[prev_eulers_h1, prev_eulers_h2],
+                init_previous_best_translations=[prev_h1.copy(), prev_h2.copy()],
+            ),
+            parity=RelionParityOptions(perturb_factor=0.5, perturb_seed=0),
+            local_search=LocalSearchOptions(local_search_translation_prior_mode="coarse"),
+        ),
     )
 
     assert recorded_translation_reference_grids
@@ -14579,7 +13685,7 @@ def test_local_search_os0_keeps_full_local_support_for_mstep(
     monkeypatch,
 ):
     """RELION os0 local search keeps all fine candidates in storeWeightedSums."""
-    import recovar.em.dense_single_volume.iteration_loop as refine_mod
+    import recovar.em.refinement.iteration_loop as refine_mod
 
     order_sizes = {4: 4}
     reconstruct_flags = []
@@ -14593,50 +13699,24 @@ def test_local_search_os0_keeps_full_local_support_for_mstep(
     def fake_get_grid_eulers(order):
         return np.zeros((fake_rotation_grid_size(order), 3), dtype=np.float32)
 
-    def fake_run_em(
-        experiment_dataset, mean, mean_variance, noise_variance, rotations, translations, disc_type, **kwargs
-    ):
-        _ = (mean, mean_variance, noise_variance, translations, disc_type, kwargs)
-        n_shells = experiment_dataset.image_shape[0] // 2 + 1
-        recon_vol_size = _mock_reconstruction_accumulator_size(experiment_dataset, kwargs)
-        return (
-            None,
-            np.zeros(experiment_dataset.n_units, dtype=np.int32),
-            jnp.zeros(recon_vol_size, dtype=jnp.complex64),
-            jnp.ones(recon_vol_size, dtype=jnp.complex64),
-            RelionStats(
-                log_evidence_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
-                best_log_score_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
-                max_posterior_per_image=jnp.ones(experiment_dataset.n_units, dtype=jnp.float32),
-                rotation_posterior_sums=jnp.ones(np.asarray(rotations).shape[0], dtype=jnp.float32),
-            ),
-            NoiseStats(
-                wsum_sigma2_noise=jnp.ones(n_shells, dtype=jnp.float32),
-                wsum_img_power=jnp.ones(n_shells, dtype=jnp.float32),
-                wsum_sigma2_offset=0.0,
-                sumw=float(experiment_dataset.n_units),
-            ),
-        )
-
     def fake_local_search(experiment_dataset, *args, **kwargs):
         _ = args
         reconstruct_flags.append(kwargs["reconstruct_significant_only"])
         n_shells = experiment_dataset.image_shape[0] // 2 + 1
         recon_vol_size = _mock_reconstruction_accumulator_size(experiment_dataset, kwargs)
-        return (
-            jnp.zeros(recon_vol_size, dtype=jnp.complex64),
-            jnp.ones(recon_vol_size, dtype=jnp.complex64),
-            np.zeros(experiment_dataset.n_units, dtype=np.int32),
-            np.tile(np.eye(3, dtype=np.float32)[None, :, :], (experiment_dataset.n_units, 1, 1)),
-            np.zeros((experiment_dataset.n_units, 2), dtype=np.float32),
-            np.zeros(experiment_dataset.n_units, dtype=np.int64),
-            RelionStats(
+        return _LocalSearchIterationResult(
+            Ft_y=jnp.zeros(recon_vol_size, dtype=jnp.complex64),
+            Ft_ctf=jnp.ones(recon_vol_size, dtype=jnp.complex64),
+            hard_assignment=np.zeros(experiment_dataset.n_units, dtype=np.int32),
+            best_pose_rotations=np.tile(np.eye(3, dtype=np.float32)[None, :, :], (experiment_dataset.n_units, 1, 1)),
+            best_pose_translations=np.zeros((experiment_dataset.n_units, 2), dtype=np.float32),
+            relion_stats=RelionStats(
                 log_evidence_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
                 best_log_score_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
                 max_posterior_per_image=jnp.ones(experiment_dataset.n_units, dtype=jnp.float32),
                 rotation_posterior_sums=jnp.ones(order_sizes[4], dtype=jnp.float32),
             ),
-            NoiseStats(
+            noise_stats=NoiseStats(
                 wsum_sigma2_noise=jnp.ones(n_shells, dtype=jnp.float32),
                 wsum_img_power=jnp.ones(n_shells, dtype=jnp.float32),
                 wsum_sigma2_offset=0.0,
@@ -14645,14 +13725,21 @@ def test_local_search_os0_keeps_full_local_support_for_mstep(
         )
 
     monkeypatch.setattr(refine_mod, "rotation_grid_size", fake_rotation_grid_size)
-    monkeypatch.setattr(refine_mod, "get_relion_rotation_grid", fake_get_grid)
-    monkeypatch.setattr(refine_mod, "get_relion_rotation_grid_eulers", fake_get_grid_eulers)
-    monkeypatch.setattr(refine_mod, "run_em", fake_run_em)
-    monkeypatch.setattr(refine_mod, "_run_local_search_iteration", fake_local_search)
+    monkeypatch.setattr(half_scoring, "rotation_grid_size", fake_rotation_grid_size)
     monkeypatch.setattr(
-        refine_mod,
+        sampling_module,
+        "_relion_rotation_grid_float32",
+        lambda order, *, dtype=np.float32: (
+            fake_get_grid(order).astype(dtype),
+            fake_get_grid_eulers(order).astype(dtype),
+        ),
+    )
+    monkeypatch.setattr(half_scoring, "run_em", _mock_run_dense_em)
+    monkeypatch.setattr(half_scoring, "_run_local_search_iteration", fake_local_search)
+    monkeypatch.setattr(
+        mean_helpers_module,
         "collapse_rotation_posterior_to_direction_prior",
-        lambda rotation_posterior_sums, healpix_order: (
+        lambda rotation_posterior_sums, healpix_order, *, dtype=np.float32: (
             np.ones(max(1, fake_rotation_grid_size(healpix_order)), dtype=np.float64)
             / max(1, fake_rotation_grid_size(healpix_order))
         ),
@@ -14663,17 +13750,13 @@ def test_local_search_os0_keeps_full_local_support_for_mstep(
         init_volume,
         jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
         jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-        _make_rotations(order_sizes[4], seed=222),
         translations,
-        disc_type="linear_interp",
-        max_iter=2,
-        image_batch_size=N_IMAGES,
-        rotation_block_size=order_sizes[4],
-        init_current_size=16,
-        adaptive_oversampling=0,
-        nside_level=4,
-        init_healpix_order=4,
-        max_healpix_order=4,
+        options=RefinementOptions(
+            disc_type="linear_interp",
+            schedule=RefinementSchedule(max_iter=2, init_current_size=16, init_healpix_order=4, max_healpix_order=4),
+            batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=order_sizes[4]),
+            adaptive=AdaptiveOptions(adaptive_oversampling=0),
+        ),
     )
 
     assert reconstruct_flags == [False, False]
@@ -14685,7 +13768,7 @@ def _run_refine_with_stubbed_exact_local_batch_sizes(
     translations,
     monkeypatch,
 ):
-    import recovar.em.dense_single_volume.iteration_loop as refine_mod
+    import recovar.em.refinement.iteration_loop as refine_mod
 
     order_sizes = {4: 4}
     image_batch_sizes = []
@@ -14699,50 +13782,24 @@ def _run_refine_with_stubbed_exact_local_batch_sizes(
     def fake_get_grid_eulers(order):
         return np.zeros((fake_rotation_grid_size(order), 3), dtype=np.float32)
 
-    def fake_run_em(
-        experiment_dataset, mean, mean_variance, noise_variance, rotations, translations, disc_type, **kwargs
-    ):
-        _ = (mean, mean_variance, noise_variance, translations, disc_type, kwargs)
-        n_shells = experiment_dataset.image_shape[0] // 2 + 1
-        recon_vol_size = _mock_reconstruction_accumulator_size(experiment_dataset, kwargs)
-        return (
-            None,
-            np.zeros(experiment_dataset.n_units, dtype=np.int32),
-            jnp.zeros(recon_vol_size, dtype=jnp.complex64),
-            jnp.ones(recon_vol_size, dtype=jnp.complex64),
-            RelionStats(
-                log_evidence_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
-                best_log_score_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
-                max_posterior_per_image=jnp.ones(experiment_dataset.n_units, dtype=jnp.float32),
-                rotation_posterior_sums=jnp.ones(np.asarray(rotations).shape[0], dtype=jnp.float32),
-            ),
-            NoiseStats(
-                wsum_sigma2_noise=jnp.ones(n_shells, dtype=jnp.float32),
-                wsum_img_power=jnp.ones(n_shells, dtype=jnp.float32),
-                wsum_sigma2_offset=0.0,
-                sumw=float(experiment_dataset.n_units),
-            ),
-        )
-
     def fake_local_search(experiment_dataset, *args, **kwargs):
         _ = args
         image_batch_sizes.append(int(kwargs["image_batch_size"]))
         n_shells = experiment_dataset.image_shape[0] // 2 + 1
         recon_vol_size = _mock_reconstruction_accumulator_size(experiment_dataset, kwargs)
-        return (
-            jnp.zeros(recon_vol_size, dtype=jnp.complex64),
-            jnp.ones(recon_vol_size, dtype=jnp.complex64),
-            np.zeros(experiment_dataset.n_units, dtype=np.int32),
-            np.tile(np.eye(3, dtype=np.float32)[None, :, :], (experiment_dataset.n_units, 1, 1)),
-            np.zeros((experiment_dataset.n_units, 2), dtype=np.float32),
-            np.zeros(experiment_dataset.n_units, dtype=np.int64),
-            RelionStats(
+        return _LocalSearchIterationResult(
+            Ft_y=jnp.zeros(recon_vol_size, dtype=jnp.complex64),
+            Ft_ctf=jnp.ones(recon_vol_size, dtype=jnp.complex64),
+            hard_assignment=np.zeros(experiment_dataset.n_units, dtype=np.int32),
+            best_pose_rotations=np.tile(np.eye(3, dtype=np.float32)[None, :, :], (experiment_dataset.n_units, 1, 1)),
+            best_pose_translations=np.zeros((experiment_dataset.n_units, 2), dtype=np.float32),
+            relion_stats=RelionStats(
                 log_evidence_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
                 best_log_score_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
                 max_posterior_per_image=jnp.ones(experiment_dataset.n_units, dtype=jnp.float32),
                 rotation_posterior_sums=jnp.ones(order_sizes[4], dtype=jnp.float32),
             ),
-            NoiseStats(
+            noise_stats=NoiseStats(
                 wsum_sigma2_noise=jnp.ones(n_shells, dtype=jnp.float32),
                 wsum_img_power=jnp.ones(n_shells, dtype=jnp.float32),
                 wsum_sigma2_offset=0.0,
@@ -14751,14 +13808,21 @@ def _run_refine_with_stubbed_exact_local_batch_sizes(
         )
 
     monkeypatch.setattr(refine_mod, "rotation_grid_size", fake_rotation_grid_size)
-    monkeypatch.setattr(refine_mod, "get_relion_rotation_grid", fake_get_grid)
-    monkeypatch.setattr(refine_mod, "get_relion_rotation_grid_eulers", fake_get_grid_eulers)
-    monkeypatch.setattr(refine_mod, "run_em", fake_run_em)
-    monkeypatch.setattr(refine_mod, "_run_local_search_iteration", fake_local_search)
+    monkeypatch.setattr(half_scoring, "rotation_grid_size", fake_rotation_grid_size)
     monkeypatch.setattr(
-        refine_mod,
+        sampling_module,
+        "_relion_rotation_grid_float32",
+        lambda order, *, dtype=np.float32: (
+            fake_get_grid(order).astype(dtype),
+            fake_get_grid_eulers(order).astype(dtype),
+        ),
+    )
+    monkeypatch.setattr(half_scoring, "run_em", _mock_run_dense_em)
+    monkeypatch.setattr(half_scoring, "_run_local_search_iteration", fake_local_search)
+    monkeypatch.setattr(
+        mean_helpers_module,
         "collapse_rotation_posterior_to_direction_prior",
-        lambda rotation_posterior_sums, healpix_order: (
+        lambda rotation_posterior_sums, healpix_order, *, dtype=np.float32: (
             np.ones(max(1, fake_rotation_grid_size(healpix_order)), dtype=np.float64)
             / max(1, fake_rotation_grid_size(healpix_order))
         ),
@@ -14769,17 +13833,13 @@ def _run_refine_with_stubbed_exact_local_batch_sizes(
         init_volume,
         jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
         jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-        _make_rotations(order_sizes[4], seed=226),
         translations,
-        disc_type="linear_interp",
-        max_iter=2,
-        image_batch_size=N_IMAGES,
-        rotation_block_size=order_sizes[4],
-        init_current_size=16,
-        adaptive_oversampling=0,
-        nside_level=4,
-        init_healpix_order=4,
-        max_healpix_order=4,
+        options=RefinementOptions(
+            disc_type="linear_interp",
+            schedule=RefinementSchedule(max_iter=2, init_current_size=16, init_healpix_order=4, max_healpix_order=4),
+            batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=order_sizes[4]),
+            adaptive=AdaptiveOptions(adaptive_oversampling=0),
+        ),
     )
 
     return image_batch_sizes
@@ -14808,7 +13868,7 @@ def test_local_search_coarse_translation_prior_mode_uses_replay_sampling_grid_wh
     monkeypatch,
     tmp_path,
 ):
-    import recovar.em.dense_single_volume.iteration_loop as refine_mod
+    import recovar.em.refinement.iteration_loop as refine_mod
 
     order_sizes = {4: 4, 5: 9}
     prev_h1 = np.zeros((half_datasets[0].n_units, 2), dtype=np.float32)
@@ -14832,79 +13892,24 @@ def test_local_search_coarse_translation_prior_mode_uses_replay_sampling_grid_wh
         order = int(order)
         return np.zeros((order_sizes[order], 3), dtype=np.float32)
 
-    def fake_run_em(
-        experiment_dataset,
-        mean,
-        mean_variance,
-        noise_variance,
-        rotations,
-        translations,
-        disc_type,
-        **kwargs,
-    ):
-        _ = (mean, mean_variance, noise_variance, translations, disc_type, kwargs)
-        n_shells = experiment_dataset.image_shape[0] // 2 + 1
-        recon_vol_size = _mock_reconstruction_accumulator_size(experiment_dataset, kwargs)
-        return (
-            None,
-            np.zeros(experiment_dataset.n_units, dtype=np.int32),
-            jnp.zeros(recon_vol_size, dtype=jnp.complex64),
-            jnp.ones(recon_vol_size, dtype=jnp.complex64),
-            RelionStats(
-                log_evidence_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
-                best_log_score_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
-                max_posterior_per_image=jnp.ones(experiment_dataset.n_units, dtype=jnp.float32),
-                rotation_posterior_sums=jnp.ones(np.asarray(rotations).shape[0], dtype=jnp.float32),
-            ),
-            NoiseStats(
-                wsum_sigma2_noise=jnp.ones(n_shells, dtype=jnp.float32),
-                wsum_img_power=jnp.ones(n_shells, dtype=jnp.float32),
-                wsum_sigma2_offset=0.0,
-                sumw=float(experiment_dataset.n_units),
-            ),
-        )
-
     def fake_grouped_local_search(
         experiment_dataset,
         mean,
-        mean_variance,
         noise_variance,
         prior_rotations,
         rotation_grid_rotations,
-        rotation_grid_eulers,
         healpix_order,
         sigma_rot,
         sigma_psi,
         translations,
         prior_translations,
         sigma_offset_angstrom,
-        offset_range_pixels,
         disc_type,
         image_batch_size,
         rotation_block_size,
         current_size,
         **kwargs,
     ):
-        _ = (
-            experiment_dataset,
-            mean,
-            mean_variance,
-            noise_variance,
-            prior_rotations,
-            rotation_grid_rotations,
-            rotation_grid_eulers,
-            healpix_order,
-            sigma_rot,
-            sigma_psi,
-            translations,
-            prior_translations,
-            sigma_offset_angstrom,
-            offset_range_pixels,
-            disc_type,
-            image_batch_size,
-            rotation_block_size,
-            current_size,
-        )
         recorded_translation_reference_grids.append(
             np.asarray(kwargs["translation_prior_reference_translations"], dtype=np.float32).copy()
         )
@@ -14927,34 +13932,38 @@ def test_local_search_coarse_translation_prior_mode_uses_replay_sampling_grid_wh
             wsum_sigma2_offset=0.0,
             sumw=float(experiment_dataset.n_units),
         )
-        outputs = list(base_outputs)
+        best_pose_details = ()
         if kwargs.get("return_best_pose_details"):
             best_rots = np.repeat(np.eye(3, dtype=np.float32)[None, :, :], experiment_dataset.n_units, axis=0)
             best_trans = np.zeros((experiment_dataset.n_units, 2), dtype=np.float32)
-            best_ids = np.zeros(experiment_dataset.n_units, dtype=np.int32)
-            outputs.extend([best_rots, best_trans, best_ids])
-        outputs.append(relion_stats)
-        if kwargs.get("accumulate_noise", False):
-            outputs.append(noise_stats)
-        if kwargs.get("return_profile", False):
-            outputs.append({"reconstruction_sample_indices_by_image": [None] * experiment_dataset.n_units})
-        return tuple(outputs)
+            best_pose_details = (best_rots, best_trans)
+        return _mock_local_search_result(
+            base_outputs, relion_stats, noise_stats, kwargs,
+            experiment_dataset.n_units, best_pose_details,
+        )
 
     monkeypatch.setattr(refine_mod, "rotation_grid_size", fake_rotation_grid_size)
-    monkeypatch.setattr(refine_mod, "get_relion_rotation_grid", fake_get_grid)
-    monkeypatch.setattr(refine_mod, "get_relion_rotation_grid_eulers", fake_get_grid_eulers)
-    monkeypatch.setattr(refine_mod, "run_em", fake_run_em)
-    monkeypatch.setattr(refine_mod, "_run_local_search_iteration", fake_grouped_local_search)
+    monkeypatch.setattr(half_scoring, "rotation_grid_size", fake_rotation_grid_size)
     monkeypatch.setattr(
-        refine_mod,
+        sampling_module,
+        "_relion_rotation_grid_float32",
+        lambda order, *, dtype=np.float32: (
+            fake_get_grid(order).astype(dtype),
+            fake_get_grid_eulers(order).astype(dtype),
+        ),
+    )
+    monkeypatch.setattr(half_scoring, "run_em", _mock_run_dense_em)
+    monkeypatch.setattr(half_scoring, "_run_local_search_iteration", fake_grouped_local_search)
+    monkeypatch.setattr(
+        mean_helpers_module,
         "collapse_rotation_posterior_to_direction_prior",
-        lambda rotation_posterior_sums, healpix_order: (
+        lambda rotation_posterior_sums, healpix_order, *, dtype=np.float32: (
             np.ones(max(1, fake_rotation_grid_size(healpix_order)), dtype=np.float64)
             / max(1, fake_rotation_grid_size(healpix_order))
         ),
     )
     monkeypatch.setattr(
-        refine_mod,
+        relion_replay_module,
         "read_relion_sampling_metadata",
         lambda _path: {
             "random_perturbation": refine_mod.relion_sampling_perturbation_for_iteration(
@@ -14976,24 +13985,25 @@ def test_local_search_coarse_translation_prior_mode_uses_replay_sampling_grid_wh
         init_volume,
         jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
         jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-        _make_rotations(order_sizes[4], seed=123),
         translations,
-        disc_type="linear_interp",
-        max_iter=1,
-        image_batch_size=N_IMAGES,
-        rotation_block_size=order_sizes[4],
-        init_current_size=16,
-        adaptive_oversampling=1,
-        nside_level=4,
-        init_healpix_order=4,
-        max_healpix_order=4,
-        init_previous_best_rotation_eulers=[prev_eulers_h1, prev_eulers_h2],
-        init_previous_best_translations=[prev_h1.copy(), prev_h2.copy()],
-        perturb_factor=0.5,
-        perturb_seed=0,
-        local_search_translation_prior_mode="coarse",
-        perturb_replay_relion_dir=str(tmp_path),
-        init_relion_iteration=13,
+        options=RefinementOptions(
+            disc_type="linear_interp",
+            schedule=RefinementSchedule(
+                max_iter=1,
+                init_current_size=16,
+                init_healpix_order=4,
+                max_healpix_order=4,
+                init_relion_iteration=13,
+            ),
+            batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=order_sizes[4]),
+            adaptive=AdaptiveOptions(adaptive_oversampling=1),
+            replay=ReplayState(
+                init_previous_best_rotation_eulers=[prev_eulers_h1, prev_eulers_h2],
+                init_previous_best_translations=[prev_h1.copy(), prev_h2.copy()],
+            ),
+            parity=RelionParityOptions(perturb_factor=0.5, perturb_seed=0, perturb_replay_relion_dir=str(tmp_path)),
+            local_search=LocalSearchOptions(local_search_translation_prior_mode="coarse"),
+        ),
     )
 
     assert recorded_translation_reference_grids
@@ -15011,14 +14021,19 @@ def test_replay_current_size_uses_control_model_star():
     assert _replay_control_model_iteration(13, 0) == 14
 
 
-def test_first_local_iteration_uses_previous_best_rotations_without_dense_bootstrap(
+@pytest.mark.parametrize(
+    ("replay_source", "rotation_seed"),
+    [("iteration_override", 7), ("initial_state", 11)],
+)
+def test_previous_best_rotations_skip_first_local_dense_bootstrap(
     half_datasets,
     init_volume,
     translations,
     monkeypatch,
+    replay_source,
+    rotation_seed,
 ):
-    """hp4 should enter local search immediately when previous best rotations exist."""
-    import recovar.em.dense_single_volume.iteration_loop as refine_mod
+    """Both replay entry points enter hp4 local search without a dense bootstrap."""
 
     dense_calls = []
     local_calls = []
@@ -15035,66 +14050,34 @@ def test_first_local_iteration_uses_previous_best_rotations_without_dense_bootst
         disc_type,
         **kwargs,
     ):
-        _ = (mean, mean_variance, noise_variance, translations, disc_type, kwargs)
         dense_calls.append(int(np.asarray(rotations).shape[0]))
         n_shells = experiment_dataset.image_shape[0] // 2 + 1
         recon_vol_size = _mock_reconstruction_accumulator_size(experiment_dataset, kwargs)
-        return (
-            None,
-            np.zeros(experiment_dataset.n_units, dtype=np.int32),
-            jnp.zeros(recon_vol_size, dtype=jnp.complex64),
-            jnp.ones(recon_vol_size, dtype=jnp.complex64),
-            RelionStats(
-                log_evidence_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
-                best_log_score_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
-                max_posterior_per_image=jnp.ones(experiment_dataset.n_units, dtype=jnp.float32),
-                rotation_posterior_sums=jnp.ones(np.asarray(rotations).shape[0], dtype=jnp.float32),
-            ),
-            NoiseStats(
-                wsum_sigma2_noise=jnp.ones(n_shells, dtype=jnp.float32),
-                wsum_img_power=jnp.ones(n_shells, dtype=jnp.float32),
-                wsum_sigma2_offset=0.0,
-                sumw=float(experiment_dataset.n_units),
-            ),
+        return _mock_dense_em_result(
+            n_images=experiment_dataset.n_units,
+            n_rotations=np.asarray(rotations).shape[0],
+            volume_size=recon_vol_size,
+            n_shells=n_shells,
         )
 
     def fake_grouped_local_search(
         experiment_dataset,
         mean,
-        mean_variance,
         noise_variance,
         prior_rotations,
         rotation_grid_rotations,
-        rotation_grid_eulers,
         healpix_order,
         sigma_rot,
         sigma_psi,
         translations,
         prior_translations,
         sigma_offset_angstrom,
-        offset_range_pixels,
         disc_type,
         image_batch_size,
         rotation_block_size,
         current_size,
         **kwargs,
     ):
-        _ = (
-            mean,
-            mean_variance,
-            noise_variance,
-            sigma_rot,
-            sigma_psi,
-            translations,
-            prior_translations,
-            sigma_offset_angstrom,
-            offset_range_pixels,
-            disc_type,
-            image_batch_size,
-            rotation_block_size,
-            current_size,
-            kwargs,
-        )
         local_calls.append(
             {
                 "healpix_order": int(healpix_order),
@@ -15125,9 +14108,8 @@ def test_first_local_iteration_uses_previous_best_rotations_without_dense_bootst
         if kwargs.get("return_best_pose_details"):
             best_rots = np.repeat(np.eye(3, dtype=np.float32)[None, :, :], experiment_dataset.n_units, axis=0)
             best_trans = np.zeros((experiment_dataset.n_units, 2), dtype=np.float32)
-            best_ids = np.zeros(experiment_dataset.n_units, dtype=np.int32)
-            best_pose_details = (best_rots, best_trans, best_ids)
-        return _pack_fake_local_search_outputs(
+            best_pose_details = (best_rots, best_trans)
+        return _mock_local_search_result(
             base_outputs,
             relion_stats,
             noise_stats,
@@ -15136,12 +14118,12 @@ def test_first_local_iteration_uses_previous_best_rotations_without_dense_bootst
             best_pose_details,
         )
 
-    monkeypatch.setattr(refine_mod, "run_em", fake_run_em)
-    monkeypatch.setattr(refine_mod, "_run_local_search_iteration", fake_grouped_local_search)
+    monkeypatch.setattr(half_scoring, "run_em", fake_run_em)
+    monkeypatch.setattr(half_scoring, "_run_local_search_iteration", fake_grouped_local_search)
     monkeypatch.setattr(
-        refine_mod,
+        mean_helpers_module,
         "collapse_rotation_posterior_to_direction_prior",
-        lambda rotation_posterior_sums, healpix_order: (
+        lambda rotation_posterior_sums, healpix_order, *, dtype=np.float32: (
             np.ones(
                 max(1, rotation_grid_size(healpix_order)),
                 dtype=np.float64,
@@ -15150,196 +14132,35 @@ def test_first_local_iteration_uses_previous_best_rotations_without_dense_bootst
         ),
     )
 
+    replay = (
+        ReplayState(replay_iteration_overrides=[{
+            "local_search": True,
+            "healpix_order": 4,
+            "previous_best_rotation_eulers": [prev_h1, prev_h2],
+        }])
+        if replay_source == "iteration_override"
+        else ReplayState(init_previous_best_rotation_eulers=[prev_h1, prev_h2])
+    )
+
     refine_single_volume(
         half_datasets,
         init_volume,
         jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
         jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-        _make_rotations(rotation_grid_size(4), seed=7),
         translations,
-        disc_type="linear_interp",
-        max_iter=1,
-        image_batch_size=N_IMAGES,
-        rotation_block_size=512,
-        init_current_size=16,
-        adaptive_oversampling=0,
-        nside_level=4,
-        init_healpix_order=4,
-        max_healpix_order=4,
-        replay_iteration_overrides=[
-            {
-                "local_search": True,
-                "healpix_order": 4,
-                "previous_best_rotation_eulers": [prev_h1, prev_h2],
-            }
-        ],
-        skip_final_iteration=True,
-    )
-
-    assert local_calls
-    assert not dense_calls
-    for call in local_calls:
-        assert call["healpix_order"] == 4
-        assert call["prior_shape"][0] == half_datasets[0].n_units
-
-
-def test_init_previous_best_rotation_eulers_seed_first_local_iteration(
-    half_datasets,
-    init_volume,
-    translations,
-    monkeypatch,
-):
-    """Initial previous-best eulers should skip the dense hp4 bootstrap."""
-    import recovar.em.dense_single_volume.iteration_loop as refine_mod
-
-    dense_calls = []
-    local_calls = []
-    prev_h1 = np.zeros((half_datasets[0].n_units, 3), dtype=np.float32)
-    prev_h2 = np.zeros((half_datasets[1].n_units, 3), dtype=np.float32)
-
-    def fake_run_em(
-        experiment_dataset,
-        mean,
-        mean_variance,
-        noise_variance,
-        rotations,
-        translations,
-        disc_type,
-        **kwargs,
-    ):
-        _ = (mean, mean_variance, noise_variance, translations, disc_type, kwargs)
-        dense_calls.append(int(np.asarray(rotations).shape[0]))
-        n_shells = experiment_dataset.image_shape[0] // 2 + 1
-        recon_vol_size = _mock_reconstruction_accumulator_size(experiment_dataset, kwargs)
-        return (
-            None,
-            np.zeros(experiment_dataset.n_units, dtype=np.int32),
-            jnp.zeros(recon_vol_size, dtype=jnp.complex64),
-            jnp.ones(recon_vol_size, dtype=jnp.complex64),
-            RelionStats(
-                log_evidence_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
-                best_log_score_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
-                max_posterior_per_image=jnp.ones(experiment_dataset.n_units, dtype=jnp.float32),
-                rotation_posterior_sums=jnp.ones(np.asarray(rotations).shape[0], dtype=jnp.float32),
+        options=RefinementOptions(
+            disc_type="linear_interp",
+            schedule=RefinementSchedule(
+                max_iter=1,
+                init_current_size=16,
+                init_healpix_order=4,
+                max_healpix_order=4,
+                skip_final_iteration=True,
             ),
-            NoiseStats(
-                wsum_sigma2_noise=jnp.ones(n_shells, dtype=jnp.float32),
-                wsum_img_power=jnp.ones(n_shells, dtype=jnp.float32),
-                wsum_sigma2_offset=0.0,
-                sumw=float(experiment_dataset.n_units),
-            ),
-        )
-
-    def fake_grouped_local_search(
-        experiment_dataset,
-        mean,
-        mean_variance,
-        noise_variance,
-        prior_rotations,
-        rotation_grid_rotations,
-        rotation_grid_eulers,
-        healpix_order,
-        sigma_rot,
-        sigma_psi,
-        translations,
-        prior_translations,
-        sigma_offset_angstrom,
-        offset_range_pixels,
-        disc_type,
-        image_batch_size,
-        rotation_block_size,
-        current_size,
-        **kwargs,
-    ):
-        _ = (
-            mean,
-            mean_variance,
-            noise_variance,
-            sigma_rot,
-            sigma_psi,
-            translations,
-            prior_translations,
-            sigma_offset_angstrom,
-            offset_range_pixels,
-            disc_type,
-            image_batch_size,
-            rotation_block_size,
-            current_size,
-            kwargs,
-        )
-        local_calls.append(
-            {
-                "healpix_order": int(healpix_order),
-                "prior_shape": np.asarray(prior_rotations).shape,
-                "grid_shape": np.asarray(rotation_grid_rotations).shape,
-            }
-        )
-        n_shells = experiment_dataset.image_shape[0] // 2 + 1
-        recon_vol_size = _mock_reconstruction_accumulator_size(experiment_dataset, kwargs)
-        base_outputs = (
-            jnp.zeros(recon_vol_size, dtype=jnp.complex64),
-            jnp.ones(recon_vol_size, dtype=jnp.complex64),
-            np.zeros(experiment_dataset.n_units, dtype=np.int32),
-        )
-        relion_stats = RelionStats(
-            log_evidence_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
-            best_log_score_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
-            max_posterior_per_image=jnp.ones(experiment_dataset.n_units, dtype=jnp.float32),
-            rotation_posterior_sums=jnp.ones(np.asarray(rotation_grid_rotations).shape[0], dtype=jnp.float32),
-        )
-        noise_stats = NoiseStats(
-            wsum_sigma2_noise=jnp.ones(n_shells, dtype=jnp.float32),
-            wsum_img_power=jnp.ones(n_shells, dtype=jnp.float32),
-            wsum_sigma2_offset=0.0,
-            sumw=float(experiment_dataset.n_units),
-        )
-        best_pose_details = ()
-        if kwargs.get("return_best_pose_details"):
-            best_rots = np.repeat(np.eye(3, dtype=np.float32)[None, :, :], experiment_dataset.n_units, axis=0)
-            best_trans = np.zeros((experiment_dataset.n_units, 2), dtype=np.float32)
-            best_ids = np.zeros(experiment_dataset.n_units, dtype=np.int32)
-            best_pose_details = (best_rots, best_trans, best_ids)
-        return _pack_fake_local_search_outputs(
-            base_outputs,
-            relion_stats,
-            noise_stats,
-            kwargs,
-            experiment_dataset.n_units,
-            best_pose_details,
-        )
-
-    monkeypatch.setattr(refine_mod, "run_em", fake_run_em)
-    monkeypatch.setattr(refine_mod, "_run_local_search_iteration", fake_grouped_local_search)
-    monkeypatch.setattr(
-        refine_mod,
-        "collapse_rotation_posterior_to_direction_prior",
-        lambda rotation_posterior_sums, healpix_order: (
-            np.ones(
-                max(1, rotation_grid_size(healpix_order)),
-                dtype=np.float64,
-            )
-            / max(1, rotation_grid_size(healpix_order))
+            batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=512),
+            adaptive=AdaptiveOptions(adaptive_oversampling=0),
+            replay=replay,
         ),
-    )
-
-    refine_single_volume(
-        half_datasets,
-        init_volume,
-        jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
-        jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-        _make_rotations(rotation_grid_size(4), seed=11),
-        translations,
-        disc_type="linear_interp",
-        max_iter=1,
-        image_batch_size=N_IMAGES,
-        rotation_block_size=512,
-        init_current_size=16,
-        adaptive_oversampling=0,
-        nside_level=4,
-        init_healpix_order=4,
-        max_healpix_order=4,
-        init_previous_best_rotation_eulers=[prev_h1, prev_h2],
-        skip_final_iteration=True,
     )
 
     assert local_calls
@@ -15356,7 +14177,6 @@ def test_relion_mode_writes_absolute_translations_from_previous_offset(
     monkeypatch,
 ):
     """RELION-mode writeback should use old_offset + delta."""
-    import recovar.em.dense_single_volume.iteration_loop as refine_mod
 
     half_datasets = [MockDataset(1, rng), MockDataset(1, rng)]
     for ds in half_datasets:
@@ -15375,49 +14195,38 @@ def test_relion_mode_writes_absolute_translations_from_previous_offset(
         disc_type,
         **kwargs,
     ):
-        _ = (mean, mean_variance, noise_variance, rotations, translations, disc_type, kwargs)
         n_shells = experiment_dataset.image_shape[0] // 2 + 1
         recon_vol_size = _mock_reconstruction_accumulator_size(experiment_dataset, kwargs)
         hard_assignment = np.full(experiment_dataset.n_units, 1, dtype=np.int32)
-        return (
-            None,
-            hard_assignment,
-            jnp.zeros(recon_vol_size, dtype=jnp.complex64),
-            jnp.ones(recon_vol_size, dtype=jnp.complex64),
-            RelionStats(
-                log_evidence_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
-                best_log_score_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
-                max_posterior_per_image=jnp.ones(experiment_dataset.n_units, dtype=jnp.float32),
-                rotation_posterior_sums=jnp.ones(np.asarray(rotations).shape[0], dtype=jnp.float32),
-            ),
-            NoiseStats(
-                wsum_sigma2_noise=jnp.ones(n_shells, dtype=jnp.float32),
-                wsum_img_power=jnp.ones(n_shells, dtype=jnp.float32),
-                wsum_sigma2_offset=0.0,
-                sumw=float(experiment_dataset.n_units),
-            ),
+        return _mock_dense_em_result(
+            n_images=experiment_dataset.n_units,
+            n_rotations=np.asarray(rotations).shape[0],
+            volume_size=recon_vol_size,
+            n_shells=n_shells,
+            hard_assignments=hard_assignment,
         )
 
-    monkeypatch.setattr(refine_mod, "run_em", fake_run_em)
+    monkeypatch.setattr(half_scoring, "run_em", fake_run_em)
 
     result = refine_single_volume(
         half_datasets,
         init_volume,
         jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
         jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-        _make_rotations(1, seed=123),
         translations,
-        disc_type="linear_interp",
-        max_iter=1,
-        image_batch_size=N_IMAGES,
-        rotation_block_size=1,
-        init_current_size=16,
-        adaptive_oversampling=0,
-        nside_level=1,
-        init_healpix_order=1,
-        max_healpix_order=1,
-        init_previous_best_translations=[prev_h1.copy(), prev_h2.copy()],
-        skip_final_iteration=True,
+        options=RefinementOptions(
+            disc_type="linear_interp",
+            schedule=RefinementSchedule(
+                max_iter=1,
+                init_current_size=16,
+                init_healpix_order=1,
+                max_healpix_order=1,
+                skip_final_iteration=True,
+            ),
+            batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=1),
+            adaptive=AdaptiveOptions(adaptive_oversampling=0),
+            replay=ReplayState(init_previous_best_translations=[prev_h1.copy(), prev_h2.copy()]),
+        ),
     )
 
     expected_h1 = relion_translation_search_base(prev_h1) + chosen_trans[None, :]
@@ -15433,13 +14242,30 @@ def test_relion_mode_writes_absolute_translations_from_previous_offset(
     )
 
 
+@pytest.mark.parametrize("capture_dump", [False, True])
 def test_kclass_recomputes_mstep_tau2_from_iref_power_spectrum(
     rng,
     init_volume,
     monkeypatch,
+    tmp_path,
+    capture_dump,
 ):
     """Class3D M-step tau2 comes from current Iref power, not previous model.star."""
-    import recovar.em.dense_single_volume.iteration_loop as refine_mod
+
+    if capture_dump:
+        monkeypatch.setenv("RECOVAR_KCLASS_DUMP_DIR", str(tmp_path))
+    else:
+        monkeypatch.delenv("RECOVAR_KCLASS_DUMP_DIR", raising=False)
+    floor_calls = []
+    shell_stats = regularization_module._compute_relion_weight_shell_stats
+
+    def record_shell_stats(*args, **kwargs):
+        result = shell_stats(*args, **kwargs)
+        if kwargs.get("shell_rounding") == "floor" and inspect.currentframe().f_back.f_code.co_name == "refine_single_volume":
+            floor_calls.append(result)
+        return result
+
+    monkeypatch.setattr(regularization_module, "_compute_relion_weight_shell_stats", record_shell_stats)
 
     half_datasets = [MockDataset(1, rng), MockDataset(1, rng)]
     n_classes = 2
@@ -15527,28 +14353,31 @@ def test_kclass_recomputes_mstep_tau2_from_iref_power_spectrum(
         )
 
     monkeypatch.setattr(regularization_module, "compute_relion_tau2_from_iref_power_spectrum", fake_iref_tau2)
-    monkeypatch.setattr(refine_mod, "run_dense_k_class_em", fake_run_dense_k_class_em)
+    monkeypatch.setattr(half_scoring, "run_dense_k_class_em", fake_run_dense_k_class_em)
 
     result = refine_single_volume(
         half_datasets,
         init_volume,
         jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
         jnp.ones((n_classes, VOLUME_SIZE), dtype=jnp.float32),
-        _make_rotations(1, seed=123),
         jnp.array([[0.0, 0.0]], dtype=jnp.float32),
-        disc_type="linear_interp",
-        max_iter=1,
-        image_batch_size=N_IMAGES,
-        rotation_block_size=1,
-        init_current_size=4,
-        adaptive_oversampling=0,
-        nside_level=1,
-        init_healpix_order=1,
-        max_healpix_order=1,
-        n_classes=n_classes,
-        init_class_log_priors=np.log(np.array([0.5, 0.5], dtype=np.float64)),
-        replay_iteration_overrides=[{"class_tau2": class_tau2}],
-        skip_final_iteration=True,
+        options=RefinementOptions(
+            disc_type="linear_interp",
+            schedule=RefinementSchedule(
+                max_iter=1,
+                init_current_size=4,
+                init_healpix_order=1,
+                max_healpix_order=1,
+                skip_final_iteration=True,
+            ),
+            batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=1),
+            adaptive=AdaptiveOptions(adaptive_oversampling=0),
+            k_class=KClassOptions(
+                n_classes=n_classes,
+                init_class_log_priors=np.log(np.array([0.5, 0.5], dtype=np.float64)),
+            ),
+            replay=ReplayState(replay_iteration_overrides=[{"class_tau2": class_tau2}]),
+        ),
     )
 
     assert len(result["tau2_radial_trajectory"]) == 1
@@ -15560,20 +14389,23 @@ def test_kclass_recomputes_mstep_tau2_from_iref_power_spectrum(
         init_volume,
         jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
         init_tau2_volume,
-        _make_rotations(1, seed=456),
         jnp.array([[0.0, 0.0]], dtype=jnp.float32),
-        disc_type="linear_interp",
-        max_iter=1,
-        image_batch_size=N_IMAGES,
-        rotation_block_size=1,
-        init_current_size=4,
-        adaptive_oversampling=0,
-        nside_level=1,
-        init_healpix_order=1,
-        max_healpix_order=1,
-        n_classes=n_classes,
-        init_class_log_priors=np.log(np.array([0.5, 0.5], dtype=np.float64)),
-        skip_final_iteration=True,
+        options=RefinementOptions(
+            disc_type="linear_interp",
+            schedule=RefinementSchedule(
+                max_iter=1,
+                init_current_size=4,
+                init_healpix_order=1,
+                max_healpix_order=1,
+                skip_final_iteration=True,
+            ),
+            batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=1),
+            adaptive=AdaptiveOptions(adaptive_oversampling=0),
+            k_class=KClassOptions(
+                n_classes=n_classes,
+                init_class_log_priors=np.log(np.array([0.5, 0.5], dtype=np.float64)),
+            ),
+        ),
     )
     assert len(init_result["tau2_radial_trajectory"]) == 1
     np.testing.assert_allclose(init_result["tau2_radial_trajectory"][0], iref_tau2, rtol=0.0, atol=1e-5)
@@ -15586,48 +14418,53 @@ def test_kclass_recomputes_mstep_tau2_from_iref_power_spectrum(
         init_volume,
         jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
         jnp.ones((n_classes, VOLUME_SIZE), dtype=jnp.float32),
-        _make_rotations(1, seed=789),
         jnp.array([[0.0, 0.0]], dtype=jnp.float32),
-        disc_type="linear_interp",
-        max_iter=1,
-        image_batch_size=N_IMAGES,
-        rotation_block_size=1,
-        init_current_size=4,
-        adaptive_oversampling=0,
-        nside_level=1,
-        init_healpix_order=1,
-        max_healpix_order=1,
-        n_classes=n_classes,
-        init_class_log_priors=np.log(np.array([0.5, 0.5], dtype=np.float64)),
-        replay_iteration_overrides=[{"class_tau2": class_tau2}, {"class_tau2": same_iter_tau2}],
-        skip_final_iteration=True,
+        options=RefinementOptions(
+            disc_type="linear_interp",
+            schedule=RefinementSchedule(
+                max_iter=1,
+                init_current_size=4,
+                init_healpix_order=1,
+                max_healpix_order=1,
+                skip_final_iteration=True,
+            ),
+            batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=1),
+            adaptive=AdaptiveOptions(adaptive_oversampling=0),
+            k_class=KClassOptions(
+                n_classes=n_classes,
+                init_class_log_priors=np.log(np.array([0.5, 0.5], dtype=np.float64)),
+            ),
+            replay=ReplayState(replay_iteration_overrides=[{"class_tau2": class_tau2}, {"class_tau2": same_iter_tau2}]),
+        ),
     )
 
     assert len(replay_result["tau2_radial_trajectory"]) == 1
     np.testing.assert_allclose(replay_result["tau2_radial_trajectory"][0], same_iter_tau2, rtol=0.0, atol=1e-5)
     assert iref_tau2_calls == [0, 1, 0, 1]
 
-    monkeypatch.setenv("RECOVAR_KCLASS_REPLAY_TAU2_SAME_ITER", "1")
     same_iter_replay_result = refine_single_volume(
         half_datasets,
         init_volume,
         jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
         jnp.ones((n_classes, VOLUME_SIZE), dtype=jnp.float32),
-        _make_rotations(1, seed=790),
         jnp.array([[0.0, 0.0]], dtype=jnp.float32),
-        disc_type="linear_interp",
-        max_iter=1,
-        image_batch_size=N_IMAGES,
-        rotation_block_size=1,
-        init_current_size=4,
-        adaptive_oversampling=0,
-        nside_level=1,
-        init_healpix_order=1,
-        max_healpix_order=1,
-        n_classes=n_classes,
-        init_class_log_priors=np.log(np.array([0.5, 0.5], dtype=np.float64)),
-        replay_iteration_overrides=[{"class_tau2": class_tau2}, {"class_tau2": same_iter_tau2}],
-        skip_final_iteration=True,
+        options=RefinementOptions(
+            disc_type="linear_interp",
+            schedule=RefinementSchedule(
+                max_iter=1,
+                init_current_size=4,
+                init_healpix_order=1,
+                max_healpix_order=1,
+                skip_final_iteration=True,
+            ),
+            batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=1),
+            adaptive=AdaptiveOptions(adaptive_oversampling=0),
+            k_class=KClassOptions(
+                n_classes=n_classes,
+                init_class_log_priors=np.log(np.array([0.5, 0.5], dtype=np.float64)),
+            ),
+            replay=ReplayState(replay_iteration_overrides=[{"class_tau2": class_tau2}, {"class_tau2": same_iter_tau2}]),
+        ),
     )
 
     assert len(same_iter_replay_result["tau2_radial_trajectory"]) == 1
@@ -15639,6 +14476,13 @@ def test_kclass_recomputes_mstep_tau2_from_iref_power_spectrum(
     )
     assert iref_tau2_calls == [0, 1, 0, 1]
 
+    assert len(floor_calls) == (8 if capture_dump else 0)
+    if capture_dump:
+        for class_idx, stats in enumerate(floor_calls[-2:]):
+            with np.load(tmp_path / f"recovar_kclass_mstep_it001_c{class_idx + 1:02d}.npz") as saved:
+                np.testing.assert_array_equal(saved["reconstruct_floor_avg_weight_shells"], stats["avg_weight_shells"])
+                np.testing.assert_array_equal(saved["reconstruct_floor_shell_count"], stats["shell_count"])
+
 
 def test_relion_mode_dense_k_class_writes_absolute_translations_from_previous_offset(
     rng,
@@ -15646,7 +14490,6 @@ def test_relion_mode_dense_k_class_writes_absolute_translations_from_previous_of
     monkeypatch,
 ):
     """Dense K-class RELION-mode writeback should use old_offset + selected delta."""
-    import recovar.em.dense_single_volume.iteration_loop as refine_mod
 
     half_datasets = [MockDataset(1, rng), MockDataset(1, rng)]
     for ds in half_datasets:
@@ -15669,7 +14512,6 @@ def test_relion_mode_dense_k_class_writes_absolute_translations_from_previous_of
         disc_type,
         **kwargs,
     ):
-        _ = (means, mean_variance, noise_variance, translations, disc_type)
         half_idx = len(dense_calls)
         dense_calls.append(kwargs)
         n_classes = int(np.asarray(means).shape[0])
@@ -15719,28 +14561,28 @@ def test_relion_mode_dense_k_class_writes_absolute_translations_from_previous_of
             best_pose_rotation_ids=jnp.zeros(n_images, dtype=jnp.int32),
         )
 
-    monkeypatch.setattr(refine_mod, "run_dense_k_class_em", fake_run_dense_k_class_em)
+    monkeypatch.setattr(half_scoring, "run_dense_k_class_em", fake_run_dense_k_class_em)
 
     result = refine_single_volume(
         half_datasets,
         init_volume,
         jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
         jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-        _make_rotations(1, seed=123),
         jnp.array([[0.0, 0.0]], dtype=jnp.float32),
-        disc_type="linear_interp",
-        max_iter=1,
-        image_batch_size=N_IMAGES,
-        rotation_block_size=1,
-        init_current_size=16,
-        adaptive_oversampling=0,
-        nside_level=1,
-        init_healpix_order=1,
-        max_healpix_order=1,
-        init_previous_best_translations=[prev_h1.copy(), prev_h2.copy()],
-        n_classes=2,
-        init_class_log_priors=np.log(np.array([0.5, 0.5], dtype=np.float64)),
-        skip_final_iteration=True,
+        options=RefinementOptions(
+            disc_type="linear_interp",
+            schedule=RefinementSchedule(
+                max_iter=1,
+                init_current_size=16,
+                init_healpix_order=1,
+                max_healpix_order=1,
+                skip_final_iteration=True,
+            ),
+            batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=1),
+            adaptive=AdaptiveOptions(adaptive_oversampling=0),
+            replay=ReplayState(init_previous_best_translations=[prev_h1.copy(), prev_h2.copy()]),
+            k_class=KClassOptions(n_classes=2, init_class_log_priors=np.log(np.array([0.5, 0.5], dtype=np.float64))),
+        ),
     )
 
     expected_h1 = relion_translation_search_base(prev_h1) + selected_by_half[0]
@@ -15785,7 +14627,7 @@ def test_local_search_decodes_hard_assignments_on_fine_grid(
     monkeypatch,
 ):
     """Oversampled local-search assignments must be decoded on the fine grid."""
-    import recovar.em.dense_single_volume.iteration_loop as refine_mod
+    import recovar.em.refinement.iteration_loop as refine_mod
 
     order_sizes = {4: 4, 5: 9}
     fine_idx = order_sizes[5] - 1
@@ -15806,78 +14648,24 @@ def test_local_search_decodes_hard_assignments_on_fine_grid(
         vals = np.arange(order_sizes[order], dtype=np.float32)
         return np.stack([vals, vals + 100.0, vals + 200.0], axis=1)
 
-    def fake_run_em(
-        experiment_dataset,
-        mean,
-        mean_variance,
-        noise_variance,
-        rotations,
-        translations,
-        disc_type,
-        **kwargs,
-    ):
-        _ = (mean, mean_variance, noise_variance, rotations, translations, disc_type, kwargs)
-        n_shells = experiment_dataset.image_shape[0] // 2 + 1
-        recon_vol_size = _mock_reconstruction_accumulator_size(experiment_dataset, kwargs)
-        return (
-            None,
-            np.zeros(experiment_dataset.n_units, dtype=np.int32),
-            jnp.zeros(recon_vol_size, dtype=jnp.complex64),
-            jnp.ones(recon_vol_size, dtype=jnp.complex64),
-            RelionStats(
-                log_evidence_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
-                best_log_score_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
-                max_posterior_per_image=jnp.ones(experiment_dataset.n_units, dtype=jnp.float32),
-                rotation_posterior_sums=jnp.ones(np.asarray(rotations).shape[0], dtype=jnp.float32),
-            ),
-            NoiseStats(
-                wsum_sigma2_noise=jnp.ones(n_shells, dtype=jnp.float32),
-                wsum_img_power=jnp.ones(n_shells, dtype=jnp.float32),
-                wsum_sigma2_offset=0.0,
-                sumw=float(experiment_dataset.n_units),
-            ),
-        )
-
     def fake_grouped_local_search(
         experiment_dataset,
         mean,
-        mean_variance,
         noise_variance,
         prior_rotations,
         rotation_grid_rotations,
-        rotation_grid_eulers,
         healpix_order,
         sigma_rot,
         sigma_psi,
         translations,
         prior_translations,
         sigma_offset_angstrom,
-        offset_range_pixels,
         disc_type,
         image_batch_size,
         rotation_block_size,
         current_size,
         **kwargs,
     ):
-        _ = (
-            mean,
-            mean_variance,
-            noise_variance,
-            prior_rotations,
-            rotation_grid_rotations,
-            rotation_grid_eulers,
-            healpix_order,
-            sigma_rot,
-            sigma_psi,
-            prior_translations,
-            sigma_offset_angstrom,
-            offset_range_pixels,
-            disc_type,
-            image_batch_size,
-            rotation_block_size,
-            current_size,
-            kwargs,
-        )
         n_shells = experiment_dataset.image_shape[0] // 2 + 1
         recon_vol_size = _mock_reconstruction_accumulator_size(experiment_dataset, kwargs)
         assignment = np.full(
@@ -15913,9 +14701,8 @@ def test_local_search_decodes_hard_assignments_on_fine_grid(
             best_trans = np.repeat(
                 np.asarray(translations)[trans_idx : trans_idx + 1], experiment_dataset.n_units, axis=0
             )
-            best_ids = np.full(experiment_dataset.n_units, fine_idx, dtype=np.int32)
-            best_pose_details = (best_rots, best_trans, best_ids)
-        return _pack_fake_local_search_outputs(
+            best_pose_details = (best_rots, best_trans)
+        return _mock_local_search_result(
             base_outputs,
             relion_stats,
             noise_stats,
@@ -15925,14 +14712,21 @@ def test_local_search_decodes_hard_assignments_on_fine_grid(
         )
 
     monkeypatch.setattr(refine_mod, "rotation_grid_size", fake_rotation_grid_size)
-    monkeypatch.setattr(refine_mod, "get_relion_rotation_grid", fake_get_grid)
-    monkeypatch.setattr(refine_mod, "get_relion_rotation_grid_eulers", fake_get_grid_eulers)
-    monkeypatch.setattr(refine_mod, "run_em", fake_run_em)
-    monkeypatch.setattr(refine_mod, "_run_local_search_iteration", fake_grouped_local_search)
+    monkeypatch.setattr(half_scoring, "rotation_grid_size", fake_rotation_grid_size)
     monkeypatch.setattr(
-        refine_mod,
+        sampling_module,
+        "_relion_rotation_grid_float32",
+        lambda order, *, dtype=np.float32: (
+            fake_get_grid(order).astype(dtype),
+            fake_get_grid_eulers(order).astype(dtype),
+        ),
+    )
+    monkeypatch.setattr(half_scoring, "run_em", _mock_run_dense_em)
+    monkeypatch.setattr(half_scoring, "_run_local_search_iteration", fake_grouped_local_search)
+    monkeypatch.setattr(
+        mean_helpers_module,
         "collapse_rotation_posterior_to_direction_prior",
-        lambda rotation_posterior_sums, healpix_order: (
+        lambda rotation_posterior_sums, healpix_order, *, dtype=np.float32: (
             np.ones(
                 max(1, fake_rotation_grid_size(healpix_order)),
                 dtype=np.float64,
@@ -15949,19 +14743,15 @@ def test_local_search_decodes_hard_assignments_on_fine_grid(
         init_volume,
         jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
         jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-        _make_rotations(order_sizes[4], seed=321),
         translations,
-        disc_type="linear_interp",
-        max_iter=1,
-        image_batch_size=N_IMAGES,
-        rotation_block_size=order_sizes[4],
-        init_current_size=16,
-        adaptive_oversampling=1,
-        nside_level=4,
-        init_healpix_order=4,
-        max_healpix_order=4,
-        init_previous_best_rotation_eulers=[prev_eulers_h1, prev_eulers_h2],
-        perturb_factor=0.0,
+        options=RefinementOptions(
+            disc_type="linear_interp",
+            schedule=RefinementSchedule(max_iter=1, init_current_size=16, init_healpix_order=4, max_healpix_order=4),
+            batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=order_sizes[4]),
+            adaptive=AdaptiveOptions(adaptive_oversampling=1),
+            replay=ReplayState(init_previous_best_rotation_eulers=[prev_eulers_h1, prev_eulers_h2]),
+            parity=RelionParityOptions(perturb_factor=0.0),
+        ),
     )
 
     expected_rotation = _selected_rotation_matrices(
@@ -15978,3 +14768,16 @@ def test_local_search_decodes_hard_assignments_on_fine_grid(
         rtol=1e-6,
         atol=1e-6,
     )
+
+
+def test_canonical_rotation_grid_reuses_relion_euler_table(monkeypatch):
+    """The direct grid owner preserves source Eulers without a SciPy round trip."""
+    order = 1
+    expected_eulers = np.asarray(get_relion_rotation_grid_eulers(order), dtype=np.float32)
+
+    def fail_r_to_relion(*_args, **_kwargs):
+        raise AssertionError("generic R_to_relion should not be called for canonical grids")
+
+    monkeypatch.setattr(iteration_loop_module.utils, "R_to_relion", fail_r_to_relion)
+    _, got = sampling_module._relion_rotation_grid_float32(order)
+    np.testing.assert_allclose(got, expected_eulers, rtol=0.0, atol=0.0)

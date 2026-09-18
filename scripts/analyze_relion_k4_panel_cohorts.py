@@ -4,13 +4,14 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import math
-import subprocess
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
+
+from scripts.analyzer_provenance import clean_repo_head
+from scripts.file_hash import sha256_file as _sha256
 
 THREEWAY_SCHEMA = "recovar.k4_iter10_panel12_threeway_fine_score.v2"
 REPEATABILITY_SCHEMA = "relion.k4_iter10_panel12_capture_repeatability.v1"
@@ -34,14 +35,6 @@ BEYOND_FLOOR = "relion_cuda_preprocessing_reduces_residual_beyond_capture_repeat
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise ValueError(message)
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(8 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def _unique_by_identity(rows: list[dict[str, Any]], label: str) -> dict[int, dict[str, Any]]:
@@ -256,13 +249,6 @@ def analyze(threeway: dict[str, Any], repeatability: dict[str, Any]) -> dict[str
     }
 
 
-def _clean_repo_head(repo: Path) -> str:
-    head = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"], text=True).strip()
-    status = subprocess.check_output(["git", "-C", str(repo), "status", "--porcelain=v1"], text=True)
-    _require(not status, "analyzer repository is dirty")
-    return head
-
-
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", required=True, type=Path)
@@ -288,7 +274,7 @@ def main() -> None:
             "path": str(args.capture_repeatability_json.resolve()),
             "sha256": _sha256(args.capture_repeatability_json),
         },
-        "analyzer_repo_head": _clean_repo_head(args.repo),
+        "analyzer_repo_head": clean_repo_head(args.repo),
     }
     args.output_json.parent.mkdir(parents=True, exist_ok=True)
     args.output_json.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")

@@ -48,10 +48,10 @@ RELION references are from `/home/mg6942/myscratch/relion/src/`, mainly:
 
 recovar references are mainly:
 
-- `recovar/em/dense_single_volume/iteration_loop.py`
-- `recovar/em/dense_single_volume/em_engine.py`
-- `recovar/em/dense_single_volume/adaptive.py`
-- `recovar/em/dense_single_volume/convergence.py`
+- `recovar/em/refinement/iteration_loop.py`
+- `recovar/em/dense/em_engine.py`
+- `recovar/em/adaptive.py`
+- `recovar/em/convergence.py`
 - `recovar/em/sampling.py`
 - `recovar/reconstruction/regularization.py`
 - `recovar/reconstruction/relion_functions.py`
@@ -828,7 +828,7 @@ What is still missing is the full RELION coupling between:
 
 ## recovar File Map
 
-### `recovar/em/dense_single_volume/em_engine.py`
+### `recovar/em/dense/em_engine.py`
 
 This is the critical fast path.
 
@@ -848,7 +848,7 @@ It does *not yet* emit all RELION sufficient statistics, especially:
 - scale and norm accumulators
 - weighted direction sums needed for RELION's learned global `pdf_direction`
 
-### `recovar/em/dense_single_volume/iteration_loop.py`
+### `recovar/em/refinement/iteration_loop.py`
 
 This is the RELION-mode control loop.
 
@@ -862,7 +862,7 @@ It currently handles:
 It still approximates parts of RELION because the engine does not yet return
 all necessary statistics.
 
-### `recovar/em/dense_single_volume/adaptive.py`
+### `recovar/em/adaptive.py`
 
 This is where adaptive oversampling now most closely mirrors RELION.
 

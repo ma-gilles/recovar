@@ -17,37 +17,29 @@ import pytest
 pytest.importorskip("jax")
 import jax
 import jax.numpy as jnp
+from helpers.em_arrays import _hermitian_volume, _raw_real_image_2d
 
 import recovar.core.fourier_transform_utils as ftu
 from recovar import core
 from recovar.core.configs import ForwardModelConfig
-from recovar.em.dense_single_volume.em_engine import run_em
-from recovar.em.dense_single_volume.helpers.half_spectrum import (
+from recovar.em.dense.em_engine import run_em
+from recovar.em.helpers.fourier_window import (
+    ALLOWED_CURRENT_SIZES,
+    make_fourier_window_indices_np,
+    make_fourier_window_spec,
+    make_frequency_coords_half_np,
+    quantize_current_size,
+    relion_fftw_order_for_square_score_window,
+)
+from recovar.em.helpers.half_spectrum import (
     make_half_image_weights,
     make_relion_noise_shell_indices_half,
     make_scoring_half_image_weights,
     mask_relion_noise_shell_indices_to_current_window,
 )
-from recovar.em.dense_single_volume.helpers.preprocessing import (
-    preprocess_batch as _preprocess_batch,
-)
-from recovar.em.dense_single_volume.helpers.projection import (
-    compute_projections_block as _compute_projections_block,
-)
-from recovar.em.dense_single_volume.helpers.scoring import (
-    _e_step_block_scores,
-    _e_step_block_scores_windowed,
-    _m_step_block_windowed,
-)
-from recovar.em.dense_single_volume.helpers.fourier_window import (
-    ALLOWED_CURRENT_SIZES,
-    make_frequency_coords_half_np,
-    make_frequency_radius_map_half,
-    make_fourier_window_indices_np,
-    make_fourier_window_spec,
-    quantize_current_size,
-    relion_fftw_order_for_square_score_window,
-)
+from recovar.em.helpers.preprocessing import preprocess_batch as _preprocess_batch
+from recovar.em.helpers.projection import compute_projections_block as _compute_projections_block
+from recovar.em.scoring.scoring import _e_step_block_scores, _e_step_block_scores_windowed, _m_step_block_windowed
 
 pytestmark = pytest.mark.unit
 
@@ -71,25 +63,6 @@ SEED = 42
 # ---------------------------------------------------------------------------
 # Helpers (reused from test_half_spectrum_em.py)
 # ---------------------------------------------------------------------------
-
-
-def _hermitian_image_2d(image_shape, seed=42):
-    rng = np.random.default_rng(seed)
-    real_img = rng.standard_normal(image_shape).astype(np.float32)
-    ft = np.fft.fftshift(np.fft.fft2(real_img))
-    return jnp.array(ft, dtype=jnp.complex64)
-
-
-def _raw_real_image_2d(image_shape, seed=42):
-    rng = np.random.default_rng(seed)
-    return rng.standard_normal(image_shape).astype(np.float32)
-
-
-def _hermitian_volume(volume_shape, seed=42):
-    rng = np.random.default_rng(seed)
-    real_vol = rng.standard_normal(volume_shape).astype(np.float32)
-    ft = np.fft.fftshift(np.fft.fftn(real_vol))
-    return jnp.array(ft.ravel(), dtype=jnp.complex64)
 
 
 def _make_rotations(n, seed=42):
@@ -507,15 +480,11 @@ class TestWindowedEStepMatchesFull:
         # Non-windowed E-step
         scores_full = _e_step_block_scores(
             shifted_half,
-            batch_norm,
             ctf2_over_nv_half,
             proj_half_weighted,
             proj_abs2_weighted,
-            half_weights,
             n_images,
             n_trans,
-            IMAGE_SHAPE,
-            VOLUME_SHAPE,
         )
 
         # Windowed E-step using ALL indices (identity window)
@@ -582,6 +551,33 @@ class TestFourierWindowSpec:
         )
         assert set(np.asarray(spec.score_indices_np)).issubset(set(np.asarray(spec.projection_indices_np)))
         assert set(np.asarray(spec.recon_indices_np)).issubset(set(np.asarray(spec.projection_indices_np)))
+
+    def test_initial_model_rounded_recon_window_keeps_cutoff_shell_rim(self):
+        shape = (32, 32)
+        n_half = shape[0] * (shape[1] // 2 + 1)
+        exact = make_fourier_window_spec(
+            shape,
+            30,
+            n_half,
+            recon_exact_radius=True,
+            include_recon_window=True,
+        )
+        rounded = make_fourier_window_spec(
+            shape,
+            30,
+            n_half,
+            recon_exact_radius=False,
+            include_recon_window=True,
+        )
+
+        exact_set = set(np.asarray(exact.recon_indices_np).tolist())
+        rounded_set = set(np.asarray(rounded.recon_indices_np).tolist())
+        assert exact_set < rounded_set
+        assert len(rounded_set - exact_set) == 17
+        assert rounded.n_recon == exact.n_recon + 17
+        assert set(np.asarray(rounded.recon_indices_np)).issubset(
+            set(np.asarray(rounded.projection_indices_np))
+        )
 
     def test_projection_union_preserves_no_recon_window_contract(self):
         spec = make_fourier_window_spec(IMAGE_SHAPE, 6, N_HALF, include_recon_window=False)
@@ -806,9 +802,6 @@ class TestWindowedMStepRoundtrip:
             Ft_ctf,
             n_images,
             n_trans,
-            n_windowed,
-            IMAGE_SHAPE,
-            VOLUME_SHAPE,
         )
 
         # Scatter back to full half-spectrum
@@ -996,7 +989,7 @@ class TestIterationAtEachCurrentSize:
         translations = np.array(s["translations"])
         mean_variance = np.ones(VOLUME_SIZE, dtype=np.float32) * 100.0
 
-        new_mean, ha, Ft_y, Ft_ctf = run_em(
+        em_result = run_em(
             ds,
             volume,
             mean_variance,
@@ -1008,6 +1001,11 @@ class TestIterationAtEachCurrentSize:
             rotation_block_size=N_ROTATIONS,
             current_size=current_size,
         )
+        new_mean = em_result.mean
+        ha = em_result.hard_assignments
+        Ft_y = em_result.Ft_y
+        Ft_ctf = em_result.Ft_ctf
+        del em_result
 
         # All outputs should be finite
         assert np.all(np.isfinite(np.array(new_mean))), f"new_mean not finite at cs={current_size}"
@@ -1030,7 +1028,7 @@ class TestIterationAtEachCurrentSize:
         mean_variance = np.ones(VOLUME_SIZE, dtype=np.float32) * 100.0
 
         # No windowing
-        new_mean_none, ha_none, Ft_y_none, _ = run_em(
+        em_result = run_em(
             ds,
             volume,
             mean_variance,
@@ -1042,9 +1040,13 @@ class TestIterationAtEachCurrentSize:
             rotation_block_size=N_ROTATIONS,
             current_size=None,
         )
+        new_mean_none = em_result.mean
+        ha_none = em_result.hard_assignments
+        _ = em_result.Ft_ctf
+        del em_result
 
         # current_size = 8 (full resolution for 8x8)
-        new_mean_8, ha_8, Ft_y_8, _ = run_em(
+        em_result = run_em(
             ds,
             volume,
             mean_variance,
@@ -1056,6 +1058,10 @@ class TestIterationAtEachCurrentSize:
             rotation_block_size=N_ROTATIONS,
             current_size=8,
         )
+        new_mean_8 = em_result.mean
+        ha_8 = em_result.hard_assignments
+        _ = em_result.Ft_ctf
+        del em_result
 
         # current_size=8 for 8x8 images is NOT windowed (use_window is False
         # when current_size >= image_shape[0]), so these should be identical
@@ -1111,35 +1117,6 @@ class TestQuantizeCurrentSize:
 
 
 # ===========================================================================
-# Test 8: Frequency radius map
-# ===========================================================================
-
-
-class TestFrequencyRadiusMap:
-    """Test make_frequency_radius_map_half."""
-
-    def test_dc_at_zero(self):
-        """DC frequency should have radius 0."""
-        radii = make_frequency_radius_map_half(IMAGE_SHAPE)
-        # DC is at the frequency coordinate (0, 0)
-        # Find it: in half-spectrum, the DC pixel should exist
-        coords = ftu.get_k_coordinate_of_each_pixel_half(IMAGE_SHAPE, voxel_size=1, scaled=False)
-        dc_mask = jnp.all(coords == 0, axis=-1)
-        dc_radii = radii[dc_mask]
-        assert len(dc_radii) == 1, "Should have exactly one DC pixel"
-        np.testing.assert_allclose(float(dc_radii[0]), 0.0, atol=1e-6)
-
-    def test_shape(self):
-        radii = make_frequency_radius_map_half(IMAGE_SHAPE)
-        assert radii.shape == (N_HALF,)
-
-    def test_positive(self):
-        """All radii should be non-negative."""
-        radii = make_frequency_radius_map_half(IMAGE_SHAPE)
-        assert jnp.all(radii >= 0)
-
-
-# ===========================================================================
 # Test 9: Multiple rotation blocks with windowing
 # ===========================================================================
 
@@ -1159,7 +1136,7 @@ class TestWindowedMultipleBlocks:
         current_size = 4
 
         # All rotations in one block
-        new_mean_1, ha_1, Ft_y_1, _ = run_em(
+        em_result = run_em(
             ds,
             volume,
             mean_variance,
@@ -1171,9 +1148,13 @@ class TestWindowedMultipleBlocks:
             rotation_block_size=N_ROTATIONS,
             current_size=current_size,
         )
+        new_mean_1 = em_result.mean
+        ha_1 = em_result.hard_assignments
+        _ = em_result.Ft_ctf
+        del em_result
 
         # Split into blocks of 2
-        new_mean_2, ha_2, Ft_y_2, _ = run_em(
+        em_result = run_em(
             ds,
             volume,
             mean_variance,
@@ -1185,6 +1166,10 @@ class TestWindowedMultipleBlocks:
             rotation_block_size=2,
             current_size=current_size,
         )
+        new_mean_2 = em_result.mean
+        ha_2 = em_result.hard_assignments
+        _ = em_result.Ft_ctf
+        del em_result
 
         np.testing.assert_allclose(
             np.array(new_mean_1),
