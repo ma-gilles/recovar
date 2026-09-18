@@ -311,8 +311,6 @@ logger = logging.getLogger(__name__)
 _EXACT_RAW_DIFF2_CACHE_MAX_BYTES_ENV = "RECOVAR_SPARSE_PASS2_EXACT_RAW_DIFF2_CACHE_MAX_BYTES"
 _SMALL_BUCKET_MAX_TRANSLATION_TILE_BYTES_ENV = "RECOVAR_SPARSE_PASS2_SMALL_BUCKET_MAX_TRANSLATION_TILE_BYTES"
 _SMALL_BUCKET_THRESHOLD_ENV = "RECOVAR_SPARSE_PASS2_SMALL_BUCKET_THRESHOLD"
-_SOFT_POSTERIOR_BLOCK_BPREF_PROTOTYPE_ENV = "RECOVAR_EM_PROTOTYPE_SOFT_POSTERIOR_BLOCK_BPREF"
-
 _SPARSE_KCLASS_COMPACT_ACTIVE_ROWS_ENV = "RECOVAR_SPARSE_KCLASS_COMPACT_ACTIVE_ROWS"
 _SPARSE_KCLASS_COMPACT_BUCKETS_ENV = "RECOVAR_SPARSE_KCLASS_COMPACT_BUCKETS"
 _SPARSE_KCLASS_REUSE_COMPACT_NOISE_SUMS_ENV = "RECOVAR_SPARSE_KCLASS_REUSE_COMPACT_NOISE_SUMS"
@@ -383,25 +381,6 @@ class SparseKClassPass2FusedResult(NamedTuple):
 # ---------------------------------------------------------------------------
 # Main bucketed driver
 # ---------------------------------------------------------------------------
-
-
-def _soft_posterior_block_bpref_active(
-    *,
-    prototype_enabled: bool,
-    live_per_particle_launches: bool,
-    winner_take_all: bool,
-) -> bool:
-    """PROTOTYPE (opt-in, default off): block BPref accumulation for soft-posterior iterations.
-
-    When enabled, iterations that are not winner-take-all (everything after the
-    fresh K=1 firstiter-CC iteration) accumulate each bucket's rows through the
-    existing block adjoint path, one CUDA launch per chunk, instead of one
-    launch per particle.  The winner-take-all iteration keeps its
-    particle-owned launches.  Only float32 atomics order changes; this is a
-    measured-numerics prototype, not a parity claim and not a production default.
-    """
-
-    return bool(prototype_enabled and live_per_particle_launches and not winner_take_all)
 
 
 def compute_pass2_stats_sparse_bucketed(
@@ -516,10 +495,6 @@ def compute_pass2_stats_sparse_bucketed(
         "live_sequential_translation_reduction"
     ]
     use_per_particle_launches = execution_modes["live_per_particle_launches"]
-    soft_posterior_block_bpref_prototype = parse_env_flag(
-        _SOFT_POSTERIOR_BLOCK_BPREF_PROTOTYPE_ENV, default=False
-    )
-    soft_posterior_block_bpref_prototype_logged = [False]
     if preserve_bpref_particle_order:
         if not relion_x_half_mstep:
             raise ValueError(
@@ -873,19 +848,10 @@ def compute_pass2_stats_sparse_bucketed(
     processing_order_chunk_size = 1
     processing_order_group_by_bucket_size = False
     processing_order_batch_consecutive_bucket_sizes = False
-    soft_posterior_block_bpref_bucketing = _soft_posterior_block_bpref_active(
-        prototype_enabled=soft_posterior_block_bpref_prototype,
-        live_per_particle_launches=bool(relion_x_half_mstep and use_per_particle_launches),
-        winner_take_all=winner_take_all,
-    )
     if processing_order_override is not None:
-        # PROTOTYPE: with block BPref accumulation the launch boundary no longer
-        # follows the physical particle order, so the 220-particle mixed-support
-        # chunks (which pad every particle to the widest support in the chunk)
-        # buy nothing; group by support size unless the env says otherwise.
         processing_order_group_by_bucket_size = parse_env_flag(
             _BPREF_EXECUTION_GROUP_BY_BUCKET_SIZE_ENV,
-            default=soft_posterior_block_bpref_bucketing,
+            default=False,
         )
         (
             processing_order_chunk_size,
@@ -939,9 +905,6 @@ def compute_pass2_stats_sparse_bucketed(
         processing_order_group_by_bucket_size=processing_order_group_by_bucket_size,
         processing_order_batch_consecutive_bucket_sizes=(
             processing_order_batch_consecutive_bucket_sizes
-        ),
-        group_chunk_image_rungs=bool(
-            soft_posterior_block_bpref_bucketing and processing_order_group_by_bucket_size
         ),
     )
     buckets = _prioritize_stopped_pass2_dump_buckets(
@@ -3903,19 +3866,6 @@ def compute_pass2_stats_sparse_bucketed(
             live_per_particle_launches = bool(
                 use_relion_x_half_mstep and use_per_particle_launches
             )
-            if _soft_posterior_block_bpref_active(
-                prototype_enabled=soft_posterior_block_bpref_prototype,
-                live_per_particle_launches=live_per_particle_launches,
-                winner_take_all=winner_take_all,
-            ):
-                live_per_particle_launches = False
-                if not soft_posterior_block_bpref_prototype_logged[0]:
-                    soft_posterior_block_bpref_prototype_logged[0] = True
-                    logger.info(
-                        "PROTOTYPE %s=1: soft-posterior BPref accumulates per bucket block "
-                        "(per-particle launches kept for winner-take-all iterations)",
-                        _SOFT_POSTERIOR_BLOCK_BPREF_PROTOTYPE_ENV,
-                    )
             bucket_fused_atomics_requested = bool(
                 fused_atomics_requested
                 and (not device_signature_requested or bucket_device_signature_requested)
