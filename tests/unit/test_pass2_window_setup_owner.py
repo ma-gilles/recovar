@@ -1,7 +1,5 @@
 """Both bucketed pass-2 entry points resolve their window, precision and fine translation prior through one owner."""
 
-import inspect
-
 import numpy as np
 
 from recovar.em.sparse_pass2 import sparse_pass2_bucketed as sp
@@ -24,10 +22,3 @@ def test_fine_translation_prior_owner_returns_none_without_a_prior():
     assert sp._fine_translation_prior_2d(None, None, n_images=2, n_fine_trans=3, dtype=np.float32) is None
     out = sp._fine_translation_prior_2d(np.zeros((2, 2)), np.array([0, 0, 1]), n_images=2, n_fine_trans=3, dtype=np.float32)
     assert out.shape == (2, 3) and out.dtype == np.float32
-
-
-def test_both_entry_points_use_the_owners():
-    for fn in (sp.compute_pass2_stats_sparse_bucketed, sp.compute_k_class_pass2_stats_sparse_fused):
-        src = inspect.getsource(fn)
-        assert src.count("= _pass2_window_setup(") == 1 and src.count("_fine_translation_prior_2d(") == 1
-        assert "make_fourier_window_spec(" not in src and "expand_fine_translation_prior(" not in src

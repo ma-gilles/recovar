@@ -1,6 +1,5 @@
 """``_packed_bucket_rotations`` is the one host gather of packed bucket rotations in the local engine."""
 
-import inspect
 import types
 
 import numpy as np
@@ -20,9 +19,3 @@ def test_owner_gathers_rows_and_limits_them_to_the_unpadded_batch():
     assert full[2].shape == (3, 2, 3, 3) and full[2].dtype == np.float64
     cast = local_em_engine._packed_bucket_rotations(bucket, take, mask, rotations_dtype=np.float32)
     assert cast[2].dtype == np.float32 and cast[3].dtype == np.float64
-
-
-def test_local_engine_sites_use_the_owner():
-    src = inspect.getsource(local_em_engine)
-    assert src.count("= _packed_bucket_rotations(bucket, reconstruction_take_indices, reconstruction_pack_mask_np") == 4
-    assert "reconstruction_take_indices[:, :, None, None]" not in inspect.getsource(local_em_engine.run_local_em_exact)

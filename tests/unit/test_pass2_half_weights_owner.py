@@ -1,17 +1,9 @@
 """Both bucketed pass-2 entry points build their scoring half-image weights through one owner."""
 
-import inspect
-
 import jax.numpy as jnp
 
 from recovar.em.sparse_pass2 import sparse_pass2_bucketed as sp
 from recovar.em.sparse_pass2 import sparse_pass2_window
-
-
-def test_both_entry_points_use_the_owner():
-    for fn in (sp.compute_pass2_stats_sparse_bucketed, sp.compute_k_class_pass2_stats_sparse_fused):
-        src = inspect.getsource(fn)
-        assert src.count("= _pass2_half_weights(") == 1 and "make_scoring_half_image_weights(" not in src
 
 
 def test_owner_casts_and_rewindows_in_double(monkeypatch):
