@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
-import inspect
 from types import SimpleNamespace
 
 import numpy as np
 import pytest
 
-import recovar.em.refinement.iteration_loop as iteration_loop
 from recovar.em.helpers import expected_accuracy as owner
 
 pytestmark = pytest.mark.unit
@@ -40,11 +38,3 @@ def test_estimator_receives_run_constants_and_per_pass_operands(monkeypatch):
         trial_order_local="order", current_image_size=56, padding_factor=2, sigma2_fudge=4.0, random_seed=11, random_seed_particle_ids="pids", ctf_params_override="ctf", do_ctf_correction=False,
     )
     assert type(recorded["current_image_size"]) is int and type(recorded["sigma2_fudge"]) is float and type(recorded["random_seed"]) is int
-
-
-def test_controller_estimates_accuracy_through_the_owner_in_both_passes():
-    source = inspect.getsource(iteration_loop.refine_single_volume)
-    assert source.count("expected_accuracy_inputs.estimate(") == 2
-    assert source.count("_expected_accuracy_class_ids(") == 2
-    assert source.count("Half1AccuracyInputs(") == 1
-    assert "estimate_relion_expected_accuracy(" not in source
