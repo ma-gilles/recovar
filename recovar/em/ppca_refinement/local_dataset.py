@@ -1962,61 +1962,6 @@ def run_local_ppca_pose_scoring_iteration(
     )
 
 
-def run_local_ppca_halfset_pose_scoring_iteration(
-    state: PoseMarginalPPCAEMState,
-    halfset_datasets,
-    halfset_local_layouts,
-    *,
-    geometry: GeometryConfig | None = None,
-    schedule: ScheduleConfig | None = None,
-    scoring: ScoringConfig | None = None,
-    mean_reg: MeanRegularizationConfig | None = None,
-    pose_selection: PoseSelectionConfig | None = None,
-    top_pose_count: int = 1,
-    disc_type: str = "linear_interp",
-) -> PoseMarginalPPCAEMState:
-    """Run a two-halfset exact-local PPCA pose-only pass.
-
-    This is the high-resolution warmup/probe stage: it updates only
-    ``pose_diagnostics`` so the following EM iteration can build local supports
-    around PPCA-selected candidates without contaminating the probe with an
-    M-step update.
-    """
-
-    if len(halfset_datasets) != 2 or len(halfset_local_layouts) != 2:
-        raise ValueError("halfset_datasets and halfset_local_layouts must each have length 2")
-    geometry = geometry if geometry is not None else GeometryConfig(volume_domain="fourier_half")
-    schedule = schedule if schedule is not None else ScheduleConfig(image_batch_size=2, rotation_block_size=512)
-    scoring = scoring if scoring is not None else ScoringConfig()
-    mean_reg = mean_reg if mean_reg is not None else MeanRegularizationConfig()
-    results = []
-    for half_dataset, half_layout in zip(halfset_datasets, halfset_local_layouts, strict=True):
-        results.append(
-            run_local_ppca_pose_scoring_iteration(
-                half_dataset,
-                state.mu_score,
-                state.W_score,
-                noise_variance=state.noise_variance,
-                local_layout=half_layout,
-                geometry=geometry,
-                schedule=schedule,
-                scoring=scoring,
-                mean_reg=mean_reg,
-                pose_selection=pose_selection,
-                top_pose_count=top_pose_count,
-                disc_type=disc_type,
-            )
-        )
-    pose_diagnostics = {
-        "halfset0": results[0].diagnostics,
-        "halfset1": results[1].diagnostics,
-        "delta_rms_mu": 0.0,
-        "delta_rms_W": 0.0,
-        "pose_score_only": True,
-    }
-    return state.replace(pose_diagnostics=pose_diagnostics)
-
-
 def run_local_ppca_halfset_fused_em_iteration(
     state: PoseMarginalPPCAEMState,
     halfset_datasets,
