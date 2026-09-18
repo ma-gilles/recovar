@@ -27,10 +27,6 @@ session's contributions on ``codex/ppca-highres-refine``:
    refinement script's ``--prior-from-init pipeline-mean-prior`` mode
    requires the saved ``pipeline_mean_prior_half_voxel``.
 
-This is the same pattern as ``test_postmerge_regression_guard.py``: if a
-merge from the EM / VDAM / refine sibling branches silently rewires any
-of the pinned contracts, this file fails with a clear error pointing to
-the lost feature.
 """
 
 from __future__ import annotations
@@ -45,7 +41,6 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
-
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -73,8 +68,8 @@ def test_postprocess_config_has_external_mask_volume_field():
 
 
 def test_postprocess_w_only_mask_strategy_is_accepted():
-    from recovar.em.ppca_refinement.postprocess import PostprocessConfig, postprocess_ppca_half_volumes
     import recovar.core.fourier_transform_utils as ftu
+    from recovar.em.ppca_refinement.postprocess import PostprocessConfig, postprocess_ppca_half_volumes
 
     volume_shape = (8, 8, 8)
     half_size = int(np.prod(ftu.volume_shape_to_half_volume_shape(volume_shape)))
@@ -107,8 +102,8 @@ def test_postprocess_external_mask_volume_round_trips_for_w_only_mask():
     the half-spectrum ↔ real-space round-trip in the postprocess doesn't lose
     information by projecting non-Hermitian components.
     """
-    from recovar.em.ppca_refinement.postprocess import PostprocessConfig, postprocess_ppca_half_volumes
     import recovar.core.fourier_transform_utils as ftu
+    from recovar.em.ppca_refinement.postprocess import PostprocessConfig, postprocess_ppca_half_volumes
 
     volume_shape = (8, 8, 8)
     rng = np.random.default_rng(22)

@@ -596,6 +596,8 @@ def test_exact_local_all_retained_support_matches_dense(tiny_inputs):
         np.asarray(dense.diagnostics["best_rotation_idx"]),
     )
     assert local.diagnostics["uses_image_scale_corrections"] is True
+    assert (dense.diagnostics["image_scale_min"], dense.diagnostics["image_scale_max"]) == pytest.approx((0.5, 1.7))
+    assert (local.diagnostics["image_scale_min"], local.diagnostics["image_scale_max"]) == pytest.approx((0.5, 1.7))
     assert local.diagnostics["local_bucketed"] is True
 
 
@@ -640,6 +642,8 @@ def test_exact_local_subset_layout_matches_dense_subset(tiny_inputs):
     np.testing.assert_allclose(np.asarray(local.mu_half), np.asarray(dense.mu_half), rtol=5e-4, atol=1e-4)
     np.testing.assert_allclose(np.asarray(local.W_half), np.asarray(dense.W_half), rtol=5e-4, atol=1e-4)
     np.testing.assert_array_equal(np.asarray(local.diagnostics["image_indices"]), image_indices)
+    assert (dense.diagnostics["image_scale_min"], dense.diagnostics["image_scale_max"]) == pytest.approx((0.5, 0.9))
+    assert (local.diagnostics["image_scale_min"], local.diagnostics["image_scale_max"]) == pytest.approx((0.5, 0.9))
 
 
 def test_exact_local_image_sharded_accumulation_matches_monolithic(tiny_inputs):
