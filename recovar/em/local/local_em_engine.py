@@ -133,6 +133,7 @@ from recovar.em.local.local_bucket_stages import (
     _build_nonzero_reconstruction_pack_indices,
     _build_reconstruction_pack_indices,
     _FixedCapacityWholeScoreCallContext,
+    _flat_local_row_class_blocks,
     _invoke_local_bucket_big_jit,
     _local_mstep_adjoint_window,
     _local_projection_mode,
@@ -738,11 +739,12 @@ def run_local_em_exact(
     if n_classes > 1:
         # Everything below that a class segment cannot express yet. Each of these is a
         # K=1 exact-RELION path that indexes rows by (image, rotation row) alone, or a
-        # route that writes a single volume pair per call.
+        # route that writes a single volume pair per call. Flat local rows used to be on
+        # this list; they are now expressible because the plan is emitted class-major
+        # and projection slices each class's block from its own volume.
         unsupported = {
             "score_only": bool(score_only),
             "fixed-capacity execution": bool(_fixed_capacity_enabled or _fixed_capacity_whole_boundary_enabled),
-            "flat local rows": bool(_flat_local_rows_enabled),
             "packed local projection": bool(_packed_local_projection_enabled),
             "fused pair fine score": bool(fused_pair_fine_score),
             "stable Fourier windows": bool(stable_fourier_window_shapes),
@@ -2350,6 +2352,17 @@ def run_local_em_exact(
                 if flat_local_rows_enabled
                 else np.zeros((1, 3), dtype=np.int32)
             )
+            flat_local_row_class_blocks = (
+                _flat_local_row_class_blocks(
+                    unpadded_bucket,
+                    flat_local_row_capacities,
+                    dense_batch_size=batch_size,
+                    rotation_block_size=rotation_block_size,
+                    exact_local_bucket_radix=resolved_exact_local_bucket_radix,
+                )
+                if flat_local_rows_enabled
+                else None
+            )
             if fused_pair_fine_score_enabled:
                 fine_job_capacity_key = (
                     int(batch_size),
@@ -2456,6 +2469,7 @@ def run_local_em_exact(
             big_jit_static_options = dict(
                 n_classes=n_classes,
                 class_segment_rotation_count=(bucket.segment_rotation_count if n_classes > 1 else None),
+                class_flat_row_counts=flat_local_row_class_blocks,
                 return_uncast_normalizer=capture_uncast_normalizer,
                 mask_mode=big_jit_mask_mode,
                 score_with_masked_images=score_with_masked_images,

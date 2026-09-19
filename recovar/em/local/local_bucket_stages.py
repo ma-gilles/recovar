@@ -1033,6 +1033,37 @@ def _build_flat_local_row_argument(
     return encode_flat_local_row_plan(plan)
 
 
+def _flat_local_row_class_blocks(
+    bucket,
+    capacities: dict[tuple[int, int], int],
+    *,
+    dense_batch_size: int,
+    rotation_block_size: int,
+    exact_local_bucket_radix: int,
+) -> tuple[int, ...] | None:
+    """Return the per-class packed row blocks, or None for a single-class bucket.
+
+    Projection needs these as static sizes to slice each class's block out of the
+    packed gather, so they are reported separately from the encoded row plan.
+    """
+
+    if int(getattr(bucket, "n_classes", 1) or 1) <= 1:
+        return None
+    dense_rotation_count = int(bucket.bucket_rotation_count)
+    key = (int(dense_batch_size), dense_rotation_count)
+    if key not in capacities:
+        raise ValueError(f"flat local row capacity is missing dense bucket ABI {key}")
+    plan = _build_pool_flat_plan_for_bucket(
+        bucket,
+        dense_rotation_count=dense_rotation_count,
+        rotation_block_size=rotation_block_size,
+        exact_local_bucket_radix=exact_local_bucket_radix,
+        packed_row_count=int(capacities[key]),
+        dense_batch_size=int(dense_batch_size),
+    )
+    return plan.class_row_counts
+
+
 _FINE_JOB_BUCKET_QUANTUM_ENV = "RECOVAR_EXACT_FINE_JOB_BUCKET_QUANTUM"
 
 

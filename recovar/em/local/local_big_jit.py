@@ -1985,6 +1985,7 @@ def _split_local_big_jit_carry(result):
         "unweighted_high_shell_image_power",
         "n_classes",
         "class_segment_rotation_count",
+        "class_flat_row_counts",
         "return_uncast_normalizer",
     ),
 )
@@ -2112,6 +2113,7 @@ def run_local_bucket_big_jit(
     unweighted_high_shell_image_power: bool = False,
     n_classes: int = 1,
     class_segment_rotation_count: int | None = None,
+    class_flat_row_counts: tuple[int, ...] | None = None,
     return_uncast_normalizer: bool = False,
 ):
     """Run one exact-local bucket in a single compiled numeric boundary.
@@ -2171,8 +2173,16 @@ def run_local_bucket_big_jit(
         # from the wrong class.
         if use_relion_projection_cache:
             raise ValueError("class-segmented rows do not use the K=1 local projection cache")
-        if use_flat_local_rows or use_packed_local_projection or use_fused_pair_fine_score:
-            raise ValueError("class-segmented rows do not use K=1 packed/flat local rows")
+        if use_fused_pair_fine_score:
+            raise ValueError("class-segmented rows do not use K=1 fused pair fine scoring")
+        if use_flat_local_rows and class_flat_row_counts is None:
+            # Without a class block table the packed rows are an undifferentiated list
+            # and projection cannot tell which class volume a row belongs to.
+            raise ValueError(
+                "class-segmented flat local rows require class_flat_row_counts"
+            )
+        if use_packed_local_projection and not use_flat_local_rows:
+            raise ValueError("class-segmented packed projection requires flat local rows")
         if projector_capacity:
             raise ValueError("class-segmented rows do not use the K=1 projector capacity path")
         if relion_exact_bpref_operands:
@@ -2188,7 +2198,10 @@ def run_local_bucket_big_jit(
             )
     flat_local_row_plan = jnp.asarray(flat_local_row_plan)
     if use_flat_local_rows:
-        if not relion_exact_fine_diff2:
+        if not relion_exact_fine_diff2 and class_flat_row_counts is None:
+            # The K=1 flat-row ABI was built for the exact RELION fine scorer. The
+            # class-segmented flat path scores through the ordinary bucket program
+            # instead: it is mathematically the same candidate set, just packed.
             raise ValueError(
                 "flat local rows require exact RELION fine diff2"
             )
@@ -2643,7 +2656,18 @@ def run_local_bucket_big_jit(
                 runtime_projector_r_max=runtime_projector_r_max,
             )
 
-        if n_classes > 1:
+        if n_classes > 1 and packed_local_projection and class_flat_row_counts is not None:
+            proj_half_flat = _project_local_class_segments_flat(
+                mean_for_proj,
+                relion_projector_half,
+                flat_rotations,
+                _project_rows,
+                n_classes=n_classes,
+                class_row_counts=class_flat_row_counts,
+                mean_is_per_class=not use_relion_projector,
+                projector_is_per_class=bool(use_relion_projector),
+            )
+        elif n_classes > 1:
             proj_half_flat = _project_local_class_segments(
                 mean_for_proj,
                 relion_projector_half,
