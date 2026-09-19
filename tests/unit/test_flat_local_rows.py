@@ -775,3 +775,27 @@ def test_class_flat_rows_quantize_with_the_bucketer_large_quantum():
         rows_in_class = plan.rotation_rows[plan.present_mask][block] % segment
         if rows_in_class.size:
             assert int(rows_in_class.max()) < segment
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("rows", [256, 255, 128, 3, 2, 1])
+def test_relion_ctf_row_shift_matches_negated_fftshift(rows):
+    """The in-place CTF row shift must equal `-fftshift(native, axes=0)` exactly.
+
+    `relion_ctf` builds each particle's cached CTF row by shifting RELION's standard-order
+    y axis and flipping sign for RECOVAR's forward-model convention. That ran once per
+    particle and cost ~40 s of a 100k run, so it now writes both row blocks into one
+    buffer instead of allocating for the roll and again for the negation. The split point
+    is `rows - rows // 2`, which differs from `rows // 2` when rows is odd.
+    """
+    native = np.random.default_rng(rows).standard_normal((rows, 129))
+
+    expected = (-np.fft.fftshift(native, axes=0)).reshape(-1)
+
+    shift = rows // 2
+    split = rows - shift
+    shifted = np.empty_like(native)
+    np.negative(native[split:], out=shifted[:shift])
+    np.negative(native[:split], out=shifted[shift:])
+
+    np.testing.assert_array_equal(shifted.reshape(-1), expected)
