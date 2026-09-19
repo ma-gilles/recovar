@@ -489,9 +489,16 @@ def compute_local_search_resident(
         _relion_cuda_fine_full_to_compact_lookup(image_shape, current_size, window_indices_np),
         dtype=jnp.int32,
     )
+    # The exact local engine casts sigma2 to the score real dtype before it
+    # divides by it (local_big_jit.py, the non-BPref-operand branch). Passing a
+    # float64 sigma2 through instead makes every downstream operand double:
+    # ctf^2/sigma2 becomes float64, the translated reconstruction tile becomes
+    # complex128, and _prepare_bucket_io then picks relion_translate_score_f64
+    # where the exact engine picks the f32 kernel. That is a different
+    # computation and twice the memory on the largest per-chunk array.
     noise_variance_half = noise_utils.to_batched_half_pixel_noise(
         noise_variance, image_shape
-    ).squeeze()
+    ).squeeze().astype(precision_policy.score_real_dtype)
     relion_score_translation_angles = _relion_cuda_score_translation_angles_if_available(
         fine_translations,
         image_shape,
@@ -500,9 +507,14 @@ def compute_local_search_resident(
     )
     if relion_score_translation_angles is None:
         raise ValueError("the resident local scorer requires RELION translation angles")
-    translation_phases_half = (
-        None if windowed_prepare else half_translation_phase_table(fine_translations, image_shape)
-    )
+    # Supply the phase table even in the windowed case. Handed ``None``, the
+    # compact prepare builds it from a float64 cached lattice, which is a
+    # complex128 table; the exact local engine builds it at the score real
+    # dtype and windows it. Windowing a supplied table is what that engine
+    # does, so supply it.
+    translation_phases_half = half_translation_phase_table(
+        fine_translations, image_shape, dtype=precision_policy.score_real_dtype
+    ).astype(precision_policy.score_complex_dtype)
 
     n_shells = image_shape[0] // 2 + 1
     shell_indices_half = mask_relion_noise_shell_indices_to_current_window(
