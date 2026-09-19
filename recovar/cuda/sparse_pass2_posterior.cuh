@@ -543,7 +543,12 @@ ffi::Error posterior_impl(
 //     cub::DeviceSegmentedRadixSort::SortKeys for the whole chunk; a radix
 //     sort is an exact permutation, so the sorted keys stay bitwise identical
 //     and only the launch structure changes.  Mode 2 also replaces the scans
-//     by segmented_inclusive_sum_kernel, one block per segment.
+//     by segmented_inclusive_sum_kernel, one block per segment.  Modes 3 and 4
+//     repeat 1 and 2 with cub::DeviceSegmentedSort, which partitions segments
+//     by size; it sorts the same keys, but its host dispatch copies the group
+//     sizes back and synchronizes the stream inside CUB
+//     (dispatch_segmented_sort.cuh, CUB 2.7.0), so it cannot be part of a
+//     device-resident call and exists for measurement, not for the default.
 //   * Modes 0 and 1 still need the segment lengths on the host, because the
 //     CUB scan takes its item count as a host argument and that count is what
 //     fixes the float32 decoupled-lookback summation order the boundary is
@@ -1008,10 +1013,22 @@ ffi::Error segmented_posterior_impl(
     // following the longest segment of this one.
     const int capacity_count = static_cast<int>(n_cells);
     const int segment_count = static_cast<int>(n_segments);
-    const int mode = sort_scan_mode <= 0 ? 0 : (sort_scan_mode >= 2 ? 2 : 1);
+    const int mode = sort_scan_mode <= 0 ? 0 : (sort_scan_mode >= 4 ? 4 : static_cast<int>(sort_scan_mode));
+    // Which CUB primitive sorts the chunk, and who scans it.  Both segmented
+    // primitives produce the same sorted keys as the per-segment sort (a sort
+    // is an exact permutation); they differ only in how they spread segments
+    // over the device, which matters because the resident capacity classes
+    // range from ten thousand to seven hundred thousand cells per segment.
+    const bool segmented_sort = mode >= 1;
+    const bool partitioned_sort = mode >= 3;
+    const bool device_scan = mode == 2 || mode == 4;
     size_t sort_bytes = 0;
     size_t scan_bytes = 0;
-    if (mode >= 1)
+    if (partitioned_sort)
+        error = cub::DeviceSegmentedSort::SortKeys(
+            nullptr, sort_bytes, raw_ptr, sorted_ptr, capacity_count, segment_count,
+            offsets_ptr, offsets_ptr + 1, stream);
+    else if (segmented_sort)
         error = cub::DeviceSegmentedRadixSort::SortKeys(
             nullptr, sort_bytes, raw_ptr, sorted_ptr, capacity_count, segment_count,
             offsets_ptr, offsets_ptr + 1, 0, sizeof(float) * 8, stream);
@@ -1021,7 +1038,7 @@ ffi::Error segmented_posterior_impl(
     if (error != cudaSuccess)
         return ffi::Error::Internal(
             std::string("SparsePass2SegmentedPosteriorF32 sort query: ") + cudaGetErrorString(error));
-    if (mode <= 1)
+    if (!device_scan)
     {
         error = relion_ampere_inclusive_sum_f32(
             nullptr, scan_bytes, sorted_ptr, cumulative_ptr, capacity_count, stream);
@@ -1029,10 +1046,11 @@ ffi::Error segmented_posterior_impl(
             return ffi::Error::Internal(
                 std::string("SparsePass2SegmentedPosteriorF32 scan query: ") + cudaGetErrorString(error));
     }
-    // Modes 1 and 2 give CUB a device-side monotone clamp of the offsets,
-    // because the host no longer validates the table it hands to the sort.
+    // The segmented modes give CUB a device-side monotone clamp of the
+    // offsets, because the host no longer validates the table it hands to the
+    // sort.
     const size_t offsets_bytes =
-        mode >= 1 ? (static_cast<size_t>(n_segments) + 1) * sizeof(int32_t) : 0;
+        segmented_sort ? (static_cast<size_t>(n_segments) + 1) * sizeof(int32_t) : 0;
     const size_t cub_bytes = std::max<size_t>(1, std::max(sort_bytes, scan_bytes));
     const size_t aligned_cub_bytes = (cub_bytes + 255) & ~static_cast<size_t>(255);
     void* temporary = nullptr;
@@ -1046,9 +1064,9 @@ ffi::Error segmented_posterior_impl(
             ? nullptr
             : reinterpret_cast<int32_t*>(static_cast<char*>(temporary) + aligned_cub_bytes);
 
-    if (mode >= 1)
+    if (segmented_sort)
     {
-        // One segmented sort for the whole chunk.  A radix sort is an exact
+        // One segmented sort for the whole chunk.  A sort is an exact
         // permutation of its keys, so every segment's sorted run is bitwise
         // what the per-segment sort of mode 0 produces; only the launch
         // structure changes (one dispatch instead of one per segment, and no
@@ -1057,7 +1075,11 @@ ffi::Error segmented_posterior_impl(
         clamp_segment_offsets_kernel<<<1, 1, 0, stream>>>(
             offsets_ptr, segment_count, n_cells, clamped_offsets);
         error = cudaGetLastError();
-        if (error == cudaSuccess)
+        if (error == cudaSuccess && partitioned_sort)
+            error = cub::DeviceSegmentedSort::SortKeys(
+                temporary, sort_bytes, raw_ptr, sorted_ptr, capacity_count, segment_count,
+                clamped_offsets, clamped_offsets + 1, stream);
+        else if (error == cudaSuccess)
             error = cub::DeviceSegmentedRadixSort::SortKeys(
                 temporary, sort_bytes, raw_ptr, sorted_ptr, capacity_count, segment_count,
                 clamped_offsets, clamped_offsets + 1, 0, sizeof(float) * 8, stream);
@@ -1070,7 +1092,7 @@ ffi::Error segmented_posterior_impl(
         }
     }
 
-    if (mode == 2)
+    if (device_scan)
     {
         // One segmented scan for the whole chunk: no host round trip is left
         // in this handler.  See segmented_inclusive_sum_kernel for the order
@@ -1090,7 +1112,7 @@ ffi::Error segmented_posterior_impl(
     }
     else
     {
-        // The one host round trip of modes 0 and 1: the per-segment CUB scan
+        // The one host round trip of the per-segment-scan modes: that CUB scan
         // takes its item count on the host, and that count is what fixes the
         // float32 summation order the significance boundary is defined by.
         // n_valid_images is NOT read back: segments at or past it carry no
@@ -1130,7 +1152,7 @@ ffi::Error segmented_posterior_impl(
             const int64_t length = host_offsets[static_cast<size_t>(segment) + 1] - begin;
             if (length <= 0) continue;
             const int cell_count = static_cast<int>(length);
-            if (mode == 0)
+            if (!segmented_sort)
                 error = cub::DeviceRadixSort::SortKeys(
                     temporary, sort_bytes, raw_ptr + begin, sorted_ptr + begin, cell_count,
                     0, sizeof(float) * 8, stream);

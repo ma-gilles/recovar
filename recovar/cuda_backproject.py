@@ -2037,6 +2037,22 @@ _SPARSE_PASS2_SEGMENT_STATE_BYTES = _SPARSE_PASS2_ROW_STATE_BYTES + 24
 SPARSE_PASS2_SORT_SCAN_PER_SEGMENT = 0
 SPARSE_PASS2_SORT_SCAN_SEGMENTED_SORT = 1
 SPARSE_PASS2_SORT_SCAN_SEGMENTED = 2
+# Modes 3 and 4 are modes 1 and 2 with cub::DeviceSegmentedSort, which
+# partitions segments by size, in place of cub::DeviceSegmentedRadixSort, whose
+# one-block-per-segment dispatch is slow once a segment holds hundreds of
+# thousands of cells.  Both sorts produce the same keys.
+SPARSE_PASS2_SORT_SCAN_PARTITIONED_SORT = 3
+SPARSE_PASS2_SORT_SCAN_PARTITIONED = 4
+# The default: pick per capacity class.  cub::DeviceSegmentedRadixSort gives
+# one block per segment, so it wins by a wide margin while a segment holds tens
+# of thousands of cells and loses once a segment holds hundreds of thousands,
+# where the per-segment cub::DeviceRadixSort has the whole device per sort.  A
+# chunk's cell and segment counts are static (they are buffer shapes), so this
+# choice is a property of the capacity class, never of the data.
+SPARSE_PASS2_SORT_SCAN_AUTO = -1
+# Measured on one A100 with measure/posterior_stage_bench.py in the T17 report
+# root: the crossover sits between the classes listed in that table.
+SPARSE_PASS2_SEGMENTED_CELLS_PER_SEGMENT_MAX = 262144
 
 _SPARSE_PASS2_SORT_SCAN_ENV = "RECOVAR_SPARSE_PASS2_SEGMENTED_SORT_SCAN"
 _SPARSE_PASS2_SORT_SCAN_NAMES = {
@@ -2046,18 +2062,25 @@ _SPARSE_PASS2_SORT_SCAN_NAMES = {
     "1": SPARSE_PASS2_SORT_SCAN_SEGMENTED_SORT,
     "segmented": SPARSE_PASS2_SORT_SCAN_SEGMENTED,
     "2": SPARSE_PASS2_SORT_SCAN_SEGMENTED,
+    "partitioned_sort": SPARSE_PASS2_SORT_SCAN_PARTITIONED_SORT,
+    "3": SPARSE_PASS2_SORT_SCAN_PARTITIONED_SORT,
+    "partitioned": SPARSE_PASS2_SORT_SCAN_PARTITIONED,
+    "4": SPARSE_PASS2_SORT_SCAN_PARTITIONED,
+    "auto": SPARSE_PASS2_SORT_SCAN_AUTO,
+    "-1": SPARSE_PASS2_SORT_SCAN_AUTO,
 }
-_SPARSE_PASS2_SORT_SCAN_DEFAULT = SPARSE_PASS2_SORT_SCAN_SEGMENTED_SORT
+_SPARSE_PASS2_SORT_SCAN_DEFAULT = SPARSE_PASS2_SORT_SCAN_AUTO
 
 
 @functools.lru_cache(maxsize=1)
 def sparse_pass2_segmented_sort_scan_mode() -> int:
     """Default sort/scan structure of the segmented pass-2 posterior.
 
-    ``RECOVAR_SPARSE_PASS2_SEGMENTED_SORT_SCAN`` selects ``per_segment`` (0),
-    ``segmented_sort`` (1, the default) or ``segmented`` (2).  The value is read
-    once per process: it is baked into compiled programs, so changing the
-    environment after the first call does not invalidate them.
+    ``RECOVAR_SPARSE_PASS2_SEGMENTED_SORT_SCAN`` selects ``auto`` (the default),
+    ``per_segment`` (0), ``segmented_sort`` (1), ``segmented`` (2),
+    ``partitioned_sort`` (3) or ``partitioned`` (4).  The value is read once per
+    process: it is baked into compiled programs, so changing the environment
+    after the first call does not invalidate them.
     """
 
     text = os.environ.get(_SPARSE_PASS2_SORT_SCAN_ENV, "").strip().lower()
@@ -2090,6 +2113,23 @@ def sparse_pass2_segmented_supported() -> bool:
         )
     except Exception:
         return False
+
+
+def sparse_pass2_segmented_auto_mode(cells: int, segments: int) -> int:
+    """Sort/scan mode for a chunk of ``cells`` cells in ``segments`` segments.
+
+    Both counts are buffer shapes, so this is a property of the capacity class
+    and identical for every chunk of that class.  Below the measured crossover
+    the segmented sort and the device scan win by a wide margin and remove the
+    handler's host round trip; above it, one block per segment is slower than
+    the per-segment sorts, which keep the whole device per segment.
+    """
+
+    if segments <= 0:
+        return SPARSE_PASS2_SORT_SCAN_PER_SEGMENT
+    if cells // segments > SPARSE_PASS2_SEGMENTED_CELLS_PER_SEGMENT_MAX:
+        return SPARSE_PASS2_SORT_SCAN_PER_SEGMENT
+    return SPARSE_PASS2_SORT_SCAN_SEGMENTED
 
 
 def _sparse_pass2_segment_geometry(
@@ -2196,7 +2236,9 @@ def sparse_pass2_segmented_posterior_f32(
 
     ``sort_scan_mode`` selects how the RELION significance boundary sorts and
     scans the candidate weights; ``None`` takes
-    :func:`sparse_pass2_segmented_sort_scan_mode`.
+    :func:`sparse_pass2_segmented_sort_scan_mode`.  Modes 3 and 4 repeat modes
+    1 and 2 with ``cub::DeviceSegmentedSort``, which partitions segments by
+    size, in place of ``cub::DeviceSegmentedRadixSort``.
 
     * ``0`` (``per_segment``) is the oracle: one CUB radix sort and one pinned
       Ampere inclusive scan per nonempty segment, every output bitwise equal to
@@ -2224,7 +2266,9 @@ def sparse_pass2_segmented_posterior_f32(
     or the cumulative sums across modes.
     """
 
-    _, segments = _sparse_pass2_segment_geometry(scores, segment_offsets, n_valid_images)
+    cells, segments = _sparse_pass2_segment_geometry(
+        scores, segment_offsets, n_valid_images
+    )
     if log_z.dtype != jnp.float64 or log_z.shape != (segments,):
         raise TypeError(
             f"log_z must be float64 with shape ({segments},), got {log_z.dtype} {log_z.shape}"
@@ -2243,12 +2287,10 @@ def sparse_pass2_segmented_posterior_f32(
         if sort_scan_mode is None
         else int(sort_scan_mode)
     )
-    if mode not in (
-        SPARSE_PASS2_SORT_SCAN_PER_SEGMENT,
-        SPARSE_PASS2_SORT_SCAN_SEGMENTED_SORT,
-        SPARSE_PASS2_SORT_SCAN_SEGMENTED,
-    ):
-        raise ValueError(f"sort_scan_mode must be 0, 1 or 2, got {sort_scan_mode!r}")
+    if mode != SPARSE_PASS2_SORT_SCAN_AUTO and mode not in range(5):
+        raise ValueError(f"sort_scan_mode must be -1 or 0-4, got {sort_scan_mode!r}")
+    if mode == SPARSE_PASS2_SORT_SCAN_AUTO:
+        mode = sparse_pass2_segmented_auto_mode(cells, segments)
     _require_sparse_pass2_cuda_backend("Segmented sparse pass-2 posterior")
     _ensure_optional_ffi(_TARGET_SPARSE_PASS2_SEGMENTED_POSTERIOR_F32)
     full = scores.shape

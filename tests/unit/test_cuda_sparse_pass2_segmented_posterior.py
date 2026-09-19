@@ -100,9 +100,12 @@ def _segmented(
     *,
     adaptive_fraction,
     keep_all,
-    sort_scan_mode=None,
+    sort_scan_mode=cb.SPARSE_PASS2_SORT_SCAN_SEGMENTED_SORT,
     scratch=False,
 ):
+    # The bitwise oracle tests pin a mode that is bitwise with the rectangular
+    # handler by construction, so they keep testing the arithmetic rather than
+    # whatever the capacity-class default happens to pick for their shape.
     segments = len(offsets) - 1
     outputs = cb.sparse_pass2_segmented_posterior_f32(
         jnp.asarray(scores_flat, dtype=jnp.float32),
@@ -150,6 +153,42 @@ def test_segment_state_bytes_match_header():
         total = (total + align - 1) // align * align + size
     total = (total + 7) // 8 * 8
     assert total == cb._SPARSE_PASS2_SEGMENT_STATE_BYTES
+
+
+@pytest.mark.parametrize(
+    "cells, segments, expected",
+    [
+        (1376256, 128, cb.SPARSE_PASS2_SORT_SCAN_SEGMENTED),   # 10752 cells/segment
+        (5505024, 128, cb.SPARSE_PASS2_SORT_SCAN_SEGMENTED),   # 43008
+        (22020096, 512, cb.SPARSE_PASS2_SORT_SCAN_SEGMENTED),  # 43008
+        (22020096, 128, cb.SPARSE_PASS2_SORT_SCAN_SEGMENTED),  # 172032
+        (22020096, 32, cb.SPARSE_PASS2_SORT_SCAN_PER_SEGMENT),  # 688128
+        (0, 0, cb.SPARSE_PASS2_SORT_SCAN_PER_SEGMENT),
+    ],
+)
+def test_auto_mode_follows_the_measured_crossover(cells, segments, expected):
+    """The default picks per capacity class, and only from the buffer shapes.
+
+    One block per segment beats one sort per segment while a segment holds tens
+    of thousands of cells and loses once it holds hundreds of thousands.  The
+    resident classes at this commit are row capacities 8192/32768/131072 times
+    168 fine translations over 32/128/512 images; only the widest rows on the
+    narrowest image capacity fall on the per-segment side.
+    """
+
+    assert cb.sparse_pass2_segmented_auto_mode(cells, segments) == expected
+
+
+def test_auto_mode_is_the_default_and_the_environment_names_every_mode():
+    assert cb._SPARSE_PASS2_SORT_SCAN_DEFAULT == cb.SPARSE_PASS2_SORT_SCAN_AUTO
+    assert set(cb._SPARSE_PASS2_SORT_SCAN_NAMES.values()) == {
+        cb.SPARSE_PASS2_SORT_SCAN_AUTO,
+        cb.SPARSE_PASS2_SORT_SCAN_PER_SEGMENT,
+        cb.SPARSE_PASS2_SORT_SCAN_SEGMENTED_SORT,
+        cb.SPARSE_PASS2_SORT_SCAN_SEGMENTED,
+        cb.SPARSE_PASS2_SORT_SCAN_PARTITIONED_SORT,
+        cb.SPARSE_PASS2_SORT_SCAN_PARTITIONED,
+    }
 
 
 def test_segmented_targets_are_optional_abi():
@@ -212,7 +251,7 @@ def test_wrapper_rejects_bad_operands(case):
     if case == "static_bool":
         kwargs["keep_all"] = 1
     if case == "sort_scan_mode":
-        kwargs["sort_scan_mode"] = 3
+        kwargs["sort_scan_mode"] = 9
     if case == "return_scratch":
         kwargs["return_scratch"] = 1
     with pytest.raises((TypeError, ValueError)):
@@ -645,8 +684,14 @@ def _float32_ulps(left, right):
 
 
 @pytest.mark.gpu
+@pytest.mark.parametrize(
+    "mode",
+    [cb.SPARSE_PASS2_SORT_SCAN_SEGMENTED_SORT, cb.SPARSE_PASS2_SORT_SCAN_PARTITIONED_SORT],
+)
 @pytest.mark.parametrize("images, rows, translations, occupancy", _PRODUCTION_CHUNKS)
-def test_segmented_sort_is_bitwise_on_production_chunks(images, rows, translations, occupancy):
+def test_segmented_sort_is_bitwise_on_production_chunks(
+    images, rows, translations, occupancy, mode
+):
     """One segmented sort per chunk reproduces the per-segment sorts bitwise.
 
     A radix sort is an exact permutation of its keys, so mode 1 changes the
@@ -668,31 +713,34 @@ def test_segmented_sort_is_bitwise_on_production_chunks(images, rows, translatio
         for mode in (
             cb.SPARSE_PASS2_SORT_SCAN_PER_SEGMENT,
             cb.SPARSE_PASS2_SORT_SCAN_PER_SEGMENT,
-            cb.SPARSE_PASS2_SORT_SCAN_SEGMENTED_SORT,
+            mode,
         )
     ]
     reference, band, candidate = arms
     for name in ("raw_weights", "sorted", "log_z", "best_log_score", "best_cell_index", "probs"):
         np.testing.assert_array_equal(
-            candidate[name], reference[name], err_msg=f"{name} mode 1 vs mode 0"
+            candidate[name], reference[name], err_msg=f"{name} segmented sort vs mode 0"
         )
     for name in _OUTPUT_NAMES + _SCRATCH_NAMES:
         if np.array_equal(band[name], reference[name]):
             np.testing.assert_array_equal(
-                candidate[name], reference[name], err_msg=f"{name} mode 1 vs mode 0"
+                candidate[name], reference[name], err_msg=f"{name} segmented sort vs mode 0"
             )
             continue
-        # The oracle did not reproduce itself on this field; mode 1 only has to
-        # stay inside the band the two mode-0 arms span.
+        # The oracle did not reproduce itself on this field; the candidate only
+        # has to stay inside the band the two mode-0 arms span.
         assert np.count_nonzero(candidate[name] != reference[name]) <= np.count_nonzero(
             band[name] != reference[name]
-        ), f"{name} mode 1 outside the mode-0 band"
+        ), f"{name} segmented sort outside the mode-0 band"
 
 
 @pytest.mark.gpu
+@pytest.mark.parametrize(
+    "mode", [cb.SPARSE_PASS2_SORT_SCAN_SEGMENTED, cb.SPARSE_PASS2_SORT_SCAN_PARTITIONED]
+)
 @pytest.mark.parametrize("images, rows, translations, occupancy", _PRODUCTION_CHUNKS)
 def test_single_scan_keeps_keys_and_moves_only_near_ties(
-    images, rows, translations, occupancy
+    images, rows, translations, occupancy, mode
 ):
     """Mode 2 keeps the sorted keys and everything the scan does not feed.
 
@@ -716,12 +764,11 @@ def test_single_scan_keeps_keys_and_moves_only_near_ties(
     )
     candidate = _segmented(
         scores, offsets, images, log_z, None,
-        adaptive_fraction=0.999, keep_all=False,
-        sort_scan_mode=cb.SPARSE_PASS2_SORT_SCAN_SEGMENTED, scratch=True,
+        adaptive_fraction=0.999, keep_all=False, sort_scan_mode=mode, scratch=True,
     )
     for name in ("raw_weights", "sorted", "log_z", "best_log_score", "best_cell_index", "probs"):
         np.testing.assert_array_equal(
-            candidate[name], reference[name], err_msg=f"{name} mode 2 vs mode 0"
+            candidate[name], reference[name], err_msg=f"{name} device scan vs mode 0"
         )
 
     # sum_weight is the scan's last element, so it moves by ULP; the threshold
@@ -757,7 +804,7 @@ def test_single_scan_keeps_keys_and_moves_only_near_ties(
 
 
 @pytest.mark.gpu
-@pytest.mark.parametrize("mode", [1, 2])
+@pytest.mark.parametrize("mode", [1, 2, 3, 4])
 @pytest.mark.parametrize("adaptive_fraction", _ADAPTIVE_FRACTIONS)
 def test_modes_agree_on_empty_and_invalid_segments(mode, adaptive_fraction):
     """Empty segments and images past ``n_valid_images`` are mode-independent.
@@ -806,7 +853,10 @@ def test_modes_agree_on_empty_and_invalid_segments(mode, adaptive_fraction):
 
 
 @pytest.mark.gpu
-def test_single_scan_clamps_a_malformed_offset_table_on_the_device():
+@pytest.mark.parametrize(
+    "mode", [cb.SPARSE_PASS2_SORT_SCAN_SEGMENTED, cb.SPARSE_PASS2_SORT_SCAN_PARTITIONED]
+)
+def test_single_scan_clamps_a_malformed_offset_table_on_the_device(mode):
     """Modes 1 and 2 hand the offsets to CUB, so the device clamps them.
 
     The host no longer reads the table back in mode 2, so a decreasing entry
@@ -841,8 +891,7 @@ def test_single_scan_clamps_a_malformed_offset_table_on_the_device():
     )
     actual = _segmented(
         scores, malformed, images, _chunk_log_z(scores, malformed, images), None,
-        adaptive_fraction=0.999, keep_all=False,
-        sort_scan_mode=cb.SPARSE_PASS2_SORT_SCAN_SEGMENTED,
+        adaptive_fraction=0.999, keep_all=False, sort_scan_mode=mode,
     )
     for name in ("log_z", "best_log_score", "n_significant", "sum_weight", "threshold"):
         np.testing.assert_array_equal(
