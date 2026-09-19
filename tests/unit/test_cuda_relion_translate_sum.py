@@ -3,12 +3,15 @@
 ``resident_pass2._resident_block_weighted_sums`` gathers a pre-shifted
 ``[images, translations, pixels]`` tile per row and contracts it with the
 posterior at ``Precision.HIGHEST``.  The CUDA kernel applies RELION's
-translation inside the reduction instead, so the tile never exists.  The two
-paths therefore share the translation arithmetic exactly -- the reference tile
-here is built by ``relion_translate_score_f32``, the primitive production uses
--- and differ only in how the products over translations are summed: the
-kernel sums sequentially in increasing ``t`` with a rounded multiply and a
-rounded add, XLA contracts the same products in its reduce fusion.
+translation inside the reduction instead, so the tile never exists.  Every
+reference below is therefore built by the primitive production uses --
+``relion_translate_score_f32``, or ``relion_translate_bpref_f32`` for the
+reconstruction operand when ``relion_exact_bpref_operands`` is selected --
+followed by the XLA reduction, so a comparison isolates the summation and not
+the translation.  The two paths differ only in how the products over
+translations are summed: the kernel sums sequentially in increasing ``t`` with
+a rounded multiply and a rounded add, XLA contracts the same products in its
+reduce fusion.
 
 Measured on an A100 with nvcc 13.3: at the production translation count (21)
 XLA emits a sequential reduction over ``t``, so the two paths agree **bitwise**
@@ -90,8 +93,12 @@ def _operands(
         -2.0 * np.pi * shifts / float(IMAGE_SHAPE[0])
     ).astype(np.float32)
     ctf2 = rng.random((image_capacity, n_pixels)).astype(np.float32)
+    recon_weight = rng.uniform(-2.0, 2.0, (image_capacity, n_pixels)).astype(
+        np.float32
+    )
     return dict(
         pixel_indices=pixel_indices,
+        recon_weight=recon_weight,
         posterior=posterior,
         row_image_ids=row_image_ids,
         recon_image=recon_image,
@@ -101,7 +108,7 @@ def _operands(
     )
 
 
-def _reference(cuda_backproject, operands, *, reference_row_ids=None):
+def _reference(cuda_backproject, operands, *, reference_row_ids=None, bpref=False):
     """The production tile builder followed by the XLA weighted sums."""
 
     from recovar.em.sparse_pass2.resident_pass2 import _resident_block_weighted_sums
@@ -110,14 +117,22 @@ def _reference(cuda_backproject, operands, *, reference_row_ids=None):
     n_trans = operands["translation_angles"].shape[0]
     shifted = []
     for key in ("recon_image", "noise_image"):
-        shifted.append(
-            cuda_backproject.relion_translate_score_f32(
+        if key == "recon_image" and bpref:
+            tile = cuda_backproject.relion_translate_bpref_f32(
+                jnp.asarray(operands[key]),
+                jnp.asarray(operands["recon_weight"]),
+                jnp.asarray(operands["translation_angles"]),
+                jnp.asarray(operands["pixel_indices"]),
+                IMAGE_SHAPE,
+            )
+        else:
+            tile = cuda_backproject.relion_translate_score_f32(
                 jnp.asarray(operands[key]),
                 jnp.asarray(operands["translation_angles"]),
                 jnp.asarray(operands["pixel_indices"]),
                 IMAGE_SHAPE,
-            ).reshape(n_images, n_trans, n_pixels)
-        )
+            )
+        shifted.append(tile.reshape(n_images, n_trans, n_pixels))
     ids = (
         operands["row_image_ids"]
         if reference_row_ids is None
@@ -133,7 +148,15 @@ def _reference(cuda_backproject, operands, *, reference_row_ids=None):
     return jax.block_until_ready((summed, masked, mass))
 
 
-def _kernel(cuda_backproject, operands, *, n_valid_rows, logical_pixels, rows_per_block=0):
+def _kernel(
+    cuda_backproject,
+    operands,
+    *,
+    n_valid_rows,
+    logical_pixels,
+    rows_per_block=0,
+    bpref=False,
+):
     return jax.block_until_ready(
         cuda_backproject.relion_translate_sum_flat_rows_f32(
             jnp.asarray(operands["recon_image"]),
@@ -144,6 +167,7 @@ def _kernel(cuda_backproject, operands, *, n_valid_rows, logical_pixels, rows_pe
             jnp.asarray(operands["pixel_indices"]),
             jnp.asarray(n_valid_rows, dtype=jnp.int32),
             jnp.asarray(logical_pixels, dtype=jnp.int32),
+            jnp.asarray(operands["recon_weight"]) if bpref else None,
             image_shape=IMAGE_SHAPE,
             rows_per_block=rows_per_block,
         )
@@ -441,3 +465,105 @@ def test_wrapper_is_traceable_with_static_shapes(
         first, second = jax.block_until_ready((first, second))
     # Both calls reuse one traced program; the device scalars change the work.
     assert float(first) > float(second) > 0.0
+
+
+@pytest.mark.gpu
+@pytest.mark.parametrize("rows_per_block", [1, 4])
+def test_exact_bpref_recon_operand_matches_its_own_translate(
+    monkeypatch, custom_cuda_lib, gpu_device, rows_per_block
+):
+    """``relion_exact_bpref_operands`` builds the recon tile with a different
+    primitive: ``relion_translate_bpref_f32`` rounds the imaginary component as
+    ``cosine * v.y + sine * v.x`` and multiplies by the weighted CTF after the
+    rotation. The kernel must reproduce that tile, not the score one, when the
+    weight is supplied -- and the noise tile must stay on the score path."""
+
+    cuda_backproject = _cuda_backproject(monkeypatch, custom_cuda_lib)
+    rng = np.random.default_rng(2025)
+    rows, n_pixels, n_trans = 1024, 415, 21
+    operands = _operands(
+        rng, rows=rows, image_capacity=32, n_trans=n_trans, n_pixels=n_pixels
+    )
+    with jax.default_device(gpu_device):
+        summed_ref, masked_ref, _mass_ref = _reference(
+            cuda_backproject, operands, bpref=True
+        )
+        summed, masked, _mass = _kernel(
+            cuda_backproject,
+            operands,
+            n_valid_rows=rows,
+            logical_pixels=n_pixels,
+            rows_per_block=rows_per_block,
+            bpref=True,
+        )
+    _assert_bitwise(summed, summed_ref)
+    _assert_bitwise(masked, masked_ref)
+
+    # The two conventions are genuinely different arithmetic, so the score-mode
+    # result must NOT equal the BPref reference; otherwise this test would pass
+    # for the wrong reason.
+    with jax.default_device(gpu_device):
+        score_mode, _m, _p = _kernel(
+            cuda_backproject,
+            operands,
+            n_valid_rows=rows,
+            logical_pixels=n_pixels,
+            rows_per_block=rows_per_block,
+            bpref=False,
+        )
+    assert not np.array_equal(np.asarray(score_mode), np.asarray(summed_ref))
+
+
+@pytest.mark.gpu
+@pytest.mark.parametrize("bpref", [False, True], ids=["score", "bpref"])
+def test_in_kernel_translation_phases_are_bitwise(
+    monkeypatch, custom_cuda_lib, gpu_device, bpref
+):
+    """The in-kernel translation must equal the production translate primitive.
+
+    One translation with unit posterior turns the reduction into the identity
+    (``1.0 * x`` is exact), so the outputs are the translated operands
+    themselves and any phase or rotation difference shows up directly.
+    """
+
+    cuda_backproject = _cuda_backproject(monkeypatch, custom_cuda_lib)
+    rng = np.random.default_rng(555)
+    n_images, n_pixels = 24, 617
+    operands = _operands(
+        rng, rows=n_images, image_capacity=n_images, n_trans=1, n_pixels=n_pixels
+    )
+    operands["row_image_ids"] = np.arange(n_images, dtype=np.int32)
+    operands["posterior"] = np.ones((n_images, 1), dtype=np.float32)
+
+    with jax.default_device(gpu_device):
+        if bpref:
+            recon_ref = cuda_backproject.relion_translate_bpref_f32(
+                jnp.asarray(operands["recon_image"]),
+                jnp.asarray(operands["recon_weight"]),
+                jnp.asarray(operands["translation_angles"]),
+                jnp.asarray(operands["pixel_indices"]),
+                IMAGE_SHAPE,
+            )
+        else:
+            recon_ref = cuda_backproject.relion_translate_score_f32(
+                jnp.asarray(operands["recon_image"]),
+                jnp.asarray(operands["translation_angles"]),
+                jnp.asarray(operands["pixel_indices"]),
+                IMAGE_SHAPE,
+            )
+        noise_ref = cuda_backproject.relion_translate_score_f32(
+            jnp.asarray(operands["noise_image"]),
+            jnp.asarray(operands["translation_angles"]),
+            jnp.asarray(operands["pixel_indices"]),
+            IMAGE_SHAPE,
+        )
+        summed, masked, mass = _kernel(
+            cuda_backproject,
+            operands,
+            n_valid_rows=n_images,
+            logical_pixels=n_pixels,
+            bpref=bpref,
+        )
+    _assert_bitwise(summed, np.asarray(recon_ref).reshape(n_images, n_pixels))
+    _assert_bitwise(masked, np.asarray(noise_ref).reshape(n_images, n_pixels))
+    np.testing.assert_array_equal(np.asarray(mass), np.ones(n_images, np.float32))

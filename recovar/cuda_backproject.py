@@ -7260,6 +7260,7 @@ def relion_translate_sum_flat_rows_f32(
     pixel_indices: jax.Array,
     n_valid_rows: jax.Array,
     logical_pixel_count: jax.Array,
+    recon_weight: jax.Array | None = None,
     *,
     image_shape: Tuple[int, int],
     rows_per_block: int = 0,
@@ -7280,6 +7281,15 @@ def relion_translate_sum_flat_rows_f32(
     without ever materialising the tile. ``pixel_indices`` are RECOVAR's
     centered packed-half indices, the same operand
     :func:`relion_translate_score_f32` takes.
+
+    ``recon_weight`` switches the first operand to the exact RELION BPref
+    convention, the one ``_prepare_bucket_io`` uses when
+    ``relion_exact_bpref_operands`` is selected: pass the raw BPref image as
+    ``recon_image`` and the weighted CTF as ``recon_weight``, and the kernel
+    reproduces :func:`relion_translate_bpref_f32`, whose imaginary component
+    and post-rotation weighting round differently from the score primitive.
+    The noise operand always uses the score convention, which is how
+    ``shifted_score_half_with_dc`` is built in both modes.
 
     ``n_valid_rows`` and ``logical_pixel_count`` are device int32 scalars, so a
     capacity-shaped chunk keeps one traced program: rows at or past
@@ -7350,6 +7360,19 @@ def relion_translate_sum_flat_rows_f32(
         raise ValueError(
             f"rows_per_block must be 0, 1, 2, 4 or 8, got {rows_per_block}"
         )
+    bpref_recon = recon_weight is not None
+    if bpref_recon:
+        recon_weight = jnp.asarray(recon_weight)
+        if recon_weight.dtype != jnp.float32 or recon_weight.shape != (
+            batch_size,
+            pixel_capacity,
+        ):
+            raise ValueError(
+                "flat-row translate-and-sum expects float32 recon_weight[B,P], "
+                f"got {recon_weight.shape} {recon_weight.dtype}"
+            )
+    else:
+        recon_weight = jnp.zeros((1, 1), dtype=jnp.float32)
     if batch_size <= 0 or pixel_capacity <= 0 or row_count <= 0 or n_trans <= 0:
         raise ValueError(
             "flat-row translate-and-sum operands must be non-empty, got "
@@ -7380,6 +7403,7 @@ def relion_translate_sum_flat_rows_f32(
     )(
         recon_image,
         noise_image,
+        recon_weight,
         row_image_ids,
         posterior,
         translation_angles,
@@ -7389,6 +7413,7 @@ def relion_translate_sum_flat_rows_f32(
         image_h=np.int64(image_h),
         image_half_width=np.int64(image_w // 2 + 1),
         rows_per_block=np.int64(int(rows_per_block)),
+        bpref_recon=np.int64(int(bpref_recon)),
     )
 
 

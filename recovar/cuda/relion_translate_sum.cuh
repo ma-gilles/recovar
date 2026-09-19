@@ -28,6 +28,16 @@
 // sequential in increasing ``t`` with a rounded multiply followed by a rounded
 // add, the order RELION's Wavg accumulation uses.
 //
+// Two operand conventions.  ``_prepare_bucket_io`` builds the reconstruction
+// tile with ``relion_translate_score_f32`` normally, but with
+// ``relion_translate_bpref_f32`` when the exact RELION BPref operands are
+// selected: that primitive writes the imaginary component as
+// ``cosine * v.y + sine * v.x`` instead of ``sine * v.x + cosine * v.y`` and
+// multiplies the rotated value by the weighted CTF afterwards.  The two round
+// differently.  ``recon_weight`` selects the BPref convention for the first
+// operand; the noise operand always uses the score convention, which is what
+// ``shifted_score_half_with_dc`` is built with in both modes.
+//
 // This header is included from cuda_backproject.cu after the anonymous
 // namespace that defines relion_score_translate_f32.
 
@@ -37,7 +47,9 @@ constexpr int kBlockThreads = 256;
 constexpr int kMaxSharedBytes = 32 * 1024;
 
 // The phase of relion_score_translate_f32, verbatim: one rounded y product
-// followed by an x FMA.
+// followed by an x FMA.  relion_translate_bpref_f32_kernel writes the same
+// phase as ``sincosf(x * tx + y * ty)`` and its PTX contracts to this same
+// sequence, so one evaluation serves both operand conventions.
 __device__ __forceinline__ float translate_phase_f32(
     int x, int y, float tx, float ty)
 {
@@ -59,11 +71,47 @@ __device__ __forceinline__ float2 translate_rotate_f32(
     return make_float2(translated_real, translated_imag);
 }
 
-template <int ROWS_PER_BLOCK>
+// The rotation and weighting of relion_translate_bpref_f32_kernel, written
+// with rounding intrinsics that reproduce what that kernel actually executes.
+//
+// Its source form is ``cosine * v.x - sine * v.y`` and
+// ``cosine * v.y + sine * v.x``.  Its PTX keeps the real component as
+// ``mul.f32``, ``mul.f32``, ``sub.f32`` -- all fusable, so ptxas contracts
+// them into the same FMA the score primitive writes explicitly -- and already
+// contracts the imaginary one to ``fma.rn(cosine, v.y, mul(sine, v.x))``,
+// whose addend is a product of the other pair than the score primitive's
+// ``fma(sine, v.x, round(cosine * v.y))``.  So the two primitives differ in
+// the imaginary component only, plus this one's post-rotation weighting.
+//
+// Copying the source form into this helper is NOT enough: measured on
+// nvcc 13.3 for compute_80, the same two lines inlined from a helper contract
+// the imaginary component the other way, and half of all output cells then
+// differ from the primitive by a few ulp.  Pinning them with non-fusable
+// intrinsics is also not enough on its own: writing the real component as
+// ``__fsub_rn(__fmul_rn(...), __fmul_rn(...))`` blocks the contraction ptxas
+// performs on the primitive and breaks the other component instead.  Both are
+// therefore pinned to the contracted form, and the unit test asserts bitwise
+// equality against the primitive.
+__device__ __forceinline__ float2 translate_rotate_bpref_f32(
+    float2 value, float sine, float cosine, float factor)
+{
+    const float translated_real = __fmaf_rn(
+        cosine, value.x,
+        -__fmul_rn(sine, value.y));
+    const float translated_imag = __fmaf_rn(
+        cosine, value.y,
+        __fmul_rn(sine, value.x));
+    return make_float2(
+        __fmul_rn(translated_real, factor),
+        __fmul_rn(translated_imag, factor));
+}
+
+template <int ROWS_PER_BLOCK, bool BPREF_RECON>
 __global__ void __launch_bounds__(kBlockThreads)
 translate_sum_flat_rows_f32_kernel(
     const float2* __restrict__ recon_image,          // [B, P]
     const float2* __restrict__ noise_image,          // [B, P]
+    const float* __restrict__ recon_weight,          // [B, P] or null
     const int32_t* __restrict__ row_image_ids,       // [Q]
     const float* __restrict__ posterior,             // [Q, T]
     const float* __restrict__ translation_angles,    // [T, 2]
@@ -184,17 +232,20 @@ translate_sum_flat_rows_f32_kernel(
         float2 noise_value[ROWS_PER_BLOCK];
         float2 recon_acc[ROWS_PER_BLOCK];
         float2 noise_acc[ROWS_PER_BLOCK];
+        float recon_factor[ROWS_PER_BLOCK];
 #pragma unroll
         for (int i = 0; i < ROWS_PER_BLOCK; ++i) {
             recon_acc[i] = make_float2(0.0f, 0.0f);
             noise_acc[i] = make_float2(0.0f, 0.0f);
             recon_value[i] = make_float2(0.0f, 0.0f);
             noise_value[i] = make_float2(0.0f, 0.0f);
+            recon_factor[i] = 0.0f;
             if (live[i]) {
                 const int64_t base =
                     static_cast<int64_t>(image_ids[i]) * pixel_capacity + pixel;
                 recon_value[i] = recon_image[base];
                 noise_value[i] = noise_image[base];
+                if constexpr (BPREF_RECON) recon_factor[i] = recon_weight[base];
             }
         }
 
@@ -213,8 +264,10 @@ translate_sum_flat_rows_f32_kernel(
                 if (!live[i]) continue;
                 const float weight =
                     shared_posterior[i * translation_count + translation];
-                const float2 recon_shifted =
-                    translate_rotate_f32(recon_value[i], sine, cosine);
+                const float2 recon_shifted = BPREF_RECON
+                    ? translate_rotate_bpref_f32(
+                          recon_value[i], sine, cosine, recon_factor[i])
+                    : translate_rotate_f32(recon_value[i], sine, cosine);
                 const float2 noise_shifted =
                     translate_rotate_f32(noise_value[i], sine, cosine);
                 recon_acc[i].x = __fadd_rn(
@@ -260,11 +313,12 @@ inline int choose_rows_per_block(
     return rows;
 }
 
-template <int ROWS_PER_BLOCK>
+template <int ROWS_PER_BLOCK, bool BPREF_RECON>
 cudaError_t launch_templated(
     cudaStream_t stream,
     const float2* recon_image,
     const float2* noise_image,
+    const float* recon_weight,
     const int32_t* row_image_ids,
     const float* posterior,
     const float* translation_angles,
@@ -285,10 +339,11 @@ cudaError_t launch_templated(
         (row_count + ROWS_PER_BLOCK - 1) / ROWS_PER_BLOCK;
     const size_t shared = static_cast<size_t>(
         shared_bytes_for(ROWS_PER_BLOCK, translation_count));
-    translate_sum_flat_rows_f32_kernel<ROWS_PER_BLOCK>
+    translate_sum_flat_rows_f32_kernel<ROWS_PER_BLOCK, BPREF_RECON>
         <<<static_cast<unsigned>(blocks), kBlockThreads, shared, stream>>>(
             recon_image,
             noise_image,
+            recon_weight,
             row_image_ids,
             posterior,
             translation_angles,
@@ -311,6 +366,7 @@ inline cudaError_t launch(
     cudaStream_t stream,
     const float2* recon_image,
     const float2* noise_image,
+    const float* recon_weight,
     const int32_t* row_image_ids,
     const float* posterior,
     const float* translation_angles,
@@ -356,21 +412,31 @@ inline cudaError_t launch(
     if (shared_bytes_for(rows, translation_count) > kMaxSharedBytes)
         return cudaErrorInvalidValue;
 
-#define RECOVAR_TRANSLATE_SUM_DISPATCH(R)                    \
-    case R:                                                  \
-        return launch_templated<R>(                          \
-            stream, recon_image, noise_image, row_image_ids, \
-            posterior, translation_angles, pixel_indices,    \
-            runtime_valid_rows, runtime_logical_pixels,      \
-            summed, summed_masked, probs_sum_t, batch_size,  \
-            row_count, translation_count, pixel_capacity,    \
-            image_h, image_half_width)
+#define RECOVAR_TRANSLATE_SUM_DISPATCH(R, BPREF)                  \
+    case R:                                                       \
+        return launch_templated<R, BPREF>(                        \
+            stream, recon_image, noise_image, recon_weight,       \
+            row_image_ids, posterior, translation_angles,         \
+            pixel_indices, runtime_valid_rows,                    \
+            runtime_logical_pixels, summed, summed_masked,        \
+            probs_sum_t, batch_size, row_count, translation_count,\
+            pixel_capacity, image_h, image_half_width)
 
+    if (recon_weight != nullptr) {
+        switch (rows) {
+            RECOVAR_TRANSLATE_SUM_DISPATCH(1, true);
+            RECOVAR_TRANSLATE_SUM_DISPATCH(2, true);
+            RECOVAR_TRANSLATE_SUM_DISPATCH(4, true);
+            RECOVAR_TRANSLATE_SUM_DISPATCH(8, true);
+            default:
+                return cudaErrorInvalidValue;
+        }
+    }
     switch (rows) {
-        RECOVAR_TRANSLATE_SUM_DISPATCH(1);
-        RECOVAR_TRANSLATE_SUM_DISPATCH(2);
-        RECOVAR_TRANSLATE_SUM_DISPATCH(4);
-        RECOVAR_TRANSLATE_SUM_DISPATCH(8);
+        RECOVAR_TRANSLATE_SUM_DISPATCH(1, false);
+        RECOVAR_TRANSLATE_SUM_DISPATCH(2, false);
+        RECOVAR_TRANSLATE_SUM_DISPATCH(4, false);
+        RECOVAR_TRANSLATE_SUM_DISPATCH(8, false);
         default:
             return cudaErrorInvalidValue;
     }
@@ -382,8 +448,10 @@ ffi::Error impl(
     int64_t image_h,
     int64_t image_half_width,
     int64_t rows_per_block,
+    int64_t bpref_recon_attr,
     ffi::AnyBuffer recon_image,
     ffi::AnyBuffer noise_image,
+    ffi::AnyBuffer recon_weight,
     ffi::AnyBuffer row_image_ids,
     ffi::AnyBuffer posterior,
     ffi::AnyBuffer translation_angles,
@@ -396,6 +464,7 @@ ffi::Error impl(
 {
     if (recon_image.element_type() != ffi::DataType::C64 ||
         noise_image.element_type() != ffi::DataType::C64 ||
+        recon_weight.element_type() != ffi::DataType::F32 ||
         row_image_ids.element_type() != ffi::DataType::S32 ||
         posterior.element_type() != ffi::DataType::F32 ||
         translation_angles.element_type() != ffi::DataType::F32 ||
@@ -412,6 +481,7 @@ ffi::Error impl(
 
     const auto recon_dims = recon_image.dimensions();
     const auto noise_dims = noise_image.dimensions();
+    const auto weight_dims = recon_weight.dimensions();
     const auto row_dims = row_image_ids.dimensions();
     const auto posterior_dims = posterior.dimensions();
     const auto angle_dims = translation_angles.dimensions();
@@ -420,6 +490,7 @@ ffi::Error impl(
     const auto masked_dims = summed_masked->dimensions();
     const auto mass_dims = probs_sum_t->dimensions();
     if (recon_dims.size() != 2 || noise_dims.size() != 2 ||
+        weight_dims.size() != 2 ||
         row_dims.size() != 1 || posterior_dims.size() != 2 ||
         angle_dims.size() != 2 || angle_dims[1] != 2 ||
         index_dims.size() != 1 || summed_dims.size() != 2 ||
@@ -443,6 +514,11 @@ ffi::Error impl(
         mass_dims[0] != row_count)
         return ffi::Error::InvalidArgument(
             "RelionTranslateSumFlatRowsF32: inconsistent topology");
+    const bool bpref_recon = bpref_recon_attr != 0;
+    if (bpref_recon &&
+        (weight_dims[0] != batch_size || weight_dims[1] != pixel_capacity))
+        return ffi::Error::InvalidArgument(
+            "RelionTranslateSumFlatRowsF32: BPref weight must be [batch, pixels]");
     if (image_h <= 0 || image_half_width <= 0 ||
         image_h > std::numeric_limits<int>::max() ||
         image_half_width > std::numeric_limits<int>::max())
@@ -460,6 +536,9 @@ ffi::Error impl(
         stream,
         reinterpret_cast<const float2*>(recon_image.untyped_data()),
         reinterpret_cast<const float2*>(noise_image.untyped_data()),
+        bpref_recon
+            ? static_cast<const float*>(recon_weight.untyped_data())
+            : nullptr,
         static_cast<const int32_t*>(row_image_ids.untyped_data()),
         static_cast<const float*>(posterior.untyped_data()),
         static_cast<const float*>(translation_angles.untyped_data()),
@@ -491,6 +570,8 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Attr<int64_t>("image_h")
         .Attr<int64_t>("image_half_width")
         .Attr<int64_t>("rows_per_block")
+        .Attr<int64_t>("bpref_recon")
+        .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
