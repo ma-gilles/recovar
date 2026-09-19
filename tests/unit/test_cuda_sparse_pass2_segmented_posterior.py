@@ -897,3 +897,35 @@ def test_single_scan_clamps_a_malformed_offset_table_on_the_device(mode):
         np.testing.assert_array_equal(
             actual[name][:2], expected[name][:2], err_msg=f"{name} before the malformed entry"
         )
+
+
+@pytest.mark.gpu
+@pytest.mark.parametrize("images, rows, translations, occupancy", _PRODUCTION_CHUNKS)
+def test_default_call_equals_the_mode_the_policy_names(
+    images, rows, translations, occupancy
+):
+    """Calling without a mode runs exactly what the capacity class selects.
+
+    The driver never passes ``sort_scan_mode``, so this is the production path:
+    the wrapper resolves the environment, then the capacity class, and the
+    result must be bit-for-bit the same as asking for that mode by name.
+    """
+
+    _require_segmented_gpu()
+    scores, offsets = make_production_chunk(images, rows, translations, occupancy, 23)
+    log_z = _chunk_log_z(scores, offsets, images)
+    cells = int(np.prod(scores.shape))
+    expected_mode = cb.sparse_pass2_segmented_auto_mode(cells, images)
+    assert cb.sparse_pass2_segmented_sort_scan_mode() == cb.SPARSE_PASS2_SORT_SCAN_AUTO
+    default = _segmented(
+        scores, offsets, images, log_z, None,
+        adaptive_fraction=0.999, keep_all=False, sort_scan_mode=None,
+    )
+    named = _segmented(
+        scores, offsets, images, log_z, None,
+        adaptive_fraction=0.999, keep_all=False, sort_scan_mode=expected_mode,
+    )
+    for name in _OUTPUT_NAMES:
+        np.testing.assert_array_equal(
+            default[name], named[name], err_msg=f"{name} default vs mode {expected_mode}"
+        )
