@@ -523,3 +523,82 @@ def test_pool_flat_row_plan_rejects_invalid_shapes(counts, dense_rotation_count,
             exact_local_bucket_radix=4,
             **kwargs,
         )
+
+
+@pytest.mark.unit
+def test_class_flat_rows_cover_every_candidate_exactly_once():
+    """Class-segmented rows pack without losing or duplicating a candidate.
+
+    The dense axis of a class-segmented bucket is class-major, so a packed row's
+    dense index must decode as ``class * segment + rotation`` and every real
+    (image, class, rotation) must appear exactly once.
+    """
+    from recovar.em.local.flat_local_rows import build_pool_flat_local_row_plan_for_classes
+
+    counts = np.asarray(
+        [[3, 200, 5, 1], [17, 180, 9, 2], [5, 220, 4, 1],
+         [400, 6, 3, 2], [9, 5, 2, 1], [7, 190, 6, 2]], dtype=np.int32,
+    )
+    segment = 512
+    plan = build_pool_flat_local_row_plan_for_classes(
+        counts, segment, pool_size=3, exact_local_bucket_radix=2,
+    )
+
+    seen = set()
+    for row in range(plan.packed_row_count):
+        if not plan.present_mask[row] or not plan.valid_mask[row]:
+            continue
+        image = int(plan.image_indices[row])
+        dense = int(plan.rotation_rows[row])
+        class_index, rotation = divmod(dense, segment)
+        assert rotation < counts[image, class_index]
+        assert (image, class_index, rotation) not in seen
+        seen.add((image, class_index, rotation))
+    assert len(seen) == int(counts.sum())
+
+
+@pytest.mark.unit
+def test_class_flat_rows_pack_far_tighter_than_the_rectangular_layout():
+    from recovar.em.local.flat_local_rows import build_pool_flat_local_row_plan_for_classes
+
+    counts = np.asarray([[3, 200, 5, 1], [17, 180, 9, 2], [5, 220, 4, 1]], dtype=np.int32)
+    segment = 512
+    plan = build_pool_flat_local_row_plan_for_classes(
+        counts, segment, pool_size=3, exact_local_bucket_radix=2,
+    )
+
+    rectangular = counts.shape[0] * counts.shape[1] * segment
+    assert plan.packed_row_count < rectangular / 3
+    # and the dense axis it maps into is still the full class-major axis
+    assert plan.dense_rotation_count == segment * counts.shape[1]
+    assert int(plan.rotation_rows[plan.present_mask].max()) < plan.dense_rotation_count
+
+
+@pytest.mark.unit
+def test_class_flat_rows_skip_classes_no_image_in_the_pool_uses():
+    """A class with no candidates anywhere in a pool must contribute no rows."""
+    from recovar.em.local.flat_local_rows import build_pool_flat_local_row_plan_for_classes
+
+    counts = np.asarray([[4, 0, 6], [5, 0, 7]], dtype=np.int32)
+    segment = 64
+    plan = build_pool_flat_local_row_plan_for_classes(
+        counts, segment, pool_size=3, exact_local_bucket_radix=2,
+    )
+
+    classes = {int(d) // segment for d in plan.rotation_rows[plan.present_mask]}
+    assert classes == {0, 2}
+
+
+@pytest.mark.unit
+def test_class_flat_rows_static_capacity_marks_padding_absent():
+    from recovar.em.local.flat_local_rows import build_pool_flat_local_row_plan_for_classes
+
+    counts = np.asarray([[4, 6], [5, 7]], dtype=np.int32)
+    natural = build_pool_flat_local_row_plan_for_classes(counts, 64, pool_size=3)
+    padded = build_pool_flat_local_row_plan_for_classes(
+        counts, 64, pool_size=3, packed_row_count=natural.packed_row_count + 32,
+    )
+
+    assert padded.packed_row_count == natural.packed_row_count + 32
+    assert int(padded.present_mask.sum()) == natural.packed_row_count
+    assert not padded.valid_mask[natural.packed_row_count:].any()

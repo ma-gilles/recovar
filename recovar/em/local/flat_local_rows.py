@@ -232,6 +232,125 @@ def build_pool_flat_local_row_plan(
     )
 
 
+def build_pool_flat_local_row_plan_for_classes(
+    class_rotation_counts,
+    segment_rotation_count: int,
+    *,
+    pool_size: int = 3,
+    rotation_block_size: int = 5000,
+    exact_local_bucket_radix: int | None = None,
+    packed_row_count: int | None = None,
+    dense_batch_size: int | None = None,
+) -> FlatLocalRowPlan:
+    """Pack class-segmented local rows without changing image/class/rotation order.
+
+    A class-segmented bucket lays each image's rows out class-major,
+    ``[class 0 rows | pad | class 1 rows | pad | ...]``, so a row's index on the
+    dense axis is ``class * segment_rotation_count + rotation``. That is the only
+    thing the flat plan needs to know about classes, which is why the returned
+    plan is an ordinary :class:`FlatLocalRowPlan`: downstream kernels index rows
+    through ``rotation_rows`` and never learn that classes exist.
+
+    Unlike the rectangular layout, each class is sized independently from the
+    largest count that class needs inside the pool, instead of every class and
+    image sharing one segment width taken over the whole halfset.
+
+    ``class_rotation_counts`` is ``[n_images, n_classes]``.
+    """
+
+    class_rotation_counts = np.asarray(class_rotation_counts, dtype=np.int32)
+    if class_rotation_counts.ndim != 2:
+        raise ValueError("class_rotation_counts must be [n_images, n_classes]")
+    physical_image_count, n_classes = (int(x) for x in class_rotation_counts.shape)
+    segment_rotation_count = int(segment_rotation_count)
+    pool_size = int(pool_size)
+    rotation_block_size = int(rotation_block_size)
+    if dense_batch_size is None:
+        dense_batch_size = physical_image_count
+    dense_batch_size = int(dense_batch_size)
+    if physical_image_count < 1:
+        raise ValueError("class_rotation_counts must contain at least one image")
+    if n_classes < 1:
+        raise ValueError("class_rotation_counts must contain at least one class")
+    if dense_batch_size < physical_image_count:
+        raise ValueError("dense_batch_size cannot be smaller than the physical image count")
+    if pool_size < 1:
+        raise ValueError("pool_size must be positive")
+    if segment_rotation_count < 1:
+        raise ValueError("segment_rotation_count must be positive")
+    if np.any(class_rotation_counts < 0) or np.any(class_rotation_counts > segment_rotation_count):
+        raise ValueError("class rotation counts must lie in [0, segment_rotation_count]")
+
+    dense_rotation_count = segment_rotation_count * n_classes
+    ordinary_buckets = np.asarray(
+        [
+            [
+                _exact_bucket_rotation_size(
+                    int(count),
+                    rotation_block_size,
+                    exact_local_bucket_radix=exact_local_bucket_radix,
+                )
+                if int(count) > 0
+                else 0
+                for count in image_counts
+            ]
+            for image_counts in class_rotation_counts
+        ],
+        dtype=np.int32,
+    )
+    if np.any(ordinary_buckets > segment_rotation_count):
+        raise ValueError("a pool bucket exceeds the enclosing class segment")
+
+    image_parts: list[np.ndarray] = []
+    rotation_parts: list[np.ndarray] = []
+    valid_parts: list[np.ndarray] = []
+    for pool_start in range(0, physical_image_count, pool_size):
+        pool_stop = min(physical_image_count, pool_start + pool_size)
+        # Each class gets its own width inside the pool; a class that no image in
+        # the pool uses contributes no rows at all.
+        pool_buckets = ordinary_buckets[pool_start:pool_stop].max(axis=0)
+        for image_index in range(pool_start, pool_stop):
+            for class_index in range(n_classes):
+                width = int(pool_buckets[class_index])
+                if width == 0:
+                    continue
+                rows = np.arange(width, dtype=np.int32)
+                image_parts.append(np.full(width, image_index, dtype=np.int32))
+                rotation_parts.append(rows + class_index * segment_rotation_count)
+                valid_parts.append(rows < int(class_rotation_counts[image_index, class_index]))
+
+    if not image_parts:
+        raise ValueError("class-segmented flat rows need at least one populated class")
+    image_indices = np.concatenate(image_parts)
+    rotation_rows = np.concatenate(rotation_parts)
+    valid_mask = np.concatenate(valid_parts)
+    required_rows = int(image_indices.size)
+    if packed_row_count is None:
+        packed_row_count = required_rows
+    packed_row_count = int(packed_row_count)
+    if packed_row_count < required_rows:
+        raise ValueError(
+            f"packed_row_count {packed_row_count} is smaller than required rows {required_rows}",
+        )
+    present_mask = np.arange(packed_row_count, dtype=np.int32) < required_rows
+    if packed_row_count > required_rows:
+        pad = packed_row_count - required_rows
+        image_indices = np.pad(image_indices, (0, pad), constant_values=0)
+        rotation_rows = np.pad(rotation_rows, (0, pad), constant_values=0)
+        valid_mask = np.pad(valid_mask, (0, pad), constant_values=False)
+
+    return FlatLocalRowPlan(
+        image_indices=image_indices,
+        rotation_rows=rotation_rows,
+        present_mask=present_mask,
+        valid_mask=valid_mask,
+        batch_size=dense_batch_size,
+        physical_image_count=physical_image_count,
+        dense_rotation_count=dense_rotation_count,
+        packed_row_count=packed_row_count,
+    )
+
+
 def scatter_flat_local_rows(
     flat_values,
     image_indices,
