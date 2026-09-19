@@ -180,7 +180,12 @@ _SOFT_POSTERIOR_BLOCK_BPREF_PROTOTYPE_ENV = "RECOVAR_EM_PROTOTYPE_SOFT_POSTERIOR
 
 # Row capacities are multiples of the M-step block so every chunk decomposes
 # into whole blocks; image capacities follow the design's ladder.
-_DEFAULT_ROW_CAPACITY_LADDER = (8192, 32768, 131072)
+# A denser ladder than the design's (8192, 32768, 131072). The chunker grows a
+# chunk to its image capacity and then rounds the row count up to the next
+# class, so a sparse ladder leaves the pixel-axis work running over padding:
+# measured occupancy at hp3 iteration 0 was 2.59M valid rows in about 5.24M
+# slots, 49%. Each extra class costs one program per stage and lifts the floor.
+_DEFAULT_ROW_CAPACITY_LADDER = (8192, 16384, 32768, 65536, 131072)
 _DEFAULT_IMAGE_CAPACITY_LADDER = (32, 128, 512)
 
 __all__ = [
@@ -1363,9 +1368,12 @@ def compute_pass2_stats_resident(
         mstep_block_rows=int(mstep_block_rows),
     )
     table_s = time.time() - table_t0
+    row_slots = sum(int(chunk.row_capacity) for chunk in chunks)
+    image_slots = sum(int(chunk.image_capacity) for chunk in chunks)
     logger.info(
         "Resident pass-2 plan: %d images, %d candidate rows -> %d chunks "
-        "(row capacities %s, image capacities %s, M-step block rows %d); "
+        "(row capacities %s, image capacities %s, M-step block rows %d, "
+        "row occupancy %.3f of %d slots, image occupancy %.3f of %d slots); "
         "setup hypothesis_prep=%.2fs table+plan=%.2fs",
         tables.n_images,
         tables.n_rows,
@@ -1373,6 +1381,10 @@ def compute_pass2_stats_resident(
         ",".join(str(v) for v in plan.row_capacity_ladder),
         ",".join(str(v) for v in plan.image_capacity_ladder),
         plan.mstep_block_rows,
+        tables.n_rows / max(row_slots, 1),
+        row_slots,
+        tables.n_images / max(image_slots, 1),
+        image_slots,
         prep_s,
         table_s,
     )
