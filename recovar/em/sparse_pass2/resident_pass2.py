@@ -175,6 +175,11 @@ _ROW_CAPACITY_LADDER_ENV = "RECOVAR_SPARSE_PASS2_RESIDENT_ROW_CAPACITIES"
 _IMAGE_CAPACITY_LADDER_ENV = "RECOVAR_SPARSE_PASS2_RESIDENT_IMAGE_CAPACITIES"
 _MSTEP_BLOCK_ROWS_ENV = "RECOVAR_SPARSE_PASS2_RESIDENT_MSTEP_BLOCK_ROWS"
 _PREPARE_IMAGE_BATCH_ENV = "RECOVAR_SPARSE_PASS2_RESIDENT_PREPARE_IMAGE_BATCH"
+# Attribution only, default off. Logs one line per chunk with its occupancy,
+# its M-step block count and a device-synchronised wall, and counts the T7
+# offsets readbacks. The synchronisation perturbs the wall, so an arm with
+# this set is a diagnostic arm and never a timing arm.
+_CHUNK_TIMING_ENV = "RECOVAR_SPARSE_PASS2_RESIDENT_CHUNK_TIMING"
 _SOFT_POSTERIOR_BLOCK_BPREF_PROTOTYPE_ENV = "RECOVAR_EM_PROTOTYPE_SOFT_POSTERIOR_BLOCK_BPREF"
 
 # Row capacities are multiples of the M-step block so every chunk decomposes
@@ -1779,6 +1784,12 @@ def _prepare_chunk_reconstruction_operands(
     }
 
 
+def _chunk_timing_enabled() -> bool:
+    """Whether to log per-chunk occupancy, block count and synchronised wall."""
+
+    return parse_env_flag(_CHUNK_TIMING_ENV, default=False)
+
+
 def _run_resident_chunk(
     chunk,
     *,
@@ -1838,6 +1849,11 @@ def _run_resident_chunk(
     n_valid_rows = int(chunk.n_valid_rows)
     n_valid_images = int(chunk.n_valid_images)
     image_indices = np.arange(chunk.image_start, chunk.image_stop, dtype=np.int64)
+    timing = _chunk_timing_enabled()
+    if timing:
+        jax.block_until_ready(Ft_y_total)
+        chunk_t0 = time.time()
+        stage_t = {}
 
     host_chunk = materialize_chunk(tables, chunk)
     row_image_local = jnp.asarray(host_chunk["row_image_local"], dtype=jnp.int32)
@@ -1876,11 +1892,17 @@ def _run_resident_chunk(
         n_score_pixels=int(operands.n_score_pixels),
     )
     scores_flat = jnp.asarray(scored.scores, dtype=jnp.float32).reshape(-1)
+    if timing:
+        jax.block_until_ready(scores_flat)
+        stage_t["score"] = time.time() - chunk_t0
 
     # --- stage 4: segmented RELION float32 fine posterior -------------------
     segment_offsets = jnp.asarray(
         _chunk_segment_offsets(tables, chunk, n_fine_trans), dtype=jnp.int32
     )
+    # T7's segmented posterior copies the C_B+1 offsets to the host and
+    # synchronises once per call; the log-Z handler does not. One posterior
+    # call per chunk, so the readback count equals the chunk count.
     log_z = cuda_backproject.sparse_pass2_segmented_log_z_f64(
         scores_flat, segment_offsets, n_valid_images_device
     )
@@ -1910,6 +1932,9 @@ def _run_resident_chunk(
     row_posterior = jnp.asarray(reconstruction_probs, dtype=jnp.float32).reshape(
         row_capacity, int(n_fine_trans)
     )
+    if timing:
+        jax.block_until_ready(row_posterior)
+        stage_t["posterior"] = time.time() - chunk_t0
 
     # --- stages 5-7 operands: the per-chunk translated tiles ----------------
     recon = _prepare_chunk_reconstruction_operands(
@@ -1934,6 +1959,9 @@ def _run_resident_chunk(
         precision_policy=precision_policy,
     )
 
+    if timing:
+        jax.block_until_ready(recon["shifted_recon"])
+        stage_t["operands"] = time.time() - chunk_t0
     n_shells = int(stats_config.n_shells)
     block_noise_shells = jnp.zeros(n_shells, dtype=jnp.float64)
     a2_per_image = None
@@ -2125,4 +2153,20 @@ def _run_resident_chunk(
     stats = stats._replace(
         invalid_best_rows=stats.invalid_best_rows + jnp.sum(invalid_best.astype(jnp.int64))
     )
+    if timing:
+        jax.block_until_ready((Ft_y_total, Ft_ctf_total, stats.wsum_sigma2_noise))
+        total = time.time() - chunk_t0
+        blocks = sum(1 for s in range(0, row_capacity, int(mstep_block_rows)) if s < n_valid_rows)
+        logger.info(
+            "Resident pass-2 chunk timing: images=%d/%d rows=%d/%d occupancy=%.3f "
+            "mstep_blocks=%d/%d score=%.3fs posterior=%.3fs operands=%.3fs mstep=%.3fs total=%.3fs",
+            n_valid_images, image_capacity, n_valid_rows, row_capacity,
+            n_valid_rows / max(row_capacity, 1),
+            blocks, row_capacity // int(mstep_block_rows),
+            stage_t.get("score", 0.0),
+            stage_t.get("posterior", 0.0) - stage_t.get("score", 0.0),
+            stage_t.get("operands", 0.0) - stage_t.get("posterior", 0.0),
+            total - stage_t.get("operands", 0.0),
+            total,
+        )
     return Ft_y_total, Ft_ctf_total, stats
