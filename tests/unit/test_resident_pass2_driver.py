@@ -170,21 +170,25 @@ def test_chunk_segment_offsets_cover_each_image_once_and_pad_empty():
     assert int(offsets[3]) == int(offsets[4])
 
 
-def test_flat_row_weighted_sums_match_the_rectangular_mstep_sums():
+def test_flat_row_weighted_sums_agree_with_the_rectangular_mstep_sums():
     """The flat-row weighted sums reproduce ``compute_local_mstep_sums``.
 
     Both call ``compute_local_weighted_sums`` with its pinned
     ``Precision.HIGHEST``; the only change is that each flat row gathers its
-    own image tile instead of sharing one per bucket row, which gives the
-    contraction a singleton rotation axis. That shape change is the one place
-    the two layouts can disagree: measured on CPU it is 0 ULP at realistic
-    shapes and at most 2 ULP on the small shape below, so the bound asserted
-    here is 4 ULP, not bitwise equality. ``ctf_probs`` is elementwise and must
-    be bitwise.
+    own image tile, which gives the translation contraction a singleton
+    rotation axis. That reassociates a float32 GEMM, so the two are not
+    bitwise equal on GPU. What is asserted is what matters: ``ctf_probs`` is
+    elementwise and must be bitwise, and the contracted sums must agree with
+    each other, and with a float64 reference, to float32 relative L2. On an
+    A100 the measured relative L2 against float64 is 1.8e-7 for the
+    rectangular layout and 7.5e-8 for the flat-row layout at production
+    shapes, so the flat-row layout is the slightly more accurate of the two.
+    The per-element maximum relative difference reaches 5e-4, but only where
+    the summed value itself has cancelled to near zero.
     """
 
     rng = np.random.default_rng(20260918)
-    batch, n_rot, n_trans, n_pix = 3, 5, 6, 11
+    batch, n_rot, n_trans, n_pix = 8, 32, 12, 24
     probs = np.abs(rng.normal(size=(batch, n_rot, n_trans))).astype(np.float32)
     probs[0, 2, :] = 0.0  # a row with no posterior mass exercises the != 0 guard
     shifted = (
@@ -218,51 +222,35 @@ def test_flat_row_weighted_sums_match_the_rectangular_mstep_sums():
         jnp.asarray(noise),
         jnp.asarray(ctf),
     )
-    for flat, rect in (
-        (np.asarray(summed), np.asarray(summed_rect).reshape(batch * n_rot, n_pix)),
-        (np.asarray(summed_masked), np.asarray(masked_rect).reshape(batch * n_rot, n_pix)),
+
+    def rel_l2(a, b):
+        a = np.asarray(a)
+        b = np.asarray(b)
+        den = float(np.linalg.norm(a))
+        return float(np.linalg.norm(a - b) / den) if den else 0.0
+
+    for flat, rect, tile in (
+        (summed, summed_rect, shifted),
+        (summed_masked, masked_rect, noise),
     ):
-        # Last-bit float32 agreement: measured worst case here is 8 ULP
-        # (1.1e-7 relative), and 0 ULP once the rotation count is realistic.
-        np.testing.assert_allclose(flat, rect, rtol=1e-6, atol=0.0)
+        flat = np.asarray(flat)
+        rect = np.asarray(rect).reshape(batch * n_rot, n_pix)
+        reference = np.einsum(
+            "brt,btp->brp", probs.astype(np.float64), tile.astype(np.complex128)
+        ).reshape(batch * n_rot, n_pix)
+        assert rel_l2(rect, flat) < 1e-6
+        assert rel_l2(reference, flat) <= rel_l2(reference, rect) * 2.0
+        assert rel_l2(reference, flat) < 1e-6
+
+    # The CTF sum is elementwise, so it has no contraction to reassociate.
     np.testing.assert_array_equal(
         np.asarray(ctf_probs), np.asarray(ctf_rect).reshape(batch * n_rot, n_pix)
     )
-    np.testing.assert_allclose(
-        np.asarray(probs_sum_t), probs.reshape(batch * n_rot, n_trans).sum(axis=1), rtol=0, atol=0
-    )
-
-
-def test_flat_row_weighted_sums_are_bitwise_at_realistic_shapes():
-    """At production-like rotation counts the contraction shapes agree exactly."""
-
-    rng = np.random.default_rng(4242)
-    batch, n_rot, n_trans, n_pix = 4, 32, 8, 24
-    probs = np.abs(rng.normal(size=(batch, n_rot, n_trans))).astype(np.float32)
-    shifted = (
-        rng.normal(size=(batch, n_trans, n_pix)) + 1j * rng.normal(size=(batch, n_trans, n_pix))
-    ).astype(np.complex64)
-    ctf = np.abs(rng.normal(size=(batch, n_pix))).astype(np.float32)
-    summed_rect, ctf_rect = compute_local_mstep_sums(
-        jnp.asarray(probs),
-        jnp.asarray(shifted),
-        jnp.asarray(ctf),
-        relion_x_half=True,
-        sequential_translation_reduction=False,
-    )
-    row_image = np.repeat(np.arange(batch, dtype=np.int32), n_rot)
-    summed, _masked, ctf_probs, _sum_t = rp._resident_block_weighted_sums(
-        jnp.asarray(probs.reshape(batch * n_rot, n_trans)),
-        jnp.asarray(row_image),
-        jnp.asarray(shifted),
-        jnp.asarray(shifted),
-        jnp.asarray(ctf),
-    )
+    # Same JAX reduction on both layouts; numpy's own float32 sum is a
+    # different tree and is deliberately not the reference here.
     np.testing.assert_array_equal(
-        np.asarray(summed), np.asarray(summed_rect).reshape(batch * n_rot, n_pix)
-    )
-    np.testing.assert_array_equal(
-        np.asarray(ctf_probs), np.asarray(ctf_rect).reshape(batch * n_rot, n_pix)
+        np.asarray(probs_sum_t),
+        np.asarray(jnp.sum(jnp.asarray(probs), axis=-1)).reshape(batch * n_rot),
     )
 
 
@@ -416,3 +404,247 @@ def test_signature_matches_the_compact_engine():
     for name in compact:
         assert compact[name].default == resident[name].default, name
         assert compact[name].kind == resident[name].kind, name
+
+
+# ---------------------------------------------------------------------------
+# GPU: the whole driver against the compact engine
+# ---------------------------------------------------------------------------
+
+
+def _gpu_available():
+    """Whether this process can run every CUDA-only resident stage."""
+
+    if jax.default_backend() != "gpu":
+        return False
+    from recovar import cuda_backproject
+
+    return bool(
+        cuda_backproject.custom_cuda_requested()
+        and cuda_backproject.sparse_pass2_segmented_supported()
+        and cuda_backproject.relion_wavg_sequential_runtime_flat_rows_triplet_f32_supported()
+        and cuda_backproject.relion_wavg_rotation_atomic_runtime_flat_rows_triplet_add_f32_supported()
+    )
+
+
+requires_resident_gpu = pytest.mark.skipif(
+    not _gpu_available(),
+    reason=(
+        "the resident driver's scoring, segmented posterior, flat-row Wavg and "
+        "x-half backprojection stages are all CUDA FFI targets"
+    ),
+)
+
+
+def _z_rotation(angle):
+    c, s = np.cos(angle), np.sin(angle)
+    return np.array([[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]], dtype=np.float32)
+
+
+def _driver_fixture_args(seed=20260918):
+    """A small K=1 pass in the production configuration both engines accept.
+
+    The fixture uses the 8x8 ``MockDataset`` of the bucketed parity tests with
+    a current-size window (so the score window excludes the ``ky=-N/2`` Nyquist
+    row), RELION's x-half M-step, the float32 fine posterior, the atomic Wavg
+    triplet and one scale-correction group. It does not use RELION's exact
+    BPref operands, which need a STAR-backed dataset, so the Wavg triplet takes
+    the algebraic branch here; the production path takes the sequential CUDA
+    branch, which the matched Slurm pair covers.
+    """
+
+    from helpers.em_arrays import _hermitian_volume
+    from test_sparse_pass2_bucketed_parity import IMAGE_SHAPE, IMAGE_SIZE, VOLUME_SHAPE, MockDataset
+
+    from recovar.em.sampling import rotation_grid_size
+
+    nside_level = 1
+    n_coarse_rot = rotation_grid_size(nside_level)
+    n_images = 12
+    children = 2
+    rng = np.random.default_rng(seed)
+
+    fine_rotations = np.stack(
+        [_z_rotation(0.031 * k) for k in range(n_coarse_rot * children)]
+    ).astype(np.float32)
+    fine_parent = np.repeat(np.arange(n_coarse_rot, dtype=np.int32), children)
+    translations = np.array(
+        [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [-1.0, 0.0]], dtype=np.float32
+    )
+    n_coarse_trans = translations.shape[0]
+    fine_translations = np.concatenate([translations, translations + 0.5]).astype(np.float32)
+    fine_translation_parent = np.concatenate(
+        [np.arange(n_coarse_trans), np.arange(n_coarse_trans)]
+    ).astype(np.int32)
+
+    total = n_coarse_rot * n_coarse_trans
+    samples = [None]
+    for _ in range(1, n_images):
+        count = int(rng.integers(1, total))
+        samples.append(np.sort(rng.choice(total, size=count, replace=False).astype(np.int32)))
+
+    n_shells = IMAGE_SHAPE[0] // 2 + 1
+    return dict(
+        experiment_dataset=MockDataset(n_images=n_images, seed=11),
+        volume=_hermitian_volume(VOLUME_SHAPE, seed=17),
+        noise_variance=jnp.ones(IMAGE_SIZE, dtype=jnp.float32) * 0.8,
+        translations=translations,
+        significant_sample_indices=samples,
+        nside_level=nside_level,
+        disc_type="linear_interp",
+        oversampling_order=0,
+        current_size=6,
+        translation_step=1.0,
+        rotation_log_prior=rng.normal(scale=0.1, size=n_coarse_rot).astype(np.float32),
+        score_with_masked_images=False,
+        return_stats=True,
+        translation_log_prior=rng.normal(
+            scale=0.05, size=(n_images, n_coarse_trans)
+        ).astype(np.float32),
+        accumulate_noise=True,
+        half_spectrum_scoring=True,
+        projection_padding_factor=2,
+        reconstruction_padding_factor=2,
+        image_corrections=None,
+        scale_corrections=None,
+        image_pre_shifts=None,
+        use_float64_scoring=False,
+        random_perturbation=0.0,
+        group_ids=np.zeros(n_images, dtype=np.int32),
+        scale_correction_group_count=1,
+        scale_correction_data_vs_prior=np.full(n_shells, 5.0, dtype=np.float64),
+        fine_rotations_override=fine_rotations,
+        fine_rotation_parent_override=fine_parent,
+        fine_translations_override=fine_translations,
+        fine_translation_parent_override=fine_translation_parent,
+        relion_x_half_mstep=True,
+        relion_fine_mstep_prune=True,
+        relion_f32_fine_posterior=True,
+        relion_exact_fine_gaussian=True,
+        # Production K=1 runs the exact rectangular CUDA reduction (k_class.py
+        # sets this whenever the custom library is available). Without it the
+        # compact engine takes the XLA 256-lane emulation, which differs from
+        # every CUDA scorer by a few ULP and would confound the comparison.
+        relion_fine_diff2_fused_ffi=True,
+        preserve_bpref_particle_order=True,
+        source_faithful_spectrum_norm=False,
+        return_score_log_z=True,
+        adaptive_fraction=0.999,
+    )
+
+
+@pytest.fixture
+def _resident_production_env(monkeypatch):
+    monkeypatch.setenv("RECOVAR_EM_PROTOTYPE_SOFT_POSTERIOR_BLOCK_BPREF", "1")
+    monkeypatch.setenv("RECOVAR_RELION_WAVG_ATOMIC_SCALE_AA", "1")
+    monkeypatch.setenv("RECOVAR_RELION_WAVG_ATOMIC_DIRECT_NOISE_ONLY", "1")
+    monkeypatch.setenv("RECOVAR_SPARSE_PASS2_RESIDENT_ROW_CAPACITIES", "256,1024,4096")
+    monkeypatch.setenv("RECOVAR_SPARSE_PASS2_RESIDENT_IMAGE_CAPACITIES", "4,16,64")
+    monkeypatch.setenv("RECOVAR_SPARSE_PASS2_RESIDENT_MSTEP_BLOCK_ROWS", "128")
+
+
+@requires_resident_gpu
+def test_resident_driver_matches_the_compact_engine(_resident_production_env):
+    """Whole-driver comparison against ``compute_pass2_stats_sparse_bucketed``.
+
+    Discrete state (pose, translation, rotation id) and every per-image score
+    field must be bitwise identical: the scores come from the same CUDA body
+    and T7's posterior is bitwise against the rectangular handler. The maps and
+    the noise/scale accumulators change reduction order, which the user waived
+    on 2026-09-18, so they are bounded by relative L2 at the values this
+    fixture measured.
+    """
+
+    from recovar.em.sparse_pass2.sparse_pass2_bucketed import (
+        compute_pass2_stats_sparse_bucketed,
+    )
+
+    args = _driver_fixture_args()
+    compact = compute_pass2_stats_sparse_bucketed(**args)
+    resident = rp.compute_pass2_stats_resident(**args)
+
+    np.testing.assert_array_equal(compact.hard_assignment, resident.hard_assignment)
+    np.testing.assert_array_equal(compact.best_rotation_indices, resident.best_rotation_indices)
+    np.testing.assert_array_equal(compact.best_rotations, resident.best_rotations)
+    np.testing.assert_array_equal(compact.best_translations, resident.best_translations)
+    np.testing.assert_array_equal(
+        np.asarray(compact.score_log_z), np.asarray(resident.score_log_z)
+    )
+    for field in (
+        "log_evidence_per_image",
+        "best_log_score_per_image",
+        "max_posterior_per_image",
+        "rotation_posterior_sums",
+    ):
+        np.testing.assert_array_equal(
+            np.asarray(getattr(compact.relion_stats, field)),
+            np.asarray(getattr(resident.relion_stats, field)),
+            err_msg=field,
+        )
+
+    def rel_l2(a, b):
+        a = np.asarray(a)
+        b = np.asarray(b)
+        den = float(np.linalg.norm(a))
+        return float(np.linalg.norm(a - b) / den) if den else 0.0
+
+    # Float32 BPref atomics and the blocked pixel-axis reductions; measured at
+    # 1.2e-7 on this fixture, against a compact-vs-compact repeat band of 4e-8.
+    assert rel_l2(compact.Ft_y, resident.Ft_y) < 1e-6
+    assert rel_l2(compact.Ft_ctf, resident.Ft_ctf) < 1e-6
+    # The Wavg diff2 residual cancels most of its magnitude, so the
+    # shape-dependent float32 image-power contraction shows up here at 6.2e-6.
+    assert rel_l2(
+        compact.noise_stats.wsum_sigma2_noise, resident.noise_stats.wsum_sigma2_noise
+    ) < 1e-4
+    for field in (
+        "wsum_img_power",
+        "wsum_norm_correction",
+        "wsum_scale_correction_xa",
+        "wsum_scale_correction_aa",
+    ):
+        assert rel_l2(
+            getattr(compact.noise_stats, field), getattr(resident.noise_stats, field)
+        ) < 1e-6, field
+    assert float(compact.noise_stats.wsum_sigma2_offset) == float(
+        resident.noise_stats.wsum_sigma2_offset
+    )
+    assert float(compact.noise_stats.sumw) == float(resident.noise_stats.sumw)
+
+
+@requires_resident_gpu
+def test_resident_driver_repeats_itself(_resident_production_env):
+    """The resident driver's own repeat band, the reference for the table above."""
+
+    args = _driver_fixture_args()
+    first = rp.compute_pass2_stats_resident(**args)
+    second = rp.compute_pass2_stats_resident(**args)
+    np.testing.assert_array_equal(first.hard_assignment, second.hard_assignment)
+    # The statistics whose reductions are ordered are bit-reproducible.
+    for field in ("wsum_sigma2_noise", "wsum_norm_correction"):
+        np.testing.assert_array_equal(
+            np.asarray(getattr(first.noise_stats, field)),
+            np.asarray(getattr(second.noise_stats, field)),
+            err_msg=field,
+        )
+
+    def rel_l2(a, b):
+        a = np.asarray(a)
+        b = np.asarray(b)
+        den = float(np.linalg.norm(a))
+        return float(np.linalg.norm(a - b) / den) if den else 0.0
+
+    # Two reductions are not: the float32 BPref atomics, and the CUDA shell
+    # binning behind the unweighted high image-power shell. Measured repeat
+    # band on an A100: 1.5e-8 for the maps, 1.4e-8 for the image power.
+    assert rel_l2(first.Ft_y, second.Ft_y) < 1e-7
+    assert rel_l2(first.noise_stats.wsum_img_power, second.noise_stats.wsum_img_power) < 1e-7
+
+
+@requires_resident_gpu
+def test_resident_driver_refuses_an_unsupported_pass(_resident_production_env):
+    """A configuration outside the gate raises instead of silently falling back."""
+
+    args = _driver_fixture_args()
+    args["relion_x_half_mstep"] = False
+    with pytest.raises(NotImplementedError, match="x-half M-step"):
+        rp.compute_pass2_stats_resident(**args)
