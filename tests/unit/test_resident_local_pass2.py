@@ -166,6 +166,7 @@ def _run(
     current_size=CURRENT_SIZE,
     source_faithful_spectrum_norm=False,
     production_shapes=False,
+    projector_dtype=None,
 ):
     """``production_shapes`` mirrors what the refinement loop actually passes:
     a projector with a singleton class axis, per-image contrast and scale
@@ -179,6 +180,8 @@ def _run(
         monkeypatch.delenv(rlp.RESIDENT_LOCAL_SEARCH_ENV, raising=False)
     layout = case["layout"]
     projector = case["projector_half"]
+    if projector_dtype is not None:
+        projector = projector.astype(projector_dtype)
     image_corrections = scale_corrections = trans_centers = None
     if production_shapes:
         projector = projector[None]  # the loop's singleton class axis
@@ -497,6 +500,56 @@ def test_full_parent_support_layout_runs_without_a_mask(monkeypatch, _resident_l
     assert case["layout"].sample_mask_bits is None
     exact = _run(case, resident=False, monkeypatch=monkeypatch)
     resident = _run(case, resident=True, monkeypatch=monkeypatch)
+    np.testing.assert_array_equal(
+        np.asarray(exact.hard_assignment), np.asarray(resident.hard_assignment)
+    )
+    np.testing.assert_allclose(
+        np.asarray(exact.relion_stats.max_posterior_per_image, dtype=np.float64),
+        np.asarray(resident.relion_stats.max_posterior_per_image, dtype=np.float64),
+        rtol=0,
+        atol=1e-5,
+    )
+    a = np.asarray(exact.Ft_y, dtype=np.complex128)
+    b = np.asarray(resident.Ft_y, dtype=np.complex128)
+    assert float(np.linalg.norm(a - b) / np.linalg.norm(a)) < 1e-5
+
+
+def test_driver_does_not_narrow_the_projector_slab():
+    """Narrowing Projector::data is a change of projection arithmetic.
+
+    It also swaps the vmapped fallback for the texture projector, so a narrowed
+    arm is both a different computation and a faster one than its control. The
+    exact local engine preserves the slab's dtype and does not read the compact
+    engine's opt-in gate, so neither does this driver.
+    """
+
+    import inspect
+
+    source = inspect.getsource(rlp.compute_local_search_resident)
+    assert "prepare_local_projector_slab" in source
+    assert "astype(jnp.complex64)" not in source
+    assert "_pass2_projector_complex64_enabled" not in source
+
+
+@requires_resident_gpu
+def test_complex128_projector_is_carried_through_unnarrowed(
+    monkeypatch, _resident_local_env
+):
+    """A double Projector::data slab, which is what the refinement loop builds.
+
+    The other fixtures build the slab through the JAX projector-setup backend,
+    which already returns complex64, so they cannot see a narrowing. This one
+    hands both engines the same complex128 slab; they must still agree, and the
+    driver must not quietly cast it.
+    """
+
+    case = _case()
+    exact = _run(
+        case, resident=False, monkeypatch=monkeypatch, projector_dtype=jnp.complex128
+    )
+    resident = _run(
+        case, resident=True, monkeypatch=monkeypatch, projector_dtype=jnp.complex128
+    )
     np.testing.assert_array_equal(
         np.asarray(exact.hard_assignment), np.asarray(resident.hard_assignment)
     )
