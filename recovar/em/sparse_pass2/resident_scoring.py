@@ -58,7 +58,11 @@ from recovar.em.sparse_pass2.resident_candidates import (
     expand_chunk_mask_jnp,
     materialize_chunk,
 )
+from recovar.em.sparse_pass2.resident_local_layout import expand_local_chunk_mask_jnp
 from recovar.em.sparse_pass2.sparse_pass2_bucket_io import _prepare_bucket_io
+from recovar.em.sparse_pass2.sparse_pass2_projection_blocks import (
+    _compute_sparse_pass2_windowed_projections_block,
+)
 from recovar.em.sparse_pass2.sparse_pass2_scoring import (
     _relion_cuda_fine_pixel_weights,
     _relion_powerclass_noise_terms,
@@ -69,9 +73,13 @@ __all__ = [
     "ResidentImageOperands",
     "materialize_chunk_device",
     "prepare_resident_image_operands",
+    "project_resident_rows",
     "resident_operand_bytes",
+    "resident_projection_block_rows",
+    "resident_row_projection_bytes",
     "score_all_chunks",
     "score_resident_chunk",
+    "score_resident_projected_chunk",
 ]
 
 
@@ -431,8 +439,6 @@ def score_resident_chunk(
     addresses one.
     """
 
-    from recovar import cuda_backproject
-
     row_image_local = jnp.asarray(row_image_local, dtype=jnp.int32)
     row_fine_rot = jnp.asarray(row_fine_rot, dtype=jnp.int32)
     image_ids = jnp.asarray(image_ids, dtype=jnp.int32)
@@ -462,12 +468,61 @@ def score_resident_chunk(
     reference = jnp.asarray(projection_score_cache, dtype=jnp.complex64)[row_fine_rot]
 
     # --- stage 3: score ----------------------------------------------------
-    weights = _relion_cuda_fine_pixel_weights(
-        chunk_corr, jnp.asarray(half_weights)[None, :]
-    ).astype(jnp.float32)
     row_is_valid = jnp.arange(row_capacity, dtype=jnp.int32) < jnp.asarray(
         n_valid_rows, dtype=jnp.int32
     )
+    candidate_mask = expand_chunk_mask_jnp(
+        row_mask_bits, row_mask_mode, fine_translation_parent
+    )
+    return _score_flat_rows(
+        reference,
+        row_image_local,
+        row_log_prior,
+        chunk_image,
+        chunk_corr,
+        chunk_translation_prior,
+        chunk_initial_diff2,
+        candidate_mask,
+        row_is_valid,
+        half_weights=half_weights,
+        translation_angles=translation_angles,
+        full_to_compact=full_to_compact,
+        logical_current_size=logical_current_size,
+        image_capacity=image_capacity,
+    )
+
+
+def _score_flat_rows(
+    reference,  # complex64 [C_R, N] the rows' projections, cached or projected
+    row_image_local,  # int32 [C_R]
+    row_log_prior,  # real [C_R]
+    chunk_image,  # complex64 [C_B, N]
+    chunk_corr,  # real [C_B, N]
+    chunk_translation_prior,  # real [C_B, T]
+    chunk_initial_diff2,  # float32 [C_B]
+    candidate_mask,  # bool [C_R, T] or None for "every cell is a candidate"
+    row_is_valid,  # bool [C_R]
+    *,
+    half_weights,
+    translation_angles,
+    full_to_compact,
+    logical_current_size,
+    image_capacity: int,
+):
+    """RELION's flat-row diff2, common minimum and log-weight conversion.
+
+    Shared by the cached-projection route (the global pass 2, which gathers a
+    per-iteration fine-rotation cache) and the projected-row route (local
+    search, whose order-5 fine grid cannot be cached). Only the source of
+    ``reference`` and the shape of the candidate mask differ between them;
+    every statement below is common, so the two routes cannot drift apart.
+    """
+
+    from recovar import cuda_backproject
+
+    weights = _relion_cuda_fine_pixel_weights(
+        chunk_corr, jnp.asarray(half_weights)[None, :]
+    ).astype(jnp.float32)
     # Padded rows are handed to the kernel as image -1: it writes +inf for the
     # whole row and skips the pixel traversal.
     kernel_row_image_ids = jnp.where(row_is_valid, row_image_local, jnp.int32(-1))
@@ -482,9 +537,10 @@ def score_resident_chunk(
         chunk_initial_diff2,
     )
 
-    candidate_mask = expand_chunk_mask_jnp(
-        row_mask_bits, row_mask_mode, fine_translation_parent
-    ) & row_is_valid[:, None]
+    if candidate_mask is None:
+        candidate_mask = jnp.broadcast_to(row_is_valid[:, None], raw_from_kernel.shape)
+    else:
+        candidate_mask = candidate_mask & row_is_valid[:, None]
     raw_diff2 = jnp.where(
         candidate_mask,
         raw_from_kernel,
@@ -523,6 +579,192 @@ def score_resident_chunk(
     scores = jnp.where(valid & jnp.isfinite(scores), scores, -jnp.inf)
 
     return ResidentChunkScores(raw_diff2=raw_diff2, scores=scores, min_diff2=min_diff2)
+
+
+@partial(
+    jax.jit,
+    static_argnames=("row_capacity", "image_capacity", "n_fine_trans", "n_score_pixels"),
+)
+def score_resident_projected_chunk(
+    reference,  # complex64 [C_R, N] projections of this chunk's own rows
+    row_image_local,  # int32 [C_R] chunk-local image id of each row
+    row_log_prior,  # real [C_R] rotation log prior of each row (nats)
+    row_mask_bits,  # uint8 [C_R, ceil(T/8)] little-endian, or None for full support
+    n_valid_rows,  # int32 scalar, runtime
+    image_ids,  # int32 [C_B] resident image row of each slot, -1 when padded
+    score_input,  # complex64 [n_images, N]
+    corr_img_score,  # real [n_images, N]
+    highres_xi2_half,  # float32 [n_images] or None
+    translation_prior,  # real [n_images, T]
+    *,
+    half_weights,  # real [N]
+    translation_angles,  # float32 [T, 2]
+    full_to_compact,  # int32 [P]
+    logical_current_size,  # int32 scalar, runtime
+    row_capacity: int,
+    image_capacity: int,
+    n_fine_trans: int,
+    n_score_pixels: int,
+):
+    """Score one capacity chunk whose rows were projected, not gathered.
+
+    The local-search twin of :func:`score_resident_chunk`: identical arithmetic
+    (both call :func:`_score_flat_rows`), with two inputs replaced.
+    ``reference`` arrives already projected for this chunk's own rows, because
+    the local fine grid at order 5 has 2.4M rotations and is never materialized;
+    and the candidate mask is the layout's per-row little-endian packing over
+    the fine translation axis rather than a per-parent uint32 bitset, because
+    the local pass 2 runs more than 32 translations.
+
+    ``row_mask_bits=None`` is the layout's compact spelling of full support and
+    is not expanded; padded rows are excluded by ``n_valid_rows`` alone.
+    """
+
+    row_image_local = jnp.asarray(row_image_local, dtype=jnp.int32)
+    image_ids = jnp.asarray(image_ids, dtype=jnp.int32)
+    if row_image_local.shape != (row_capacity,):
+        raise ValueError(f"row_image_local must have shape ({row_capacity},)")
+    if reference.shape != (row_capacity, n_score_pixels):
+        raise ValueError(
+            f"reference must have shape ({row_capacity}, {n_score_pixels}), got {reference.shape}"
+        )
+    if image_ids.shape != (image_capacity,):
+        raise ValueError(f"image_ids must have shape ({image_capacity},)")
+    if int(translation_angles.shape[0]) != n_fine_trans:
+        raise ValueError(f"translation_angles must have {n_fine_trans} rows")
+
+    safe_image_ids = jnp.where(image_ids >= 0, image_ids, jnp.int32(0))
+    chunk_image = jnp.asarray(score_input, dtype=jnp.complex64)[safe_image_ids]
+    chunk_corr = corr_img_score[safe_image_ids]
+    chunk_translation_prior = translation_prior[safe_image_ids]
+    chunk_initial_diff2 = (
+        jnp.zeros((image_capacity,), dtype=jnp.float32)
+        if highres_xi2_half is None
+        else jnp.asarray(highres_xi2_half, dtype=jnp.float32)[safe_image_ids]
+    )
+
+    row_is_valid = jnp.arange(row_capacity, dtype=jnp.int32) < jnp.asarray(
+        n_valid_rows, dtype=jnp.int32
+    )
+    candidate_mask = expand_local_chunk_mask_jnp(row_mask_bits, n_trans=n_fine_trans)
+    return _score_flat_rows(
+        jnp.asarray(reference, dtype=jnp.complex64),
+        row_image_local,
+        row_log_prior,
+        chunk_image,
+        chunk_corr,
+        chunk_translation_prior,
+        chunk_initial_diff2,
+        candidate_mask,
+        row_is_valid,
+        half_weights=half_weights,
+        translation_angles=translation_angles,
+        full_to_compact=full_to_compact,
+        logical_current_size=logical_current_size,
+        image_capacity=image_capacity,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Projection by rows (local search: no per-iteration fine-rotation cache)
+# ---------------------------------------------------------------------------
+
+
+def resident_row_projection_bytes(
+    *,
+    n_score_pixels: int,
+    n_recon_pixels: int,
+    complex_bytes: int = 8,
+    real_bytes: int = 4,
+) -> int:
+    """Device bytes one projected row holds while its chunk is being scored.
+
+    A row carries its score-window projection (complex), its reconstruction
+    window projection (complex) and that window's ``|proj|^2`` (real). This is
+    the term that decides a local chunk's row capacity, because the local route
+    cannot amortize projections across chunks the way the global route's
+    per-iteration cache does.
+    """
+
+    return max(int(n_score_pixels), 0) * int(complex_bytes) + max(
+        int(n_recon_pixels), 0
+    ) * (int(complex_bytes) + int(real_bytes))
+
+
+def resident_projection_block_rows(
+    *,
+    n_score_pixels: int,
+    n_recon_pixels: int,
+    max_block_bytes: int,
+    complex_bytes: int = 8,
+    real_bytes: int = 4,
+) -> int:
+    """Rows per projector call, from a byte budget on the projected rows.
+
+    Only the transient of one projector call is bounded here; the caller bounds
+    the chunk's resident projections separately with
+    :func:`resident_row_projection_bytes`. The result is at least one row, so a
+    single heavy row is never unprojectable.
+    """
+
+    per_row = resident_row_projection_bytes(
+        n_score_pixels=n_score_pixels,
+        n_recon_pixels=n_recon_pixels,
+        complex_bytes=complex_bytes,
+        real_bytes=real_bytes,
+    )
+    return max(int(max_block_bytes) // max(per_row, 1), 1)
+
+
+def project_resident_rows(
+    mean_for_proj,
+    rotations,
+    image_shape,
+    proj_volume_shape,
+    disc_type,
+    *,
+    score_indices,
+    recon_indices,
+    max_projected_rotations: int,
+    output_complex_dtype=None,
+    output_abs2_dtype=None,
+    relion_projector_half=None,
+    relion_projector_r_max: int | None = None,
+    projection_padding_factor: int = 1,
+    **projection_kwargs,
+):
+    """Project a chunk's own rows into the score and reconstruction windows.
+
+    Stage 2 of the design for local search. The compact/global route gathers
+    ``projection_cache["score"][row_fine_rot]``; the local fine grid has up to
+    2.4M rotations at order 5 and is never cached, so a chunk's rows are
+    projected here instead, in blocks of ``max_projected_rotations`` rows so the
+    projector's transient stays inside its byte budget. The blocking is the
+    compact engine's own
+    :func:`_compute_sparse_pass2_windowed_projections_block`, so the projector
+    call, its window gathers and the ``|proj|^2`` formation are the same code
+    the cache build uses, only driven by row rotations instead of grid rotations.
+
+    Returns ``(score_proj [Q, N_score], recon_proj [Q, N_recon],
+    recon_abs2 [Q, N_recon])``.
+    """
+
+    return _compute_sparse_pass2_windowed_projections_block(
+        mean_for_proj,
+        rotations,
+        image_shape,
+        proj_volume_shape,
+        disc_type,
+        score_indices=score_indices,
+        recon_indices=recon_indices,
+        max_projected_rotations=int(max_projected_rotations),
+        output_complex_dtype=output_complex_dtype,
+        output_abs2_dtype=output_abs2_dtype,
+        relion_projector_half=relion_projector_half,
+        relion_projector_r_max=relion_projector_r_max,
+        projection_padding_factor=projection_padding_factor,
+        **projection_kwargs,
+    )
 
 
 def materialize_chunk_device(tables: ResidentCandidateTables, chunk: CapacityChunk) -> dict:
