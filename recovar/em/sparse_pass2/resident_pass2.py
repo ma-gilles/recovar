@@ -176,9 +176,8 @@ _MSTEP_BLOCK_ROWS_ENV = "RECOVAR_SPARSE_PASS2_RESIDENT_MSTEP_BLOCK_ROWS"
 # offsets readbacks. The synchronisation perturbs the wall, so an arm with
 # this set is a diagnostic arm and never a timing arm.
 _CHUNK_TIMING_ENV = "RECOVAR_SPARSE_PASS2_RESIDENT_CHUNK_TIMING"
-# T14: the chunk body as one jitted program per capacity class. Default on;
-# set to 0 to select the per-stage path, which stays the oracle both paths are
-# compared against. ``..._CHUNK_STATIC_BLOCKS`` runs the M-step block loop over
+# T14: the chunk body as one jitted program per capacity class. Opt-in; the
+# per-stage path is the default and the oracle both paths are compared against. ``..._CHUNK_STATIC_BLOCKS`` runs the M-step block loop over
 # the whole row capacity instead of the chunk's live blocks; both forms trace
 # one program per capacity class and are bitwise equal, because a padded block
 # carries a zero posterior and contributes exact zeros.
@@ -1845,13 +1844,24 @@ def _chunk_timing_enabled() -> bool:
 def _chunk_jit_enabled() -> bool:
     """Whether the chunk body runs as one jitted program (T14).
 
-    Default on. ``RECOVAR_SPARSE_PASS2_RESIDENT_CHUNK_JIT=0`` selects the
-    per-stage path, which stays the oracle: both paths call the same stage
-    helpers on the same operands, so only the JIT boundary and the M-step
+    Opt-in: ``RECOVAR_SPARSE_PASS2_RESIDENT_CHUNK_JIT=1`` selects it, and the
+    per-stage path is both the default and the oracle. Both paths call the same
+    stage helpers on the same operands, so only the JIT boundary and the M-step
     loop's trip mechanism differ.
+
+    Measured at 0bedf7672 on one H100 (jobs 14147789 hp3, 14147877 early,
+    14147878 end-to-end). The program removes the chunk body's eager dispatch
+    (267 -> 2 per chunk at hp3, 740 -> 2 at early) and 77% of its XLA glue
+    launches, and the warm chunk loop is 0.9% (hp3) to 4.2% (early) faster. It
+    is off by default because the end-to-end gate does not hold: with a cold
+    persistent cache the fused program compiles once per (capacity class, pixel
+    class) inside the chunk loop, and over the 16 iterations the 10k run took
+    with an identical trajectory that cost 22.5 s (+1.9%), 84% of it in the two
+    iterations that introduced a new pixel class. Turn it on with a warm
+    persistent cache, or after that first-use compile is cheaper.
     """
 
-    return parse_env_flag(_CHUNK_JIT_ENV, default=True)
+    return parse_env_flag(_CHUNK_JIT_ENV, default=False)
 
 
 def _chunk_static_block_trip_enabled() -> bool:
