@@ -99,9 +99,11 @@ from recovar.em.sparse_pass2.resident_local_layout import (
     plan_local_capacity_chunks,
     tables_from_local_layout,
 )
+from recovar.em.local.local_batch_planning import (
+    _exact_local_xhalf_projection_target_row_pixels,
+)
 from recovar.em.sparse_pass2.resident_scoring import (
     project_resident_rows,
-    resident_projection_block_rows,
     resident_row_projection_bytes,
     score_resident_projected_chunk,
 )
@@ -601,10 +603,16 @@ def compute_local_search_resident(
         max_block_bytes=_max_adjoint_block_bytes_for_pass(device_memory_bytes),
         row_capacity_ladder=row_ladder,
     )
-    projection_block_rows = resident_projection_block_rows(
-        n_score_pixels=n_windowed,
-        n_recon_pixels=n_recon_windowed,
-        max_block_bytes=_projection_call_max_bytes_for_pass(device_memory_bytes),
+    # Bound one projector call the way the exact local engine bounds its own:
+    # a row-pixel budget over the union projection window, not a byte model of
+    # the outputs. The projector's transient depends on Projector::data's dtype
+    # and on which interpolator the slab selects, and the unnarrowed complex128
+    # slab is twice the width a byte model of the complex64 outputs assumes; a
+    # 32768-row call at current size 92 asked for 16.1 GiB and was refused.
+    # RECOVAR_EXACT_LOCAL_XHALF_PROJECTION_TARGET_ROW_PIXELS moves both engines.
+    n_projection_pixels = int(getattr(window_spec, "n_projection", n_recon_windowed))
+    projection_block_rows = max(
+        1, _exact_local_xhalf_projection_target_row_pixels() // max(n_projection_pixels, 1)
     )
     chunks = plan_local_capacity_chunks(
         tables,
@@ -618,7 +626,7 @@ def compute_local_search_resident(
     logger.info(
         "Resident local pass-2 plan: %d images, %d candidate rows, %d translations -> %d chunks "
         "(row capacities %s, image capacities %s, M-step block rows %d, projection block rows %d); "
-        "row projections %.2f KiB/row, largest chunk %.2f GiB; setup %.2fs",
+        "row projections %.2f KiB/row, largest chunk %.2f GiB, projection window %d px; setup %.2fs",
         tables.n_images,
         tables.n_rows,
         n_fine_trans,
@@ -631,6 +639,7 @@ def compute_local_search_resident(
         max((int(chunk.row_capacity) for chunk in chunks), default=0)
         * per_row_bytes
         / float(1024**3),
+        n_projection_pixels,
         table_s,
     )
 
