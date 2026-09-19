@@ -265,10 +265,27 @@ def require_resident_production_configuration(**kwargs) -> None:
         not bool(kwargs["mstep_subtract_ctf_projection"]),
         "subtracting the projected reference in the M-step is a diagnostic mode",
     )
+    # The K=1 adaptive route always hands the M-step call an
+    # ``normalization_other_score_log_z`` built from the *other* classes'
+    # log-Z (k_class.py::_run_sparse_k_class_adaptive_pass2). At K=1 there are
+    # no other classes, so that vector is all -inf and the compact engine's
+    # own arithmetic collapses to its unnormalized branch: logaddexp(x, -inf)
+    # is x, the reported log-evidence and score log-Z are taken from
+    # ``local_score_log_z`` rather than from the combined value, and the
+    # float32 reconstruction weights never read it at all. Accept exactly that
+    # degenerate vector, which is the production K=1 case, and refuse any
+    # finite entry, which would genuinely mix classes.
+    other_log_z = kwargs["normalization_other_score_log_z"]
+    other_log_z_is_degenerate = other_log_z is not None and bool(
+        np.all(np.asarray(other_log_z) == -np.inf)
+    )
     _require(
-        kwargs["normalization_log_z"] is None
-        and kwargs["normalization_other_score_log_z"] is None,
-        "external score normalization belongs to the K-class engine",
+        kwargs["normalization_log_z"] is None,
+        "an externally supplied log-Z belongs to the K-class engine",
+    )
+    _require(
+        other_log_z is None or other_log_z_is_degenerate,
+        "a finite cross-class score normalization belongs to the K-class engine",
     )
     _require(
         kwargs["relion_f32_normalization_sum_weight"] is None

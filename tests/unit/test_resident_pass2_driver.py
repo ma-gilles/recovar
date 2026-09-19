@@ -92,7 +92,11 @@ def test_production_configuration_is_accepted():
         ({"relion_firstiter_winner_take_all": True}, "winner-take-all"),
         ({"disable_adjoint_y": True, "disable_adjoint_ctf": True}, "score-only"),
         ({"accumulate_noise": False}, "noise statistics"),
-        ({"normalization_log_z": np.zeros(3)}, "external score normalization"),
+        ({"normalization_log_z": np.zeros(3)}, "externally supplied log-Z"),
+        (
+            {"normalization_other_score_log_z": np.zeros(3)},
+            "finite cross-class score normalization",
+        ),
         ({"relion_f32_normalization_sum_weight": np.ones(3)}, "zero-oversampling"),
         ({"preserve_bpref_particle_order": True}, "per-particle BPref launches"),
         ({"fine_rotations_override": None}, "fine_rotations_override"),
@@ -528,6 +532,13 @@ def _driver_fixture_args(seed=20260918):
         preserve_bpref_particle_order=True,
         source_faithful_spectrum_norm=False,
         return_score_log_z=True,
+        # Production K=1 reaches the M-step call through
+        # k_class.py::_run_sparse_k_class_adaptive_pass2, which always supplies
+        # the other classes' log-Z. At K=1 there are no other classes, so the
+        # vector is all -inf; carry it here so the fixture exercises the same
+        # branch the matched Slurm pairs do.
+        normalization_other_score_log_z=np.full(n_images, -np.inf, dtype=np.float64),
+        normalization_score_mode="gaussian",
         adaptive_fraction=0.999,
     )
 
@@ -638,6 +649,55 @@ def test_resident_driver_repeats_itself(_resident_production_env):
     # band on an A100: 1.5e-8 for the maps, 1.4e-8 for the image power.
     assert rel_l2(first.Ft_y, second.Ft_y) < 1e-7
     assert rel_l2(first.noise_stats.wsum_img_power, second.noise_stats.wsum_img_power) < 1e-7
+
+
+@requires_resident_gpu
+def test_degenerate_cross_class_normalizer_is_a_no_op_for_the_compact_engine(
+    _resident_production_env,
+):
+    """The all -inf normalizer the K=1 route supplies changes no compact output.
+
+    This is the premise the gate's relaxation rests on, so it is measured
+    rather than argued: running the compact engine with and without the
+    degenerate vector must give the same maps, poses and per-image statistics.
+    """
+
+    from recovar.em.sparse_pass2.sparse_pass2_bucketed import (
+        compute_pass2_stats_sparse_bucketed,
+    )
+
+    with_norm = _driver_fixture_args()
+    without_norm = _driver_fixture_args()
+    without_norm.pop("normalization_other_score_log_z")
+    without_norm.pop("normalization_score_mode")
+    assert with_norm["normalization_other_score_log_z"] is not None
+
+    a = compute_pass2_stats_sparse_bucketed(**with_norm)
+    b = compute_pass2_stats_sparse_bucketed(**without_norm)
+    np.testing.assert_array_equal(a.hard_assignment, b.hard_assignment)
+    np.testing.assert_array_equal(a.best_rotation_indices, b.best_rotation_indices)
+    np.testing.assert_array_equal(np.asarray(a.score_log_z), np.asarray(b.score_log_z))
+    for field in (
+        "log_evidence_per_image",
+        "best_log_score_per_image",
+        "max_posterior_per_image",
+        "rotation_posterior_sums",
+    ):
+        np.testing.assert_array_equal(
+            np.asarray(getattr(a.relion_stats, field)),
+            np.asarray(getattr(b.relion_stats, field)),
+            err_msg=field,
+        )
+
+
+@requires_resident_gpu
+def test_gate_refuses_a_finite_cross_class_normalizer(_resident_production_env):
+    args = _driver_fixture_args()
+    args["normalization_other_score_log_z"] = np.zeros(
+        args["experiment_dataset"].n_units, dtype=np.float64
+    )
+    with pytest.raises(NotImplementedError, match="finite cross-class"):
+        rp.compute_pass2_stats_resident(**args)
 
 
 @requires_resident_gpu
