@@ -9,3 +9,4 @@ include recovar/cuda/relion_scoring.cuh
 include recovar/cuda/vdam_trace.cuh
 include recovar/cuda/relion_preprocess.cuh
 include recovar/cuda/sparse_pass2_posterior.cuh
+include recovar/cuda/relion_translate_sum.cuh
