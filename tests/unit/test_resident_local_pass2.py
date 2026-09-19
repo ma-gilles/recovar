@@ -73,7 +73,7 @@ def _prior_eulers(n_images, seed):
     return eulers
 
 
-def _pass2_layout(seed=20260919):
+def _pass2_layout(seed=20260919, full_support=False):
     translations = np.array(
         [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [-1.0, 0.0]], dtype=np.float32
     )
@@ -96,6 +96,12 @@ def _pass2_layout(seed=20260919):
     rng = np.random.default_rng(seed + 1)
     samples = []
     for image in range(parent.n_images):
+        if full_support:
+            # ``None`` is how RELION's full-parent diagnostic spells "every
+            # (rotation, translation) survives"; the layout then carries no
+            # mask at all, and the driver must not materialize one.
+            samples.append(None)
+            continue
         start = int(parent.rotation_offsets[image])
         stop = int(parent.rotation_offsets[image + 1])
         parent_ids = np.asarray(parent.rotation_ids_flat[start:stop], dtype=np.int64)
@@ -124,7 +130,7 @@ def _relion_projector(volume_real, current_size):
     return jnp.asarray(halves[0], dtype=jnp.complex64), int(r_max)
 
 
-def _case(seed=20260919):
+def _case(seed=20260919, full_support=False):
     """Dataset, volume, RELION projector and pass-2 layout for one half."""
 
     dataset = MockDataset(n_images=N_IMAGES, seed=seed % 2**31)
@@ -133,7 +139,7 @@ def _case(seed=20260919):
         ftu.get_idft3(np.asarray(volume_ft).reshape(VOLUME_SHAPE)).real, dtype=np.float64
     )
     projector_half, r_max = _relion_projector(volume_real, IMAGE_SHAPE[0])
-    layout, translations = _pass2_layout(seed)
+    layout, translations = _pass2_layout(seed, full_support=full_support)
     n_shells = IMAGE_SHAPE[0] // 2 + 1
     n_half = IMAGE_SHAPE[0] * (IMAGE_SHAPE[1] // 2 + 1)
     return dict(
@@ -414,6 +420,33 @@ def test_resident_local_matches_the_exact_engine(monkeypatch, _resident_local_en
     assert float(exact.noise_stats.wsum_sigma2_offset) == pytest.approx(
         float(resident.noise_stats.wsum_sigma2_offset), abs=1e-9
     )
+
+
+@requires_resident_gpu
+def test_full_parent_support_layout_runs_without_a_mask(monkeypatch, _resident_local_env):
+    """A layout whose ``sample_mask_bits`` is ``None`` drives the driver too.
+
+    RELION's full-parent local pass 2 produces exactly that, and the adapter
+    keeps the compact ``None`` spelling instead of materializing an all-ones
+    mask. The whole pass must still agree with the exact local engine.
+    """
+
+    case = _case(full_support=True)
+    assert case["layout"].sample_mask_bits is None
+    exact = _run(case, resident=False, monkeypatch=monkeypatch)
+    resident = _run(case, resident=True, monkeypatch=monkeypatch)
+    np.testing.assert_array_equal(
+        np.asarray(exact.hard_assignment), np.asarray(resident.hard_assignment)
+    )
+    np.testing.assert_allclose(
+        np.asarray(exact.relion_stats.max_posterior_per_image, dtype=np.float64),
+        np.asarray(resident.relion_stats.max_posterior_per_image, dtype=np.float64),
+        rtol=0,
+        atol=1e-5,
+    )
+    a = np.asarray(exact.Ft_y, dtype=np.complex128)
+    b = np.asarray(resident.Ft_y, dtype=np.complex128)
+    assert float(np.linalg.norm(a - b) / np.linalg.norm(a)) < 1e-5
 
 
 @requires_resident_gpu
