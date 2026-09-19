@@ -299,11 +299,7 @@ def test_unmasked_scoring_is_refused():
             window_indices=case["window_indices"],
             recon_window_indices=case["window_indices"],
             image_shape=case["image_shape"],
-            current_size=case["current_size"],
             n_fine_trans=N_FINE_TRANS,
-            use_exact_relion_gaussian=False,
-            accumulate_noise=False,
-            source_faithful_spectrum_norm=False,
         )
 
 
@@ -326,11 +322,7 @@ def _resident_operands(case):
         window_indices=case["window_indices"],
         recon_window_indices=case["window_indices"],
         image_shape=case["image_shape"],
-        current_size=case["current_size"],
         n_fine_trans=N_FINE_TRANS,
-        use_exact_relion_gaussian=False,
-        accumulate_noise=False,
-        source_faithful_spectrum_norm=False,
         image_batch_size=4,
     )
 
@@ -496,6 +488,10 @@ def test_chunk_gather_reproduces_the_capacity_padding(
             rect_indices=rect_indices,
             exact_positions=np.arange(rect_indices.size, dtype=np.int32),
             image_shape=IMAGE_SHAPE,
+            current_size=case["current_size"],
+            use_exact_relion_gaussian=False,
+            accumulate_noise=False,
+            source_faithful_spectrum_norm=False,
         )
 
     for name, source in (

@@ -118,8 +118,13 @@ class ResidentHalfOperands:
     processed_image_half
         The raw processed half image RELION's Wavg and power-spectrum terms
         read; the full packed half, because the image-power shells are binned
-        over it.
-    relion_norm_high_shell, scale, group_ids
+        over it. The ``powerClass`` terms themselves are *not* resident: their
+        shell binning is a scatter-add over duplicate indices, and XLA chooses
+        its order from the launch shape, so a batch of 256 images and a chunk
+        of 128 disagree (measured: every one of 128 cells of
+        ``relion_norm_high_shell``, up to 31 absolute, on the hp3 state). They
+        are formed per chunk instead, at the chunk's own shape, from these rows.
+    scale, group_ids
         Per-image scalars of the statistics tail.
     """
 
@@ -130,7 +135,6 @@ class ResidentHalfOperands:
     n_fine_trans: int
     score_input: jax.Array
     corr_img_score: jax.Array
-    highres_xi2_half: jax.Array | None
     translation_prior: jax.Array
     recon_image: jax.Array
     recon_weight: jax.Array | None
@@ -138,7 +142,6 @@ class ResidentHalfOperands:
     ctf2_over_nv_recon: jax.Array
     direct_ctf_rfloat_recon: jax.Array | None
     processed_image_half: jax.Array
-    relion_norm_high_shell: jax.Array | None
     scale: jax.Array
     group_ids: jax.Array
 
@@ -169,7 +172,6 @@ class ResidentHalfOperands:
         for name in (
             "score_input",
             "corr_img_score",
-            "highres_xi2_half",
             "translation_prior",
             "recon_image",
             "recon_weight",
@@ -177,7 +179,6 @@ class ResidentHalfOperands:
             "ctf2_over_nv_recon",
             "direct_ctf_rfloat_recon",
             "processed_image_half",
-            "relion_norm_high_shell",
             "scale",
             "group_ids",
         ):
@@ -257,11 +258,7 @@ def prepare_resident_half_operands(
     window_indices,
     recon_window_indices,
     image_shape,
-    current_size,
     n_fine_trans: int,
-    use_exact_relion_gaussian: bool,
-    accumulate_noise: bool,
-    source_faithful_spectrum_norm: bool,
     fine_translation_prior_2d=None,
     scale_corrections_np=None,
     group_ids_np=None,
@@ -350,8 +347,6 @@ def prepare_resident_half_operands(
     optional_available: dict[str, bool | None] = {
         "recon_weight": None,
         "direct_ctf_rfloat_recon": None,
-        "highres_xi2_half": None,
-        "relion_norm_high_shell": None,
     }
     batch_size = int(image_batch_size or _prepare_image_batch_size())
 
@@ -398,18 +393,8 @@ def prepare_resident_half_operands(
         if unshifted.ctf_half_rfloat is not None:
             batch_arrays["direct_ctf_rfloat_recon"] = unshifted.ctf_half_rfloat[:, recon_indices]
 
-        highres_xi2_half, relion_norm_high_shell = _relion_powerclass_noise_terms(
-            unshifted.processed_score_half_for_noise,
-            image_shape=image_shape,
-            current_size=current_size,
-            use_exact_relion_gaussian=use_exact_relion_gaussian,
-            accumulate_noise=accumulate_noise,
-            source_faithful_spectrum_norm=source_faithful_spectrum_norm,
-        )
-        if highres_xi2_half is not None:
-            batch_arrays["highres_xi2_half"] = highres_xi2_half
-        if relion_norm_high_shell is not None:
-            batch_arrays["relion_norm_high_shell"] = relion_norm_high_shell
+        # The ``powerClass`` terms are deliberately absent: see
+        # :func:`chunk_powerclass_terms`.
 
         for name, flag in optional_available.items():
             present = name in batch_arrays
@@ -474,7 +459,6 @@ def prepare_resident_half_operands(
         n_fine_trans=int(n_fine_trans),
         score_input=score_input,
         corr_img_score=stack("corr_img_score", required=True),
-        highres_xi2_half=stack("highres_xi2_half"),
         translation_prior=translation_prior,
         recon_image=recon_image,
         recon_weight=stack("recon_weight"),
@@ -482,7 +466,6 @@ def prepare_resident_half_operands(
         ctf2_over_nv_recon=stack("ctf2_over_nv_recon", required=True),
         direct_ctf_rfloat_recon=stack("direct_ctf_rfloat_recon"),
         processed_image_half=processed_image_half,
-        relion_norm_high_shell=stack("relion_norm_high_shell"),
         scale=jnp.asarray(scale),
         group_ids=jnp.asarray(group_ids),
     )
@@ -515,7 +498,6 @@ def _gather_chunk_arrays(
     image_slots,
     score_input,
     corr_img_score,
-    highres_xi2_half,
     translation_prior,
     recon_image,
     recon_weight,
@@ -523,7 +505,6 @@ def _gather_chunk_arrays(
     ctf2_over_nv_recon,
     direct_ctf_rfloat_recon,
     processed_image_half,
-    relion_norm_high_shell,
     scale,
     group_ids,
     translation_angles,
@@ -540,23 +521,38 @@ def _gather_chunk_arrays(
     keeps -1 so the scale accumulators drop it; both are the per-chunk path's
     own padding values, and neither is observable because a padded slot's
     posterior is zero.
+
+    A padded slot reads the chunk's *first* image rather than image zero, which
+    is what ``_pad_batch_to_capacity`` fed the per-chunk preparation. It only
+    matters for the power-spectrum terms, whose scatter-add order XLA takes
+    from the batch it is given; everything else is zeroed here anyway.
+    Returns the padded processed image alongside the zeroed one, because those
+    terms are formed from the padded batch and zeroed afterwards, exactly as
+    the per-chunk path did.
     """
 
     image_slots = jnp.asarray(image_slots, dtype=jnp.int32)
     valid = image_slots >= 0
-    safe_slots = jnp.where(valid, image_slots, 0)
+    safe_slots = jnp.where(valid, image_slots, image_slots[0])
 
-    processed_chunk = _gather_rows(processed_image_half, safe_slots, valid)
+    processed_padded = jnp.asarray(processed_image_half)[safe_slots]
+    processed_chunk = jnp.where(
+        valid[:, None], processed_padded, jnp.zeros((), processed_padded.dtype)
+    )
     raw_translated_wavg_rectangle = _relion_cuda_translate_wavg_norm_images(
-        processed_chunk,
+        processed_padded,
         translation_angles,
         rect_indices,
         image_shape,
     )
+    raw_translated_wavg_rectangle = jnp.where(
+        valid[:, None, None],
+        raw_translated_wavg_rectangle,
+        jnp.zeros((), raw_translated_wavg_rectangle.dtype),
+    )
     return (
         _gather_rows(score_input, safe_slots, valid),
         _gather_rows(corr_img_score, safe_slots, valid),
-        _gather_rows(highres_xi2_half, safe_slots, valid),
         _gather_rows(translation_prior, safe_slots, valid),
         _gather_rows(recon_image, safe_slots, valid),
         _gather_rows(recon_weight, safe_slots, valid),
@@ -564,11 +560,59 @@ def _gather_chunk_arrays(
         _gather_rows(ctf2_over_nv_recon, safe_slots, valid),
         _gather_rows(direct_ctf_rfloat_recon, safe_slots, valid),
         processed_chunk,
-        _gather_rows(relion_norm_high_shell, safe_slots, valid),
+        processed_padded,
         _gather_rows(scale, safe_slots, valid, fill=1.0),
         _gather_rows(group_ids, safe_slots, valid, fill=-1),
         raw_translated_wavg_rectangle,
         raw_translated_wavg_rectangle[:, :, jnp.asarray(exact_positions, dtype=jnp.int32)],
+        valid,
+    )
+
+
+@jax.jit
+def _zero_padded(values, valid):
+    """Zero the padded slots of a per-image term computed on the padded batch."""
+
+    if values is None:
+        return None
+    values = jnp.asarray(values)
+    mask = jnp.asarray(valid, dtype=bool).reshape((-1,) + (1,) * (values.ndim - 1))
+    return jnp.where(mask, values, jnp.zeros((), values.dtype))
+
+
+def chunk_powerclass_terms(
+    processed_padded,
+    valid,
+    *,
+    image_shape,
+    current_size,
+    use_exact_relion_gaussian: bool,
+    accumulate_noise: bool,
+    source_faithful_spectrum_norm: bool,
+):
+    """RELION's ``powerClass`` terms for one chunk, at the chunk's own shape.
+
+    These two cannot be prepared once per half. ``relion_norm_high_shell`` bins
+    the image power into shells with a scatter-add over duplicate indices, and
+    XLA picks that scatter's order from the shape it is compiled for, so the
+    same image binned inside a 256-image preparation and inside a 128-image
+    chunk gives different sums (measured on the hp3 state: all 128 cells,
+    up to 31 absolute). Forming them here, on the chunk's padded batch, keeps
+    the launch shape the per-chunk preparation had, and is a few kernels per
+    chunk rather than the whole per-image preparation.
+    """
+
+    highres_xi2_half, relion_norm_high_shell = _relion_powerclass_noise_terms(
+        processed_padded,
+        image_shape=image_shape,
+        current_size=current_size,
+        use_exact_relion_gaussian=use_exact_relion_gaussian,
+        accumulate_noise=accumulate_noise,
+        source_faithful_spectrum_norm=source_faithful_spectrum_norm,
+    )
+    return (
+        None if highres_xi2_half is None else _zero_padded(highres_xi2_half, valid),
+        None if relion_norm_high_shell is None else _zero_padded(relion_norm_high_shell, valid),
     )
 
 
@@ -580,6 +624,10 @@ def gather_resident_chunk_operands(
     rect_indices,
     exact_positions,
     image_shape,
+    current_size,
+    use_exact_relion_gaussian: bool,
+    accumulate_noise: bool,
+    source_faithful_spectrum_norm: bool,
 ) -> dict:
     """Gather one chunk's operands out of the half's resident arrays.
 
@@ -592,7 +640,6 @@ def gather_resident_chunk_operands(
     (
         score_input,
         corr_img_score,
-        highres_xi2_half,
         translation_prior,
         recon_image,
         recon_weight,
@@ -600,16 +647,16 @@ def gather_resident_chunk_operands(
         ctf2_over_nv_recon,
         direct_ctf_rfloat_recon,
         processed_image_half,
-        relion_norm_high_shell,
+        processed_padded,
         scale,
         group_ids,
         raw_translated_wavg_rectangle,
         raw_translated_wavg_for_atomic,
+        valid,
     ) = _gather_chunk_arrays(
         jnp.asarray(image_slots, dtype=jnp.int32),
         operands.score_input,
         operands.corr_img_score,
-        operands.highres_xi2_half,
         operands.translation_prior,
         operands.recon_image,
         operands.recon_weight,
@@ -617,13 +664,21 @@ def gather_resident_chunk_operands(
         operands.ctf2_over_nv_recon,
         operands.direct_ctf_rfloat_recon,
         operands.processed_image_half,
-        operands.relion_norm_high_shell,
         operands.scale,
         operands.group_ids,
         jnp.asarray(translation_angles, dtype=jnp.float32),
         jnp.asarray(rect_indices, dtype=jnp.int32),
         jnp.asarray(exact_positions, dtype=jnp.int32),
         image_shape=tuple(int(size) for size in image_shape),
+    )
+    highres_xi2_half, relion_norm_high_shell = chunk_powerclass_terms(
+        processed_padded,
+        valid,
+        image_shape=image_shape,
+        current_size=current_size,
+        use_exact_relion_gaussian=use_exact_relion_gaussian,
+        accumulate_noise=accumulate_noise,
+        source_faithful_spectrum_norm=source_faithful_spectrum_norm,
     )
     return {
         "score_input": score_input,

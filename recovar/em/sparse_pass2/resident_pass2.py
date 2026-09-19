@@ -1660,11 +1660,7 @@ def compute_pass2_stats_resident(
                     window_indices=window_indices,
                     recon_window_indices=recon_window_indices,
                     image_shape=image_shape,
-                    current_size=current_size,
                     n_fine_trans=int(n_fine_trans),
-                    use_exact_relion_gaussian=use_exact_relion_gaussian,
-                    accumulate_noise=accumulate_noise,
-                    source_faithful_spectrum_norm=resolved_spectrum_norm,
                     fine_translation_prior_2d=fine_translation_prior_2d,
                     scale_corrections_np=scale_corrections_np,
                     group_ids_np=group_ids_np,
@@ -3010,6 +3006,10 @@ def _run_resident_chunk(
             rect_indices=rect_indices_device,
             exact_positions=exact_positions_device,
             image_shape=image_shape,
+            current_size=current_size,
+            use_exact_relion_gaussian=use_exact_relion_gaussian,
+            accumulate_noise=accumulate_noise,
+            source_faithful_spectrum_norm=source_faithful_spectrum_norm,
         )
         if verify_operands:
             _verify_resident_chunk_operands(
