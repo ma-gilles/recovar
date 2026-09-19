@@ -1604,6 +1604,66 @@ def _project_local_class_segments(
     return jnp.concatenate(segments, axis=1).reshape(batch_size * rows, segments[0].shape[-1])
 
 
+def _project_local_class_segments_flat(
+    mean_for_proj,
+    relion_projector_half,
+    flat_rotations,
+    project_rows,
+    *,
+    n_classes: int,
+    class_row_counts,
+    mean_is_per_class: bool = True,
+    projector_is_per_class: bool = True,
+):
+    """Project packed class-major flat rows, each class block from its own volume.
+
+    The rectangular sibling slices ``local_rotations[:, k*seg:(k+1)*seg]``. Flat rows
+    have no per-image rotation axis to slice, so the plan emits them class-major and
+    reports ``class_row_counts``; class ``k`` owns the contiguous block
+    ``[sum(counts[:k]), +counts[k])``. Slicing those blocks is what keeps a packed row
+    from being projected out of the wrong class volume.
+
+    ``class_row_counts`` must be static Python ints: they set the projection shapes.
+    """
+
+    counts = tuple(int(c) for c in class_row_counts)
+    if len(counts) != int(n_classes):
+        raise ValueError(
+            f"class_row_counts must have {int(n_classes)} entries, got {len(counts)}"
+        )
+    total = sum(counts)
+    if total > int(flat_rotations.shape[0]):
+        raise ValueError(
+            f"class row blocks cover {total} rows but only {int(flat_rotations.shape[0])} are packed"
+        )
+    segments = []
+    start = 0
+    for class_index, count in enumerate(counts):
+        if count <= 0:
+            continue
+        projected = project_rows(
+            _class_volume(mean_for_proj, class_index, n_classes, per_class=mean_is_per_class),
+            _class_volume(
+                relion_projector_half, class_index, n_classes, per_class=projector_is_per_class
+            ),
+            flat_rotations[start : start + count],
+        )
+        segments.append(projected)
+        start += count
+    if not segments:
+        raise ValueError("class-segmented flat rows need at least one populated class")
+    projected_rows = jnp.concatenate(segments, axis=0)
+    tail = int(flat_rotations.shape[0]) - total
+    if tail > 0:
+        # Static capacity padding beyond the plan's present rows: score-inert, but the
+        # row axis must keep its compiled shape.
+        projected_rows = jnp.concatenate(
+            (projected_rows, jnp.zeros((tail,) + projected_rows.shape[1:], projected_rows.dtype)),
+            axis=0,
+        )
+    return projected_rows
+
+
 def _adjoint_local_class_segments(
     summed,
     ctf_probs,
