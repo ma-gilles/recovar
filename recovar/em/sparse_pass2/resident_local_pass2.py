@@ -146,6 +146,11 @@ RESIDENT_LOCAL_SEARCH_ENV = "RECOVAR_LOCAL_SEARCH_RESIDENT"
 _ROW_CAPACITY_LADDER_ENV = "RECOVAR_LOCAL_SEARCH_RESIDENT_ROW_CAPACITIES"
 _IMAGE_CAPACITY_LADDER_ENV = "RECOVAR_LOCAL_SEARCH_RESIDENT_IMAGE_CAPACITIES"
 _PREPARE_IMAGE_BATCH_ENV = "RECOVAR_LOCAL_SEARCH_RESIDENT_PREPARE_IMAGE_BATCH"
+# Diagnostic only: log one line per chunk with its occupancy, padding and
+# per-stage seconds. It inserts ``block_until_ready`` between stages, so it
+# serialises work that normally overlaps and inflates the loop; never use a
+# profiled arm for a wall-time comparison.
+_CHUNK_PROFILE_ENV = "RECOVAR_LOCAL_SEARCH_RESIDENT_CHUNK_PROFILE"
 
 # Row capacities are powers of two so a chunk decomposes into whole M-step
 # blocks; the ladder is truncated at run time by the projection byte budget,
@@ -959,6 +964,17 @@ def _run_resident_local_chunk(
     n_valid_images = int(chunk.n_valid_images)
     image_indices = np.arange(chunk.image_start, chunk.image_stop, dtype=np.int64)
 
+    profile = parse_env_flag(_CHUNK_PROFILE_ENV, default=False)
+    marks: dict[str, float] = {}
+
+    def mark(name, *values):
+        if not profile:
+            return
+        if values:
+            jax.block_until_ready(values)
+        marks[name] = time.time()
+
+    mark("t0")
     host_chunk = materialize_local_chunk(tables, chunk)
     row_image_local = jnp.asarray(host_chunk["row_image_local"], dtype=jnp.int32)
     row_log_prior = jnp.asarray(host_chunk["row_log_prior"], dtype=jnp.float32)
@@ -991,6 +1007,8 @@ def _run_resident_local_chunk(
         **projection_kwargs,
     )
 
+    mark("project", score_proj, recon_proj, recon_abs2)
+
     # --- stage 3: score ----------------------------------------------------
     scored = score_resident_projected_chunk(
         score_proj,
@@ -1014,6 +1032,7 @@ def _run_resident_local_chunk(
     )
     del score_proj
     scores_flat = jnp.asarray(scored.scores, dtype=jnp.float32).reshape(-1)
+    mark("score", scores_flat)
 
     # --- stage 4: segmented RELION float32 fine posterior -------------------
     segment_offsets_np = _local_chunk_segment_offsets(tables, chunk, n_fine_trans)
@@ -1047,6 +1066,7 @@ def _run_resident_local_chunk(
     row_posterior = jnp.asarray(reconstruction_probs, dtype=jnp.float32).reshape(
         row_capacity, int(n_fine_trans)
     )
+    mark("posterior", row_posterior, log_z_out, best_cell_index)
     if significant_counts is not None:
         significant_counts[chunk.image_start : chunk.image_stop] = np.asarray(
             jax.device_get(n_significant)[:n_valid_images], dtype=np.int32
@@ -1075,6 +1095,7 @@ def _run_resident_local_chunk(
         precision_policy=precision_policy,
     )
 
+    mark("recon_operands", *[v for v in recon.values() if v is not None])
     mstep_rotations = jnp.asarray(
         host_chunk["mstep_rotations"], dtype=precision_policy.score_real_dtype
     )
@@ -1117,6 +1138,8 @@ def _run_resident_local_chunk(
         max_adjoint_block_bytes=max_adjoint_block_bytes,
         cuda_backproject=cuda_backproject,
     )
+
+    mark("mstep", Ft_y_total, Ft_ctf_total, wavg_triplet_pixels, block_noise_shells)
 
     # --- stage 7: image-level statistics ------------------------------------
     translation_sqdist_ang = image_tables.translation_sqdist_ang
@@ -1182,4 +1205,25 @@ def _run_resident_local_chunk(
     stats = stats._replace(
         invalid_best_rows=stats.invalid_best_rows + jnp.sum(invalid_best.astype(jnp.int64))
     )
+    mark("stats", stats)
+    if profile:
+        order = ("t0", "project", "score", "posterior", "recon_operands", "mstep", "stats")
+        spans = {
+            name: marks[name] - marks[prev]
+            for prev, name in zip(order, order[1:])
+            if name in marks and prev in marks
+        }
+        n_blocks = len(range(0, min(row_capacity, max(n_valid_rows, 1)), int(mstep_block_rows))) or 1
+        logger.info(
+            "Resident local chunk profile: images=%d/%d rows=%d/%d row_pad=%.1f%% "
+            "blocks=%d proj_rows=%d recon_tile=%s wavg_tile=%s | %s | chunk=%.3fs",
+            n_valid_images, image_capacity, n_valid_rows, row_capacity,
+            100.0 * (row_capacity - n_valid_rows) / max(row_capacity, 1),
+            n_blocks, row_capacity,
+            f"{recon['shifted_recon'].dtype}{tuple(recon['shifted_recon'].shape)}",
+            f"{recon['raw_translated_wavg_rectangle'].dtype}"
+            f"{tuple(recon['raw_translated_wavg_rectangle'].shape)}",
+            " ".join(f"{k}={v:.3f}s" for k, v in spans.items()),
+            marks["stats"] - marks["t0"],
+        )
     return Ft_y_total, Ft_ctf_total, stats
