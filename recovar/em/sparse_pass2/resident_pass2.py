@@ -109,10 +109,7 @@ from recovar.em.sparse_pass2.resident_candidates import (
     materialize_chunk,
     plan_capacity_chunks,
 )
-from recovar.em.sparse_pass2.resident_scoring import (
-    prepare_resident_image_operands,
-    score_resident_chunk,
-)
+from recovar.em.sparse_pass2.resident_scoring import score_resident_chunk
 from recovar.em.sparse_pass2.resident_statistics import (
     ResidentStatistics,
     _drop_index,
@@ -174,7 +171,6 @@ RESIDENT_PASS2_ENV = "RECOVAR_SPARSE_PASS2_RESIDENT"
 _ROW_CAPACITY_LADDER_ENV = "RECOVAR_SPARSE_PASS2_RESIDENT_ROW_CAPACITIES"
 _IMAGE_CAPACITY_LADDER_ENV = "RECOVAR_SPARSE_PASS2_RESIDENT_IMAGE_CAPACITIES"
 _MSTEP_BLOCK_ROWS_ENV = "RECOVAR_SPARSE_PASS2_RESIDENT_MSTEP_BLOCK_ROWS"
-_PREPARE_IMAGE_BATCH_ENV = "RECOVAR_SPARSE_PASS2_RESIDENT_PREPARE_IMAGE_BATCH"
 # Attribution only, default off. Logs one line per chunk with its occupancy,
 # its M-step block count and a device-synchronised wall, and counts the T7
 # offsets readbacks. The synchronisation perturbs the wall, so an arm with
@@ -1381,9 +1377,12 @@ def compute_pass2_stats_resident(
         table_s,
     )
 
-    # ---- T6: resident per-image scoring operands --------------------------
-    prepare_batch = os.environ.get(_PREPARE_IMAGE_BATCH_ENV, "").strip()
-    prepare_batch = int(prepare_batch) if prepare_batch else 256
+    # ---- per-chunk preparation arguments ----------------------------------
+    # The score and reconstruction operands both come from one
+    # ``_prepare_bucket_io`` call per chunk. An earlier revision also made a
+    # per-half pass for the score side; that was 1.8-2.5 s per half of
+    # duplicate work, and the preparation is per-image pure, so the per-chunk
+    # call gives the same arrays.
     bucket_io_kwargs = dict(
         noise_variance_half=noise_variance_half,
         fine_translations=fine_translations,
@@ -1404,33 +1403,6 @@ def compute_pass2_stats_resident(
         return_windowed_shifted=windowed_prepare,
         relion_exact_normalized_cc_operands=relion_exact_fine_normalized_cc,
         relion_exact_bpref_operands=relion_exact_bpref_operands,
-    )
-    operands_t0 = time.time()
-    operands = prepare_resident_image_operands(
-        experiment_dataset,
-        np.arange(n_images, dtype=np.int64),
-        bucket_io_kwargs=bucket_io_kwargs,
-        half_weights=half_weights_windowed,
-        full_to_compact=relion_score_full_to_compact,
-        translation_angles=relion_score_translation_angles,
-        window_indices=window_indices,
-        windowed_prepare=windowed_prepare,
-        image_shape=image_shape,
-        current_size=current_size,
-        n_fine_trans=n_fine_trans,
-        use_exact_relion_gaussian=use_exact_relion_gaussian,
-        accumulate_noise=accumulate_noise,
-        source_faithful_spectrum_norm=resolved_spectrum_norm,
-        fine_translation_prior_2d=fine_translation_prior_2d,
-        score_real_dtype=precision_policy.score_real_dtype,
-        image_batch_size=prepare_batch,
-    )
-    logger.info(
-        "Resident pass-2 image operands: %d images x %d score pixels resident in %.2fs (%.2f GiB)",
-        operands.n_images,
-        operands.n_score_pixels,
-        time.time() - operands_t0,
-        operands.nbytes()["total"] / float(1024**3),
     )
 
     # ---- resident row-aligned tables --------------------------------------
@@ -1494,8 +1466,13 @@ def compute_pass2_stats_resident(
             chunk,
             tables=tables,
             experiment_dataset=experiment_dataset,
-            operands=operands,
             bucket_io_kwargs=bucket_io_kwargs,
+            half_weights=jnp.asarray(half_weights_windowed),
+            translation_angles=jnp.asarray(relion_score_translation_angles, dtype=jnp.float32),
+            full_to_compact=relion_score_full_to_compact,
+            n_score_pixels=int(n_windowed),
+            fine_translation_prior_2d=fine_translation_prior_2d,
+            score_real_dtype=precision_policy.score_real_dtype,
             projection_score_cache=projection_score_cache,
             projection_recon_cache=projection_recon_cache,
             projection_recon_abs2_cache=projection_recon_abs2_cache,
@@ -1637,6 +1614,9 @@ def _prepare_chunk_reconstruction_operands(
     bucket_io_kwargs,
     windowed_prepare,
     recon_window_indices,
+    score_window_indices,
+    fine_translation_prior_2d,
+    score_real_dtype,
     n_fine_trans,
     n_recon_windowed,
     image_shape,
@@ -1688,12 +1668,12 @@ def _prepare_chunk_reconstruction_operands(
         _shifted_score_half,
         shifted_recon_half,
         _batch_norm,
-        _ctf2_over_nv_half,
+        ctf2_over_nv_half,
         ctf2_over_nv_half_with_dc,
         shifted_score_half_with_dc,
         processed_score_half_for_noise,
         _shifted_corrected_score_half,
-        _direct_score_input,
+        direct_score_input,
         _direct_preprocessed_score_input,
         _direct_pixel_correction,
         _direct_preprocess_normalization_factors,
@@ -1717,7 +1697,19 @@ def _prepare_chunk_reconstruction_operands(
         None if direct_ctf_rfloat_half is None else direct_ctf_rfloat_half[:, gather_recon]
     )
 
-    _highres_xi2_half, relion_norm_high_shell = _relion_powerclass_noise_terms(
+    # Score-side operands come from this same call. The driver used to make a
+    # second pass over the whole half for them; the preparation is per-image
+    # pure (bitwise at batch 256, 128, 32, 13 and 1), so taking them here is
+    # the same arithmetic with one call per chunk instead of two per image.
+    if windowed_prepare:
+        score_input = direct_score_input
+        corr_img_score = ctf2_over_nv_half
+    else:
+        gather_score = jnp.asarray(score_window_indices, dtype=jnp.int32)
+        score_input = direct_score_input[:, gather_score]
+        corr_img_score = ctf2_over_nv_half[:, gather_score]
+
+    highres_xi2_half, relion_norm_high_shell = _relion_powerclass_noise_terms(
         processed_score_half_for_noise,
         image_shape=image_shape,
         current_size=current_size,
@@ -1725,7 +1717,6 @@ def _prepare_chunk_reconstruction_operands(
         accumulate_noise=accumulate_noise,
         source_faithful_spectrum_norm=source_faithful_spectrum_norm,
     )
-    del _highres_xi2_half  # the resident scorer reads the per-half operand instead
     raw_translated_wavg_rectangle = _relion_cuda_translate_wavg_norm_images(
         processed_score_half_for_noise,
         relion_score_translation_angles,
@@ -1743,6 +1734,9 @@ def _prepare_chunk_reconstruction_operands(
             jnp.asarray(values)[permutation], valid_images
         )
 
+    score_input = take(score_input)
+    corr_img_score = take(corr_img_score)
+    highres_xi2_half = None if highres_xi2_half is None else take(highres_xi2_half)
     shifted_recon = take(shifted_recon.reshape(image_capacity, n_fine_trans, -1))
     shifted_noise = take(shifted_noise.reshape(image_capacity, n_fine_trans, -1))
     ctf2_over_nv_recon = take(ctf2_over_nv_recon)
@@ -1770,7 +1764,20 @@ def _prepare_chunk_reconstruction_operands(
             group_ids_np[image_indices], dtype=np.int32
         )
 
+    translation_prior = jnp.asarray(
+        np.zeros((image_capacity, int(n_fine_trans)), dtype=np.float32)
+        if fine_translation_prior_2d is None
+        else _pad_batch_to_capacity(
+            np.asarray(fine_translation_prior_2d)[image_indices], image_capacity
+        ),
+        dtype=score_real_dtype,
+    )
+
     return {
+        "score_input": score_input,
+        "corr_img_score": corr_img_score,
+        "highres_xi2_half": highres_xi2_half,
+        "translation_prior": _zero_padded_images(translation_prior, valid_images),
         "shifted_recon": shifted_recon,
         "shifted_noise": shifted_noise,
         "ctf2_over_nv_recon": ctf2_over_nv_recon,
@@ -1795,8 +1802,13 @@ def _run_resident_chunk(
     *,
     tables,
     experiment_dataset,
-    operands,
     bucket_io_kwargs,
+    half_weights,
+    translation_angles,
+    full_to_compact,
+    n_score_pixels,
+    fine_translation_prior_2d,
+    score_real_dtype,
     projection_score_cache,
     projection_recon_cache,
     projection_recon_abs2_cache,
@@ -1868,6 +1880,42 @@ def _run_resident_chunk(
     kernel_row_image_ids = jnp.where(row_is_valid, row_image_local, jnp.int32(-1))
 
     # --- stages 1-3: gather, cached projection, score ----------------------
+    # Stages 1-7 read one preparation. Chunk-local image slots address it, so
+    # the scoring program is keyed on the image capacity rather than on the
+    # half's image count, and the two halves of an iteration share a program.
+    recon = _prepare_chunk_reconstruction_operands(
+        chunk=chunk,
+        image_indices=image_indices,
+        experiment_dataset=experiment_dataset,
+        bucket_io_kwargs=bucket_io_kwargs,
+        windowed_prepare=windowed_prepare,
+        recon_window_indices=recon_window_indices,
+        score_window_indices=window_indices,
+        fine_translation_prior_2d=fine_translation_prior_2d,
+        score_real_dtype=score_real_dtype,
+        n_fine_trans=int(n_fine_trans),
+        n_recon_windowed=int(n_recon_windowed),
+        image_shape=image_shape,
+        current_size=current_size,
+        use_exact_relion_gaussian=use_exact_relion_gaussian,
+        accumulate_noise=accumulate_noise,
+        source_faithful_spectrum_norm=source_faithful_spectrum_norm,
+        relion_score_translation_angles=translation_angles,
+        rect_indices_device=rect_indices_device,
+        exact_positions_device=exact_positions_device,
+        scale_corrections_np=scale_corrections_np,
+        group_ids_np=group_ids_np,
+        precision_policy=precision_policy,
+    )
+    if timing:
+        jax.block_until_ready(recon["shifted_recon"])
+        stage_t["operands"] = time.time() - chunk_t0
+
+    chunk_image_ids = jnp.where(
+        jnp.arange(image_capacity, dtype=jnp.int32) < n_valid_images_device,
+        jnp.arange(image_capacity, dtype=jnp.int32),
+        jnp.int32(-1),
+    )
     scored = score_resident_chunk(
         row_image_local,
         row_fine_rot,
@@ -1875,21 +1923,21 @@ def _run_resident_chunk(
         row_mask_bits,
         row_mask_mode,
         n_valid_rows_device,
-        image_ids,
+        chunk_image_ids,
         projection_score_cache,
-        operands.score_input,
-        operands.corr_img_score,
-        operands.highres_xi2_half,
-        operands.translation_prior,
-        half_weights=operands.half_weights,
-        translation_angles=operands.translation_angles,
-        full_to_compact=operands.full_to_compact,
+        recon["score_input"],
+        recon["corr_img_score"],
+        recon["highres_xi2_half"],
+        recon["translation_prior"],
+        half_weights=half_weights,
+        translation_angles=translation_angles,
+        full_to_compact=full_to_compact,
         fine_translation_parent=fine_translation_parent_device,
-        logical_current_size=jnp.asarray(operands.current_size, dtype=jnp.int32),
+        logical_current_size=jnp.asarray(current_size, dtype=jnp.int32),
         row_capacity=row_capacity,
         image_capacity=image_capacity,
         n_fine_trans=int(n_fine_trans),
-        n_score_pixels=int(operands.n_score_pixels),
+        n_score_pixels=int(n_score_pixels),
     )
     scores_flat = jnp.asarray(scored.scores, dtype=jnp.float32).reshape(-1)
     if timing:
@@ -1936,32 +1984,6 @@ def _run_resident_chunk(
         jax.block_until_ready(row_posterior)
         stage_t["posterior"] = time.time() - chunk_t0
 
-    # --- stages 5-7 operands: the per-chunk translated tiles ----------------
-    recon = _prepare_chunk_reconstruction_operands(
-        chunk=chunk,
-        image_indices=image_indices,
-        experiment_dataset=experiment_dataset,
-        bucket_io_kwargs=bucket_io_kwargs,
-        windowed_prepare=windowed_prepare,
-        recon_window_indices=recon_window_indices,
-        n_fine_trans=int(n_fine_trans),
-        n_recon_windowed=int(n_recon_windowed),
-        image_shape=image_shape,
-        current_size=current_size,
-        use_exact_relion_gaussian=use_exact_relion_gaussian,
-        accumulate_noise=accumulate_noise,
-        source_faithful_spectrum_norm=source_faithful_spectrum_norm,
-        relion_score_translation_angles=operands.translation_angles,
-        rect_indices_device=rect_indices_device,
-        exact_positions_device=exact_positions_device,
-        scale_corrections_np=scale_corrections_np,
-        group_ids_np=group_ids_np,
-        precision_policy=precision_policy,
-    )
-
-    if timing:
-        jax.block_until_ready(recon["shifted_recon"])
-        stage_t["operands"] = time.time() - chunk_t0
     n_shells = int(stats_config.n_shells)
     block_noise_shells = jnp.zeros(n_shells, dtype=jnp.float64)
     a2_per_image = None
