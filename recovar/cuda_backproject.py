@@ -2024,6 +2024,53 @@ def sparse_pass2_posterior_f32(
 _SPARSE_PASS2_SEGMENT_STATE_BYTES = _SPARSE_PASS2_ROW_STATE_BYTES + 24
 
 
+# Sort/scan structure of SparsePass2SegmentedPosteriorF32.  Mode 0 keeps one
+# CUB radix sort and one CUB inclusive scan per segment and is the oracle every
+# bitwise test compares against.  Mode 1 replaces the sorts by a single
+# cub::DeviceSegmentedRadixSort for the chunk; a radix sort is an exact
+# permutation, so every output stays bitwise equal to mode 0 while the handler
+# issues one sort dispatch instead of one per image.  Mode 2 also replaces the
+# scans by one device-side segmented scan, which removes the handler's last
+# host round trip and changes the float32 summation order of the significance
+# boundary: its ``sum_weight`` and ``threshold`` can differ from mode 0 by a
+# few ULP.  See the header comment of recovar/cuda/sparse_pass2_posterior.cuh.
+SPARSE_PASS2_SORT_SCAN_PER_SEGMENT = 0
+SPARSE_PASS2_SORT_SCAN_SEGMENTED_SORT = 1
+SPARSE_PASS2_SORT_SCAN_SEGMENTED = 2
+
+_SPARSE_PASS2_SORT_SCAN_ENV = "RECOVAR_SPARSE_PASS2_SEGMENTED_SORT_SCAN"
+_SPARSE_PASS2_SORT_SCAN_NAMES = {
+    "per_segment": SPARSE_PASS2_SORT_SCAN_PER_SEGMENT,
+    "0": SPARSE_PASS2_SORT_SCAN_PER_SEGMENT,
+    "segmented_sort": SPARSE_PASS2_SORT_SCAN_SEGMENTED_SORT,
+    "1": SPARSE_PASS2_SORT_SCAN_SEGMENTED_SORT,
+    "segmented": SPARSE_PASS2_SORT_SCAN_SEGMENTED,
+    "2": SPARSE_PASS2_SORT_SCAN_SEGMENTED,
+}
+_SPARSE_PASS2_SORT_SCAN_DEFAULT = SPARSE_PASS2_SORT_SCAN_SEGMENTED_SORT
+
+
+@functools.lru_cache(maxsize=1)
+def sparse_pass2_segmented_sort_scan_mode() -> int:
+    """Default sort/scan structure of the segmented pass-2 posterior.
+
+    ``RECOVAR_SPARSE_PASS2_SEGMENTED_SORT_SCAN`` selects ``per_segment`` (0),
+    ``segmented_sort`` (1, the default) or ``segmented`` (2).  The value is read
+    once per process: it is baked into compiled programs, so changing the
+    environment after the first call does not invalidate them.
+    """
+
+    text = os.environ.get(_SPARSE_PASS2_SORT_SCAN_ENV, "").strip().lower()
+    if not text:
+        return _SPARSE_PASS2_SORT_SCAN_DEFAULT
+    if text not in _SPARSE_PASS2_SORT_SCAN_NAMES:
+        raise ValueError(
+            f"{_SPARSE_PASS2_SORT_SCAN_ENV}={text!r} is not one of "
+            f"{sorted(_SPARSE_PASS2_SORT_SCAN_NAMES)}"
+        )
+    return _SPARSE_PASS2_SORT_SCAN_NAMES[text]
+
+
 def sparse_pass2_segmented_supported() -> bool:
     """Return whether the loaded library exports both segmented pass-2 targets.
 
@@ -2105,7 +2152,14 @@ def sparse_pass2_segmented_log_z_f64(
 
 
 @functools.partial(
-    jax.jit, static_argnames=("adaptive_fraction", "keep_all", "use_external_sum_weight")
+    jax.jit,
+    static_argnames=(
+        "adaptive_fraction",
+        "keep_all",
+        "use_external_sum_weight",
+        "sort_scan_mode",
+        "return_scratch",
+    ),
 )
 def sparse_pass2_segmented_posterior_f32(
     scores: jax.Array,
@@ -2117,6 +2171,8 @@ def sparse_pass2_segmented_posterior_f32(
     adaptive_fraction: float,
     keep_all: bool,
     use_external_sum_weight: bool,
+    sort_scan_mode: int | None = None,
+    return_scratch: bool = False,
 ) -> tuple[jax.Array, ...]:
     """Segmented form of :func:`sparse_pass2_posterior_f32`.
 
@@ -2138,17 +2194,34 @@ def sparse_pass2_segmented_posterior_f32(
     so nothing on the host depends on the chunk's occupancy and two chunks of
     one capacity class issue identical work.
 
-    One host round trip remains. The RELION significance boundary reuses the
-    per-segment CUB radix sort and pinned Ampere inclusive scan of the
-    rectangular handler, whose item count is a host argument, and that count is
-    what fixes the float32 summation order the boundary is defined by
-    (``sum_weight`` is the scan's last element and the threshold is a
-    searchsorted over it). The handler therefore copies ``segment_offsets``
-    back and synchronizes once, after it has enqueued its first two kernels and
-    reserved the scratch, so the device works on this call while the host
-    waits. Replacing the loop with a device-side segmented scan would remove
-    the round trip and change both outputs, so it is a numerics decision, not a
-    performance one.
+    ``sort_scan_mode`` selects how the RELION significance boundary sorts and
+    scans the candidate weights; ``None`` takes
+    :func:`sparse_pass2_segmented_sort_scan_mode`.
+
+    * ``0`` (``per_segment``) is the oracle: one CUB radix sort and one pinned
+      Ampere inclusive scan per nonempty segment, every output bitwise equal to
+      :func:`sparse_pass2_posterior_f32` on the same candidates.
+    * ``1`` (``segmented_sort``, the default) issues one
+      ``cub::DeviceSegmentedRadixSort`` for the chunk instead of one sort per
+      image. A radix sort is an exact permutation of its keys, so every output
+      stays bitwise equal to mode 0.
+    * ``2`` (``segmented``) also replaces the per-segment scans by one
+      device-side segmented scan and is the only mode with no host round trip.
+      Its float32 summation order differs, so ``sum_weight`` and ``threshold``
+      can differ from mode 0 by a few ULP and an image whose significance
+      boundary sits on a near-tie can keep a different number of candidates.
+      Mode 2 is therefore not bitwise with the rectangular handler.
+
+    Modes 0 and 1 copy ``segment_offsets`` back and synchronize once, after
+    they have enqueued the first two kernels and reserved the scratch, so the
+    device works on this call while the host waits: the CUB scan takes its item
+    count as a host argument, and that count is what fixes the float32
+    summation order the boundary is defined by (``sum_weight`` is the scan's
+    last element and the threshold is a searchsorted over it).
+
+    ``return_scratch`` appends the handler's ``(raw_weights, sorted,
+    cumulative)`` scratch to the result, for tests that compare the sorted keys
+    or the cumulative sums across modes.
     """
 
     _, segments = _sparse_pass2_segment_geometry(scores, segment_offsets, n_valid_images)
@@ -2163,6 +2236,19 @@ def sparse_pass2_segmented_posterior_f32(
         )
     if type(keep_all) is not bool or type(use_external_sum_weight) is not bool:
         raise TypeError("keep_all and use_external_sum_weight must be static Python bools")
+    if type(return_scratch) is not bool:
+        raise TypeError("return_scratch must be a static Python bool")
+    mode = (
+        sparse_pass2_segmented_sort_scan_mode()
+        if sort_scan_mode is None
+        else int(sort_scan_mode)
+    )
+    if mode not in (
+        SPARSE_PASS2_SORT_SCAN_PER_SEGMENT,
+        SPARSE_PASS2_SORT_SCAN_SEGMENTED_SORT,
+        SPARSE_PASS2_SORT_SCAN_SEGMENTED,
+    ):
+        raise ValueError(f"sort_scan_mode must be 0, 1 or 2, got {sort_scan_mode!r}")
     _require_sparse_pass2_cuda_backend("Segmented sparse pass-2 posterior")
     _ensure_optional_ffi(_TARGET_SPARSE_PASS2_SEGMENTED_POSTERIOR_F32)
     full = scores.shape
@@ -2194,8 +2280,9 @@ def sparse_pass2_segmented_posterior_f32(
         adaptive_fraction=np.float32(adaptive_fraction),
         keep_all=np.int64(keep_all),
         use_external_sum_weight=np.int64(use_external_sum_weight),
+        sort_scan_mode=np.int64(mode),
     )
-    return tuple(result[:11])
+    return tuple(result[:14] if return_scratch else result[:11])
 
 
 @jax.jit
