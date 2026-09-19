@@ -614,12 +614,27 @@ def _resident_block_weighted_sums_kernel(
         summed, summed_masked, probs_sum_t, ctf_probs = outputs
         return summed, summed_masked, ctf_probs, probs_sum_t
     summed, summed_masked, _kernel_mass = outputs
-    probs_sum_t = jnp.sum(row_posterior, axis=-1)
+    ctf_probs, probs_sum_t = _resident_block_ctf_probs(
+        row_posterior, row_image_local, ctf2_over_nv_recon
+    )
+    return summed, summed_masked, ctf_probs, probs_sum_t
+
+
+@jax.jit
+def _resident_block_ctf_probs(row_posterior, row_image_local, ctf2_over_nv_recon):
+    """``ctf_probs`` and its mass, exactly as :func:`_resident_block_weighted_sums` forms them.
+
+    One program, so the kernel path costs one dispatch here rather than three.
+    The statements, the gather and the ``!= 0`` mass predicate are the tile
+    path's own, which is what makes the two paths bitwise on this output.
+    """
+
+    probs_sum_t = jnp.sum(jnp.asarray(row_posterior), axis=-1)
     ctf_probs = compute_local_ctf_sums_from_probs_sum_t(
         probs_sum_t[:, None],
         jnp.asarray(ctf2_over_nv_recon)[jnp.asarray(row_image_local, dtype=jnp.int32)],
     )[:, 0, :]
-    return summed, summed_masked, ctf_probs, probs_sum_t
+    return ctf_probs, probs_sum_t
 
 
 @partial(jax.jit, static_argnames=("n_shells", "image_capacity"))
