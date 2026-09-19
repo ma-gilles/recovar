@@ -7261,10 +7261,11 @@ def relion_translate_sum_flat_rows_f32(
     n_valid_rows: jax.Array,
     logical_pixel_count: jax.Array,
     recon_weight: jax.Array | None = None,
+    ctf2_over_nv: jax.Array | None = None,
     *,
     image_shape: Tuple[int, int],
     rows_per_block: int = 0,
-) -> tuple[jax.Array, jax.Array, jax.Array]:
+) -> tuple[jax.Array, ...]:
     """Translate and posterior-weight two per-image operands over packed rows.
 
     This is the flat-row form of the resident M-step's weighted sums. For every
@@ -7299,6 +7300,16 @@ def relion_translate_sum_flat_rows_f32(
     rounded add; the XLA path it replaces contracts the same products at
     ``Precision.HIGHEST``, so the two agree to a few float32 ulp and exactly at
     ``T == 1``.
+
+    ``ctf2_over_nv`` adds the M-step block's fourth output. Supplied, the call
+    returns ``(summed, summed_masked, probs_sum_t, ctf_probs)`` with
+
+    ``ctf_probs[r, p] = probs_sum_t[r] != 0 ? probs_sum_t[r] * ctf2[id, p] : 0``
+
+    which is :func:`recovar.em.local.local_backprojection.compute_local_ctf_sums_from_probs_sum_t`
+    term for term, including its predicate on the mass rather than on the
+    product, and bitwise against it on the same ``probs_sum_t``. Omitted, the
+    call returns the three-output form and reads no CTF operand.
 
     ``rows_per_block`` selects how many packed rows share one ``sincosf``
     evaluation. Zero picks the kernel's default; it changes performance only,
@@ -7373,6 +7384,19 @@ def relion_translate_sum_flat_rows_f32(
             )
     else:
         recon_weight = jnp.zeros((1, 1), dtype=jnp.float32)
+    write_ctf_probs = ctf2_over_nv is not None
+    if write_ctf_probs:
+        ctf2_over_nv = jnp.asarray(ctf2_over_nv)
+        if ctf2_over_nv.dtype != jnp.float32 or ctf2_over_nv.shape != (
+            batch_size,
+            pixel_capacity,
+        ):
+            raise ValueError(
+                "flat-row translate-and-sum expects float32 ctf2_over_nv[B,P], "
+                f"got {ctf2_over_nv.shape} {ctf2_over_nv.dtype}"
+            )
+    else:
+        ctf2_over_nv = jnp.zeros((1, 1), dtype=jnp.float32)
     if batch_size <= 0 or pixel_capacity <= 0 or row_count <= 0 or n_trans <= 0:
         raise ValueError(
             "flat-row translate-and-sum operands must be non-empty, got "
@@ -7395,8 +7419,12 @@ def relion_translate_sum_flat_rows_f32(
         jax.ShapeDtypeStruct((row_count, pixel_capacity), jnp.complex64),
         jax.ShapeDtypeStruct((row_count, pixel_capacity), jnp.complex64),
         jax.ShapeDtypeStruct((row_count,), jnp.float32),
+        jax.ShapeDtypeStruct(
+            (row_count, pixel_capacity) if write_ctf_probs else (1, 1),
+            jnp.float32,
+        ),
     )
-    return jax.ffi.ffi_call(
+    results = jax.ffi.ffi_call(
         _TARGET_RELION_TRANSLATE_SUM_FLAT_ROWS_F32,
         outputs,
         vmap_method="sequential",
@@ -7404,6 +7432,7 @@ def relion_translate_sum_flat_rows_f32(
         recon_image,
         noise_image,
         recon_weight,
+        ctf2_over_nv,
         row_image_ids,
         posterior,
         translation_angles,
@@ -7414,7 +7443,11 @@ def relion_translate_sum_flat_rows_f32(
         image_half_width=np.int64(image_w // 2 + 1),
         rows_per_block=np.int64(int(rows_per_block)),
         bpref_recon=np.int64(int(bpref_recon)),
+        write_ctf_probs=np.int64(int(write_ctf_probs)),
     )
+    # The unused fourth buffer is a 1x1 placeholder; the three-output form
+    # never exposes it.
+    return tuple(results) if write_ctf_probs else tuple(results[:3])
 
 
 @jax.jit

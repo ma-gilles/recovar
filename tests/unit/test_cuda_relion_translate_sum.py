@@ -156,6 +156,7 @@ def _kernel(
     logical_pixels,
     rows_per_block=0,
     bpref=False,
+    with_ctf=False,
 ):
     return jax.block_until_ready(
         cuda_backproject.relion_translate_sum_flat_rows_f32(
@@ -168,6 +169,7 @@ def _kernel(
             jnp.asarray(n_valid_rows, dtype=jnp.int32),
             jnp.asarray(logical_pixels, dtype=jnp.int32),
             jnp.asarray(operands["recon_weight"]) if bpref else None,
+            jnp.asarray(operands["ctf2"]) if with_ctf else None,
             image_shape=IMAGE_SHAPE,
             rows_per_block=rows_per_block,
         )
@@ -567,3 +569,166 @@ def test_in_kernel_translation_phases_are_bitwise(
     _assert_bitwise(summed, np.asarray(recon_ref).reshape(n_images, n_pixels))
     _assert_bitwise(masked, np.asarray(noise_ref).reshape(n_images, n_pixels))
     np.testing.assert_array_equal(np.asarray(mass), np.ones(n_images, np.float32))
+
+
+def _ctf_probs_reference(operands, probs_sum_t, row_ids=None):
+    """``compute_local_ctf_sums_from_probs_sum_t`` on the kernel's own mass."""
+
+    from recovar.em.local.local_backprojection import (
+        compute_local_ctf_sums_from_probs_sum_t,
+    )
+
+    ids = operands["row_image_ids"] if row_ids is None else row_ids
+    return compute_local_ctf_sums_from_probs_sum_t(
+        jnp.asarray(probs_sum_t)[:, None],
+        jnp.asarray(operands["ctf2"])[jnp.asarray(ids)],
+    )[:, 0, :]
+
+
+@pytest.mark.gpu
+@pytest.mark.parametrize(
+    ("rows", "image_capacity", "n_trans", "n_pixels"),
+    [(4096, 128, 21, 415), (1024, 128, 21, 3386)],
+    ids=["early", "hp3"],
+)
+def test_ctf_probs_output_matches_the_jax_helper_bitwise(
+    monkeypatch, custom_cuda_lib, gpu_device, rows, image_capacity, n_trans, n_pixels
+):
+    """The fourth output is one rounded multiply under the helper's predicate.
+
+    Fed the kernel's own ``probs_sum_t``, the helper and the kernel must agree
+    bit for bit; feeding XLA's ``jnp.sum`` instead would fold that reduction's
+    order difference into the comparison and test the wrong thing.
+    """
+
+    cuda_backproject = _cuda_backproject(monkeypatch, custom_cuda_lib)
+    rng = np.random.default_rng(4400 + n_pixels)
+    operands = _operands(
+        rng,
+        rows=rows,
+        image_capacity=image_capacity,
+        n_trans=n_trans,
+        n_pixels=n_pixels,
+    )
+    with jax.default_device(gpu_device):
+        summed, masked, mass, ctf_probs = _kernel(
+            cuda_backproject,
+            operands,
+            n_valid_rows=rows,
+            logical_pixels=n_pixels,
+            with_ctf=True,
+        )
+        three = _kernel(
+            cuda_backproject,
+            operands,
+            n_valid_rows=rows,
+            logical_pixels=n_pixels,
+            with_ctf=False,
+        )
+        expected = jax.block_until_ready(_ctf_probs_reference(operands, mass))
+    _assert_bitwise(ctf_probs, expected)
+    # Asking for the fourth output must not disturb the other three.
+    assert len(three) == 3
+    for actual, other in zip(three, (summed, masked, mass)):
+        _assert_bitwise(actual, other)
+
+
+@pytest.mark.gpu
+@pytest.mark.parametrize("rows_per_block", [1, 4])
+def test_ctf_probs_zero_mass_and_padded_rows(
+    monkeypatch, custom_cuda_lib, gpu_device, rows_per_block
+):
+    """Zero-mass rows, padded rows and the tails are zero in the fourth output.
+
+    A zero-mass row is the case the helper's predicate exists for: without it
+    the product would be a signed zero taken from the CTF row's sign.
+    """
+
+    cuda_backproject = _cuda_backproject(monkeypatch, custom_cuda_lib)
+    rng = np.random.default_rng(991)
+    rows, n_pixels, logical_pixels, n_valid_rows = 96, 200, 137, 70
+    padded_rows = (0, 3, 4, 5, 37, 69)
+    zero_rows = (1, 2, 36, 68)
+    operands = _operands(
+        rng,
+        rows=rows,
+        image_capacity=11,
+        n_trans=21,
+        n_pixels=n_pixels,
+        zero_rows=zero_rows,
+        padded_rows=padded_rows,
+    )
+    with jax.default_device(gpu_device):
+        _summed, _masked, mass, ctf_probs = _kernel(
+            cuda_backproject,
+            operands,
+            n_valid_rows=n_valid_rows,
+            logical_pixels=logical_pixels,
+            rows_per_block=rows_per_block,
+            with_ctf=True,
+        )
+        reference_ids = operands["row_image_ids"].copy()
+        live = np.ones(rows, dtype=bool)
+        live[list(padded_rows)] = False
+        live[n_valid_rows:] = False
+        reference_ids[~live] = 0
+        expected = jax.block_until_ready(
+            _ctf_probs_reference(operands, mass, reference_ids)
+        )
+    ctf_probs = np.asarray(ctf_probs)
+    for row in padded_rows:
+        assert np.all(ctf_probs[row] == 0.0), f"padded row {row} wrote ctf_probs"
+    for row in zero_rows:
+        assert np.all(ctf_probs[row] == 0.0), f"zero-mass row {row} wrote ctf_probs"
+    assert np.all(ctf_probs[n_valid_rows:] == 0.0)
+    assert np.all(ctf_probs[:, logical_pixels:] == 0.0)
+    _assert_bitwise(
+        ctf_probs[live][:, :logical_pixels],
+        np.asarray(expected)[live][:, :logical_pixels],
+    )
+
+
+@pytest.mark.gpu
+def test_ctf_probs_matches_the_resident_block_reduction(
+    monkeypatch, custom_cuda_lib, gpu_device
+):
+    """End to end against the XLA path's own ctf_probs at a production shape."""
+
+    cuda_backproject = _cuda_backproject(monkeypatch, custom_cuda_lib)
+    rng = np.random.default_rng(7788)
+    rows, n_pixels = 2048, 415
+    operands = _operands(
+        rng, rows=rows, image_capacity=64, n_trans=21, n_pixels=n_pixels
+    )
+    from recovar.em.sparse_pass2.resident_pass2 import _resident_block_weighted_sums
+
+    with jax.default_device(gpu_device):
+        shifted = [
+            cuda_backproject.relion_translate_score_f32(
+                jnp.asarray(operands[key]),
+                jnp.asarray(operands["translation_angles"]),
+                jnp.asarray(operands["pixel_indices"]),
+                IMAGE_SHAPE,
+            ).reshape(64, 21, n_pixels)
+            for key in ("recon_image", "noise_image")
+        ]
+        _s, _m, ctf_ref, _p = jax.block_until_ready(
+            _resident_block_weighted_sums(
+                jnp.asarray(operands["posterior"]),
+                jnp.asarray(operands["row_image_ids"]),
+                shifted[0],
+                shifted[1],
+                jnp.asarray(operands["ctf2"]),
+            )
+        )
+        _su, _ma, _mass, ctf_probs = _kernel(
+            cuda_backproject,
+            operands,
+            n_valid_rows=rows,
+            logical_pixels=n_pixels,
+            with_ctf=True,
+        )
+    # At 21 translations both paths sum the mass identically, so the whole
+    # fourth output is bitwise; a shape where the masses differ would show the
+    # reduction gap here rather than a multiply gap.
+    _assert_bitwise(ctf_probs, ctf_ref)

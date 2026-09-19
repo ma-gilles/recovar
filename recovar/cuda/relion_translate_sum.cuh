@@ -12,6 +12,14 @@
 //   summed_masked[r, p] = sum_t posterior[r, t] * shift_t(noise_image[id[r], p])
 //   probs_sum_t[r]      = sum_t posterior[r, t]
 //
+// With the optional ``ctf2_over_nv`` operand it also writes the fourth output
+// the M-step block needs, reproducing
+// ``local_backprojection.compute_local_ctf_sums_from_probs_sum_t`` exactly:
+//
+//   ctf_probs[r, p] = probs_sum_t[r] != 0 ? probs_sum_t[r] * ctf2[id[r], p] : 0
+//
+// one rounded multiply under that helper's own ``!= 0`` mass predicate.
+//
 // Addressing follows the flat-row family (``relion_fine_diff2_fused_translate_
 // runtime_flat_rows_f32`` and ``relion_wavg_sequential_runtime_flat_rows_
 // triplet_f32``): every row carries its own image id and a negative id marks
@@ -112,6 +120,7 @@ translate_sum_flat_rows_f32_kernel(
     const float2* __restrict__ recon_image,          // [B, P]
     const float2* __restrict__ noise_image,          // [B, P]
     const float* __restrict__ recon_weight,          // [B, P] or null
+    const float* __restrict__ ctf2_over_nv,          // [B, P] or null
     const int32_t* __restrict__ row_image_ids,       // [Q]
     const float* __restrict__ posterior,             // [Q, T]
     const float* __restrict__ translation_angles,    // [T, 2]
@@ -121,6 +130,7 @@ translate_sum_flat_rows_f32_kernel(
     float2* __restrict__ summed,                     // [Q, P]
     float2* __restrict__ summed_masked,              // [Q, P]
     float* __restrict__ probs_sum_t,                 // [Q]
+    float* __restrict__ ctf_probs,                   // [Q, P] or null
     int64_t batch_size,
     int64_t row_count,
     int64_t translation_count,
@@ -208,17 +218,21 @@ translate_sum_flat_rows_f32_kernel(
     __syncthreads();
 
     // probs_sum_t is the same sequential translation sum, one row per lane.
+    // ctf_probs needs it on every lane, so it also lands in shared memory.
+    __shared__ float shared_mass[ROWS_PER_BLOCK];
     if (threadIdx.x < ROWS_PER_BLOCK) {
         const int i = threadIdx.x;
+        float mass = 0.0f;
         if (live[i]) {
-            float mass = 0.0f;
             for (int64_t t = 0; t < translation_count; ++t) {
                 mass = __fadd_rn(
                     mass, shared_posterior[i * translation_count + t]);
             }
             probs_sum_t[row_base + i] = mass;
         }
+        shared_mass[i] = mass;
     }
+    __syncthreads();
 
     for (int64_t pixel = threadIdx.x;
          pixel < logical_pixels;
@@ -287,6 +301,20 @@ translate_sum_flat_rows_f32_kernel(
             const int64_t base = (row_base + i) * pixel_capacity + pixel;
             summed[base] = recon_acc[i];
             summed_masked[base] = noise_acc[i];
+            if (ctf_probs != nullptr) {
+                // compute_local_ctf_sums_from_probs_sum_t, term for term: the
+                // predicate is on the mass, not on the product, and the
+                // product is one rounded float32 multiply.
+                const float mass = shared_mass[i];
+                ctf_probs[base] = mass != 0.0f
+                    ? __fmul_rn(
+                          mass,
+                          ctf2_over_nv[
+                              static_cast<int64_t>(image_ids[i]) *
+                                  pixel_capacity +
+                              pixel])
+                    : 0.0f;
+            }
         }
     }
 }
@@ -319,6 +347,7 @@ cudaError_t launch_templated(
     const float2* recon_image,
     const float2* noise_image,
     const float* recon_weight,
+    const float* ctf2_over_nv,
     const int32_t* row_image_ids,
     const float* posterior,
     const float* translation_angles,
@@ -328,6 +357,7 @@ cudaError_t launch_templated(
     float2* summed,
     float2* summed_masked,
     float* probs_sum_t,
+    float* ctf_probs,
     int64_t batch_size,
     int64_t row_count,
     int64_t translation_count,
@@ -344,6 +374,7 @@ cudaError_t launch_templated(
             recon_image,
             noise_image,
             recon_weight,
+            ctf2_over_nv,
             row_image_ids,
             posterior,
             translation_angles,
@@ -353,6 +384,7 @@ cudaError_t launch_templated(
             summed,
             summed_masked,
             probs_sum_t,
+            ctf_probs,
             batch_size,
             row_count,
             translation_count,
@@ -367,6 +399,7 @@ inline cudaError_t launch(
     const float2* recon_image,
     const float2* noise_image,
     const float* recon_weight,
+    const float* ctf2_over_nv,
     const int32_t* row_image_ids,
     const float* posterior,
     const float* translation_angles,
@@ -376,6 +409,7 @@ inline cudaError_t launch(
     float2* summed,
     float2* summed_masked,
     float* probs_sum_t,
+    float* ctf_probs,
     int64_t batch_size,
     int64_t row_count,
     int64_t translation_count,
@@ -405,6 +439,14 @@ inline cudaError_t launch(
         static_cast<size_t>(row_count) * sizeof(float),
         stream);
     if (err != cudaSuccess) return err;
+    if (ctf_probs != nullptr) {
+        err = cudaMemsetAsync(
+            ctf_probs,
+            0,
+            static_cast<size_t>(row_count) * pixel_capacity * sizeof(float),
+            stream);
+        if (err != cudaSuccess) return err;
+    }
     if (translation_count == 0) return cudaSuccess;
 
     const int rows = choose_rows_per_block(
@@ -416,11 +458,12 @@ inline cudaError_t launch(
     case R:                                                       \
         return launch_templated<R, BPREF>(                        \
             stream, recon_image, noise_image, recon_weight,       \
-            row_image_ids, posterior, translation_angles,         \
-            pixel_indices, runtime_valid_rows,                    \
+            ctf2_over_nv, row_image_ids, posterior,               \
+            translation_angles, pixel_indices, runtime_valid_rows,\
             runtime_logical_pixels, summed, summed_masked,        \
-            probs_sum_t, batch_size, row_count, translation_count,\
-            pixel_capacity, image_h, image_half_width)
+            probs_sum_t, ctf_probs, batch_size, row_count,        \
+            translation_count, pixel_capacity, image_h,           \
+            image_half_width)
 
     if (recon_weight != nullptr) {
         switch (rows) {
@@ -449,9 +492,11 @@ ffi::Error impl(
     int64_t image_half_width,
     int64_t rows_per_block,
     int64_t bpref_recon_attr,
+    int64_t write_ctf_probs_attr,
     ffi::AnyBuffer recon_image,
     ffi::AnyBuffer noise_image,
     ffi::AnyBuffer recon_weight,
+    ffi::AnyBuffer ctf2_over_nv,
     ffi::AnyBuffer row_image_ids,
     ffi::AnyBuffer posterior,
     ffi::AnyBuffer translation_angles,
@@ -460,11 +505,14 @@ ffi::Error impl(
     ffi::AnyBuffer logical_pixel_count,
     ffi::Result<ffi::AnyBuffer> summed,
     ffi::Result<ffi::AnyBuffer> summed_masked,
-    ffi::Result<ffi::AnyBuffer> probs_sum_t)
+    ffi::Result<ffi::AnyBuffer> probs_sum_t,
+    ffi::Result<ffi::AnyBuffer> ctf_probs)
 {
     if (recon_image.element_type() != ffi::DataType::C64 ||
         noise_image.element_type() != ffi::DataType::C64 ||
         recon_weight.element_type() != ffi::DataType::F32 ||
+        ctf2_over_nv.element_type() != ffi::DataType::F32 ||
+        ctf_probs->element_type() != ffi::DataType::F32 ||
         row_image_ids.element_type() != ffi::DataType::S32 ||
         posterior.element_type() != ffi::DataType::F32 ||
         translation_angles.element_type() != ffi::DataType::F32 ||
@@ -482,6 +530,8 @@ ffi::Error impl(
     const auto recon_dims = recon_image.dimensions();
     const auto noise_dims = noise_image.dimensions();
     const auto weight_dims = recon_weight.dimensions();
+    const auto ctf_dims = ctf2_over_nv.dimensions();
+    const auto ctf_out_dims = ctf_probs->dimensions();
     const auto row_dims = row_image_ids.dimensions();
     const auto posterior_dims = posterior.dimensions();
     const auto angle_dims = translation_angles.dimensions();
@@ -490,7 +540,8 @@ ffi::Error impl(
     const auto masked_dims = summed_masked->dimensions();
     const auto mass_dims = probs_sum_t->dimensions();
     if (recon_dims.size() != 2 || noise_dims.size() != 2 ||
-        weight_dims.size() != 2 ||
+        weight_dims.size() != 2 || ctf_dims.size() != 2 ||
+        ctf_out_dims.size() != 2 ||
         row_dims.size() != 1 || posterior_dims.size() != 2 ||
         angle_dims.size() != 2 || angle_dims[1] != 2 ||
         index_dims.size() != 1 || summed_dims.size() != 2 ||
@@ -519,6 +570,13 @@ ffi::Error impl(
         (weight_dims[0] != batch_size || weight_dims[1] != pixel_capacity))
         return ffi::Error::InvalidArgument(
             "RelionTranslateSumFlatRowsF32: BPref weight must be [batch, pixels]");
+    const bool write_ctf_probs = write_ctf_probs_attr != 0;
+    if (write_ctf_probs &&
+        (ctf_dims[0] != batch_size || ctf_dims[1] != pixel_capacity ||
+         ctf_out_dims[0] != row_count || ctf_out_dims[1] != pixel_capacity))
+        return ffi::Error::InvalidArgument(
+            "RelionTranslateSumFlatRowsF32: ctf2_over_nv must be "
+            "[batch, pixels] and ctf_probs [rows, pixels]");
     if (image_h <= 0 || image_half_width <= 0 ||
         image_h > std::numeric_limits<int>::max() ||
         image_half_width > std::numeric_limits<int>::max())
@@ -539,6 +597,9 @@ ffi::Error impl(
         bpref_recon
             ? static_cast<const float*>(recon_weight.untyped_data())
             : nullptr,
+        write_ctf_probs
+            ? static_cast<const float*>(ctf2_over_nv.untyped_data())
+            : nullptr,
         static_cast<const int32_t*>(row_image_ids.untyped_data()),
         static_cast<const float*>(posterior.untyped_data()),
         static_cast<const float*>(translation_angles.untyped_data()),
@@ -548,6 +609,7 @@ ffi::Error impl(
         reinterpret_cast<float2*>(summed->untyped_data()),
         reinterpret_cast<float2*>(summed_masked->untyped_data()),
         static_cast<float*>(probs_sum_t->untyped_data()),
+        write_ctf_probs ? static_cast<float*>(ctf_probs->untyped_data()) : nullptr,
         batch_size,
         row_count,
         translation_count,
@@ -571,6 +633,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Attr<int64_t>("image_half_width")
         .Attr<int64_t>("rows_per_block")
         .Attr<int64_t>("bpref_recon")
+        .Attr<int64_t>("write_ctf_probs")
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
@@ -580,6 +643,8 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>()
         .Ret<ffi::AnyBuffer>()
         .Ret<ffi::AnyBuffer>()
         .Ret<ffi::AnyBuffer>());
