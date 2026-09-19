@@ -555,10 +555,6 @@ def run_local_em_exact(
     relion_exact_score_translation = bool(relion_exact_score_translation)
     relion_exact_bpref_operands = bool(relion_exact_bpref_operands)
     relion_exact_fine_diff2 = bool(relion_exact_fine_diff2)
-    if flat_local_rows_enabled and not relion_exact_fine_diff2:
-        raise ValueError(
-            "flat local rows require exact RELION fine diff2"
-        )
     if stable_flat_row_capacity_enabled and not flat_local_rows_enabled:
         raise ValueError("stable flat-row capacity requires flat local rows")
     if packed_local_projection_enabled and not flat_local_rows_enabled:
@@ -736,6 +732,13 @@ def run_local_em_exact(
         if float(class_log_prior) != 0.0:
             raise ValueError("class_log_prior is the single-class scalar; use class_log_priors for K>1")
         local_layout = class_layouts[0]
+    if flat_local_rows_enabled and n_classes == 1 and not relion_exact_fine_diff2:
+        # The single-class flat-row ABI was built for the exact RELION fine scorer.
+        # Class-segmented flat rows score through the ordinary bucket program instead,
+        # so they carry no such requirement.
+        raise ValueError(
+            "flat local rows require exact RELION fine diff2"
+        )
     if n_classes > 1:
         # Everything below that a class segment cannot express yet. Each of these is a
         # K=1 exact-RELION path that indexes rows by (image, rotation row) alone, or a

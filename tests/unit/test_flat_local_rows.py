@@ -737,3 +737,41 @@ def test_class_flat_rows_are_class_major_with_block_sizes():
         assert (image, class_index, rotation) not in seen
         seen.add((image, class_index, rotation))
     assert len(seen) == int(counts.sum())
+
+
+@pytest.mark.unit
+def test_class_flat_rows_quantize_with_the_bucketer_large_quantum():
+    """A class must be quantized with the same large-bucket quantum as its segment.
+
+    The segment width is produced by the bucketer's resolved large-bucket quantum. If
+    the plan quantizes a class with a different one, a class above the engine cap can
+    round above its own segment and the plan is rejected. This reproduced in a real
+    K=4 run as "a pool bucket exceeds the enclosing class segment".
+    """
+    from recovar.em.local.flat_local_rows import build_pool_flat_local_row_plan_for_classes
+    from recovar.em.local.local_layout import (
+        _exact_bucket_rotation_size,
+        _exact_local_large_bucket_quantum,
+    )
+
+    rotation_block_size = 5000
+    quantum = _exact_local_large_bucket_quantum(rotation_block_size, None)
+    # a count above the engine cap, so the large-quantum path decides the width
+    count = quantum + 1
+    segment = _exact_bucket_rotation_size(
+        count, rotation_block_size, large_bucket_quantum=quantum,
+    )
+    assert segment > quantum  # the case that matters
+
+    counts = np.asarray([[count, 4], [count - 1, 6]], dtype=np.int32)
+    plan = build_pool_flat_local_row_plan_for_classes(
+        counts, segment, pool_size=3, rotation_block_size=rotation_block_size,
+    )
+
+    assert plan.class_row_counts is not None
+    # no class block may reach past its own segment on the dense axis
+    for class_index in range(counts.shape[1]):
+        block = plan.rotation_rows[plan.present_mask] // segment == class_index
+        rows_in_class = plan.rotation_rows[plan.present_mask][block] % segment
+        if rows_in_class.size:
+            assert int(rows_in_class.max()) < segment

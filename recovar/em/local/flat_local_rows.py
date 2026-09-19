@@ -8,7 +8,10 @@ import jax.numpy as jnp
 import numpy as np
 
 from recovar.em.helpers.deterministic_reduce import deterministic_reductions_enabled
-from recovar.em.local.local_layout import _exact_bucket_rotation_size
+from recovar.em.local.local_layout import (
+    _exact_bucket_rotation_size,
+    _exact_local_large_bucket_quantum,
+)
 
 
 @dataclass(frozen=True)
@@ -243,6 +246,7 @@ def build_pool_flat_local_row_plan_for_classes(
     pool_size: int = 3,
     rotation_block_size: int = 5000,
     exact_local_bucket_radix: int | None = None,
+    large_bucket_quantum: int | None = None,
     packed_row_count: int | None = None,
     dense_batch_size: int | None = None,
 ) -> FlatLocalRowPlan:
@@ -286,12 +290,19 @@ def build_pool_flat_local_row_plan_for_classes(
         raise ValueError("class rotation counts must lie in [0, segment_rotation_count]")
 
     dense_rotation_count = segment_rotation_count * n_classes
+    # The segment width came from the bucketer's resolved large-bucket quantum, so a
+    # class must be quantized with the same one; a different quantum can round a class
+    # above its own segment.
+    resolved_large_bucket_quantum = _exact_local_large_bucket_quantum(
+        rotation_block_size, large_bucket_quantum,
+    )
     ordinary_buckets = np.asarray(
         [
             [
                 _exact_bucket_rotation_size(
                     int(count),
                     rotation_block_size,
+                    large_bucket_quantum=resolved_large_bucket_quantum,
                     exact_local_bucket_radix=exact_local_bucket_radix,
                 )
                 if int(count) > 0
