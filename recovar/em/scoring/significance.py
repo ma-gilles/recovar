@@ -108,6 +108,9 @@ from recovar.em.scoring.coarse_gemm_streaming import (
 )
 from recovar.em.scoring.scoring import _e_step_block_scores, _e_step_block_scores_windowed, _update_logsumexp
 from recovar.em.scoring.significant_samples import compact_significant_sample_indices_from_mask
+from recovar.em.sparse_pass2.resident_significance import (
+    coarse_significance_device_requested,
+)
 from recovar.utils.nvtx_shim import nvtx
 
 _SIGNIFICANCE_SCORE_CACHE_ENV = "RECOVAR_SIGNIFICANCE_SCORE_CACHE"
@@ -1430,6 +1433,20 @@ def _compute_k_class_significance_batched(
     relion_f32_coarse_support_enabled = (
         relion_f32_coarse_support_requested and score_mode == "gaussian"
     )
+    # Compact the coarse support mask on the device instead of pulling it
+    # (ticket T13).  K=1 only, and only when the ids are actually collected;
+    # every dense-mask diagnostic keeps the host pull, checked per batch.
+    coarse_significance_device_enabled = (
+        coarse_significance_device_requested()
+        and int(n_classes) == 1
+        and bool(collect_significance)
+    )
+    device_significance_counts = []
+    device_significance_ids = []
+    if coarse_significance_device_enabled:
+        from recovar.em.sparse_pass2.resident_significance import (
+            compact_batch_significance,
+        )
     if coarse_gaussian_gemm_hybrid_requested:
         _validate_coarse_gaussian_gemm_hybrid_request(
             macro_enabled=coarse_gaussian_gemm_macro_enabled,
@@ -2647,6 +2664,7 @@ def _compute_k_class_significance_batched(
     ):
         actual_batch_size = len(indices)
         end_idx = start_idx + actual_batch_size
+        device_significance_batch = False
         coarse_gaussian_gemm_hybrid_batch_result = None
         (
             relion_cuda_preprocess,
@@ -4097,7 +4115,39 @@ def _compute_k_class_significance_batched(
                     max_significants=max_significants,
                     return_cutoff_count=True,
                 )
-            batch_sig_mask_np = np.array(batch_sig_mask, dtype=bool, copy=True)
+            device_significance_batch = (
+                coarse_significance_device_enabled
+                and compact_hybrid_scores is None
+                and coarse_gemm_diagnostic_positions is None
+                and coarse_gemm_stream_state is None
+                and not debug_dump_enabled
+            )
+            if device_significance_batch:
+                # The mask stays on the device; only the per-image ids cross
+                # the bus.  ``sig_rot_any`` below is already a device
+                # reduction, so it is unaffected.
+                if not np.array_equal(
+                    np.asarray(indices, dtype=np.int64),
+                    np.arange(start_idx, end_idx, dtype=np.int64),
+                ):
+                    raise RuntimeError(
+                        "the device significance compaction needs image batches in "
+                        "dataset order",
+                    )
+                batch_sig_mask_np = None
+                batch_device_counts, batch_device_ids, _batch_device_rot_any = (
+                    compact_batch_significance(
+                        batch_sig_mask,
+                        actual_batch_size=actual_batch_size,
+                        n_coarse_rot=n_rot,
+                        n_coarse_trans=n_trans,
+                        batch_n_sig=batch_n_sig,
+                    )
+                )
+                device_significance_counts.append(batch_device_counts)
+                device_significance_ids.append(batch_device_ids)
+            else:
+                batch_sig_mask_np = np.array(batch_sig_mask, dtype=bool, copy=True)
             if compact_hybrid_scores is None:
                 sig_rot_any |= np.asarray(
                     jnp.any(batch_sig_rot_mask[:actual_batch_size], axis=0),
@@ -4578,7 +4628,7 @@ def _compute_k_class_significance_batched(
                 debug_iteration=debug_iteration,
             )
 
-        if collect_significance:
+        if collect_significance and not device_significance_batch:
             if compact_hybrid_scores is not None:
                 if compact_support_pose_ids is None:
                     raise RuntimeError("compact hybrid support mapping was not produced")
@@ -4598,6 +4648,39 @@ def _compute_k_class_significance_batched(
                             mask,
                         )
         start_idx = end_idx
+
+    if device_significance_counts:
+        from recovar.em.sparse_pass2.resident_significance import (
+            DeviceCompactedSignificantSamples,
+            build_coarse_significance_csr,
+            host_support_rows,
+        )
+
+        covered = int(sum(int(counts.size) for counts in device_significance_counts))
+        if covered != n_images:
+            raise RuntimeError(
+                "the device significance compaction covered "
+                f"{covered} of {n_images} images; some batches took the host path",
+            )
+        coarse_significance_csr = build_coarse_significance_csr(
+            n_images=n_images,
+            n_coarse_rot=n_rot,
+            n_coarse_trans=n_trans,
+            counts_per_batch=device_significance_counts,
+            ids_per_batch=device_significance_ids,
+        )
+        significant_sample_indices[0] = DeviceCompactedSignificantSamples(
+            host_support_rows(coarse_significance_csr),
+            csr=coarse_significance_csr,
+        )
+        logger.info(
+            "Coarse significance compacted on the device: %d images, %d ids "
+            "(%.2f MB) instead of a %.2f GB support mask",
+            n_images,
+            int(coarse_significance_csr.ids.size),
+            coarse_significance_csr.ids.nbytes / 1e6,
+            float(n_images) * float(n_rot) * float(n_trans) / 1e9,
+        )
 
     coarse_gaussian_gemm_hybrid_full_dense_batch_count = (
         coarse_gaussian_gemm_hybrid_static_dense_batch_count

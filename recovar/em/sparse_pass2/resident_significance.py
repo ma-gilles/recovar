@@ -52,7 +52,10 @@ from functools import partial
 import numpy as np
 
 from recovar.em.helpers.env_flags import parse_env_strict_flag
-from recovar.em.sparse_pass2.resident_candidates import ResidentCandidateTables
+from recovar.em.sparse_pass2.resident_candidates import (
+    ResidentCandidateTables,
+    build_resident_candidate_tables,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +69,8 @@ __all__ = [
     "compact_batch_significance",
     "csr_capacity_for_total",
     "host_support_rows",
+    "resident_candidate_tables",
+    "resident_significance_csr",
 ]
 
 COARSE_SIGNIFICANCE_DEVICE_ENV = "RECOVAR_COARSE_SIGNIFICANCE_DEVICE"
@@ -321,6 +326,45 @@ def host_support_rows(csr: CoarseSignificanceCSR) -> list:
     """
 
     return [csr.image_ids(image) for image in range(csr.n_images)]
+
+
+def resident_significance_csr(
+    significant_sample_indices,
+    *,
+    n_images: int,
+    n_coarse_rot: int,
+    n_coarse_trans: int,
+):
+    """Return the device-compacted CSR behind a support list, or ``None``.
+
+    ``None`` means the candidate tables must be built through the host path:
+    either the flag is off, or this support did not come from the coarse
+    posterior at all (the local-search routes pass their own parent support).
+    The caller logs which route it took, so a measured result always knows
+    which one produced it.
+    """
+
+    if not coarse_significance_device_requested():
+        return None
+    csr = getattr(significant_sample_indices, "csr", None)
+    if csr is None:
+        logger.info(
+            "Resident pass-2 candidate tables: %s=1 but this support carries no "
+            "device-compacted CSR; building them through the host path",
+            COARSE_SIGNIFICANCE_DEVICE_ENV,
+        )
+        return None
+    if (
+        int(csr.n_images) != int(n_images)
+        or int(csr.n_coarse_rot) != int(n_coarse_rot)
+        or int(csr.n_coarse_trans) != int(n_coarse_trans)
+    ):
+        raise ValueError(
+            "the device-compacted significance CSR does not match this pass: "
+            f"images {csr.n_images} vs {n_images}, rotations {csr.n_coarse_rot} vs "
+            f"{n_coarse_rot}, translations {csr.n_coarse_trans} vs {n_coarse_trans}",
+        )
+    return csr
 
 
 # ---------------------------------------------------------------------------
@@ -593,4 +637,47 @@ def build_resident_candidate_tables_from_csr(
         mask_mode=mask_mode,
         parent_offsets=parent_offsets,
         parent_trans_bits=support_parent_bits,
+    )
+
+
+def resident_candidate_tables(
+    significance_csr,
+    per_image_inputs,
+    *,
+    n_coarse_trans,
+    n_fine_trans,
+    fine_translation_parent,
+    nside_level,
+    oversampling_order,
+    rotation_log_prior,
+    random_perturbation,
+    fine_rotation_parent_override,
+    relion_parent_execution_order,
+    dtype,
+):
+    """Candidate tables from the device-compacted CSR, or from the host path.
+
+    ``significance_csr`` is present only when the coarse pass compacted its
+    support on the device (ticket T13, ``RECOVAR_COARSE_SIGNIFICANCE_DEVICE``);
+    both routes return the same ``ResidentCandidateTables``.
+    """
+
+    if significance_csr is not None:
+        return build_resident_candidate_tables_from_csr(
+            significance_csr,
+            nside_level=nside_level,
+            oversampling_order=oversampling_order,
+            n_fine_trans=n_fine_trans,
+            fine_translation_parent=fine_translation_parent,
+            rotation_log_prior=rotation_log_prior,
+            random_perturbation=random_perturbation,
+            fine_rotation_parent_override=fine_rotation_parent_override,
+            relion_parent_execution_order=relion_parent_execution_order,
+            dtype=dtype,
+        )
+    return build_resident_candidate_tables(
+        per_image_inputs,
+        n_coarse_trans=n_coarse_trans,
+        n_fine_trans=n_fine_trans,
+        fine_translation_parent=fine_translation_parent,
     )
