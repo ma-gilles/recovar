@@ -642,6 +642,7 @@ def test_relion_coarse_prehalf_shared_body_is_built_packaged_and_stale_checked()
         "relion_preprocess.cuh",
         "relion_vdam_mstep.cuh",
         "relion_scoring.cuh",
+        "sparse_pass2_posterior.cuh",
     )
     library_rule = next(line for line in makefile.splitlines() if line.startswith("$(LIB):"))
     prerequisites, order_only = library_rule.split(":", 1)[1].split("|", 1)
@@ -658,6 +659,7 @@ def test_relion_coarse_prehalf_shared_body_is_built_packaged_and_stale_checked()
         "relion_preprocess.cuh",
         "relion_vdam_mstep.cuh",
         "relion_scoring.cuh",
+        "sparse_pass2_posterior.cuh",
         "cuda_backproject.cu",
         include_name,
         "Makefile",
