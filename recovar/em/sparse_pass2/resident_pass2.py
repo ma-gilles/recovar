@@ -176,6 +176,14 @@ _MSTEP_BLOCK_ROWS_ENV = "RECOVAR_SPARSE_PASS2_RESIDENT_MSTEP_BLOCK_ROWS"
 # offsets readbacks. The synchronisation perturbs the wall, so an arm with
 # this set is a diagnostic arm and never a timing arm.
 _CHUNK_TIMING_ENV = "RECOVAR_SPARSE_PASS2_RESIDENT_CHUNK_TIMING"
+# T14: the chunk body as one jitted program per capacity class. Default on;
+# set to 0 to select the per-stage path, which stays the oracle both paths are
+# compared against. ``..._CHUNK_STATIC_BLOCKS`` runs the M-step block loop over
+# the whole row capacity instead of the chunk's live blocks; both forms trace
+# one program per capacity class and are bitwise equal, because a padded block
+# carries a zero posterior and contributes exact zeros.
+_CHUNK_JIT_ENV = "RECOVAR_SPARSE_PASS2_RESIDENT_CHUNK_JIT"
+_CHUNK_STATIC_BLOCKS_ENV = "RECOVAR_SPARSE_PASS2_RESIDENT_CHUNK_STATIC_BLOCKS"
 _SOFT_POSTERIOR_BLOCK_BPREF_PROTOTYPE_ENV = "RECOVAR_EM_PROTOTYPE_SOFT_POSTERIOR_BLOCK_BPREF"
 
 # Row capacities are multiples of the M-step block so every chunk decomposes
@@ -1834,6 +1842,609 @@ def _chunk_timing_enabled() -> bool:
     return parse_env_flag(_CHUNK_TIMING_ENV, default=False)
 
 
+def _chunk_jit_enabled() -> bool:
+    """Whether the chunk body runs as one jitted program (T14).
+
+    Default on. ``RECOVAR_SPARSE_PASS2_RESIDENT_CHUNK_JIT=0`` selects the
+    per-stage path, which stays the oracle: both paths call the same stage
+    helpers on the same operands, so only the JIT boundary and the M-step
+    loop's trip mechanism differ.
+    """
+
+    return parse_env_flag(_CHUNK_JIT_ENV, default=True)
+
+
+def _chunk_static_block_trip_enabled() -> bool:
+    """Whether the chunk program's M-step loop runs the whole row capacity.
+
+    Default off. The live-block bound skips blocks whose rows are all chunk
+    padding; at the hp3 state that is about a quarter of the pixel-axis work
+    (row occupancy 0.73 over the two measured iterations). Both forms are one
+    program per capacity class, and a padded block contributes exact zeros, so
+    the two are bitwise equal; the flag exists to measure that claim.
+    """
+
+    return parse_env_flag(_CHUNK_STATIC_BLOCKS_ENV, default=False)
+
+
+# ---------------------------------------------------------------------------
+# One program per chunk (T14)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class _ChunkProgramSpec:
+    """Everything the chunk program is keyed on.
+
+    Only capacity classes, pixel counts and resolved configuration appear here,
+    so two chunks of one class share a program whatever their occupancy: the
+    valid row and image counts travel as device scalars.
+    """
+
+    row_capacity: int
+    image_capacity: int
+    n_fine_trans: int
+    n_score_pixels: int
+    n_recon_pixels: int
+    n_rect: int
+    mstep_block_rows: int
+    adaptive_fraction: float
+    current_size: int
+    mstep_current_size: int
+    image_shape: tuple
+    recon_volume_shape: tuple
+    max_adjoint_block_bytes: int
+    stats_config: object
+    use_rfloat_ctf_wavg: bool
+    # Trip mechanism of the M-step block loop. False (default) bounds the loop
+    # by the chunk's live block count, a device scalar, so the padded blocks the
+    # per-stage loop breaks out of are skipped; True runs the full capacity as
+    # the ticket's literal form does. Both trace one program per capacity class.
+    static_block_trip: bool
+
+
+class _ChunkRowArrays(NamedTuple):
+    """One chunk's row-aligned tables and its runtime extents."""
+
+    row_image_local: jax.Array  # int32 [C_R]
+    row_fine_rot: jax.Array  # int32 [C_R]
+    row_log_prior: jax.Array  # float32 [C_R]
+    row_mask_bits: jax.Array  # uint32 [C_R, W]
+    row_mask_mode: jax.Array  # int8 [C_R]
+    image_ids: jax.Array  # int32 [C_B], global image id, -1 when padded
+    n_valid_rows: jax.Array  # int32 []
+    n_valid_images: jax.Array  # int32 []
+    segment_offsets: jax.Array  # int32 [C_B + 1], cell offsets
+    image_row_start: jax.Array  # int64 [C_B], chunk-local first row of a slot
+    image_row_count: jax.Array  # int64 [C_B], rows owned by a slot
+
+
+class _ChunkStageOperands(NamedTuple):
+    """One chunk's per-image operands, already padded to the image capacity."""
+
+    score_input: jax.Array
+    corr_img_score: jax.Array
+    highres_xi2_half: jax.Array | None
+    translation_prior: jax.Array
+    shifted_recon: jax.Array
+    shifted_noise: jax.Array
+    ctf2_over_nv_recon: jax.Array
+    direct_ctf_rfloat_recon: jax.Array | None
+    processed_image_half: jax.Array
+    relion_norm_high_shell: jax.Array
+    raw_translated_wavg_rectangle: jax.Array
+    raw_translated_wavg_for_atomic: jax.Array
+    scale: jax.Array
+    group_ids: jax.Array
+    translation_sqdist_ang: jax.Array | None
+
+
+class _ChunkStageTables(NamedTuple):
+    """Iteration-global device tables every chunk of a half reads."""
+
+    projection_score_cache: jax.Array
+    projection_recon_cache: jax.Array
+    projection_recon_abs2_cache: jax.Array
+    mstep_grid: jax.Array
+    coarse_parent_grid: jax.Array
+    fine_translation_parent: jax.Array
+    half_weights: jax.Array
+    translation_angles: jax.Array
+    full_to_compact: jax.Array
+    noise_variance_for_noise: jax.Array
+    shell_indices_noise: jax.Array
+    exact_positions: jax.Array
+    relion_x_half_recon_indices: jax.Array
+    shell_indices_half: jax.Array
+    wavg_shell_indices: jax.Array
+    wavg_scale_pixel_mask: jax.Array
+
+
+class _ChunkPosterior(NamedTuple):
+    """Stages 1-4 of one chunk."""
+
+    row_posterior: jax.Array  # float32 [C_R, T]
+    min_diff2: jax.Array  # real [C_B]
+    class_log_z: jax.Array  # float64 [C_B]
+    best_log_score: jax.Array  # float32 [C_B]
+    best_cell_index: jax.Array  # int64 [C_B]
+    max_posterior: jax.Array  # real [C_B]
+    kernel_row_image_ids: jax.Array  # int32 [C_R], -1 on padded rows
+    row_is_valid: jax.Array  # bool [C_R]
+
+
+class _ChunkMstepCarry(NamedTuple):
+    """Loop carry of the M-step block loop."""
+
+    Ft_y: jax.Array
+    Ft_ctf: jax.Array
+    wavg_triplet_pixels: jax.Array  # float32 [C_B, P_rect, 3]
+    noise_shells: jax.Array  # float64 [n_shells]
+    a2_per_image: jax.Array  # real [C_B]
+    xa_per_image: jax.Array  # real [C_B]
+
+
+def _resident_chunk_posterior(
+    rows: _ChunkRowArrays,
+    operands: _ChunkStageOperands,
+    tables: _ChunkStageTables,
+    *,
+    spec: _ChunkProgramSpec,
+    cuda_backproject,
+) -> _ChunkPosterior:
+    """Gather, cached projection, score and the segmented RELION posterior.
+
+    Identical calls to the per-stage path; factored out so the jitted program
+    and its oracle cannot drift apart.
+    """
+
+    row_capacity = int(spec.row_capacity)
+    image_capacity = int(spec.image_capacity)
+    n_fine_trans = int(spec.n_fine_trans)
+
+    row_index = jnp.arange(row_capacity, dtype=jnp.int32)
+    row_is_valid = row_index < rows.n_valid_rows
+    kernel_row_image_ids = jnp.where(row_is_valid, rows.row_image_local, jnp.int32(-1))
+    image_index = jnp.arange(image_capacity, dtype=jnp.int32)
+    chunk_image_ids = jnp.where(image_index < rows.n_valid_images, image_index, jnp.int32(-1))
+
+    scored = score_resident_chunk(
+        rows.row_image_local,
+        rows.row_fine_rot,
+        rows.row_log_prior,
+        rows.row_mask_bits,
+        rows.row_mask_mode,
+        rows.n_valid_rows,
+        chunk_image_ids,
+        tables.projection_score_cache,
+        operands.score_input,
+        operands.corr_img_score,
+        operands.highres_xi2_half,
+        operands.translation_prior,
+        half_weights=tables.half_weights,
+        translation_angles=tables.translation_angles,
+        full_to_compact=tables.full_to_compact,
+        fine_translation_parent=tables.fine_translation_parent,
+        logical_current_size=jnp.asarray(spec.current_size, dtype=jnp.int32),
+        row_capacity=row_capacity,
+        image_capacity=image_capacity,
+        n_fine_trans=n_fine_trans,
+        n_score_pixels=int(spec.n_score_pixels),
+    )
+    scores_flat = jnp.asarray(scored.scores, dtype=jnp.float32).reshape(-1)
+
+    log_z = cuda_backproject.sparse_pass2_segmented_log_z_f64(
+        scores_flat, rows.segment_offsets, rows.n_valid_images
+    )
+    posterior = cuda_backproject.sparse_pass2_segmented_posterior_f32(
+        scores_flat,
+        rows.segment_offsets,
+        rows.n_valid_images,
+        log_z,
+        jnp.ones((image_capacity,), dtype=jnp.float32),
+        adaptive_fraction=float(spec.adaptive_fraction),
+        keep_all=False,
+        use_external_sum_weight=False,
+    )
+    (
+        log_z_out,
+        best_log_score,
+        best_cell_index,
+        max_posterior,
+        _probs,
+        _normalized_weights,
+        reconstruction_probs,
+        _mask,
+        _n_significant,
+        _sum_weight,
+        _threshold,
+    ) = posterior
+    return _ChunkPosterior(
+        row_posterior=jnp.asarray(reconstruction_probs, dtype=jnp.float32).reshape(
+            row_capacity, n_fine_trans
+        ),
+        min_diff2=scored.min_diff2,
+        class_log_z=jnp.asarray(log_z_out, dtype=jnp.float64),
+        best_log_score=best_log_score,
+        best_cell_index=jnp.asarray(best_cell_index, dtype=jnp.int64),
+        max_posterior=max_posterior,
+        kernel_row_image_ids=kernel_row_image_ids,
+        row_is_valid=row_is_valid,
+    )
+
+
+def _resident_mstep_block(
+    *,
+    block_row_image,
+    block_kernel_ids,
+    block_posterior,
+    block_fine_rot,
+    operands: _ChunkStageOperands,
+    tables: _ChunkStageTables,
+    carry: _ChunkMstepCarry,
+    spec: _ChunkProgramSpec,
+    cuda_backproject,
+) -> _ChunkMstepCarry:
+    """One pixel-axis row block: weighted sums, Wavg, noise, both adjoints.
+
+    Statement for statement the body the per-stage loop ran inline; both paths
+    call this one copy, so the only difference between them is how the block's
+    rows are sliced (static Python slice versus ``dynamic_slice``).
+    """
+
+    proj = tables.projection_recon_cache[block_fine_rot]
+    proj_abs2 = tables.projection_recon_abs2_cache[block_fine_rot]
+    logical_recon_pixels = jnp.asarray(spec.n_recon_pixels, dtype=jnp.int32)
+    logical_rect_pixels = jnp.asarray(spec.n_rect, dtype=jnp.int32)
+
+    summed, summed_masked, ctf_probs, _probs_sum_t = _resident_block_weighted_sums(
+        block_posterior,
+        block_row_image,
+        operands.shifted_recon,
+        operands.shifted_noise,
+        operands.ctf2_over_nv_recon,
+    )
+
+    # RELION Wavg triplet in the flat-row layout, then its rotation atomics.
+    # The host tail picks the sequential RELION reducer when the pass carries
+    # the RFLOAT CTF operand and the algebraic form otherwise; follow the same
+    # branch, resolved on the host into the program's static configuration.
+    if not spec.use_rfloat_ctf_wavg:
+        exact_terms = _resident_block_wavg_algebraic_terms(
+            proj,
+            proj_abs2,
+            summed_masked,
+            ctf_probs,
+            tables.noise_variance_for_noise,
+            operands.scale,
+            operands.raw_translated_wavg_for_atomic,
+            block_posterior,
+            block_row_image,
+        )
+    else:
+        exact_terms = cuda_backproject.relion_wavg_sequential_runtime_flat_rows_triplet_f32(
+            jnp.asarray(proj, dtype=jnp.complex64),
+            block_kernel_ids,
+            jnp.asarray(operands.direct_ctf_rfloat_recon, dtype=jnp.float32),
+            jnp.asarray(operands.scale, dtype=jnp.float32),
+            jnp.asarray(operands.raw_translated_wavg_for_atomic, dtype=jnp.complex64),
+            block_posterior,
+            logical_recon_pixels,
+        )
+    rectangle_terms = _resident_block_wavg_rectangle_terms(
+        exact_terms,
+        operands.raw_translated_wavg_rectangle,
+        block_posterior,
+        block_row_image,
+        tables.exact_positions,
+    )
+    wavg_triplet_pixels = (
+        cuda_backproject.relion_wavg_rotation_atomic_runtime_flat_rows_triplet_add_f32(
+            rectangle_terms,
+            block_kernel_ids,
+            carry.wavg_triplet_pixels,
+            logical_rect_pixels,
+        )
+    )
+
+    block_shells, block_a2, block_xa = _resident_block_noise_and_norm(
+        proj,
+        proj_abs2,
+        summed_masked,
+        ctf_probs,
+        tables.noise_variance_for_noise,
+        tables.shell_indices_noise,
+        block_row_image,
+        n_shells=int(spec.stats_config.n_shells),
+        image_capacity=int(spec.image_capacity),
+    )
+
+    block_mstep_rotations = tables.mstep_grid[block_fine_rot]
+    Ft_y = _accumulate_adjoint_block_chunked(
+        summed,
+        block_mstep_rotations,
+        carry.Ft_y,
+        window_indices=tables.relion_x_half_recon_indices,
+        use_windowed_adjoint=True,
+        image_shape=spec.image_shape,
+        volume_shape=spec.recon_volume_shape,
+        disc_type="linear_interp",
+        half_image=True,
+        half_volume=True,
+        max_r=float(spec.mstep_current_size // 2),
+        relion_x_half=True,
+        max_block_bytes=int(spec.max_adjoint_block_bytes),
+        log_label="resident-y-window",
+    )
+    Ft_ctf = _accumulate_adjoint_block_chunked(
+        ctf_probs,
+        block_mstep_rotations,
+        carry.Ft_ctf,
+        window_indices=tables.relion_x_half_recon_indices,
+        use_windowed_adjoint=True,
+        image_shape=spec.image_shape,
+        volume_shape=spec.recon_volume_shape,
+        disc_type="linear_interp",
+        half_image=True,
+        half_volume=True,
+        max_r=float(spec.mstep_current_size // 2),
+        relion_x_half=True,
+        max_block_bytes=int(spec.max_adjoint_block_bytes),
+        log_label="resident-ctf-window",
+    )
+    return _ChunkMstepCarry(
+        Ft_y=Ft_y,
+        Ft_ctf=Ft_ctf,
+        wavg_triplet_pixels=wavg_triplet_pixels,
+        noise_shells=carry.noise_shells + block_shells,
+        a2_per_image=carry.a2_per_image + block_a2,
+        xa_per_image=carry.xa_per_image + block_xa,
+    )
+
+
+def _initial_mstep_carry(
+    Ft_y,
+    Ft_ctf,
+    operands: _ChunkStageOperands,
+    tables: _ChunkStageTables,
+    *,
+    spec: _ChunkProgramSpec,
+) -> _ChunkMstepCarry:
+    """Zero-initialized block accumulators with the block stages' own dtypes.
+
+    The per-image ``A2``/``XA`` partials take whatever dtype the noise and
+    projection operands promote to, so the initial carry is typed by tracing
+    the two block programs on the real operand avals instead of guessing.
+    Zero-initializing (rather than seeding with the first block, as an earlier
+    revision did) makes the loop a ``lax.fori_loop`` carry; adding a leading
+    zero changes no float value except the unobservable ``-0.0`` case.
+    """
+
+    image_capacity = int(spec.image_capacity)
+    block_rows = int(spec.mstep_block_rows)
+    n_pixels = int(spec.n_recon_pixels)
+
+    def probe(row_posterior, row_image, shifted_recon, shifted_noise, ctf2, proj, proj_abs2, noise, shells):
+        _summed, summed_masked, ctf_probs, _mass = _resident_block_weighted_sums(
+            row_posterior, row_image, shifted_recon, shifted_noise, ctf2
+        )
+        return _resident_block_noise_and_norm(
+            proj,
+            proj_abs2,
+            summed_masked,
+            ctf_probs,
+            noise,
+            shells,
+            row_image,
+            n_shells=int(spec.stats_config.n_shells),
+            image_capacity=image_capacity,
+        )
+
+    shells_aval, a2_aval, xa_aval = jax.eval_shape(
+        probe,
+        jax.ShapeDtypeStruct((block_rows, int(spec.n_fine_trans)), jnp.float32),
+        jax.ShapeDtypeStruct((block_rows,), jnp.int32),
+        operands.shifted_recon,
+        operands.shifted_noise,
+        operands.ctf2_over_nv_recon,
+        jax.ShapeDtypeStruct((block_rows, n_pixels), tables.projection_recon_cache.dtype),
+        jax.ShapeDtypeStruct((block_rows, n_pixels), tables.projection_recon_abs2_cache.dtype),
+        tables.noise_variance_for_noise,
+        tables.shell_indices_noise,
+    )
+    return _ChunkMstepCarry(
+        Ft_y=Ft_y,
+        Ft_ctf=Ft_ctf,
+        wavg_triplet_pixels=jnp.zeros(
+            (image_capacity, int(spec.n_rect), 3), dtype=jnp.float32
+        ),
+        noise_shells=jnp.zeros(shells_aval.shape, dtype=shells_aval.dtype),
+        a2_per_image=jnp.zeros(a2_aval.shape, dtype=a2_aval.dtype),
+        xa_per_image=jnp.zeros(xa_aval.shape, dtype=xa_aval.dtype),
+    )
+
+
+def _resident_chunk_statistics(
+    stats,
+    rows: _ChunkRowArrays,
+    operands: _ChunkStageOperands,
+    tables: _ChunkStageTables,
+    posterior: _ChunkPosterior,
+    mstep: _ChunkMstepCarry,
+    *,
+    spec: _ChunkProgramSpec,
+):
+    """Fold one chunk's image-level terms and its padding sanity counter."""
+
+    image_tables = _ChunkImageTables(
+        shell_indices_half=tables.shell_indices_half,
+        wavg_shell_indices=tables.wavg_shell_indices,
+        wavg_scale_pixel_mask=tables.wavg_scale_pixel_mask,
+        translation_sqdist_ang=operands.translation_sqdist_ang,
+    )
+    best_row_local = posterior.best_cell_index // jnp.int64(int(spec.n_fine_trans))
+    slot_is_valid = jnp.arange(int(spec.image_capacity), dtype=jnp.int32) < rows.n_valid_images
+    invalid_best = slot_is_valid & (
+        (best_row_local < 0) | (best_row_local >= rows.image_row_count)
+    )
+    best_chunk_row = jnp.clip(
+        rows.image_row_start + best_row_local,
+        0,
+        jnp.int64(max(int(spec.row_capacity) - 1, 0)),
+    ).astype(jnp.int32)
+    best_fine_rot = jnp.asarray(rows.row_fine_rot, dtype=jnp.int64)[best_chunk_row]
+
+    chunk_operands = _ChunkImageOperands(
+        row_posterior=posterior.row_posterior,
+        row_image_local=rows.row_image_local,
+        row_coarse_rot=jnp.where(
+            posterior.row_is_valid,
+            tables.coarse_parent_grid[rows.row_fine_rot],
+            jnp.int32(int(spec.stats_config.n_coarse_rot)),
+        ),
+        image_ids=rows.image_ids,
+        group_ids=operands.group_ids,
+        processed_image_half=operands.processed_image_half,
+        relion_norm_high_shell=operands.relion_norm_high_shell,
+        wavg_triplet_pixels=mstep.wavg_triplet_pixels,
+        block_noise_shells=mstep.noise_shells,
+        a2_per_image=mstep.a2_per_image,
+        xa_per_image=mstep.xa_per_image,
+        class_log_z=posterior.class_log_z,
+        min_diff2=posterior.min_diff2,
+        best_log_score=posterior.best_log_score,
+        max_posterior=posterior.max_posterior,
+        best_cell_index=posterior.best_cell_index,
+        best_fine_rot=best_fine_rot,
+    )
+    stats = _accumulate_chunk_image_terms(
+        stats, chunk_operands, image_tables, config=spec.stats_config
+    )
+    return stats._replace(
+        invalid_best_rows=stats.invalid_best_rows + jnp.sum(invalid_best.astype(jnp.int64))
+    )
+
+
+@partial(jax.jit, static_argnames=("spec",), donate_argnums=(3,))
+def _run_resident_chunk_program(
+    rows: _ChunkRowArrays,
+    operands: _ChunkStageOperands,
+    tables: _ChunkStageTables,
+    carry: tuple,
+    *,
+    spec: _ChunkProgramSpec,
+):
+    """Every device stage of one capacity chunk in one program.
+
+    The Python chunk loop around this call contains only the host materialize,
+    the host padding and the operand preparation: no ``block_until_ready``, no
+    ``.item()``, no ``np.asarray`` of a device value. The M-step block loop is
+    a ``lax.fori_loop`` whose trip count is the chunk's *live* block count, a
+    device scalar, so the program is keyed on the capacity class alone while
+    still skipping the padded blocks the per-stage loop breaks out of. A static
+    trip count would instead run those blocks; at the hp3 state that is about
+    half of the pixel-axis work, all of it multiplying a zero posterior.
+    """
+
+    from recovar import cuda_backproject
+
+    Ft_y_total, Ft_ctf_total, stats = carry
+    posterior = _resident_chunk_posterior(
+        rows, operands, tables, spec=spec, cuda_backproject=cuda_backproject
+    )
+
+    block_rows = int(spec.mstep_block_rows)
+    initial = _initial_mstep_carry(Ft_y_total, Ft_ctf_total, operands, tables, spec=spec)
+    if spec.static_block_trip:
+        n_blocks = int(spec.row_capacity) // block_rows
+    else:
+        n_blocks = jax.lax.div(
+            rows.n_valid_rows + jnp.int32(block_rows - 1), jnp.int32(block_rows)
+        )
+
+    def body(block_index, carry_in):
+        start = block_index * block_rows
+
+        def take(values):
+            return jax.lax.dynamic_slice_in_dim(values, start, block_rows, axis=0)
+
+        return _resident_mstep_block(
+            block_row_image=take(rows.row_image_local),
+            block_kernel_ids=take(posterior.kernel_row_image_ids),
+            block_posterior=take(posterior.row_posterior),
+            block_fine_rot=take(rows.row_fine_rot),
+            operands=operands,
+            tables=tables,
+            carry=carry_in,
+            spec=spec,
+            cuda_backproject=cuda_backproject,
+        )
+
+    mstep = jax.lax.fori_loop(0, n_blocks, body, initial)
+    stats = _resident_chunk_statistics(
+        stats, rows, operands, tables, posterior, mstep, spec=spec
+    )
+    return mstep.Ft_y, mstep.Ft_ctf, stats
+
+
+def _run_resident_chunk_stages(
+    rows: _ChunkRowArrays,
+    operands: _ChunkStageOperands,
+    tables: _ChunkStageTables,
+    carry: tuple,
+    *,
+    spec: _ChunkProgramSpec,
+    n_valid_rows: int,
+    timing_hook=None,
+):
+    """Per-stage oracle: the same stages, dispatched one at a time.
+
+    Kept selectable by ``RECOVAR_SPARSE_PASS2_RESIDENT_CHUNK_JIT=0`` so the
+    fused program can be compared against the path it replaces inside one
+    process. ``timing_hook(name)`` is called after each stage when the chunk
+    timing diagnostic is on; it synchronizes, so an arm that passes it is a
+    diagnostic arm.
+    """
+
+    from recovar import cuda_backproject
+
+    Ft_y_total, Ft_ctf_total, stats = carry
+    posterior = _resident_chunk_posterior(
+        rows, operands, tables, spec=spec, cuda_backproject=cuda_backproject
+    )
+    if timing_hook is not None:
+        timing_hook("posterior", posterior.row_posterior)
+
+    block_rows = int(spec.mstep_block_rows)
+    mstep = _initial_mstep_carry(Ft_y_total, Ft_ctf_total, operands, tables, spec=spec)
+    for start in range(0, int(spec.row_capacity), block_rows):
+        if start >= int(n_valid_rows):
+            # Every row of this block is chunk padding: its posterior is zero,
+            # so the weighted sums, the Wavg terms, the noise partials and both
+            # adjoint scatters are exactly zero and adding them changes no
+            # accumulator bit.
+            break
+        block = slice(start, start + block_rows)
+        mstep = _resident_mstep_block(
+            block_row_image=rows.row_image_local[block],
+            block_kernel_ids=posterior.kernel_row_image_ids[block],
+            block_posterior=posterior.row_posterior[block],
+            block_fine_rot=rows.row_fine_rot[block],
+            operands=operands,
+            tables=tables,
+            carry=mstep,
+            spec=spec,
+            cuda_backproject=cuda_backproject,
+        )
+    if timing_hook is not None:
+        timing_hook("mstep", (mstep.Ft_y, mstep.Ft_ctf))
+
+    stats = _resident_chunk_statistics(
+        stats, rows, operands, tables, posterior, mstep, spec=spec
+    )
+    return mstep.Ft_y, mstep.Ft_ctf, stats
+
+
 def _run_resident_chunk(
     chunk,
     *,
@@ -1888,9 +2499,10 @@ def _run_resident_chunk(
 ):
     """Run every resident stage for one capacity chunk.
 
-    Returns the updated ``(Ft_y_total, Ft_ctf_total, stats)``. The only host
-    work inside is the chunk's operand upload and the T7 offsets readback the
-    segmented posterior performs internally; no per-chunk result is pulled.
+    Returns the updated ``(Ft_y_total, Ft_ctf_total, stats)``. Host work inside
+    is the chunk's materialize/pad, its operand preparation and the T7 offsets
+    readback the segmented posterior performs internally; no per-chunk result
+    is pulled.
     """
 
     row_capacity = int(chunk.row_capacity)
@@ -1899,27 +2511,32 @@ def _run_resident_chunk(
     n_valid_images = int(chunk.n_valid_images)
     image_indices = np.arange(chunk.image_start, chunk.image_stop, dtype=np.int64)
     timing = _chunk_timing_enabled()
+    chunk_t0 = time.time()
+    stage_t = {}
     if timing:
         jax.block_until_ready(Ft_y_total)
         chunk_t0 = time.time()
-        stage_t = {}
 
     host_chunk = materialize_chunk(tables, chunk)
-    row_image_local = jnp.asarray(host_chunk["row_image_local"], dtype=jnp.int32)
-    row_fine_rot = jnp.asarray(host_chunk["row_fine_rot"], dtype=jnp.int32)
-    row_log_prior = jnp.asarray(host_chunk["row_log_prior"], dtype=jnp.float32)
-    row_mask_bits = jnp.asarray(host_chunk["row_mask_bits"], dtype=jnp.uint32)
-    row_mask_mode = jnp.asarray(host_chunk["row_mask_mode"], dtype=jnp.int8)
-    image_ids = jnp.asarray(host_chunk["image_ids"], dtype=jnp.int32)
-    n_valid_rows_device = jnp.asarray(host_chunk["n_valid_rows"], dtype=jnp.int32)
-    n_valid_images_device = jnp.asarray(host_chunk["n_valid_images"], dtype=jnp.int32)
-    row_is_valid = jnp.arange(row_capacity, dtype=jnp.int32) < n_valid_rows_device
-    kernel_row_image_ids = jnp.where(row_is_valid, row_image_local, jnp.int32(-1))
+    segment_offsets_np = _chunk_segment_offsets(tables, chunk, n_fine_trans)
+    image_row_start_np = segment_offsets_np.astype(np.int64)[:image_capacity] // int(n_fine_trans)
+    image_row_count_np = (
+        segment_offsets_np.astype(np.int64)[1:] - segment_offsets_np.astype(np.int64)[:-1]
+    ) // int(n_fine_trans)
+    rows = _ChunkRowArrays(
+        row_image_local=jnp.asarray(host_chunk["row_image_local"], dtype=jnp.int32),
+        row_fine_rot=jnp.asarray(host_chunk["row_fine_rot"], dtype=jnp.int32),
+        row_log_prior=jnp.asarray(host_chunk["row_log_prior"], dtype=jnp.float32),
+        row_mask_bits=jnp.asarray(host_chunk["row_mask_bits"], dtype=jnp.uint32),
+        row_mask_mode=jnp.asarray(host_chunk["row_mask_mode"], dtype=jnp.int8),
+        image_ids=jnp.asarray(host_chunk["image_ids"], dtype=jnp.int32),
+        n_valid_rows=jnp.asarray(host_chunk["n_valid_rows"], dtype=jnp.int32),
+        n_valid_images=jnp.asarray(host_chunk["n_valid_images"], dtype=jnp.int32),
+        segment_offsets=jnp.asarray(segment_offsets_np, dtype=jnp.int32),
+        image_row_start=jnp.asarray(image_row_start_np, dtype=jnp.int64),
+        image_row_count=jnp.asarray(image_row_count_np, dtype=jnp.int64),
+    )
 
-    # --- stages 1-3: gather, cached projection, score ----------------------
-    # Stages 1-7 read one preparation. Chunk-local image slots address it, so
-    # the scoring program is keyed on the image capacity rather than on the
-    # half's image count, and the two halves of an iteration share a program.
     recon = _prepare_chunk_reconstruction_operands(
         chunk=chunk,
         image_indices=image_indices,
@@ -1948,210 +2565,12 @@ def _run_resident_chunk(
         jax.block_until_ready(recon["shifted_recon"])
         stage_t["operands"] = time.time() - chunk_t0
 
-    chunk_image_ids = jnp.where(
-        jnp.arange(image_capacity, dtype=jnp.int32) < n_valid_images_device,
-        jnp.arange(image_capacity, dtype=jnp.int32),
-        jnp.int32(-1),
-    )
-    scored = score_resident_chunk(
-        row_image_local,
-        row_fine_rot,
-        row_log_prior,
-        row_mask_bits,
-        row_mask_mode,
-        n_valid_rows_device,
-        chunk_image_ids,
-        projection_score_cache,
-        recon["score_input"],
-        recon["corr_img_score"],
-        recon["highres_xi2_half"],
-        recon["translation_prior"],
-        half_weights=half_weights,
-        translation_angles=translation_angles,
-        full_to_compact=full_to_compact,
-        fine_translation_parent=fine_translation_parent_device,
-        logical_current_size=jnp.asarray(current_size, dtype=jnp.int32),
-        row_capacity=row_capacity,
-        image_capacity=image_capacity,
-        n_fine_trans=int(n_fine_trans),
-        n_score_pixels=int(n_score_pixels),
-    )
-    scores_flat = jnp.asarray(scored.scores, dtype=jnp.float32).reshape(-1)
-    if timing:
-        jax.block_until_ready(scores_flat)
-        stage_t["score"] = time.time() - chunk_t0
-
-    # --- stage 4: segmented RELION float32 fine posterior -------------------
-    segment_offsets = jnp.asarray(
-        _chunk_segment_offsets(tables, chunk, n_fine_trans), dtype=jnp.int32
-    )
-    # T7's segmented posterior copies the C_B+1 offsets to the host and
-    # synchronises once per call; the log-Z handler does not. One posterior
-    # call per chunk, so the readback count equals the chunk count.
-    log_z = cuda_backproject.sparse_pass2_segmented_log_z_f64(
-        scores_flat, segment_offsets, n_valid_images_device
-    )
-    posterior = cuda_backproject.sparse_pass2_segmented_posterior_f32(
-        scores_flat,
-        segment_offsets,
-        n_valid_images_device,
-        log_z,
-        jnp.ones((image_capacity,), dtype=jnp.float32),
-        adaptive_fraction=float(adaptive_fraction),
-        keep_all=False,
-        use_external_sum_weight=False,
-    )
-    (
-        log_z_out,
-        best_log_score,
-        best_cell_index,
-        max_posterior,
-        _probs,
-        _normalized_weights,
-        reconstruction_probs,
-        _mask,
-        _n_significant,
-        _sum_weight,
-        _threshold,
-    ) = posterior
-    row_posterior = jnp.asarray(reconstruction_probs, dtype=jnp.float32).reshape(
-        row_capacity, int(n_fine_trans)
-    )
-    if timing:
-        jax.block_until_ready(row_posterior)
-        stage_t["posterior"] = time.time() - chunk_t0
-
-    n_shells = int(stats_config.n_shells)
-    block_noise_shells = jnp.zeros(n_shells, dtype=jnp.float64)
-    a2_per_image = None
-    xa_per_image = None
-    wavg_triplet_pixels = jnp.zeros((image_capacity, int(n_rect), 3), dtype=jnp.float32)
-    logical_recon_pixels = jnp.asarray(n_recon_windowed, dtype=jnp.int32)
-    logical_rect_pixels = jnp.asarray(n_rect, dtype=jnp.int32)
-
-    for start in range(0, row_capacity, int(mstep_block_rows)):
-        if start >= n_valid_rows:
-            # Every row of this block is chunk padding: its posterior is zero,
-            # so the weighted sums, the Wavg terms, the noise partials and both
-            # adjoint scatters are all exactly zero and adding them changes no
-            # accumulator bit. The chunker fills a chunk to its image capacity
-            # and then rounds the row count up to the next class, so at the hp3
-            # state this skips about half of the pixel-axis work.
-            break
-        stop = start + int(mstep_block_rows)
-        rows = slice(start, stop)
-        block_row_image = row_image_local[rows]
-        block_kernel_ids = kernel_row_image_ids[rows]
-        block_posterior = row_posterior[rows]
-        block_fine_rot = row_fine_rot[rows]
-        proj = projection_recon_cache[block_fine_rot]
-        proj_abs2 = projection_recon_abs2_cache[block_fine_rot]
-
-        summed, summed_masked, ctf_probs, _probs_sum_t = _resident_block_weighted_sums(
-            block_posterior,
-            block_row_image,
-            recon["shifted_recon"],
-            recon["shifted_noise"],
-            recon["ctf2_over_nv_recon"],
-        )
-
-        # RELION Wavg triplet in the flat-row layout, then its rotation atomics.
-        # The host tail picks the sequential RELION reducer when the pass
-        # carries the RFLOAT CTF operand and the algebraic form otherwise;
-        # follow the same branch.
-        if recon["direct_ctf_rfloat_recon"] is None:
-            exact_terms = _resident_block_wavg_algebraic_terms(
-                proj,
-                proj_abs2,
-                summed_masked,
-                ctf_probs,
-                noise_variance_for_noise,
-                recon["scale"],
-                recon["raw_translated_wavg_for_atomic"],
-                block_posterior,
-                block_row_image,
-            )
-        else:
-            exact_terms = cuda_backproject.relion_wavg_sequential_runtime_flat_rows_triplet_f32(
-                jnp.asarray(proj, dtype=jnp.complex64),
-                block_kernel_ids,
-                jnp.asarray(recon["direct_ctf_rfloat_recon"], dtype=jnp.float32),
-                jnp.asarray(recon["scale"], dtype=jnp.float32),
-                jnp.asarray(recon["raw_translated_wavg_for_atomic"], dtype=jnp.complex64),
-                block_posterior,
-                logical_recon_pixels,
-            )
-        rectangle_terms = _resident_block_wavg_rectangle_terms(
-            exact_terms,
-            recon["raw_translated_wavg_rectangle"],
-            block_posterior,
-            block_row_image,
-            exact_positions_device,
-        )
-        wavg_triplet_pixels = (
-            cuda_backproject.relion_wavg_rotation_atomic_runtime_flat_rows_triplet_add_f32(
-                rectangle_terms,
-                block_kernel_ids,
-                wavg_triplet_pixels,
-                logical_rect_pixels,
-            )
-        )
-
-        block_shells, block_a2, block_xa = _resident_block_noise_and_norm(
-            proj,
-            proj_abs2,
-            summed_masked,
-            ctf_probs,
-            noise_variance_for_noise,
-            shell_indices_noise,
-            block_row_image,
-            n_shells=n_shells,
-            image_capacity=image_capacity,
-        )
-        block_noise_shells = block_noise_shells + block_shells
-        a2_per_image = block_a2 if a2_per_image is None else a2_per_image + block_a2
-        xa_per_image = block_xa if xa_per_image is None else xa_per_image + block_xa
-
-        block_mstep_rotations = mstep_grid[block_fine_rot]
-        Ft_y_total = _accumulate_adjoint_block_chunked(
-            summed,
-            block_mstep_rotations,
-            Ft_y_total,
-            window_indices=relion_x_half_recon_indices,
-            use_windowed_adjoint=True,
-            image_shape=image_shape,
-            volume_shape=recon_volume_shape,
-            disc_type="linear_interp",
-            half_image=True,
-            half_volume=True,
-            max_r=float(mstep_current_size // 2),
-            relion_x_half=True,
-            max_block_bytes=max_adjoint_block_bytes,
-            log_label="resident-y-window",
-        )
-        Ft_ctf_total = _accumulate_adjoint_block_chunked(
-            ctf_probs,
-            block_mstep_rotations,
-            Ft_ctf_total,
-            window_indices=relion_x_half_recon_indices,
-            use_windowed_adjoint=True,
-            image_shape=image_shape,
-            volume_shape=recon_volume_shape,
-            disc_type="linear_interp",
-            half_image=True,
-            half_volume=True,
-            max_r=float(mstep_current_size // 2),
-            relion_x_half=True,
-            max_block_bytes=max_adjoint_block_bytes,
-            log_label="resident-ctf-window",
-        )
-
-    # --- stage 7: image-level statistics ------------------------------------
+    # The prior squared distances are a per-image host table; building them at
+    # capacity here keeps the program keyed on the capacity class and takes the
+    # eager device ops out of the chunk loop. Padded slots multiply a zero
+    # posterior, so their value is never observable; they are zeroed anyway.
     translation_sqdist_ang = image_tables.translation_sqdist_ang
     if translation_prior_centers_np is not None:
-        # Build the centres at capacity on the host so the squared-distance
-        # program is keyed on the capacity class, not the occupancy; padded
-        # rows multiply a zero posterior, so their value is never observable.
         padded_image_indices = _pad_batch_to_capacity(
             np.asarray(image_indices).reshape(-1, 1), image_capacity
         ).reshape(-1)
@@ -2160,72 +2579,112 @@ def _run_resident_chunk(
             padded_image_indices,
             batch_size=image_capacity,
         )
-        translation_sqdist_ang = _zero_padded_images(
-            jnp.asarray(translation_sqdist_angstrom(fine_translations, centers, voxel_size)),
-            jnp.asarray(np.arange(image_capacity) < n_valid_images, dtype=bool),
+        sqdist_np = np.asarray(
+            translation_sqdist_angstrom(fine_translations, centers, voxel_size)
         )
-    chunk_tables = image_tables._replace(translation_sqdist_ang=translation_sqdist_ang)
+        sqdist_np = np.where(
+            (np.arange(image_capacity) < n_valid_images)[:, None], sqdist_np, 0.0
+        )
+        translation_sqdist_ang = jnp.asarray(sqdist_np)
 
-    # Chunk-local first row and row count of every image slot; padded slots sit
-    # at the chunk's valid-row end with zero rows, so their winner can never
-    # point at a real row.
-    segment_offsets_np = np.asarray(_chunk_segment_offsets(tables, chunk, n_fine_trans), dtype=np.int64)
-    image_row_start_np = segment_offsets_np[:image_capacity] // int(n_fine_trans)
-    image_row_count_np = (segment_offsets_np[1:] - segment_offsets_np[:-1]) // int(n_fine_trans)
-    image_row_start = jnp.asarray(image_row_start_np, dtype=jnp.int64)
-    image_row_count = jnp.asarray(image_row_count_np, dtype=jnp.int64)
-
-    best_row_local = jnp.asarray(best_cell_index, dtype=jnp.int64) // jnp.int64(n_fine_trans)
-    slot_is_valid = jnp.arange(image_capacity, dtype=jnp.int32) < n_valid_images_device
-    invalid_best = slot_is_valid & ((best_row_local < 0) | (best_row_local >= image_row_count))
-    best_chunk_row = jnp.clip(
-        image_row_start + best_row_local, 0, jnp.int64(max(row_capacity - 1, 0))
-    ).astype(jnp.int32)
-    best_fine_rot = jnp.asarray(row_fine_rot, dtype=jnp.int64)[best_chunk_row]
-
-    chunk_operands = _ChunkImageOperands(
-        row_posterior=row_posterior,
-        row_image_local=row_image_local,
-        row_coarse_rot=jnp.where(
-            row_is_valid,
-            coarse_parent_grid[row_fine_rot],
-            jnp.int32(int(stats_config.n_coarse_rot)),
-        ),
-        image_ids=jnp.asarray(host_chunk["image_ids"], dtype=jnp.int32),
-        group_ids=recon["group_ids"],
+    operands = _ChunkStageOperands(
+        score_input=recon["score_input"],
+        corr_img_score=recon["corr_img_score"],
+        highres_xi2_half=recon["highres_xi2_half"],
+        translation_prior=recon["translation_prior"],
+        shifted_recon=recon["shifted_recon"],
+        shifted_noise=recon["shifted_noise"],
+        ctf2_over_nv_recon=recon["ctf2_over_nv_recon"],
+        direct_ctf_rfloat_recon=recon["direct_ctf_rfloat_recon"],
         processed_image_half=recon["processed_image_half"],
         relion_norm_high_shell=recon["relion_norm_high_shell"],
-        wavg_triplet_pixels=wavg_triplet_pixels,
-        block_noise_shells=block_noise_shells,
-        a2_per_image=a2_per_image,
-        xa_per_image=xa_per_image,
-        class_log_z=jnp.asarray(log_z_out, dtype=jnp.float64),
-        min_diff2=scored.min_diff2,
-        best_log_score=best_log_score,
-        max_posterior=max_posterior,
-        best_cell_index=jnp.asarray(best_cell_index, dtype=jnp.int64),
-        best_fine_rot=best_fine_rot,
+        raw_translated_wavg_rectangle=recon["raw_translated_wavg_rectangle"],
+        raw_translated_wavg_for_atomic=recon["raw_translated_wavg_for_atomic"],
+        scale=recon["scale"],
+        group_ids=recon["group_ids"],
+        translation_sqdist_ang=translation_sqdist_ang,
     )
-    stats = _accumulate_chunk_image_terms(
-        stats, chunk_operands, chunk_tables, config=stats_config
+    stage_tables = _ChunkStageTables(
+        projection_score_cache=projection_score_cache,
+        projection_recon_cache=projection_recon_cache,
+        projection_recon_abs2_cache=projection_recon_abs2_cache,
+        mstep_grid=mstep_grid,
+        coarse_parent_grid=coarse_parent_grid,
+        fine_translation_parent=fine_translation_parent_device,
+        half_weights=half_weights,
+        translation_angles=translation_angles,
+        full_to_compact=full_to_compact,
+        noise_variance_for_noise=noise_variance_for_noise,
+        shell_indices_noise=shell_indices_noise,
+        exact_positions=exact_positions_device,
+        relion_x_half_recon_indices=relion_x_half_recon_indices,
+        shell_indices_half=image_tables.shell_indices_half,
+        wavg_shell_indices=image_tables.wavg_shell_indices,
+        wavg_scale_pixel_mask=image_tables.wavg_scale_pixel_mask,
     )
-    stats = stats._replace(
-        invalid_best_rows=stats.invalid_best_rows + jnp.sum(invalid_best.astype(jnp.int64))
+    spec = _ChunkProgramSpec(
+        row_capacity=row_capacity,
+        image_capacity=image_capacity,
+        n_fine_trans=int(n_fine_trans),
+        n_score_pixels=int(n_score_pixels),
+        n_recon_pixels=int(n_recon_windowed),
+        n_rect=int(n_rect),
+        mstep_block_rows=int(mstep_block_rows),
+        adaptive_fraction=float(adaptive_fraction),
+        current_size=int(current_size),
+        mstep_current_size=int(mstep_current_size),
+        image_shape=tuple(int(v) for v in image_shape),
+        recon_volume_shape=tuple(int(v) for v in recon_volume_shape),
+        max_adjoint_block_bytes=int(max_adjoint_block_bytes),
+        stats_config=stats_config,
+        use_rfloat_ctf_wavg=recon["direct_ctf_rfloat_recon"] is not None,
+        static_block_trip=_chunk_static_block_trip_enabled(),
     )
+
+    use_jit = _chunk_jit_enabled()
+    if use_jit:
+        Ft_y_total, Ft_ctf_total, stats = _run_resident_chunk_program(
+            rows, operands, stage_tables, (Ft_y_total, Ft_ctf_total, stats), spec=spec
+        )
+    else:
+        def timing_hook(name, value):
+            jax.block_until_ready(value)
+            stage_t[name] = time.time() - chunk_t0
+
+        Ft_y_total, Ft_ctf_total, stats = _run_resident_chunk_stages(
+            rows,
+            operands,
+            stage_tables,
+            (Ft_y_total, Ft_ctf_total, stats),
+            spec=spec,
+            n_valid_rows=n_valid_rows,
+            timing_hook=timing_hook if timing else None,
+        )
+
     if timing:
         jax.block_until_ready((Ft_y_total, Ft_ctf_total, stats.wsum_sigma2_noise))
         total = time.time() - chunk_t0
+        operands_s = stage_t.get("operands", 0.0)
+        if use_jit:
+            split = "program=%.3fs" % (total - operands_s)
+        else:
+            posterior_end = stage_t.get("posterior", operands_s)
+            mstep_end = stage_t.get("mstep", total)
+            split = "score+posterior=%.3fs mstep=%.3fs statistics=%.3fs" % (
+                posterior_end - operands_s,
+                mstep_end - posterior_end,
+                total - mstep_end,
+            )
         blocks = sum(1 for s in range(0, row_capacity, int(mstep_block_rows)) if s < n_valid_rows)
         logger.info(
-            "Resident pass-2 chunk timing: images=%d/%d rows=%d/%d occupancy=%.3f "
-            "mstep_blocks=%d/%d score=%.3fs posterior=%.3fs operands=%.3fs mstep=%.3fs total=%.3fs",
+            "Resident pass-2 chunk timing: jit=%d images=%d/%d rows=%d/%d occupancy=%.3f "
+            "mstep_blocks=%d/%d operands=%.3fs %s total=%.3fs",
+            int(use_jit),
             n_valid_images, image_capacity, n_valid_rows, row_capacity,
             n_valid_rows / max(row_capacity, 1),
             blocks, row_capacity // int(mstep_block_rows),
-            stage_t.get("score", 0.0),
-            stage_t.get("posterior", 0.0) - stage_t.get("score", 0.0),
-            stage_t.get("operands", 0.0) - stage_t.get("posterior", 0.0),
-            total - stage_t.get("operands", 0.0),
+            operands_s,
+            split,
             total,
         )
     return Ft_y_total, Ft_ctf_total, stats
