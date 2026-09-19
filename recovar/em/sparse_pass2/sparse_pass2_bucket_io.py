@@ -10,6 +10,7 @@ from __future__ import annotations
 import functools
 import logging
 from functools import partial
+from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
@@ -205,17 +206,56 @@ def _divide_by_safe_ctf(sparse_score_input_half, ctf_half):
     )
 
 
-def _prepare_bucket_io(
+class UnshiftedBucketOperands(NamedTuple):
+    """Every per-image operand :func:`_prepare_bucket_io` builds before shifting.
+
+    The bucket preparation is two halves: a per-image half that weights, corrects
+    and pre-centers each image, and a translation half that tiles the result over
+    the fine translations. Only the first half is per-image pure, so it is the
+    half the device-resident driver hoists to once per pass over a set of images
+    (:mod:`recovar.em.sparse_pass2.resident_operands`). This record is that half's
+    output, named exactly as the locals it replaced; :func:`_prepare_bucket_io`
+    consumes it and appends the translation half unchanged.
+    """
+
+    image_shape: object
+    use_normalized_cc: object
+    relion_cuda_preprocess: object
+    integer_pre_shifts: object
+    batch_corr_np: object
+    batch_scale_np: object
+    relion_preprocess_kwargs: object
+    real_space_pre_shift_applied: object
+    ctf_half_rfloat: object
+    acc_real_dtype: object
+    ctf_half: object
+    batch_scale: object
+    direct_pixel_correction_full: object
+    inverse_noise_half: object
+    weighted_ctf_half: object
+    ctf2_over_nv_half: object
+    ctf2_score_half: object
+    ctf2_over_nv_recon_half: object
+    processed_score_half_raw: object
+    processed_recon_half_raw: object
+    batch_norm: object
+    score_weighted_half: object
+    recon_weighted_half: object
+    recon_bpref_input_half: object
+    folded_normalized_cc_operands: object
+    sparse_score_input_half: object
+    processed_score_half_for_noise: object
+
+
+def prepare_unshifted_bucket_operands(
     experiment_dataset,
     batch,
     ctf_params,
     image_indices,
+    *,
     noise_variance_half,
-    fine_translations,
     config,
-    n_trans,
     score_with_masked_images,
-    half_spectrum_scoring,
     image_corrections,
     scale_corrections,
     image_pre_shifts,
@@ -224,29 +264,19 @@ def _prepare_bucket_io(
     score_only=False,
     score_mode="gaussian",
     window_indices=None,
-    recon_window_indices=None,
-    translation_phases_half=None,
-    score_translation_phases=None,
-    recon_translation_phases=None,
-    relion_score_translation_angles=None,
-    return_windowed_shifted=False,
-    return_shifted_score=True,
     relion_exact_normalized_cc_operands=False,
     relion_exact_bpref_operands=False,
-):
-    """Run preprocessing for a batch of images (translations tiled, CTF/noise ratios).
+) -> UnshiftedBucketOperands:
+    """Per-image half of :func:`_prepare_bucket_io`, statement for statement.
 
-    Mirrors the ``run_em``/``_preprocess_batch`` pipeline exactly so the
-    bucketed sparse pass-2 path is bit-for-bit identical to calling
-    ``run_em`` per image.
+    Extracted so the resident driver can prepare these operands once for a whole
+    half instead of once per chunk. Nothing here depends on the fine translations,
+    so a call covering any set of images returns exactly the rows a per-bucket
+    call would; the translation-dependent work stays in :func:`_prepare_bucket_io`.
     """
+
     if score_mode not in {"gaussian", "normalized_cc"}:
         raise ValueError(f"score_mode must be 'gaussian' or 'normalized_cc', got {score_mode!r}")
-    if return_windowed_shifted:
-        if window_indices is None:
-            raise ValueError("return_windowed_shifted requires window_indices")
-        if recon_window_indices is None:
-            recon_window_indices = window_indices
 
     image_shape = config.image_shape
     use_normalized_cc = score_mode == "normalized_cc"
@@ -445,6 +475,128 @@ def _prepare_bucket_io(
                 recon_bpref_input_half = recon_bpref_input_half * phase_factors
         if return_direct_scoring_io:
             sparse_score_input_half = sparse_score_input_half * phase_factors
+
+    return UnshiftedBucketOperands(
+        image_shape=image_shape,
+        use_normalized_cc=use_normalized_cc,
+        relion_cuda_preprocess=relion_cuda_preprocess,
+        integer_pre_shifts=integer_pre_shifts,
+        batch_corr_np=batch_corr_np,
+        batch_scale_np=batch_scale_np,
+        relion_preprocess_kwargs=relion_preprocess_kwargs,
+        real_space_pre_shift_applied=real_space_pre_shift_applied,
+        ctf_half_rfloat=ctf_half_rfloat,
+        acc_real_dtype=acc_real_dtype,
+        ctf_half=ctf_half,
+        batch_scale=batch_scale,
+        direct_pixel_correction_full=direct_pixel_correction_full,
+        inverse_noise_half=inverse_noise_half,
+        weighted_ctf_half=weighted_ctf_half,
+        ctf2_over_nv_half=ctf2_over_nv_half,
+        ctf2_score_half=ctf2_score_half,
+        ctf2_over_nv_recon_half=ctf2_over_nv_recon_half,
+        processed_score_half_raw=processed_score_half_raw,
+        processed_recon_half_raw=processed_recon_half_raw,
+        batch_norm=batch_norm,
+        score_weighted_half=score_weighted_half,
+        recon_weighted_half=recon_weighted_half,
+        recon_bpref_input_half=recon_bpref_input_half,
+        folded_normalized_cc_operands=folded_normalized_cc_operands,
+        sparse_score_input_half=sparse_score_input_half,
+        processed_score_half_for_noise=processed_score_half_for_noise,
+    )
+
+
+def _prepare_bucket_io(
+    experiment_dataset,
+    batch,
+    ctf_params,
+    image_indices,
+    noise_variance_half,
+    fine_translations,
+    config,
+    n_trans,
+    score_with_masked_images,
+    half_spectrum_scoring,
+    image_corrections,
+    scale_corrections,
+    image_pre_shifts,
+    use_float64_scoring,
+    return_direct_scoring_io=False,
+    score_only=False,
+    score_mode="gaussian",
+    window_indices=None,
+    recon_window_indices=None,
+    translation_phases_half=None,
+    score_translation_phases=None,
+    recon_translation_phases=None,
+    relion_score_translation_angles=None,
+    return_windowed_shifted=False,
+    return_shifted_score=True,
+    relion_exact_normalized_cc_operands=False,
+    relion_exact_bpref_operands=False,
+):
+    """Run preprocessing for a batch of images (translations tiled, CTF/noise ratios).
+
+    Mirrors the ``run_em``/``_preprocess_batch`` pipeline exactly so the
+    bucketed sparse pass-2 path is bit-for-bit identical to calling
+    ``run_em`` per image.
+    """
+    if return_windowed_shifted:
+        if window_indices is None:
+            raise ValueError("return_windowed_shifted requires window_indices")
+        if recon_window_indices is None:
+            recon_window_indices = window_indices
+
+    unshifted = prepare_unshifted_bucket_operands(
+        experiment_dataset,
+        batch,
+        ctf_params,
+        image_indices,
+        noise_variance_half=noise_variance_half,
+        config=config,
+        score_with_masked_images=score_with_masked_images,
+        image_corrections=image_corrections,
+        scale_corrections=scale_corrections,
+        image_pre_shifts=image_pre_shifts,
+        use_float64_scoring=use_float64_scoring,
+        return_direct_scoring_io=return_direct_scoring_io,
+        score_only=score_only,
+        score_mode=score_mode,
+        window_indices=window_indices,
+        relion_exact_normalized_cc_operands=relion_exact_normalized_cc_operands,
+        relion_exact_bpref_operands=relion_exact_bpref_operands,
+    )
+    (
+        image_shape,
+        use_normalized_cc,
+        relion_cuda_preprocess,
+        integer_pre_shifts,
+        batch_corr_np,
+        batch_scale_np,
+        relion_preprocess_kwargs,
+        real_space_pre_shift_applied,
+        ctf_half_rfloat,
+        acc_real_dtype,
+        ctf_half,
+        batch_scale,
+        direct_pixel_correction_full,
+        inverse_noise_half,
+        weighted_ctf_half,
+        ctf2_over_nv_half,
+        ctf2_score_half,
+        ctf2_over_nv_recon_half,
+        processed_score_half_raw,
+        processed_recon_half_raw,
+        batch_norm,
+        score_weighted_half,
+        recon_weighted_half,
+        recon_bpref_input_half,
+        folded_normalized_cc_operands,
+        sparse_score_input_half,
+        processed_score_half_for_noise,
+    ) = unshifted
+
 
     score_weighted_half_for_score = score_weighted_half
 
