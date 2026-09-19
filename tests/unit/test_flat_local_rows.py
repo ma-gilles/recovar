@@ -696,3 +696,44 @@ def test_bucket_stage_flat_plan_dispatches_on_class_segmented_buckets():
         dense_batch_size=dense_batch,
     )
     assert klass.packed_row_count <= dense_batch * int(bucket.bucket_rotation_count)
+
+
+@pytest.mark.unit
+def test_class_flat_rows_are_class_major_with_block_sizes():
+    """Projection slices one class at a time, so a class's rows must be contiguous.
+
+    Flat rows interleave classes by construction, and projecting an interleaved list
+    against a single class volume would silently use the wrong volume for most rows.
+    Emitting class-major lets each class's block be projected with its own volume.
+    """
+    from recovar.em.local.flat_local_rows import build_pool_flat_local_row_plan_for_classes
+
+    counts = np.asarray(
+        [[3, 200, 5], [17, 180, 9], [5, 220, 4], [400, 6, 3]], dtype=np.int32,
+    )
+    segment = 512
+    plan = build_pool_flat_local_row_plan_for_classes(
+        counts, segment, pool_size=3, exact_local_bucket_radix=2,
+    )
+
+    assert plan.class_row_counts is not None
+    assert len(plan.class_row_counts) == counts.shape[1]
+    assert sum(plan.class_row_counts) == int(plan.present_mask.sum())
+
+    # each class's block is contiguous and holds only that class's rows
+    start = 0
+    for class_index, block in enumerate(plan.class_row_counts):
+        block_rows = plan.rotation_rows[start:start + block]
+        assert np.all(block_rows // segment == class_index)
+        start += block
+
+    # and every real candidate still appears exactly once
+    seen = set()
+    for row in range(plan.packed_row_count):
+        if not plan.present_mask[row] or not plan.valid_mask[row]:
+            continue
+        image = int(plan.image_indices[row])
+        class_index, rotation = divmod(int(plan.rotation_rows[row]), segment)
+        assert (image, class_index, rotation) not in seen
+        seen.add((image, class_index, rotation))
+    assert len(seen) == int(counts.sum())

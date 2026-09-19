@@ -23,6 +23,10 @@ class FlatLocalRowPlan:
     physical_image_count: int
     dense_rotation_count: int
     packed_row_count: int
+    # Class-segmented plans only. Rows are emitted class-major, so class k owns the
+    # contiguous block [sum(class_row_counts[:k]), +class_row_counts[k]). Projection
+    # slices those blocks to use each class's own volume; None for single-class plans.
+    class_row_counts: tuple[int, ...] | None = None
 
 
 def encode_flat_local_row_plan(plan: FlatLocalRowPlan) -> np.ndarray:
@@ -304,20 +308,25 @@ def build_pool_flat_local_row_plan_for_classes(
     image_parts: list[np.ndarray] = []
     rotation_parts: list[np.ndarray] = []
     valid_parts: list[np.ndarray] = []
-    for pool_start in range(0, physical_image_count, pool_size):
-        pool_stop = min(physical_image_count, pool_start + pool_size)
-        # Each class gets its own width inside the pool; a class that no image in
-        # the pool uses contributes no rows at all.
-        pool_buckets = ordinary_buckets[pool_start:pool_stop].max(axis=0)
-        for image_index in range(pool_start, pool_stop):
-            for class_index in range(n_classes):
-                width = int(pool_buckets[class_index])
-                if width == 0:
-                    continue
-                rows = np.arange(width, dtype=np.int32)
+    class_row_counts: list[int] = []
+    # Class-major: every row of class k is emitted before any row of class k+1, so a
+    # projection can slice class k's block and use class k's volume. Within a class the
+    # original pool/image order is preserved.
+    for class_index in range(n_classes):
+        rows_before = int(sum(part.size for part in image_parts))
+        for pool_start in range(0, physical_image_count, pool_size):
+            pool_stop = min(physical_image_count, pool_start + pool_size)
+            # Each class gets its own width inside the pool; a class that no image in
+            # the pool uses contributes no rows at all.
+            width = int(ordinary_buckets[pool_start:pool_stop, class_index].max())
+            if width == 0:
+                continue
+            rows = np.arange(width, dtype=np.int32)
+            for image_index in range(pool_start, pool_stop):
                 image_parts.append(np.full(width, image_index, dtype=np.int32))
                 rotation_parts.append(rows + class_index * segment_rotation_count)
                 valid_parts.append(rows < int(class_rotation_counts[image_index, class_index]))
+        class_row_counts.append(int(sum(part.size for part in image_parts)) - rows_before)
 
     if not image_parts:
         raise ValueError("class-segmented flat rows need at least one populated class")
@@ -348,6 +357,7 @@ def build_pool_flat_local_row_plan_for_classes(
         physical_image_count=physical_image_count,
         dense_rotation_count=dense_rotation_count,
         packed_row_count=packed_row_count,
+        class_row_counts=tuple(class_row_counts),
     )
 
 

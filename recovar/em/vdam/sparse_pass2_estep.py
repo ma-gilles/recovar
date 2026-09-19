@@ -63,6 +63,11 @@ _EXACT_RELION_FINE_DIFF2_ENV = "RECOVAR_INITIAL_MODEL_EXACT_FINE_DIFF2"
 
 
 _FLAT_LOCAL_ROWS_ENV = "RECOVAR_INITIAL_MODEL_FLAT_LOCAL_ROWS"
+# Opt-in, default off: allow the exact RELION CUDA operand/fine-diff2 path at K>1.
+# That path computes only the candidates a particle actually needs, where the JAX
+# fallback pads to rectangles; at K=4 100k/256 the fallback computes 28.8x the rows
+# it needs. Leaving this off preserves the qualified K>1 behavior exactly.
+_KCLASS_EXACT_FINE_ENV = "RECOVAR_INITIAL_MODEL_KCLASS_EXACT_FINE"
 
 
 _STABLE_FLAT_ROW_CAPACITY_ENV = "RECOVAR_INITIAL_MODEL_STABLE_FLAT_ROW_CAPACITY"
@@ -823,8 +828,11 @@ def _run_sparse_pass2_initial_model_estep(
 
         t0 = time.time()
         from recovar.em.sparse_pass2 import sparse_pass2_posterior as sparse_diagnostics
+        kclass_exact_fine = bool(
+            state.K > 1 and _env_enabled(_KCLASS_EXACT_FINE_ENV)
+        )
         use_exact_local_relion_operands = bool(
-            state.K == 1
+            (state.K == 1 or kclass_exact_fine)
             and use_exact_relion_projector
             and uses_relion_cuda_image_preprocessing(group_dataset)
         )
@@ -833,7 +841,7 @@ def _run_sparse_pass2_initial_model_estep(
             or (not use_compact_sparse_pass2 and use_exact_local_relion_operands)
         )
         use_exact_fine_diff2 = bool(
-            state.K == 1
+            (state.K == 1 or kclass_exact_fine)
             and use_exact_local_relion_operands
             and _env_enabled(_EXACT_RELION_FINE_DIFF2_ENV, default=True)
         )
