@@ -183,13 +183,13 @@ _CHUNK_TIMING_ENV = "RECOVAR_SPARSE_PASS2_RESIDENT_CHUNK_TIMING"
 # carries a zero posterior and contributes exact zeros.
 _CHUNK_JIT_ENV = "RECOVAR_SPARSE_PASS2_RESIDENT_CHUNK_JIT"
 _CHUNK_STATIC_BLOCKS_ENV = "RECOVAR_SPARSE_PASS2_RESIDENT_CHUNK_STATIC_BLOCKS"
-# How the chunk program walks its M-step blocks. "unrolled" (default) emits the
-# blocks straight into the program, with the block count taken from a static
-# power-of-two ladder above the chunk's live block count, so the program holds
-# no loop and XLA:GPU never reads a loop predicate back to the host. "while"
-# keeps the device loop and is the oracle the unrolled form is compared against.
-_CHUNK_BLOCK_LOOP_ENV = "RECOVAR_SPARSE_PASS2_RESIDENT_CHUNK_BLOCK_LOOP"
-_BLOCK_COUNT_LADDER = (1, 2, 4, 8, 16, 32)
+# How many M-step blocks the chunk program emits per device-loop iteration.
+# XLA:GPU reads a while predicate back to the host once per iteration, so an
+# unroll of u divides those readbacks by u; it also multiplies the live
+# pixel-axis transients by u, because the emitted copies no longer reuse one
+# block's buffers. Emitting every block (no loop) is not an option: at the early
+# state's second iteration that program asked the allocator for 54.5 GiB.
+_CHUNK_BLOCK_UNROLL_ENV = "RECOVAR_SPARSE_PASS2_RESIDENT_CHUNK_BLOCK_UNROLL"
 _SOFT_POSTERIOR_BLOCK_BPREF_PROTOTYPE_ENV = "RECOVAR_EM_PROTOTYPE_SOFT_POSTERIOR_BLOCK_BPREF"
 
 # Row capacities are multiples of the M-step block so every chunk decomposes
@@ -1874,42 +1874,25 @@ def _chunk_jit_enabled() -> bool:
     return parse_env_flag(_CHUNK_JIT_ENV, default=False)
 
 
-def _chunk_block_loop_mode() -> str:
-    """``"unrolled"`` (default) or ``"while"`` for the M-step block walk.
+def _chunk_block_unroll() -> int:
+    """M-step blocks emitted per device-loop iteration; 1 keeps today's loop.
 
     XLA:GPU executes every ``while`` iteration by copying the loop predicate to
-    the host and synchronizing, so a device loop drains the pipeline once per
-    M-step block whatever the trip count is: the hp3 nsys arm charges 264 such
-    ``cuStreamSynchronize`` calls, 5.94 s, to one warm half. Emitting the blocks
-    into the program removes the loop, and with it the readback.
+    the host and synchronizing, so the device loop drains the pipeline once per
+    iteration: the hp3 nsys arm of job 14147789 charges 264 such
+    ``cuStreamSynchronize`` calls, 5.94 s, to one warm half, and the early arm
+    charges 1.88 ms to each of 1867 blocks. An unroll of ``u`` divides that by
+    ``u`` and multiplies the live pixel-axis transients by ``u``, so it is a
+    memory trade, not a free one; emitting every block cost 54.5 GiB.
     """
 
-    mode = os.environ.get(_CHUNK_BLOCK_LOOP_ENV, "").strip().lower()
-    if not mode:
-        return "unrolled"
-    if mode not in {"unrolled", "while"}:
-        raise ValueError(
-            f"{_CHUNK_BLOCK_LOOP_ENV} must be 'unrolled' or 'while', got {mode!r}"
-        )
-    return mode
-
-
-def _program_block_count(n_valid_rows: int, *, row_capacity: int, block_rows: int) -> int:
-    """Static block count of the unrolled program for a chunk.
-
-    The live block count rounded up to :data:`_BLOCK_COUNT_LADDER`, capped by the
-    chunk's own capacity, so a capacity class traces at most one program per
-    ladder entry instead of one per occupancy. The blocks between the live count
-    and the ladder entry carry only padded rows, whose posterior is zero, so they
-    contribute exact zeros and cost their empty launches.
-    """
-
-    capacity_blocks = max(int(row_capacity) // int(block_rows), 1)
-    live = max((int(n_valid_rows) + int(block_rows) - 1) // int(block_rows), 1)
-    for rung in _BLOCK_COUNT_LADDER:
-        if rung >= live:
-            return min(rung, capacity_blocks)
-    return capacity_blocks
+    raw = os.environ.get(_CHUNK_BLOCK_UNROLL_ENV, "").strip()
+    if not raw:
+        return 1
+    value = int(raw)
+    if value < 1:
+        raise ValueError(f"{_CHUNK_BLOCK_UNROLL_ENV} must be >= 1, got {value}")
+    return value
 
 
 def _chunk_static_block_trip_enabled() -> bool:
@@ -1954,11 +1937,9 @@ class _ChunkProgramSpec:
     max_adjoint_block_bytes: int
     stats_config: object
     use_rfloat_ctf_wavg: bool
-    # Blocks the program walks, and how. ``block_loop`` is "unrolled" or
-    # "while"; ``n_program_blocks`` is the static count the unrolled form emits.
-    block_loop: str
-    n_program_blocks: int
-    # Trip mechanism of the M-step block loop, "while" form only. False (default) bounds the loop
+    # M-step blocks emitted per device-loop iteration.
+    block_unroll: int
+    # Trip mechanism of the M-step block loop. False (default) bounds the loop
     # by the chunk's live block count, a device scalar, so the padded blocks the
     # per-stage loop breaks out of are skipped; True runs the full capacity as
     # the ticket's literal form does. Both trace one program per capacity class.
@@ -2431,30 +2412,31 @@ def _run_resident_chunk_program(
             cuda_backproject=cuda_backproject,
         )
 
-    if spec.block_loop == "unrolled":
-        # No device loop at all: XLA:GPU reads a while predicate back to the host
-        # once per iteration, which drains the pipeline once per M-step block.
-        for index in range(int(spec.n_program_blocks)):
-            start = index * block_rows
-            mstep = block(mstep, lambda values, _s=start: values[_s : _s + block_rows])
+    unroll = max(int(spec.block_unroll), 1)
+    if spec.static_block_trip:
+        n_blocks = int(spec.row_capacity) // block_rows
+        n_outer = (n_blocks + unroll - 1) // unroll
     else:
-        if spec.static_block_trip:
-            n_blocks = int(spec.row_capacity) // block_rows
-        else:
-            n_blocks = jax.lax.div(
-                rows.n_valid_rows + jnp.int32(block_rows - 1), jnp.int32(block_rows)
-            )
-        mstep = jax.lax.fori_loop(
-            0,
-            n_blocks,
-            lambda block_index, carry_in: block(
+        n_blocks = jax.lax.div(
+            rows.n_valid_rows + jnp.int32(block_rows - 1), jnp.int32(block_rows)
+        )
+        n_outer = jax.lax.div(n_blocks + jnp.int32(unroll - 1), jnp.int32(unroll))
+
+    def outer(outer_index, carry_in):
+        # ``unroll`` blocks per device-loop iteration: the predicate is read back
+        # once per iteration, and a trailing block past the live count carries
+        # only padded rows, whose posterior is zero.
+        for offset in range(unroll):
+            index = outer_index * unroll + offset
+            carry_in = block(
                 carry_in,
-                lambda values, _i=block_index: jax.lax.dynamic_slice_in_dim(
+                lambda values, _i=index: jax.lax.dynamic_slice_in_dim(
                     values, _i * block_rows, block_rows, axis=0
                 ),
-            ),
-            mstep,
-        )
+            )
+        return carry_in
+
+    mstep = jax.lax.fori_loop(0, n_outer, outer, mstep)
     stats = _resident_chunk_statistics(
         stats, rows, operands, tables, posterior, mstep, spec=spec
     )
@@ -2712,10 +2694,7 @@ def _run_resident_chunk(
         max_adjoint_block_bytes=int(max_adjoint_block_bytes),
         stats_config=stats_config,
         use_rfloat_ctf_wavg=recon["direct_ctf_rfloat_recon"] is not None,
-        block_loop=_chunk_block_loop_mode(),
-        n_program_blocks=_program_block_count(
-            n_valid_rows, row_capacity=row_capacity, block_rows=int(mstep_block_rows)
-        ),
+        block_unroll=_chunk_block_unroll(),
         static_block_trip=_chunk_static_block_trip_enabled(),
     )
 
@@ -2744,9 +2723,7 @@ def _run_resident_chunk(
         total = time.time() - chunk_t0
         operands_s = stage_t.get("operands", 0.0)
         if use_jit:
-            split = "program=%.3fs blocks_emitted=%d(%s)" % (
-                total - operands_s, spec.n_program_blocks, spec.block_loop,
-            )
+            split = "program=%.3fs unroll=%d" % (total - operands_s, spec.block_unroll)
         else:
             posterior_end = stage_t.get("posterior", operands_s)
             mstep_end = stage_t.get("mstep", total)
