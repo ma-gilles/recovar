@@ -193,13 +193,16 @@ _BLOCK_COUNT_LADDER = (1, 2, 4, 8, 16, 32)
 _SOFT_POSTERIOR_BLOCK_BPREF_PROTOTYPE_ENV = "RECOVAR_EM_PROTOTYPE_SOFT_POSTERIOR_BLOCK_BPREF"
 
 # Row capacities are multiples of the M-step block so every chunk decomposes
-# into whole blocks; image capacities follow the design's ladder.
-# A denser ladder than the design's (8192, 32768, 131072). The chunker grows a
-# chunk to its image capacity and then rounds the row count up to the next
-# class, so a sparse ladder leaves the pixel-axis work running over padding:
-# measured occupancy at hp3 iteration 0 was 2.59M valid rows in about 5.24M
-# slots, 49%. Each extra class costs one program per stage and lifts the floor.
-_DEFAULT_ROW_CAPACITY_LADDER = (8192, 16384, 32768, 65536, 131072)
+# into whole blocks; image capacities follow the design's ladder. The design's
+# three classes, restored after the denser five-class ladder was measured and
+# bought nothing: at hp3 the matched pairs put the two ladders inside the
+# control's own drift (loop 22.6 versus 22.1 s per half) and at the early state
+# they are indistinguishable (resident warm 67.6 / 60.4 versus 67.0 / 61.5 s,
+# occupancy 0.95-0.97 either way, jobs 14143902 and 14143904), while the dense
+# ladder costs 84 extra traced programs. Every extra class is one more program
+# per capacity-class stage, and with the chunk program one more program again.
+# The occupancy of each plan is still logged, so a future change has its number.
+_DEFAULT_ROW_CAPACITY_LADDER = (8192, 32768, 131072)
 _DEFAULT_IMAGE_CAPACITY_LADDER = (32, 128, 512)
 
 __all__ = [
