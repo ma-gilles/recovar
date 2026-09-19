@@ -602,3 +602,97 @@ def test_class_flat_rows_static_capacity_marks_padding_absent():
     assert padded.packed_row_count == natural.packed_row_count + 32
     assert int(padded.present_mask.sum()) == natural.packed_row_count
     assert not padded.valid_mask[natural.packed_row_count:].any()
+
+
+@pytest.mark.unit
+def test_bucket_stage_flat_plan_dispatches_on_class_segmented_buckets():
+    """The bucket-stage helpers must use the class-aware builder at K>1.
+
+    A previous change in this area was applied only to the single-class path and
+    was dead code at K=4, so this drives the real class-segmented bucket through
+    the stage helpers rather than the plan builder directly.
+    """
+    from recovar.em import sampling
+    from recovar.em.local import local_layout
+    from recovar.em.local.local_bucket_stages import (
+        _build_flat_local_row_argument,
+        _build_pool_flat_plan_for_bucket,
+        _plan_flat_local_row_capacities,
+    )
+
+    n = sampling.rotation_grid_size(0)
+    n_classes = 3
+    layouts = [
+        local_layout.build_pass2_hypothesis_layout(
+            [np.arange(2), np.arange(9), np.arange(n)],
+            n_coarse_rotations=n, n_coarse_translations=1, nside_level=0,
+            translations=np.zeros((1, 2), dtype=np.float32),
+            translation_step=1.0, oversampling_order=1,
+        )
+        for _ in range(n_classes)
+    ]
+    # the plan must be built with the same rotation_block_size the bucket used:
+    # it sets the quantizer's engine cap, and a mismatch can size a class wider
+    # than its own segment.
+    rotation_block_size = 5000
+    buckets = local_layout.bucket_class_local_hypothesis_layouts(
+        layouts, np.zeros(n_classes), 3, rotation_block_size,
+    )
+    assert buckets and all(int(b.n_classes) == n_classes for b in buckets)
+
+    capacities = _plan_flat_local_row_capacities(
+        buckets, rotation_block_size=rotation_block_size, exact_local_bucket_radix=2,
+    )
+    assert capacities
+
+    for bucket in buckets:
+        physical = int(np.asarray(bucket.image_indices).shape[0])
+        dense_batch = max(physical, int(bucket.bucket_image_count))
+        encoded = _build_flat_local_row_argument(
+            bucket, capacities,
+            dense_batch_size=dense_batch,
+            rotation_block_size=rotation_block_size,
+            exact_local_bucket_radix=2,
+        )
+        # packed rows must stay inside the bucket's own dense class-major axis
+        assert encoded.shape[1] == 3
+        assert int(encoded[:, 1].max()) < int(bucket.bucket_rotation_count)
+        # and must be a genuine reduction against the rectangular layout
+        assert encoded.shape[0] <= dense_batch * int(bucket.bucket_rotation_count)
+
+    # the whole point: packed capacity is smaller than the rectangular ABI
+    rectangular = sum(
+        max(int(np.asarray(b.image_indices).shape[0]), int(b.bucket_image_count))
+        * int(b.bucket_rotation_count)
+        for b in buckets
+    )
+    packed = sum(capacities.values())
+    assert packed < rectangular
+
+    # Prove the class-aware builder actually ran rather than silently falling back.
+    # The single-class builder treats actual_rotation_counts as counts on one
+    # rotation axis; on a class bucket those are summed across classes, so
+    # quantizing them overflows the dense axis and it refuses outright.
+    from recovar.em.local.flat_local_rows import build_pool_flat_local_row_plan
+
+    bucket = buckets[0]
+    physical = int(np.asarray(bucket.image_indices).shape[0])
+    dense_batch = max(physical, int(bucket.bucket_image_count))
+    with pytest.raises(ValueError, match="dense rotation axis"):
+        build_pool_flat_local_row_plan(
+            np.asarray(bucket.actual_rotation_counts, dtype=np.int32),
+            int(bucket.bucket_rotation_count),
+            pool_size=3,
+            rotation_block_size=rotation_block_size,
+            exact_local_bucket_radix=2,
+            dense_batch_size=dense_batch,
+        )
+    # the class-aware builder handles the same bucket
+    klass = _build_pool_flat_plan_for_bucket(
+        bucket,
+        dense_rotation_count=int(bucket.bucket_rotation_count),
+        rotation_block_size=rotation_block_size,
+        exact_local_bucket_radix=2,
+        dense_batch_size=dense_batch,
+    )
+    assert klass.packed_row_count <= dense_batch * int(bucket.bucket_rotation_count)

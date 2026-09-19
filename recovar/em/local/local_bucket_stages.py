@@ -36,6 +36,7 @@ from recovar.em.helpers.shape_buckets import pad_axis, pad_batch_data_ctf_and_va
 from recovar.em.local.flat_local_rows import (
     build_dense_to_flat_local_row_lookup,
     build_pool_flat_local_row_plan,
+    build_pool_flat_local_row_plan_for_classes,
     encode_flat_local_row_plan,
     map_dense_local_rows_to_flat_rows,
 )
@@ -924,6 +925,50 @@ def _pad_local_big_jit_image_axis(bucket: LocalBucketSpec, batch_data, ctf_param
     return padded_bucket, padded_batch_data, padded_ctf_params, valid_image_mask, padded_batch_size
 
 
+def _build_pool_flat_plan_for_bucket(
+    bucket,
+    *,
+    dense_rotation_count: int,
+    rotation_block_size: int,
+    exact_local_bucket_radix: int,
+    dense_batch_size: int,
+    packed_row_count: int | None = None,
+):
+    """Build one bucket's packed plan, class-segmented or single-class.
+
+    A class-segmented bucket carries per-class counts and its own segment width,
+    and its dense axis is class-major, so the class-aware builder sizes each
+    class independently instead of padding every class to one shared width.
+    """
+
+    n_classes = int(getattr(bucket, "n_classes", 1) or 1)
+    if n_classes > 1:
+        class_counts = getattr(bucket, "class_actual_rotation_counts", None)
+        segment = getattr(bucket, "class_segment_rotation_count", None)
+        if class_counts is None or segment is None:
+            raise ValueError(
+                "class-segmented flat rows require per-class counts and a segment width"
+            )
+        return build_pool_flat_local_row_plan_for_classes(
+            np.asarray(class_counts, dtype=np.int32),
+            int(segment),
+            pool_size=3,
+            rotation_block_size=rotation_block_size,
+            exact_local_bucket_radix=exact_local_bucket_radix,
+            packed_row_count=packed_row_count,
+            dense_batch_size=dense_batch_size,
+        )
+    return build_pool_flat_local_row_plan(
+        np.asarray(bucket.actual_rotation_counts, dtype=np.int32),
+        dense_rotation_count,
+        pool_size=3,
+        rotation_block_size=rotation_block_size,
+        exact_local_bucket_radix=exact_local_bucket_radix,
+        packed_row_count=packed_row_count,
+        dense_batch_size=dense_batch_size,
+    )
+
+
 def _plan_flat_local_row_capacities(
     bucket_specs,
     *,
@@ -948,10 +993,9 @@ def _plan_flat_local_row_capacities(
             int(getattr(bucket, "bucket_image_count", physical_image_count)),
         )
         dense_rotation_count = int(bucket.bucket_rotation_count)
-        plan = build_pool_flat_local_row_plan(
-            np.asarray(bucket.actual_rotation_counts, dtype=np.int32),
-            dense_rotation_count,
-            pool_size=3,
+        plan = _build_pool_flat_plan_for_bucket(
+            bucket,
+            dense_rotation_count=dense_rotation_count,
             rotation_block_size=rotation_block_size,
             exact_local_bucket_radix=exact_local_bucket_radix,
             dense_batch_size=dense_batch_size,
@@ -978,10 +1022,9 @@ def _build_flat_local_row_argument(
     key = (int(dense_batch_size), dense_rotation_count)
     if key not in capacities:
         raise ValueError(f"flat local row capacity is missing dense bucket ABI {key}")
-    plan = build_pool_flat_local_row_plan(
-        np.asarray(bucket.actual_rotation_counts, dtype=np.int32),
-        dense_rotation_count,
-        pool_size=3,
+    plan = _build_pool_flat_plan_for_bucket(
+        bucket,
+        dense_rotation_count=dense_rotation_count,
         rotation_block_size=rotation_block_size,
         exact_local_bucket_radix=exact_local_bucket_radix,
         packed_row_count=int(capacities[key]),
