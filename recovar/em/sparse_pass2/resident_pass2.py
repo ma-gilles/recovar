@@ -109,6 +109,13 @@ from recovar.em.sparse_pass2.resident_candidates import (
     materialize_chunk,
     plan_capacity_chunks,
 )
+from recovar.em.sparse_pass2.resident_operands import (
+    ResidentOperandsUnsupported,
+    gather_resident_chunk_operands,
+    prepare_resident_half_operands,
+    resident_half_operand_bytes,
+    resident_operands_max_bytes,
+)
 from recovar.em.sparse_pass2.resident_scoring import score_resident_chunk
 from recovar.em.sparse_pass2.resident_statistics import (
     ResidentStatistics,
@@ -190,6 +197,24 @@ _CHUNK_STATIC_BLOCKS_ENV = "RECOVAR_SPARSE_PASS2_RESIDENT_CHUNK_STATIC_BLOCKS"
 # keeps the device loop and is the oracle the unrolled form is compared against.
 _CHUNK_BLOCK_LOOP_ENV = "RECOVAR_SPARSE_PASS2_RESIDENT_CHUNK_BLOCK_LOOP"
 _BLOCK_COUNT_LADDER = (1, 2, 4, 8, 16, 32)
+# T16: prepare the per-image operands once per half and keep them resident, and
+# take the M-step's weighted sums with T15's flat-row translate-and-sum kernel
+# instead of a gathered ``[images, translations, pixels]`` tile. Default on;
+# ``RECOVAR_SPARSE_PASS2_RESIDENT_OPERANDS=0`` selects the per-chunk
+# ``_prepare_bucket_io`` preparation and the XLA tile reduction, which stay as
+# the oracle both forms are compared against.
+_RESIDENT_OPERANDS_ENV = "RECOVAR_SPARSE_PASS2_RESIDENT_OPERANDS"
+# Diagnostic, default off. For the first chunk of a half it also runs the
+# per-chunk preparation and checks, on that chunk's real operands, that
+# translating the resident per-image arrays reproduces the pre-shifted tiles
+# bitwise and that the kernel's weighted sums equal the XLA reduction. It
+# doubles that chunk's preparation cost, so an arm with it set is a diagnostic
+# arm, never a timing arm.
+_RESIDENT_OPERANDS_VERIFY_ENV = "RECOVAR_SPARSE_PASS2_RESIDENT_OPERANDS_VERIFY"
+# Take ``ctf_probs`` from the translate-and-sum kernel's fourth output instead
+# of the XLA statement. Measurement only: see
+# ``_resident_block_weighted_sums_kernel`` for why it is not the default.
+_KERNEL_CTF_PROBS_ENV = "RECOVAR_SPARSE_PASS2_RESIDENT_KERNEL_CTF_PROBS"
 _SOFT_POSTERIOR_BLOCK_BPREF_PROTOTYPE_ENV = "RECOVAR_EM_PROTOTYPE_SOFT_POSTERIOR_BLOCK_BPREF"
 
 # Row capacities are multiples of the M-step block so every chunk decomposes
@@ -521,6 +546,78 @@ def _resident_block_weighted_sums(
     ctf_probs = compute_local_ctf_sums_from_probs_sum_t(
         probs_sum_t[:, None],
         jnp.asarray(ctf2_over_nv_recon)[row_image_local],
+    )[:, 0, :]
+    return summed, summed_masked, ctf_probs, probs_sum_t
+
+
+def _resident_block_weighted_sums_kernel(
+    row_posterior,  # float32 [block, T]
+    row_image_ids,  # int32 [block], -1 on a padded row
+    row_image_local,  # int32 [block], the chunk-local slot the XLA gather uses
+    recon_image,  # complex64 [C_B, P], unshifted
+    recon_weight,  # float32 [C_B, P] (BPref weighted CTF) or None
+    noise_image,  # complex64 [C_B, P], unshifted
+    ctf2_over_nv_recon,  # float32 [C_B, P]
+    recon_pixel_indices,  # int32 [P], centered packed-half indices
+    translation_angles,  # float32 [T, 2]
+    *,
+    image_shape,
+    n_recon_pixels: int,
+    kernel_ctf_probs: bool,
+    cuda_backproject,
+):
+    """T15's translate-and-sum kernel in place of the gathered-tile reduction.
+
+    Same four outputs as :func:`_resident_block_weighted_sums`, from the
+    *unshifted* per-image operands: the kernel applies each translation inside
+    the reduction with the phase arithmetic of the primitive that built the
+    tile, so no ``[images, translations, pixels]`` tile exists. ``recon_weight``
+    selects the convention pairing production uses -- BPref for the
+    reconstruction operand, score for the noise operand -- and matches how
+    ``_prepare_bucket_io`` builds the two shifted arrays.
+
+    Rows are bounded by their image id rather than by a row count: a padded row
+    carries ``-1`` and the kernel writes it as zeros, which is the value the XLA
+    path reaches through a zero posterior.
+
+    ``ctf_probs``. The kernel can also produce it, from its own sequential
+    ``probs_sum_t``. That mass is bitwise against ``jnp.sum`` only where XLA
+    happens to reduce the translations sequentially too: it does at
+    ``[2048, 21]``, and it does not at ``[64, 21]``, where the fourth output
+    moves 53% of the cells by up to 1 relative ulp. ``ctf_probs`` feeds the
+    ``Ft_ctf`` accumulator and the Wavg and noise terms, so the default keeps
+    the XLA statement the per-chunk path used, on the same gathered CTF row;
+    the fused form stays selectable for measurement, and the kernel's own mass
+    is never used for anything else.
+    """
+
+    row_posterior = jnp.asarray(row_posterior, dtype=jnp.float32)
+    block_rows = int(row_posterior.shape[0])
+    outputs = cuda_backproject.relion_translate_sum_flat_rows_f32(
+        jnp.asarray(recon_image, dtype=jnp.complex64),
+        jnp.asarray(noise_image, dtype=jnp.complex64),
+        jnp.asarray(row_image_ids, dtype=jnp.int32),
+        row_posterior,
+        jnp.asarray(translation_angles, dtype=jnp.float32),
+        jnp.asarray(recon_pixel_indices, dtype=jnp.int32),
+        jnp.asarray(block_rows, dtype=jnp.int32),
+        jnp.asarray(int(n_recon_pixels), dtype=jnp.int32),
+        recon_weight=(
+            None if recon_weight is None else jnp.asarray(recon_weight, dtype=jnp.float32)
+        ),
+        ctf2_over_nv=(
+            jnp.asarray(ctf2_over_nv_recon, dtype=jnp.float32) if kernel_ctf_probs else None
+        ),
+        image_shape=tuple(int(size) for size in image_shape),
+    )
+    if kernel_ctf_probs:
+        summed, summed_masked, probs_sum_t, ctf_probs = outputs
+        return summed, summed_masked, ctf_probs, probs_sum_t
+    summed, summed_masked, _kernel_mass = outputs
+    probs_sum_t = jnp.sum(row_posterior, axis=-1)
+    ctf_probs = compute_local_ctf_sums_from_probs_sum_t(
+        probs_sum_t[:, None],
+        jnp.asarray(ctf2_over_nv_recon)[jnp.asarray(row_image_local, dtype=jnp.int32)],
     )[:, 0, :]
     return summed, summed_masked, ctf_probs, probs_sum_t
 
@@ -1512,6 +1609,64 @@ def compute_pass2_stats_resident(
     rect_indices_device = jnp.asarray(relion_wavg_rectangle.centered_indices, dtype=jnp.int32)
     noise_variance_for_noise_device = jnp.asarray(noise_variance_for_noise)
     shell_indices_noise_device = jnp.asarray(shell_indices_noise, dtype=jnp.int32)
+    recon_pixel_indices_device = jnp.asarray(recon_window_indices, dtype=jnp.int32)
+
+    # ---- T16: per-image operands prepared once for the whole half ----------
+    # The per-chunk preparation repeats this work for every chunk an image
+    # appears in (image occupancy 0.38-0.66 at the early state) and was 71.5% of
+    # the half's CUDA launches. The operands are per-image pure, so one pass
+    # over the half produces the same rows; the chunk loop then gathers them.
+    resident_operands = None
+    if _resident_operands_requested():
+        operand_bytes = resident_half_operand_bytes(
+            n_images=int(n_images),
+            n_score_pixels=int(n_windowed),
+            n_recon_pixels=int(n_recon_windowed),
+            n_half_pixels=int(np.asarray(noise_variance_half).size),
+            n_fine_trans=int(n_fine_trans),
+            score_complex_bytes=np.dtype(precision_policy.score_complex_dtype).itemsize,
+            real_bytes=np.dtype(precision_policy.score_real_dtype).itemsize,
+        )
+        budget_bytes = resident_operands_max_bytes(device_memory_bytes)
+        if operand_bytes > budget_bytes:
+            logger.info(
+                "Resident pass-2 keeps the per-chunk operand preparation: one half's resident "
+                "operands would take %.2f GiB against a %.2f GiB budget",
+                operand_bytes / float(1024**3),
+                budget_bytes / float(1024**3),
+            )
+        else:
+            operands_t0 = time.time()
+            try:
+                resident_operands = prepare_resident_half_operands(
+                    experiment_dataset,
+                    np.arange(n_images, dtype=np.int64),
+                    bucket_io_kwargs=bucket_io_kwargs,
+                    window_indices=window_indices,
+                    recon_window_indices=recon_window_indices,
+                    image_shape=image_shape,
+                    current_size=current_size,
+                    n_fine_trans=int(n_fine_trans),
+                    use_exact_relion_gaussian=use_exact_relion_gaussian,
+                    accumulate_noise=accumulate_noise,
+                    source_faithful_spectrum_norm=resolved_spectrum_norm,
+                    fine_translation_prior_2d=fine_translation_prior_2d,
+                    scale_corrections_np=scale_corrections_np,
+                    group_ids_np=group_ids_np,
+                    precision_policy=precision_policy,
+                )
+            except ResidentOperandsUnsupported as reason:
+                logger.info(
+                    "Resident pass-2 keeps the per-chunk operand preparation: %s", reason
+                )
+                resident_operands = None
+            else:
+                logger.info(
+                    "Resident pass-2 per-half operand preparation: %.2fs",
+                    time.time() - operands_t0,
+                )
+
+    verify_operands = resident_operands is not None and _resident_operands_verify_enabled()
 
     # ---- chunk loop --------------------------------------------------------
     loop_t0 = time.time()
@@ -1544,6 +1699,9 @@ def compute_pass2_stats_resident(
             relion_x_half_recon_indices=relion_x_half_recon_indices,
             exact_positions_device=exact_positions_device,
             rect_indices_device=rect_indices_device,
+            recon_pixel_indices=recon_pixel_indices_device,
+            resident_operands=resident_operands,
+            verify_operands=verify_operands and chunk is chunks[0],
             image_shape=image_shape,
             current_size=current_size,
             mstep_current_size=mstep_current_size,
@@ -1912,6 +2070,129 @@ def _program_block_count(n_valid_rows: int, *, row_capacity: int, block_rows: in
     return capacity_blocks
 
 
+def _kernel_ctf_probs_enabled() -> bool:
+    """Whether the M-step's ``ctf_probs`` comes from the kernel's fourth output."""
+
+    return parse_env_flag(_KERNEL_CTF_PROBS_ENV, default=False)
+
+
+def _resident_operands_verify_enabled() -> bool:
+    """Whether to check the first chunk of a half against the per-chunk path."""
+
+    return parse_env_flag(_RESIDENT_OPERANDS_VERIFY_ENV, default=False)
+
+
+def _verify_resident_chunk_operands(
+    resident_recon,
+    reference_recon,
+    *,
+    translation_angles,
+    recon_pixel_indices,
+    image_shape,
+    n_recon_pixels: int,
+    bpref_recon_operand: bool,
+    label: str,
+    cuda_backproject,
+) -> None:
+    """Prove one real chunk's resident operands equal the per-chunk preparation.
+
+    The two paths differ in *when* the translation is applied, so the check
+    translates the resident per-image operands with the primitives
+    ``_prepare_bucket_io`` uses and compares against its own pre-shifted tiles.
+    A mismatch raises: this runs only in a diagnostic arm, and a silent
+    difference here would be a changed reconstruction operand.
+    """
+
+    image_capacity = int(np.asarray(reference_recon["shifted_recon"]).shape[0])
+    angles = jnp.asarray(translation_angles, dtype=jnp.float32)
+    indices = jnp.asarray(recon_pixel_indices, dtype=jnp.int32)
+    if bpref_recon_operand:
+        translated_recon = cuda_backproject.relion_translate_bpref_f32(
+            jnp.asarray(resident_recon["recon_image"], dtype=jnp.complex64),
+            jnp.asarray(resident_recon["recon_weight"], dtype=jnp.float32),
+            angles,
+            indices,
+            image_shape,
+        )
+    else:
+        translated_recon = cuda_backproject.relion_translate_score_f32(
+            jnp.asarray(resident_recon["recon_image"], dtype=jnp.complex64),
+            angles,
+            indices,
+            image_shape,
+        )
+    translated_noise = cuda_backproject.relion_translate_score_f32(
+        jnp.asarray(resident_recon["noise_image"], dtype=jnp.complex64),
+        angles,
+        indices,
+        image_shape,
+    )
+    n_fine_trans = int(angles.shape[0])
+    checks = {
+        "shifted_recon": (
+            np.asarray(translated_recon).reshape(image_capacity, n_fine_trans, n_recon_pixels),
+            np.asarray(reference_recon["shifted_recon"]),
+        ),
+        "shifted_noise": (
+            np.asarray(translated_noise).reshape(image_capacity, n_fine_trans, n_recon_pixels),
+            np.asarray(reference_recon["shifted_noise"]),
+        ),
+    }
+    for name in (
+        "score_input",
+        "corr_img_score",
+        "highres_xi2_half",
+        "translation_prior",
+        "ctf2_over_nv_recon",
+        "direct_ctf_rfloat_recon",
+        "processed_image_half",
+        "relion_norm_high_shell",
+        "raw_translated_wavg_rectangle",
+        "raw_translated_wavg_for_atomic",
+        "scale",
+        "group_ids",
+    ):
+        expected = reference_recon.get(name)
+        actual = resident_recon.get(name)
+        if expected is None and actual is None:
+            continue
+        if (expected is None) != (actual is None):
+            raise AssertionError(f"resident operand {name} presence differs from the per-chunk path")
+        checks[name] = (np.asarray(actual), np.asarray(expected))
+
+    mismatched = []
+    for name, (actual, expected) in checks.items():
+        if actual.shape != expected.shape or actual.dtype != expected.dtype:
+            mismatched.append(f"{name}: {actual.shape}/{actual.dtype} vs {expected.shape}/{expected.dtype}")
+        elif not np.array_equal(actual, expected):
+            differing = int(np.count_nonzero(actual != expected))
+            worst = float(np.max(np.abs(actual.astype(np.complex128) - expected.astype(np.complex128))))
+            mismatched.append(f"{name}: {differing}/{actual.size} cells differ, max |delta| {worst:.3e}")
+    if mismatched:
+        raise AssertionError(
+            f"resident per-half operands differ from the per-chunk preparation on {label}: "
+            + "; ".join(mismatched)
+        )
+    logger.info(
+        "Resident pass-2 operand verification on %s: %d operands bitwise equal to the "
+        "per-chunk preparation (BPref reconstruction operand=%d)",
+        label,
+        len(checks),
+        int(bpref_recon_operand),
+    )
+
+
+def _resident_operands_requested() -> bool:
+    """Whether the per-image operands are prepared once per half (T16).
+
+    Default on. ``RECOVAR_SPARSE_PASS2_RESIDENT_OPERANDS=0`` keeps the per-chunk
+    ``_prepare_bucket_io`` preparation and the XLA tile reduction, which are the
+    oracle for every bitwise comparison of the new path.
+    """
+
+    return parse_env_flag(_RESIDENT_OPERANDS_ENV, default=True)
+
+
 def _chunk_static_block_trip_enabled() -> bool:
     """Whether the chunk program's M-step loop runs the whole row capacity.
 
@@ -1954,6 +2235,15 @@ class _ChunkProgramSpec:
     max_adjoint_block_bytes: int
     stats_config: object
     use_rfloat_ctf_wavg: bool
+    # T16: whether the M-step's weighted sums come from the translate-and-sum
+    # kernel on unshifted operands, and whether its reconstruction operand takes
+    # the BPref convention (a weight) or the score convention (no weight).
+    use_translate_sum_kernel: bool
+    bpref_recon_operand: bool
+    # Whether ``ctf_probs`` comes from the kernel's fourth output instead of the
+    # XLA statement the per-chunk path used. Off by default: the kernel's own
+    # translation mass is bitwise against ``jnp.sum`` only at some shapes.
+    kernel_ctf_probs: bool
     # Blocks the program walks, and how. ``block_loop`` is "unrolled" or
     # "while"; ``n_program_blocks`` is the static count the unrolled form emits.
     block_loop: str
@@ -1988,8 +2278,15 @@ class _ChunkStageOperands(NamedTuple):
     corr_img_score: jax.Array
     highres_xi2_half: jax.Array | None
     translation_prior: jax.Array
-    shifted_recon: jax.Array
-    shifted_noise: jax.Array
+    # Exactly one reconstruction operand pair is populated. The per-chunk
+    # preparation fills the pre-shifted ``[C_B, T, P]`` tiles; the once-per-half
+    # preparation fills the unshifted ``[C_B, P]`` images T15's kernel takes,
+    # with ``recon_weight`` set only in the exact-BPref configuration.
+    shifted_recon: jax.Array | None
+    shifted_noise: jax.Array | None
+    recon_image: jax.Array | None
+    recon_weight: jax.Array | None
+    noise_image: jax.Array | None
     ctf2_over_nv_recon: jax.Array
     direct_ctf_rfloat_recon: jax.Array | None
     processed_image_half: jax.Array
@@ -2016,6 +2313,7 @@ class _ChunkStageTables(NamedTuple):
     noise_variance_for_noise: jax.Array
     shell_indices_noise: jax.Array
     exact_positions: jax.Array
+    recon_pixel_indices: jax.Array
     relion_x_half_recon_indices: jax.Array
     shell_indices_half: jax.Array
     wavg_shell_indices: jax.Array
@@ -2159,13 +2457,30 @@ def _resident_mstep_block(
     logical_recon_pixels = jnp.asarray(spec.n_recon_pixels, dtype=jnp.int32)
     logical_rect_pixels = jnp.asarray(spec.n_rect, dtype=jnp.int32)
 
-    summed, summed_masked, ctf_probs, _probs_sum_t = _resident_block_weighted_sums(
-        block_posterior,
-        block_row_image,
-        operands.shifted_recon,
-        operands.shifted_noise,
-        operands.ctf2_over_nv_recon,
-    )
+    if spec.use_translate_sum_kernel:
+        summed, summed_masked, ctf_probs, _probs_sum_t = _resident_block_weighted_sums_kernel(
+            block_posterior,
+            block_kernel_ids,
+            block_row_image,
+            operands.recon_image,
+            operands.recon_weight,
+            operands.noise_image,
+            operands.ctf2_over_nv_recon,
+            tables.recon_pixel_indices,
+            tables.translation_angles,
+            image_shape=spec.image_shape,
+            n_recon_pixels=int(spec.n_recon_pixels),
+            kernel_ctf_probs=bool(spec.kernel_ctf_probs),
+            cuda_backproject=cuda_backproject,
+        )
+    else:
+        summed, summed_masked, ctf_probs, _probs_sum_t = _resident_block_weighted_sums(
+            block_posterior,
+            block_row_image,
+            operands.shifted_recon,
+            operands.shifted_noise,
+            operands.ctf2_over_nv_recon,
+        )
 
     # RELION Wavg triplet in the flat-row layout, then its rotation atomics.
     # The host tail picks the sequential RELION reducer when the pass carries
@@ -2286,10 +2601,24 @@ def _initial_mstep_carry(
     block_rows = int(spec.mstep_block_rows)
     n_pixels = int(spec.n_recon_pixels)
 
-    def probe(row_posterior, row_image, shifted_recon, shifted_noise, ctf2, proj, proj_abs2, noise, shells):
-        _summed, summed_masked, ctf_probs, _mass = _resident_block_weighted_sums(
-            row_posterior, row_image, shifted_recon, shifted_noise, ctf2
+    if spec.use_translate_sum_kernel:
+        # The kernel's wrapper declares these two outputs, so their avals are
+        # known without tracing an FFI call.
+        summed_masked_aval = jax.ShapeDtypeStruct((block_rows, n_pixels), jnp.complex64)
+        ctf_probs_aval = jax.ShapeDtypeStruct((block_rows, n_pixels), jnp.float32)
+    else:
+        summed_masked_aval, ctf_probs_aval = jax.eval_shape(
+            lambda posterior, row_image, recon, noise, ctf2: _resident_block_weighted_sums(
+                posterior, row_image, recon, noise, ctf2
+            )[1:3],
+            jax.ShapeDtypeStruct((block_rows, int(spec.n_fine_trans)), jnp.float32),
+            jax.ShapeDtypeStruct((block_rows,), jnp.int32),
+            operands.shifted_recon,
+            operands.shifted_noise,
+            operands.ctf2_over_nv_recon,
         )
+
+    def probe(summed_masked, ctf_probs, proj, proj_abs2, noise, shells, row_image):
         return _resident_block_noise_and_norm(
             proj,
             proj_abs2,
@@ -2304,15 +2633,13 @@ def _initial_mstep_carry(
 
     shells_aval, a2_aval, xa_aval = jax.eval_shape(
         probe,
-        jax.ShapeDtypeStruct((block_rows, int(spec.n_fine_trans)), jnp.float32),
-        jax.ShapeDtypeStruct((block_rows,), jnp.int32),
-        operands.shifted_recon,
-        operands.shifted_noise,
-        operands.ctf2_over_nv_recon,
+        summed_masked_aval,
+        ctf_probs_aval,
         jax.ShapeDtypeStruct((block_rows, n_pixels), tables.projection_recon_cache.dtype),
         jax.ShapeDtypeStruct((block_rows, n_pixels), tables.projection_recon_abs2_cache.dtype),
         tables.noise_variance_for_noise,
         tables.shell_indices_noise,
+        jax.ShapeDtypeStruct((block_rows,), jnp.int32),
     )
     return _ChunkMstepCarry(
         Ft_y=Ft_y,
@@ -2548,6 +2875,9 @@ def _run_resident_chunk(
     relion_x_half_recon_indices,
     exact_positions_device,
     rect_indices_device,
+    recon_pixel_indices,
+    resident_operands,
+    verify_operands,
     image_shape,
     current_size,
     mstep_current_size,
@@ -2611,32 +2941,84 @@ def _run_resident_chunk(
         image_row_count=jnp.asarray(image_row_count_np, dtype=jnp.int64),
     )
 
-    recon = _prepare_chunk_reconstruction_operands(
-        chunk=chunk,
-        image_indices=image_indices,
-        experiment_dataset=experiment_dataset,
-        bucket_io_kwargs=bucket_io_kwargs,
-        windowed_prepare=windowed_prepare,
-        recon_window_indices=recon_window_indices,
-        score_window_indices=window_indices,
-        fine_translation_prior_2d=fine_translation_prior_2d,
-        score_real_dtype=score_real_dtype,
-        n_fine_trans=int(n_fine_trans),
-        n_recon_windowed=int(n_recon_windowed),
-        image_shape=image_shape,
-        current_size=current_size,
-        use_exact_relion_gaussian=use_exact_relion_gaussian,
-        accumulate_noise=accumulate_noise,
-        source_faithful_spectrum_norm=source_faithful_spectrum_norm,
-        relion_score_translation_angles=translation_angles,
-        rect_indices_device=rect_indices_device,
-        exact_positions_device=exact_positions_device,
-        scale_corrections_np=scale_corrections_np,
-        group_ids_np=group_ids_np,
-        precision_policy=precision_policy,
-    )
+    if resident_operands is None:
+        recon = _prepare_chunk_reconstruction_operands(
+            chunk=chunk,
+            image_indices=image_indices,
+            experiment_dataset=experiment_dataset,
+            bucket_io_kwargs=bucket_io_kwargs,
+            windowed_prepare=windowed_prepare,
+            recon_window_indices=recon_window_indices,
+            score_window_indices=window_indices,
+            fine_translation_prior_2d=fine_translation_prior_2d,
+            score_real_dtype=score_real_dtype,
+            n_fine_trans=int(n_fine_trans),
+            n_recon_windowed=int(n_recon_windowed),
+            image_shape=image_shape,
+            current_size=current_size,
+            use_exact_relion_gaussian=use_exact_relion_gaussian,
+            accumulate_noise=accumulate_noise,
+            source_faithful_spectrum_norm=source_faithful_spectrum_norm,
+            relion_score_translation_angles=translation_angles,
+            rect_indices_device=rect_indices_device,
+            exact_positions_device=exact_positions_device,
+            scale_corrections_np=scale_corrections_np,
+            group_ids_np=group_ids_np,
+            precision_policy=precision_policy,
+        )
+    else:
+        # The chunk's image slots are the half's images ``image_start`` to
+        # ``image_stop``; the padded slots carry -1 and the gather zeroes them,
+        # which is what the per-chunk preparation's capacity mask did.
+        image_slots = np.full(image_capacity, -1, dtype=np.int32)
+        image_slots[:n_valid_images] = image_indices[:n_valid_images]
+        recon = gather_resident_chunk_operands(
+            resident_operands,
+            image_slots,
+            translation_angles=translation_angles,
+            rect_indices=rect_indices_device,
+            exact_positions=exact_positions_device,
+            image_shape=image_shape,
+        )
+        if verify_operands:
+            _verify_resident_chunk_operands(
+                recon,
+                _prepare_chunk_reconstruction_operands(
+                    chunk=chunk,
+                    image_indices=image_indices,
+                    experiment_dataset=experiment_dataset,
+                    bucket_io_kwargs=bucket_io_kwargs,
+                    windowed_prepare=windowed_prepare,
+                    recon_window_indices=recon_window_indices,
+                    score_window_indices=window_indices,
+                    fine_translation_prior_2d=fine_translation_prior_2d,
+                    score_real_dtype=score_real_dtype,
+                    n_fine_trans=int(n_fine_trans),
+                    n_recon_windowed=int(n_recon_windowed),
+                    image_shape=image_shape,
+                    current_size=current_size,
+                    use_exact_relion_gaussian=use_exact_relion_gaussian,
+                    accumulate_noise=accumulate_noise,
+                    source_faithful_spectrum_norm=source_faithful_spectrum_norm,
+                    relion_score_translation_angles=translation_angles,
+                    rect_indices_device=rect_indices_device,
+                    exact_positions_device=exact_positions_device,
+                    scale_corrections_np=scale_corrections_np,
+                    group_ids_np=group_ids_np,
+                    precision_policy=precision_policy,
+                ),
+                translation_angles=translation_angles,
+                recon_pixel_indices=recon_pixel_indices,
+                image_shape=image_shape,
+                n_recon_pixels=int(n_recon_windowed),
+                bpref_recon_operand=resident_operands.recon_weight is not None,
+                label=f"chunk images {chunk.image_start}-{chunk.image_stop}",
+                cuda_backproject=cuda_backproject,
+            )
     if timing:
-        jax.block_until_ready(recon["shifted_recon"])
+        jax.block_until_ready(
+            recon["shifted_recon"] if resident_operands is None else recon["recon_image"]
+        )
         stage_t["operands"] = time.time() - chunk_t0
 
     # The prior squared distances are a per-image host table; building them at
@@ -2666,8 +3048,11 @@ def _run_resident_chunk(
         corr_img_score=recon["corr_img_score"],
         highres_xi2_half=recon["highres_xi2_half"],
         translation_prior=recon["translation_prior"],
-        shifted_recon=recon["shifted_recon"],
-        shifted_noise=recon["shifted_noise"],
+        shifted_recon=recon.get("shifted_recon"),
+        shifted_noise=recon.get("shifted_noise"),
+        recon_image=recon.get("recon_image"),
+        recon_weight=recon.get("recon_weight"),
+        noise_image=recon.get("noise_image"),
         ctf2_over_nv_recon=recon["ctf2_over_nv_recon"],
         direct_ctf_rfloat_recon=recon["direct_ctf_rfloat_recon"],
         processed_image_half=recon["processed_image_half"],
@@ -2691,6 +3076,7 @@ def _run_resident_chunk(
         noise_variance_for_noise=noise_variance_for_noise,
         shell_indices_noise=shell_indices_noise,
         exact_positions=exact_positions_device,
+        recon_pixel_indices=recon_pixel_indices,
         relion_x_half_recon_indices=relion_x_half_recon_indices,
         shell_indices_half=image_tables.shell_indices_half,
         wavg_shell_indices=image_tables.wavg_shell_indices,
@@ -2712,6 +3098,11 @@ def _run_resident_chunk(
         max_adjoint_block_bytes=int(max_adjoint_block_bytes),
         stats_config=stats_config,
         use_rfloat_ctf_wavg=recon["direct_ctf_rfloat_recon"] is not None,
+        use_translate_sum_kernel=resident_operands is not None,
+        bpref_recon_operand=(
+            resident_operands is not None and resident_operands.recon_weight is not None
+        ),
+        kernel_ctf_probs=_kernel_ctf_probs_enabled(),
         block_loop=_chunk_block_loop_mode(),
         n_program_blocks=_program_block_count(
             n_valid_rows, row_capacity=row_capacity, block_rows=int(mstep_block_rows)
