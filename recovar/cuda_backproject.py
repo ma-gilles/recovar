@@ -2236,30 +2236,32 @@ def sparse_pass2_segmented_posterior_f32(
 
     ``sort_scan_mode`` selects how the RELION significance boundary sorts and
     scans the candidate weights; ``None`` takes
-    :func:`sparse_pass2_segmented_sort_scan_mode`.  Modes 3 and 4 repeat modes
-    1 and 2 with ``cub::DeviceSegmentedSort``, which partitions segments by
-    size, in place of ``cub::DeviceSegmentedRadixSort``.
+    :func:`sparse_pass2_segmented_sort_scan_mode`, whose default is ``auto``:
+    :func:`sparse_pass2_segmented_auto_mode` then picks mode 2 or mode 0 from
+    this chunk's capacity class. Modes 3 and 4 repeat modes 1 and 2 with
+    ``cub::DeviceSegmentedSort``, which partitions segments by size, in place of
+    ``cub::DeviceSegmentedRadixSort``.
 
     * ``0`` (``per_segment``) is the oracle: one CUB radix sort and one pinned
       Ampere inclusive scan per nonempty segment, every output bitwise equal to
       :func:`sparse_pass2_posterior_f32` on the same candidates.
-    * ``1`` (``segmented_sort``, the default) issues one
-      ``cub::DeviceSegmentedRadixSort`` for the chunk instead of one sort per
-      image. A radix sort is an exact permutation of its keys, so every output
-      stays bitwise equal to mode 0.
-    * ``2`` (``segmented``) also replaces the per-segment scans by one
-      device-side segmented scan and is the only mode with no host round trip.
+    * ``1`` (``segmented_sort``) issues one ``cub::DeviceSegmentedRadixSort``
+      for the chunk instead of one sort per image. A radix sort is an exact
+      permutation of its keys, so every output stays bitwise equal to mode 0.
+    * ``2`` (``segmented``, what ``auto`` picks below the crossover) also
+      replaces the per-segment scans by one device-side segmented scan and is
+      the only mode with no host round trip.
       Its float32 summation order differs, so ``sum_weight`` and ``threshold``
       can differ from mode 0 by a few ULP and an image whose significance
       boundary sits on a near-tie can keep a different number of candidates.
       Mode 2 is therefore not bitwise with the rectangular handler.
 
-    Modes 0 and 1 copy ``segment_offsets`` back and synchronize once, after
-    they have enqueued the first two kernels and reserved the scratch, so the
-    device works on this call while the host waits: the CUB scan takes its item
-    count as a host argument, and that count is what fixes the float32
-    summation order the boundary is defined by (``sum_weight`` is the scan's
-    last element and the threshold is a searchsorted over it).
+    The per-segment-scan modes (0, 1 and 3) copy ``segment_offsets`` back and
+    synchronize once, after they have enqueued the first two kernels and
+    reserved the scratch, so the device works on this call while the host waits:
+    the CUB scan takes its item count as a host argument, and that count is what
+    fixes the float32 summation order the boundary is defined by (``sum_weight``
+    is the scan's last element and the threshold is a searchsorted over it).
 
     ``return_scratch`` appends the handler's ``(raw_weights, sorted,
     cumulative)`` scratch to the result, for tests that compare the sorted keys
