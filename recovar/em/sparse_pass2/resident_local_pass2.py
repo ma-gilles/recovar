@@ -221,10 +221,6 @@ def require_resident_local_configuration(**kwargs) -> None:
         "an externally supplied normalizer belongs to the broad-denominator probe",
     )
     _require(
-        not bool(kwargs["source_faithful_spectrum_norm"]),
-        "RELION source-faithful spectrum normalization is not wired here",
-    )
-    _require(
         not bool(kwargs["return_reconstruction_sample_indices"]),
         "significant-sample capture belongs to the pass-1 parent probe",
     )
@@ -390,6 +386,13 @@ def compute_local_search_resident(
         use_float64_scoring=use_float64_scoring,
     )
 
+    # ``run_local_em_exact`` uses this flag as passed rather than resolving it
+    # against the environment, so do the same: it selects RELION's powerClass
+    # shell spectrum for the image-power statistics and, with it, the
+    # deterministic float64 norm reduction. It does not switch on RELION's
+    # exact BPref operands here, because the exact local engine never enables
+    # those on its production path.
+    resolved_spectrum_norm = bool(source_faithful_spectrum_norm)
     scale_groups_available = group_ids is not None
     relion_wavg_atomic_scale_aa = bool(
         accumulate_noise
@@ -419,7 +422,6 @@ def compute_local_search_resident(
         mstep_subtract_ctf_projection=mstep_subtract_ctf_projection,
         normalization_log_z=normalization_log_z,
         normalization_log_evidence=normalization_log_evidence,
-        source_faithful_spectrum_norm=source_faithful_spectrum_norm,
         return_reconstruction_sample_indices=return_reconstruction_sample_indices,
         group_ids=group_ids,
         use_window=budget_window_spec.use_window,
@@ -652,7 +654,7 @@ def compute_local_search_resident(
         n_fine_trans=n_fine_trans,
         use_exact_relion_gaussian=True,
         accumulate_noise=accumulate_noise,
-        source_faithful_spectrum_norm=False,
+        source_faithful_spectrum_norm=resolved_spectrum_norm,
         fine_translation_prior_2d=np.asarray(
             tables.translation_log_prior, dtype=precision_policy.score_real_dtype
         ),
@@ -680,7 +682,7 @@ def compute_local_search_resident(
         relion_wavg_atomic_direct_noise=relion_wavg_atomic_direct_noise,
         relion_wavg_atomic_scale_aa=relion_wavg_atomic_scale_aa,
         accumulate_scale=scale_groups_available,
-        source_faithful_spectrum_norm=False,
+        source_faithful_spectrum_norm=resolved_spectrum_norm,
     )
     stats = make_resident_statistics(
         stats_config, max_posterior_dtype=precision_policy.score_real_dtype
@@ -762,6 +764,7 @@ def compute_local_search_resident(
             fine_translations=fine_translations,
             voxel_size=experiment_dataset.voxel_size,
             accumulate_noise=accumulate_noise,
+            source_faithful_spectrum_norm=resolved_spectrum_norm,
             stats=stats,
             stats_config=stats_config,
             image_tables=image_tables,
@@ -927,6 +930,7 @@ def _run_resident_local_chunk(
     fine_translations,
     voxel_size,
     accumulate_noise,
+    source_faithful_spectrum_norm,
     stats,
     stats_config,
     image_tables,
@@ -1055,7 +1059,7 @@ def _run_resident_local_chunk(
         current_size=current_size,
         use_exact_relion_gaussian=True,
         accumulate_noise=accumulate_noise,
-        source_faithful_spectrum_norm=False,
+        source_faithful_spectrum_norm=bool(source_faithful_spectrum_norm),
         relion_score_translation_angles=operands.translation_angles,
         rect_indices_device=rect_indices_device,
         exact_positions_device=exact_positions_device,

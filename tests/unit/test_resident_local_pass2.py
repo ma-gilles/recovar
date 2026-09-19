@@ -158,7 +158,14 @@ def _case(seed=20260919, full_support=False):
     )
 
 
-def _run(case, *, resident: bool, monkeypatch, current_size=CURRENT_SIZE):
+def _run(
+    case,
+    *,
+    resident: bool,
+    monkeypatch,
+    current_size=CURRENT_SIZE,
+    source_faithful_spectrum_norm=False,
+):
     """One fine pass 2 through the production dispatch."""
 
     if resident:
@@ -204,6 +211,7 @@ def _run(case, *, resident: bool, monkeypatch, current_size=CURRENT_SIZE):
         max_significants=-1,
         return_best_pose_details=True,
         return_significant_counts=True,
+        source_faithful_spectrum_norm=source_faithful_spectrum_norm,
         pass2_layout=layout,
     )
 
@@ -271,7 +279,6 @@ def test_gate_names_the_missing_piece(override, expected):
         mstep_subtract_ctf_projection=False,
         normalization_log_z=None,
         normalization_log_evidence=None,
-        source_faithful_spectrum_norm=False,
         return_reconstruction_sample_indices=False,
         group_ids=np.zeros(3, dtype=np.int32),
         use_window=True,
@@ -420,6 +427,45 @@ def test_resident_local_matches_the_exact_engine(monkeypatch, _resident_local_en
     assert float(exact.noise_stats.wsum_sigma2_offset) == pytest.approx(
         float(resident.noise_stats.wsum_sigma2_offset), abs=1e-9
     )
+
+
+@requires_resident_gpu
+def test_source_faithful_spectrum_norm_is_plumbed_not_refused(
+    monkeypatch, _resident_local_env
+):
+    """The production local search sets this flag, so the driver must carry it.
+
+    ``source_faithful_spectrum_norm`` selects RELION's powerClass shell
+    spectrum for the image-power statistics and the deterministic float64 norm
+    reduction. The exact local engine uses the caller's value directly, with no
+    environment resolution of its own, and so does this driver.
+    """
+
+    case = _case()
+    exact = _run(
+        case, resident=False, monkeypatch=monkeypatch, source_faithful_spectrum_norm=True
+    )
+    resident = _run(
+        case, resident=True, monkeypatch=monkeypatch, source_faithful_spectrum_norm=True
+    )
+    np.testing.assert_array_equal(
+        np.asarray(exact.hard_assignment), np.asarray(resident.hard_assignment)
+    )
+
+    def rel_l2(a, b):
+        a = np.asarray(a, dtype=np.complex128)
+        b = np.asarray(b, dtype=np.complex128)
+        den = float(np.linalg.norm(a))
+        return float(np.linalg.norm(a - b) / den) if den else 0.0
+
+    assert rel_l2(exact.Ft_y, resident.Ft_y) < 1e-5
+    total_exact = np.asarray(exact.noise_stats.wsum_sigma2_noise) + np.asarray(
+        exact.noise_stats.wsum_img_power
+    )
+    total_resident = np.asarray(resident.noise_stats.wsum_sigma2_noise) + np.asarray(
+        resident.noise_stats.wsum_img_power
+    )
+    assert rel_l2(total_exact, total_resident) < 1e-4
 
 
 @requires_resident_gpu
