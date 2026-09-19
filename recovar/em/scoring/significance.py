@@ -1442,6 +1442,7 @@ def _compute_k_class_significance_batched(
         and bool(collect_significance)
     )
     device_significance_counts = []
+    device_significance_polarity = []
     device_significance_ids = []
     if coarse_significance_device_enabled:
         from recovar.em.sparse_pass2.resident_significance import (
@@ -4135,16 +4136,20 @@ def _compute_k_class_significance_batched(
                         "dataset order",
                     )
                 batch_sig_mask_np = None
-                batch_device_counts, batch_device_ids, _batch_device_rot_any = (
-                    compact_batch_significance(
-                        batch_sig_mask,
-                        actual_batch_size=actual_batch_size,
-                        n_coarse_rot=n_rot,
-                        n_coarse_trans=n_trans,
-                        batch_n_sig=batch_n_sig,
-                    )
+                (
+                    batch_device_counts,
+                    batch_device_polarity,
+                    batch_device_ids,
+                    _batch_device_rot_any,
+                ) = compact_batch_significance(
+                    batch_sig_mask,
+                    actual_batch_size=actual_batch_size,
+                    n_coarse_rot=n_rot,
+                    n_coarse_trans=n_trans,
+                    batch_n_sig=batch_n_sig,
                 )
                 device_significance_counts.append(batch_device_counts)
+                device_significance_polarity.append(batch_device_polarity)
                 device_significance_ids.append(batch_device_ids)
             else:
                 batch_sig_mask_np = np.array(batch_sig_mask, dtype=bool, copy=True)
@@ -4666,7 +4671,8 @@ def _compute_k_class_significance_batched(
             n_images=n_images,
             n_coarse_rot=n_rot,
             n_coarse_trans=n_trans,
-            counts_per_batch=device_significance_counts,
+            n_significant_per_batch=device_significance_counts,
+            store_excluded_per_batch=device_significance_polarity,
             ids_per_batch=device_significance_ids,
         )
         significant_sample_indices[0] = DeviceCompactedSignificantSamples(

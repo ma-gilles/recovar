@@ -14,6 +14,7 @@ import numpy as np
 import pytest
 
 from recovar.em.scoring.significant_samples import (
+    ComplementSignificantSampleIndices,
     compact_significant_sample_indices_from_mask,
 )
 from recovar.em.scoring.sparse_bucket_arrays import _prepare_per_image_pass2_inputs
@@ -65,7 +66,13 @@ def _fine_rotation_override():
 
 
 def _supports(n_images: int, n_samples: int, seed: int = 13) -> list[np.ndarray]:
-    """Per-image significant coarse cell ids: varied sizes, one empty image."""
+    """Per-image significant coarse cell ids, one image of every regime.
+
+    Image 1 has no support, image 2 is dense (the host encoder stores its
+    complement), image 3 is fully significant (the host encoder stores
+    ``None``), image 4 sits exactly on the threshold where the rule keeps the
+    included ids, and the rest are ordinary sparse supports.
+    """
 
     rng = np.random.default_rng(seed)
     supports = []
@@ -73,7 +80,14 @@ def _supports(n_images: int, n_samples: int, seed: int = 13) -> list[np.ndarray]
         if image == 1:
             supports.append(np.zeros(0, dtype=np.int32))
             continue
-        count = int(rng.integers(1, max(2, n_samples // 4)))
+        if image == 2 and n_images > 2:
+            count = n_samples - max(1, n_samples // 8)
+        elif image == 3 and n_images > 3:
+            count = n_samples
+        elif image == 4 and n_images > 4:
+            count = n_samples // 2  # included == excluded: keep the included ids
+        else:
+            count = int(rng.integers(1, max(2, n_samples // 4)))
         ids = rng.choice(n_samples, size=count, replace=False)
         supports.append(np.sort(ids).astype(np.int32))
     return supports
@@ -86,19 +100,41 @@ def _mask_from_supports(supports, n_samples: int) -> np.ndarray:
     return mask
 
 
+def _encoded_supports(supports, n_samples: int) -> list:
+    """The host encoder's output for these supports, as production produces it.
+
+    ``_prepare_per_image_pass2_inputs`` never sees raw id lists in production:
+    it sees whatever
+    :func:`compact_significant_sample_indices_from_mask` encoded, which is
+    ``None`` for a full support and a sparse complement for a dense one.
+    """
+
+    mask = _mask_from_supports(supports, n_samples)
+    return [compact_significant_sample_indices_from_mask(mask[i]) for i in range(mask.shape[0])]
+
+
 def _csr_from_supports(supports, *, n_coarse_rot, n_coarse_trans) -> CoarseSignificanceCSR:
-    counts = np.asarray([np.asarray(s).size for s in supports], dtype=np.int32)
-    ids = (
-        np.concatenate([np.asarray(s, dtype=np.int32) for s in supports])
-        if supports
-        else np.zeros(0, dtype=np.int32)
-    )
+    """Build the CSR the device path would build for these supports."""
+
+    n_samples = n_coarse_rot * n_coarse_trans
+    n_significant = np.asarray([np.asarray(s).size for s in supports], dtype=np.int32)
+    store_excluded = (n_significant.astype(np.int64) * 2) > n_samples
+    stored = []
+    for image, ids in enumerate(supports):
+        ids = np.asarray(ids, dtype=np.int64)
+        if store_excluded[image]:
+            keep = np.ones(n_samples, dtype=bool)
+            keep[ids] = False
+            stored.append(np.flatnonzero(keep).astype(np.int32))
+        else:
+            stored.append(ids.astype(np.int32))
     return build_coarse_significance_csr(
         n_images=len(supports),
         n_coarse_rot=n_coarse_rot,
         n_coarse_trans=n_coarse_trans,
-        counts_per_batch=[counts],
-        ids_per_batch=[ids],
+        n_significant_per_batch=[n_significant],
+        store_excluded_per_batch=[store_excluded],
+        ids_per_batch=[np.concatenate(stored) if stored else np.zeros(0, np.int32)],
     )
 
 
@@ -111,26 +147,30 @@ def test_compaction_matches_flatnonzero_per_image_bitwise():
     mask = _mask_from_supports(supports, n_samples)
     counts_host = mask.sum(axis=1).astype(np.int32)
 
-    counts, ids, rot_any = compact_batch_significance(
+    n_significant, store_excluded, ids, rot_any = compact_batch_significance(
         mask,
         actual_batch_size=mask.shape[0],
         n_coarse_rot=N_COARSE_ROT,
         n_coarse_trans=N_COARSE_TRANS,
         batch_n_sig=counts_host,
     )
-    np.testing.assert_array_equal(counts, counts_host)
+    np.testing.assert_array_equal(n_significant, counts_host)
     csr = build_coarse_significance_csr(
         n_images=mask.shape[0],
         n_coarse_rot=N_COARSE_ROT,
         n_coarse_trans=N_COARSE_TRANS,
-        counts_per_batch=[counts],
+        n_significant_per_batch=[n_significant],
+        store_excluded_per_batch=[store_excluded],
         ids_per_batch=[ids],
     )
+    n_samples = N_COARSE_ROT * N_COARSE_TRANS
     for image in range(mask.shape[0]):
-        np.testing.assert_array_equal(
-            csr.image_ids(image),
-            np.flatnonzero(mask[image]).astype(np.int32),
+        expected = (
+            np.flatnonzero(~mask[image]) if store_excluded[image] else np.flatnonzero(mask[image])
         )
+        np.testing.assert_array_equal(csr.image_ids(image), expected.astype(np.int32))
+        # The stored set is always the smaller one, exactly as the host rule picks it.
+        assert bool(store_excluded[image]) == (int(counts_host[image]) * 2 > n_samples)
     np.testing.assert_array_equal(
         rot_any,
         mask.reshape(mask.shape[0], N_COARSE_ROT, N_COARSE_TRANS).any(axis=(0, 2)),
@@ -144,27 +184,27 @@ def test_compaction_ignores_padded_image_rows():
     actual = 4
     counts_host = mask[:actual].sum(axis=1).astype(np.int32)
 
-    counts, ids, _rot_any = compact_batch_significance(
+    n_significant, store_excluded, ids, _rot_any = compact_batch_significance(
         mask,
         actual_batch_size=actual,
         n_coarse_rot=N_COARSE_ROT,
         n_coarse_trans=N_COARSE_TRANS,
         batch_n_sig=mask.sum(axis=1).astype(np.int32),
     )
-    np.testing.assert_array_equal(counts, counts_host)
-    assert ids.size == int(counts_host.sum())
+    np.testing.assert_array_equal(n_significant, counts_host)
     csr = build_coarse_significance_csr(
         n_images=actual,
         n_coarse_rot=N_COARSE_ROT,
         n_coarse_trans=N_COARSE_TRANS,
-        counts_per_batch=[counts],
+        n_significant_per_batch=[n_significant],
+        store_excluded_per_batch=[store_excluded],
         ids_per_batch=[ids],
     )
     for image in range(actual):
-        np.testing.assert_array_equal(
-            csr.image_ids(image),
-            np.flatnonzero(mask[image]).astype(np.int32),
+        expected = (
+            np.flatnonzero(~mask[image]) if store_excluded[image] else np.flatnonzero(mask[image])
         )
+        np.testing.assert_array_equal(csr.image_ids(image), expected.astype(np.int32))
 
 
 def test_host_support_rows_match_the_host_encoder():
@@ -179,22 +219,38 @@ def test_host_support_rows_match_the_host_encoder():
     rows = host_support_rows(csr)
     for image in range(mask.shape[0]):
         expected = compact_significant_sample_indices_from_mask(mask[image])
-        np.testing.assert_array_equal(np.asarray(rows[image]), np.asarray(expected))
-        assert np.asarray(rows[image]).dtype == np.int32
+        got = rows[image]
+        assert type(got) is type(expected), image
+        if expected is None:
+            continue
+        if isinstance(expected, ComplementSignificantSampleIndices):
+            np.testing.assert_array_equal(got.excluded_indices, expected.excluded_indices)
+            assert int(got.total_size) == int(expected.total_size)
+            assert np.asarray(got.excluded_indices).dtype == np.int32
+            continue
+        np.testing.assert_array_equal(np.asarray(got), np.asarray(expected))
+        assert np.asarray(got).dtype == np.int32
 
 
-def test_compaction_refuses_the_complement_regime():
+def test_compaction_stores_the_complement_of_a_dense_support():
+    """A dense support is stored as its complement, as the host encoder does."""
+
     n_samples = N_COARSE_ROT * N_COARSE_TRANS
     mask = np.zeros((2, n_samples), dtype=bool)
-    mask[0, : n_samples // 2 + 1] = True
-    with pytest.raises(NotImplementedError, match="complement"):
-        compact_batch_significance(
-            mask,
-            actual_batch_size=2,
-            n_coarse_rot=N_COARSE_ROT,
-            n_coarse_trans=N_COARSE_TRANS,
-            batch_n_sig=mask.sum(axis=1).astype(np.int32),
-        )
+    mask[0, : n_samples // 2 + 1] = True  # just over the threshold
+    mask[1, : n_samples // 2] = True  # exactly on it: keep the included ids
+    n_significant, store_excluded, ids, _rot_any = compact_batch_significance(
+        mask,
+        actual_batch_size=2,
+        n_coarse_rot=N_COARSE_ROT,
+        n_coarse_trans=N_COARSE_TRANS,
+        batch_n_sig=mask.sum(axis=1).astype(np.int32),
+    )
+    assert list(store_excluded) == [True, False]
+    np.testing.assert_array_equal(n_significant, mask.sum(axis=1).astype(np.int32))
+    split = n_samples - int(n_significant[0])
+    np.testing.assert_array_equal(ids[:split], np.flatnonzero(~mask[0]).astype(np.int32))
+    np.testing.assert_array_equal(ids[split:], np.flatnonzero(mask[1]).astype(np.int32))
 
 
 def test_capacity_ladder_is_power_of_two_and_covers_the_total():
@@ -215,8 +271,15 @@ def test_support_list_carries_its_csr_and_stays_a_list():
     rows = DeviceCompactedSignificantSamples(host_support_rows(csr), csr=csr)
     assert isinstance(rows, list)
     assert len(rows) == len(supports)
-    for image, ids in enumerate(rows):
-        np.testing.assert_array_equal(ids, supports[image])
+    expected = _encoded_supports(supports, n_samples)
+    for image, got in enumerate(rows):
+        want = expected[image]
+        if want is None:
+            assert got is None
+        elif isinstance(want, ComplementSignificantSampleIndices):
+            np.testing.assert_array_equal(got.excluded_indices, want.excluded_indices)
+        else:
+            np.testing.assert_array_equal(np.asarray(got), np.asarray(want))
     assert rows.csr is csr
     with pytest.raises(ValueError, match="CSR covers"):
         DeviceCompactedSignificantSamples(rows[:-1], csr=csr)
@@ -254,7 +317,7 @@ def test_tables_from_csr_match_the_host_path_with_a_fine_grid_override(execution
     rotation_log_prior = np.linspace(-2.0, 2.0, N_COARSE_ROT, dtype=np.float32)
 
     per_image_inputs = _prepare_per_image_pass2_inputs(
-        supports,
+        _encoded_supports(supports, n_samples),
         n_coarse_rot=N_COARSE_ROT,
         n_coarse_trans=N_COARSE_TRANS,
         nside_level=STD_NSIDE_LEVEL,
@@ -301,7 +364,7 @@ def test_tables_from_csr_match_the_host_path_on_the_generated_grid(execution_ord
     rotation_log_prior = np.linspace(-1.0, 1.0, STD_N_COARSE_ROT, dtype=np.float32)
 
     per_image_inputs = _prepare_per_image_pass2_inputs(
-        supports,
+        _encoded_supports(supports, n_samples),
         n_coarse_rot=STD_N_COARSE_ROT,
         n_coarse_trans=N_COARSE_TRANS,
         nside_level=STD_NSIDE_LEVEL,
@@ -344,7 +407,7 @@ def test_tables_from_csr_match_the_host_path_without_a_rotation_prior():
     fine_rotations, fine_parent = _fine_rotation_override()
 
     per_image_inputs = _prepare_per_image_pass2_inputs(
-        supports,
+        _encoded_supports(supports, n_samples),
         n_coarse_rot=N_COARSE_ROT,
         n_coarse_trans=N_COARSE_TRANS,
         nside_level=STD_NSIDE_LEVEL,
@@ -384,57 +447,6 @@ def test_tables_from_csr_match_the_host_path_without_a_rotation_prior():
     _assert_tables_equal(got, expected)
 
 
-def test_tables_from_csr_refuse_the_complement_regime():
-    n_samples = N_COARSE_ROT * N_COARSE_TRANS
-    supports = [np.arange(n_samples // 2 + 1, dtype=np.int32)]
-    csr = _csr_from_supports(
-        supports,
-        n_coarse_rot=N_COARSE_ROT,
-        n_coarse_trans=N_COARSE_TRANS,
-    )
-    _rotations, fine_parent = _fine_rotation_override()
-    with pytest.raises(NotImplementedError, match="complement"):
-        build_resident_candidate_tables_from_csr(
-            csr,
-            nside_level=STD_NSIDE_LEVEL,
-            oversampling_order=0,
-            n_fine_trans=N_FINE_TRANS,
-            fine_translation_parent=FINE_TRANS_PARENT,
-            rotation_log_prior=None,
-            random_perturbation=0.0,
-            fine_rotation_parent_override=fine_parent,
-            relion_parent_execution_order=True,
-            dtype=np.float32,
-        )
-
-
-def test_fixture_exercises_both_mask_modes():
-    """Guard the fixture: it must cover an empty image and a bitset image."""
-
-    n_samples = N_COARSE_ROT * N_COARSE_TRANS
-    supports = _supports(11, n_samples)
-    _rotations, fine_parent = _fine_rotation_override()
-    per_image_inputs = _prepare_per_image_pass2_inputs(
-        supports,
-        n_coarse_rot=N_COARSE_ROT,
-        n_coarse_trans=N_COARSE_TRANS,
-        nside_level=STD_NSIDE_LEVEL,
-        oversampling_order=0,
-        n_fine_trans=N_FINE_TRANS,
-        fine_translation_parent=FINE_TRANS_PARENT,
-        rotation_log_prior=None,
-        random_perturbation=0.0,
-        fine_rotations_override=_fine_rotation_override()[0],
-        fine_rotation_parent_override=fine_parent,
-        relion_parent_execution_order=True,
-        dtype=np.float32,
-    )
-    modes = {mask.mode for mask in per_image_inputs["candidate_mask"]}
-    assert modes == {"coarse", "empty"}, (
-        f"fixture built modes {modes}; update the fixture, not the assertion"
-    )
-
-
 def test_compaction_fills_an_exactly_full_capacity():
     """A total support equal to the id capacity must not be corrupted.
 
@@ -452,12 +464,50 @@ def test_compaction_fills_an_exactly_full_capacity():
     mask = np.zeros((2, n_samples), dtype=bool)
     mask[0, ids.astype(np.int64)] = True
 
-    counts, compacted, _rot_any = compact_batch_significance(
+    _n_significant, _store_excluded, compacted, _rot_any = compact_batch_significance(
         mask,
         actual_batch_size=2,
         n_coarse_rot=n_coarse_rot,
         n_coarse_trans=n_coarse_trans,
         batch_n_sig=mask.sum(axis=1).astype(np.int32),
     )
-    assert int(counts.sum()) == capacity
+    assert compacted.size == capacity
     np.testing.assert_array_equal(compacted, ids)
+
+
+def test_fixture_covers_every_support_regime():
+    """Guard the fixture: it must exercise all four host encodings.
+
+    The device path has to reproduce every one of them, so a fixture that
+    quietly stopped covering one would hide a gap like the dense-support case
+    that failed the first end-to-end gate.
+    """
+
+    n_samples = N_COARSE_ROT * N_COARSE_TRANS
+    supports = _supports(11, n_samples)
+    encoded = _encoded_supports(supports, n_samples)
+    assert any(e is None for e in encoded), "no full-support image"
+    assert any(isinstance(e, ComplementSignificantSampleIndices) for e in encoded), "no dense image"
+    assert any(isinstance(e, np.ndarray) and e.size == 0 for e in encoded), "no empty image"
+    assert any(isinstance(e, np.ndarray) and e.size > 0 for e in encoded), "no sparse image"
+
+    _rotations, fine_parent = _fine_rotation_override()
+    per_image_inputs = _prepare_per_image_pass2_inputs(
+        encoded,
+        n_coarse_rot=N_COARSE_ROT,
+        n_coarse_trans=N_COARSE_TRANS,
+        nside_level=STD_NSIDE_LEVEL,
+        oversampling_order=0,
+        n_fine_trans=N_FINE_TRANS,
+        fine_translation_parent=FINE_TRANS_PARENT,
+        rotation_log_prior=None,
+        random_perturbation=0.0,
+        fine_rotations_override=_fine_rotation_override()[0],
+        fine_rotation_parent_override=fine_parent,
+        relion_parent_execution_order=True,
+        dtype=np.float32,
+    )
+    modes = {mask.mode for mask in per_image_inputs["candidate_mask"]}
+    assert modes == {"coarse", "empty", "full", "coarse_exclude"}, (
+        f"fixture built modes {modes}; update the fixture, not the assertion"
+    )
