@@ -2132,9 +2132,23 @@ def sparse_pass2_segmented_posterior_f32(
     or beyond ``n_valid_images`` carry the values the rectangular handler
     produces for an all ``-inf`` row.
 
-    The RELION significance boundary reuses the per-segment CUB radix sort and
-    pinned Ampere inclusive scan of the rectangular handler, which needs the
-    segment lengths on the host: this call synchronizes the stream once.
+    Launch geometry is capacity-only: every kernel is launched at the static
+    segment count from ``segment_offsets.shape``, the CUB scratch is sized at
+    the static cell count, and ``n_valid_images`` is read on the device alone,
+    so nothing on the host depends on the chunk's occupancy and two chunks of
+    one capacity class issue identical work.
+
+    One host round trip remains. The RELION significance boundary reuses the
+    per-segment CUB radix sort and pinned Ampere inclusive scan of the
+    rectangular handler, whose item count is a host argument, and that count is
+    what fixes the float32 summation order the boundary is defined by
+    (``sum_weight`` is the scan's last element and the threshold is a
+    searchsorted over it). The handler therefore copies ``segment_offsets``
+    back and synchronizes once, after it has enqueued its first two kernels and
+    reserved the scratch, so the device works on this call while the host
+    waits. Replacing the loop with a device-side segmented scan would remove
+    the round trip and change both outputs, so it is a numerics decision, not a
+    performance one.
     """
 
     _, segments = _sparse_pass2_segment_geometry(scores, segment_offsets, n_valid_images)

@@ -413,3 +413,138 @@ def test_empty_segments_invalid_images_and_padding(adaptive_fraction, keep_all, 
     assert np.all(actual["normalized_weights"][tail:] == 0.0)
     assert np.all(actual["reconstruction_probs"][tail:] == 0.0)
     assert not np.any(actual["mask"][tail:])
+
+
+@pytest.mark.gpu
+@pytest.mark.parametrize("adaptive_fraction", _ADAPTIVE_FRACTIONS)
+def test_capacity_launch_is_independent_of_occupancy(adaptive_fraction):
+    """Padding a chunk up to a larger capacity class changes no live output.
+
+    The device-resident driver pads every chunk to a capacity class, so the same
+    images are handed to the handler with different segment counts and different
+    cell counts from one run to the next.  The handler reads ``n_valid_images``
+    only on the device and sizes its scratch from the static cell count, so the
+    live segments must come back bitwise identical whatever the padding is.
+    """
+
+    _require_segmented_gpu()
+    translations = 7
+    row_counts = [5, 1, 64, 12]
+    lengths = [count * translations for count in row_counts]
+    n_valid = len(lengths)
+    live_offsets = np.concatenate([[0], np.cumsum(lengths)]).astype(np.int64)
+    live_cells = int(live_offsets[-1])
+    scores = make_scores((live_cells,), 71).astype(np.float32)
+    for index in range(n_valid):
+        segment = scores[live_offsets[index] : live_offsets[index + 1]]
+        if not np.isfinite(segment).any():
+            segment[0] = -150.0
+    log_z_live = np.empty(n_valid, np.float64)
+    for index in range(n_valid):
+        segment = scores[live_offsets[index] : live_offsets[index + 1]]
+        log_z_live[index] = np.asarray(
+            cb.sparse_pass2_log_z_f64(jnp.asarray(segment.reshape(1, -1), jnp.float32))
+        )[0]
+
+    reference = None
+    for image_capacity, row_capacity in ((n_valid, sum(row_counts)), (16, 256), (64, 1024)):
+        cells = row_capacity * translations
+        padded_scores = np.full(cells, -np.inf, np.float32)
+        padded_scores[:live_cells] = scores
+        offsets = np.full(image_capacity + 1, live_cells, np.int32)
+        offsets[: n_valid + 1] = live_offsets[: n_valid + 1]
+        log_z = np.full(image_capacity, -np.inf, np.float64)
+        log_z[:n_valid] = log_z_live
+
+        segmented_log_z = np.asarray(
+            cb.sparse_pass2_segmented_log_z_f64(
+                jnp.asarray(padded_scores, jnp.float32),
+                jnp.asarray(offsets, jnp.int32),
+                jnp.asarray(n_valid, jnp.int32),
+            )
+        )
+        np.testing.assert_array_equal(
+            segmented_log_z[:n_valid], log_z_live, err_msg=f"log_z at capacity {image_capacity}"
+        )
+
+        actual = _segmented(
+            padded_scores, offsets, n_valid, log_z, None,
+            adaptive_fraction=adaptive_fraction, keep_all=False,
+        )
+        live = {
+            name: (
+                value[:live_cells] if value.shape == (cells,) else value[:n_valid]
+            )
+            for name, value in actual.items()
+        }
+        if reference is None:
+            reference = live
+            continue
+        for name in _OUTPUT_NAMES:
+            np.testing.assert_array_equal(
+                live[name], reference[name], err_msg=f"{name} at capacity {image_capacity}"
+            )
+
+
+@pytest.mark.gpu
+@pytest.mark.parametrize("adaptive_fraction", _ADAPTIVE_FRACTIONS)
+def test_offsets_past_n_valid_images_do_not_leak(adaptive_fraction):
+    """Nonempty segments past ``n_valid_images`` stay all ``-inf`` rows.
+
+    The sort/scan loop no longer reads ``n_valid_images`` back to the host, so
+    it sorts those segments' scratch as well; nothing they write may reach a
+    live segment or their own outputs.
+    """
+
+    _require_segmented_gpu()
+    translations = 5
+    lengths = [6 * translations, 9 * translations, 4 * translations]
+    offsets = np.concatenate([[0], np.cumsum(lengths)]).astype(np.int32)
+    cells = int(offsets[-1])
+    scores = make_scores((cells,), 97).astype(np.float32)
+    for index in range(len(lengths)):
+        segment = scores[offsets[index] : offsets[index + 1]]
+        if not np.isfinite(segment).any():
+            segment[0] = -150.0
+    log_z = np.empty(len(lengths), np.float64)
+    for index in range(len(lengths)):
+        segment = scores[offsets[index] : offsets[index + 1]]
+        log_z[index] = np.asarray(
+            cb.sparse_pass2_log_z_f64(jnp.asarray(segment.reshape(1, -1), jnp.float32))
+        )[0]
+
+    full = _segmented(
+        scores, offsets, len(lengths), log_z, None,
+        adaptive_fraction=adaptive_fraction, keep_all=False,
+    )
+    clipped = _segmented(
+        scores, offsets, 2, log_z, None,
+        adaptive_fraction=adaptive_fraction, keep_all=False,
+    )
+    live_cells = int(offsets[2])
+    for name in _OUTPUT_NAMES:
+        value, reference = clipped[name], full[name]
+        if value.shape == (cells,):
+            np.testing.assert_array_equal(
+                value[:live_cells], reference[:live_cells], err_msg=f"{name} live cells"
+            )
+        else:
+            np.testing.assert_array_equal(value[:2], reference[:2], err_msg=f"{name} live segments")
+
+    invalid = _rectangular(
+        np.full((1, lengths[2]), -np.inf, np.float32),
+        np.zeros(1, np.float64),
+        None,
+        adaptive_fraction=adaptive_fraction,
+        keep_all=False,
+    )
+    begin = int(offsets[2])
+    per_segment = {
+        name: (
+            clipped[name][begin : begin + lengths[2]].reshape(1, -1)
+            if clipped[name].shape == (cells,)
+            else clipped[name][2:3]
+        )
+        for name in _OUTPUT_NAMES
+    }
+    _assert_same(per_segment, invalid, "segment past n_valid_images")

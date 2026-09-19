@@ -543,12 +543,22 @@ ffi::Error posterior_impl(
 //     segment with a host-side length, the sort uses the same loop, which makes
 //     the sorted key order identical by construction instead of by argument.
 //   * The host therefore needs the segment lengths: the posterior handler
-//     copies segment_offsets and n_valid_images back and synchronizes the
-//     stream once per call.  That readback happens before the handler launches
-//     anything, so the host stalls only on the work that produced the offsets
-//     and then enqueues every stage back to back; the CUB dispatch keeps
-//     overlapping the kernels as it does in the rectangular handler.  The
-//     log-Z handler needs no lengths on the host and stays device-resident.
+//     copies segment_offsets back and synchronizes the stream once per call.
+//     This is the one host round trip left in the device-resident chunk body,
+//     and it cannot be removed while the significance boundary is CUB's
+//     decoupled-lookback float32 scan: that scan's summation order depends on
+//     the segment length, sum_weight is cumulative[n - 1] and the threshold is
+//     a searchsorted over the same array, so a device-side segmented scan (a
+//     ScanByKey, or one scan over the whole chunk) moves both and breaks the
+//     bitwise contract with the rectangular handler and with RELION.  The
+//     launch geometry is capacity-only: every kernel is launched at the static
+//     segment count, the scratch is sized at the static cell count, and
+//     n_valid_images is read only on the device, so nothing on the host
+//     depends on the chunk's occupancy.  To keep the stall off the device, the
+//     handler enqueues the max and exponentiate kernels, and the CUB scratch
+//     allocation, before it synchronizes, so the device is working on this
+//     call's own kernels while the host waits.  The log-Z handler needs no
+//     lengths on the host and stays device-resident.
 //
 // Empty segments and images at or beyond n_valid_images produce exactly the
 // values the rectangular path produces for an all -inf row.  Cells covered by
@@ -873,37 +883,9 @@ ffi::Error segmented_posterior_impl(
     float* sorted_ptr = static_cast<float*>(sorted->untyped_data());
     float* cumulative_ptr = static_cast<float*>(cumulative->untyped_data());
 
-    // The sort/scan loop needs host-side segment lengths; see the note above.
-    // The readback runs before this handler launches anything, so the host
-    // stalls only on the work that produced the offsets and then enqueues every
-    // stage back to back: the CUB sort/scan dispatch still overlaps the kernels
-    // below, exactly as in the rectangular handler.
-    std::vector<int32_t> host_offsets(static_cast<size_t>(n_segments) + 1, 0);
-    int32_t host_valid = 0;
-    cudaError_t error = cudaMemcpyAsync(host_offsets.data(), offsets_ptr,
-                                        host_offsets.size() * sizeof(int32_t),
-                                        cudaMemcpyDeviceToHost, stream);
-    if (error == cudaSuccess)
-        error = cudaMemcpyAsync(&host_valid, n_valid_images.untyped_data(), sizeof(int32_t),
-                                cudaMemcpyDeviceToHost, stream);
-    if (error == cudaSuccess) error = cudaStreamSynchronize(stream);
-    if (error != cudaSuccess)
-        return ffi::Error::Internal(
-            std::string("SparsePass2SegmentedPosteriorF32 offset readback: ") + cudaGetErrorString(error));
-    if (host_valid < 0) host_valid = 0;
-    if (host_valid > static_cast<int32_t>(n_segments)) host_valid = static_cast<int32_t>(n_segments);
-    int64_t previous = 0;
-    int64_t longest = 0;
-    for (size_t i = 0; i < host_offsets.size(); ++i)
-    {
-        const int64_t offset = host_offsets[i];
-        if (offset < previous || offset > n_cells)
-            return ffi::Error::InvalidArgument(
-                "SparsePass2SegmentedPosteriorF32: segment_offsets must be nondecreasing within [0, n_cells]");
-        if (i > 0 && offset - previous > longest) longest = offset - previous;
-        previous = offset;
-    }
-
+    // Stage 1 and 2 need nothing from the host: launch them, and reserve the
+    // CUB scratch at the static cell count, before the offsets readback, so the
+    // device works on this call's own kernels while the host waits for it.
     segmented_max_kernel<<<static_cast<int>(n_segments), kRowThreads, 0, stream>>>(
         scores_ptr, offsets_ptr,
         static_cast<const int32_t*>(n_valid_images.untyped_data()),
@@ -912,7 +894,7 @@ ffi::Error segmented_posterior_impl(
         static_cast<double*>(log_z_out->untyped_data()),
         static_cast<float*>(best_log_score->untyped_data()),
         static_cast<int64_t*>(best_cell_index->untyped_data()));
-    error = cudaGetLastError();
+    cudaError_t error = cudaGetLastError();
     if (error != cudaSuccess)
         return ffi::Error::Internal(
             std::string("SparsePass2SegmentedPosteriorF32 segment max: ") + cudaGetErrorString(error));
@@ -933,43 +915,77 @@ ffi::Error segmented_posterior_impl(
         return ffi::Error::Internal(
             std::string("SparsePass2SegmentedPosteriorF32 exponentiate: ") + cudaGetErrorString(error));
 
-    // Same CUB radix sort and pinned Ampere inclusive scan as the rectangular
-    // handler, once per live segment on the caller's stream.
+    // Scratch for the per-segment sort and scan, sized at the capacity: a
+    // query at n_cells bounds every segment of this chunk, so the allocation
+    // and its query are the same for every chunk of a capacity class instead
+    // of following the longest segment of this one.
+    const int capacity_count = static_cast<int>(n_cells);
     size_t sort_bytes = 0;
     size_t scan_bytes = 0;
-    if (longest > 0)
+    error = cub::DeviceRadixSort::SortKeys(
+        nullptr, sort_bytes, raw_ptr, sorted_ptr, capacity_count, 0, sizeof(float) * 8, stream);
+    if (error != cudaSuccess)
+        return ffi::Error::Internal(
+            std::string("SparsePass2SegmentedPosteriorF32 sort query: ") + cudaGetErrorString(error));
+    error = relion_ampere_inclusive_sum_f32(
+        nullptr, scan_bytes, sorted_ptr, cumulative_ptr, capacity_count, stream);
+    if (error != cudaSuccess)
+        return ffi::Error::Internal(
+            std::string("SparsePass2SegmentedPosteriorF32 scan query: ") + cudaGetErrorString(error));
+    void* temporary = nullptr;
+    const size_t temporary_bytes = std::max<size_t>(1, std::max(sort_bytes, scan_bytes));
+    error = cudaMallocAsync(&temporary, temporary_bytes, stream);
+    if (error != cudaSuccess)
+        return ffi::Error::Internal(
+            std::string("SparsePass2SegmentedPosteriorF32 cudaMallocAsync: ") + cudaGetErrorString(error));
+
+    // The one host round trip: the per-segment CUB calls take their item count
+    // on the host, and that count is what fixes the float32 scan order the
+    // significance boundary is defined by.  n_valid_images is NOT read back:
+    // segments at or past it carry no cells on the device (segment_extent
+    // clamps them), and sorting a range the device treats as empty writes only
+    // into scratch that the threshold body never reads for that segment.
+    std::vector<int32_t> host_offsets(static_cast<size_t>(n_segments) + 1, 0);
+    error = cudaMemcpyAsync(host_offsets.data(), offsets_ptr,
+                            host_offsets.size() * sizeof(int32_t),
+                            cudaMemcpyDeviceToHost, stream);
+    if (error == cudaSuccess) error = cudaStreamSynchronize(stream);
+    if (error != cudaSuccess)
     {
-        const int longest_count = static_cast<int>(longest);
-        error = cub::DeviceRadixSort::SortKeys(
-            nullptr, sort_bytes, raw_ptr, sorted_ptr, longest_count, 0, sizeof(float) * 8, stream);
-        if (error != cudaSuccess)
-            return ffi::Error::Internal(
-                std::string("SparsePass2SegmentedPosteriorF32 sort query: ") + cudaGetErrorString(error));
-        error = relion_ampere_inclusive_sum_f32(
-            nullptr, scan_bytes, sorted_ptr, cumulative_ptr, longest_count, stream);
-        if (error != cudaSuccess)
-            return ffi::Error::Internal(
-                std::string("SparsePass2SegmentedPosteriorF32 scan query: ") + cudaGetErrorString(error));
-        void* temporary = nullptr;
-        const size_t temporary_bytes = std::max<size_t>(1, std::max(sort_bytes, scan_bytes));
-        error = cudaMallocAsync(&temporary, temporary_bytes, stream);
-        if (error != cudaSuccess)
-            return ffi::Error::Internal(
-                std::string("SparsePass2SegmentedPosteriorF32 cudaMallocAsync: ") + cudaGetErrorString(error));
-        for (int64_t segment = 0; segment < host_valid && error == cudaSuccess; ++segment)
+        cudaFreeAsync(temporary, stream);
+        return ffi::Error::Internal(
+            std::string("SparsePass2SegmentedPosteriorF32 offset readback: ") + cudaGetErrorString(error));
+    }
+    int64_t previous = 0;
+    for (size_t i = 0; i < host_offsets.size(); ++i)
+    {
+        const int64_t offset = host_offsets[i];
+        if (offset < previous || offset > n_cells)
         {
-            const int64_t begin = host_offsets[static_cast<size_t>(segment)];
-            const int64_t length = host_offsets[static_cast<size_t>(segment) + 1] - begin;
-            if (length <= 0) continue;
-            const int segment_count = static_cast<int>(length);
-            error = cub::DeviceRadixSort::SortKeys(
-                temporary, sort_bytes, raw_ptr + begin, sorted_ptr + begin, segment_count,
-                0, sizeof(float) * 8, stream);
-            if (error == cudaSuccess)
-                error = relion_ampere_inclusive_sum_f32(
-                    temporary, scan_bytes, sorted_ptr + begin, cumulative_ptr + begin,
-                    segment_count, stream);
+            cudaFreeAsync(temporary, stream);
+            return ffi::Error::InvalidArgument(
+                "SparsePass2SegmentedPosteriorF32: segment_offsets must be nondecreasing within [0, n_cells]");
         }
+        previous = offset;
+    }
+
+    // Same CUB radix sort and pinned Ampere inclusive scan as the rectangular
+    // handler, once per nonempty segment on the caller's stream.
+    for (int64_t segment = 0; segment < n_segments && error == cudaSuccess; ++segment)
+    {
+        const int64_t begin = host_offsets[static_cast<size_t>(segment)];
+        const int64_t length = host_offsets[static_cast<size_t>(segment) + 1] - begin;
+        if (length <= 0) continue;
+        const int segment_count = static_cast<int>(length);
+        error = cub::DeviceRadixSort::SortKeys(
+            temporary, sort_bytes, raw_ptr + begin, sorted_ptr + begin, segment_count,
+            0, sizeof(float) * 8, stream);
+        if (error == cudaSuccess)
+            error = relion_ampere_inclusive_sum_f32(
+                temporary, scan_bytes, sorted_ptr + begin, cumulative_ptr + begin,
+                segment_count, stream);
+    }
+    {
         const cudaError_t free_error = cudaFreeAsync(temporary, stream);
         if (error != cudaSuccess)
             return ffi::Error::Internal(
