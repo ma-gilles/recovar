@@ -92,6 +92,7 @@ from recovar.em.helpers.projection import (
 )
 from recovar.em.helpers.scale_groups import prepare_scale_correction_groups
 from recovar.em.helpers.types import LocalEMResult, make_noise_stats, make_relion_stats
+from recovar.em.refinement.projector_preparation import prepare_local_projector_slab
 from recovar.em.sparse_pass2 import resident_pass2 as rp
 from recovar.em.sparse_pass2.resident_local_layout import (
     materialize_local_chunk,
@@ -541,7 +542,13 @@ def compute_local_search_resident(
     )
 
     # ---- projection setup -------------------------------------------------
-    relion_projector_half = jnp.asarray(relion_projector_half)
+    # The refinement loop hands local search a projector with a singleton class
+    # axis; the exact local engine normalizes it with the same helper before
+    # projecting, so do that here rather than letting the projector unpack a
+    # 4-D shape.
+    relion_projector_half = prepare_local_projector_slab(
+        relion_projector_half, path_label="device-resident local projector path"
+    )
     if relion_projector_half.dtype == jnp.complex128:
         relion_projector_half = relion_projector_half.astype(jnp.complex64)
     projection_kwargs = _projection_kwargs_for_relion_score_window(

@@ -165,7 +165,12 @@ def _run(
     monkeypatch,
     current_size=CURRENT_SIZE,
     source_faithful_spectrum_norm=False,
+    production_shapes=False,
 ):
+    """``production_shapes`` mirrors what the refinement loop actually passes:
+    a projector with a singleton class axis, per-image contrast and scale
+    corrections, and translation-prior centres."""
+
     """One fine pass 2 through the production dispatch."""
 
     if resident:
@@ -173,6 +178,14 @@ def _run(
     else:
         monkeypatch.delenv(rlp.RESIDENT_LOCAL_SEARCH_ENV, raising=False)
     layout = case["layout"]
+    projector = case["projector_half"]
+    image_corrections = scale_corrections = trans_centers = None
+    if production_shapes:
+        projector = projector[None]  # the loop's singleton class axis
+        rng = np.random.default_rng(4242)
+        image_corrections = rng.uniform(0.9, 1.1, N_IMAGES).astype(np.float32)
+        scale_corrections = rng.uniform(0.9, 1.1, N_IMAGES).astype(np.float32)
+        trans_centers = rng.uniform(-0.5, 0.5, (N_IMAGES, 2)).astype(np.float32)
     return local_search_iteration._run_local_search_iteration(
         case["dataset"],
         case["volume"],
@@ -197,8 +210,11 @@ def _run(
         half_spectrum_scoring=True,
         relion_exact_score_translation=True,
         projection_relion_texture_interp=None,
-        relion_projector_half=case["projector_half"],
+        relion_projector_half=projector,
         relion_projector_r_max=case["r_max"],
+        image_corrections=image_corrections,
+        scale_corrections=scale_corrections,
+        translation_prior_centers=trans_centers,
         do_gridding_correction=True,
         square_window=False,
         group_ids=np.zeros(N_IMAGES, dtype=np.int32),
@@ -493,6 +509,37 @@ def test_full_parent_support_layout_runs_without_a_mask(monkeypatch, _resident_l
     a = np.asarray(exact.Ft_y, dtype=np.complex128)
     b = np.asarray(resident.Ft_y, dtype=np.complex128)
     assert float(np.linalg.norm(a - b) / np.linalg.norm(a)) < 1e-5
+
+
+@requires_resident_gpu
+def test_production_shaped_inputs_are_accepted(monkeypatch, _resident_local_env):
+    """The shapes the refinement loop actually hands local search.
+
+    A projector with a singleton class axis (normalized by the same helper the
+    exact local engine uses), per-image contrast and scale corrections, and
+    translation-prior centres, which switch on the sigma2-offset accumulator.
+    The 3-D fixture elsewhere in this file would not have caught the class axis.
+    """
+
+    case = _case()
+    exact = _run(case, resident=False, monkeypatch=monkeypatch, production_shapes=True)
+    resident = _run(case, resident=True, monkeypatch=monkeypatch, production_shapes=True)
+    np.testing.assert_array_equal(
+        np.asarray(exact.hard_assignment), np.asarray(resident.hard_assignment)
+    )
+
+    def rel_l2(a, b):
+        a = np.asarray(a, dtype=np.complex128)
+        b = np.asarray(b, dtype=np.complex128)
+        den = float(np.linalg.norm(a))
+        return float(np.linalg.norm(a - b) / den) if den else 0.0
+
+    assert rel_l2(exact.Ft_y, resident.Ft_y) < 1e-5
+    # Translation-prior centres switch on the sigma2 offset on both paths.
+    assert float(exact.noise_stats.wsum_sigma2_offset) != 0.0
+    assert float(resident.noise_stats.wsum_sigma2_offset) == pytest.approx(
+        float(exact.noise_stats.wsum_sigma2_offset), rel=1e-6
+    )
 
 
 @requires_resident_gpu
