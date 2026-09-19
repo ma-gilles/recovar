@@ -99,9 +99,6 @@ from recovar.em.sparse_pass2.resident_local_layout import (
     plan_local_capacity_chunks,
     tables_from_local_layout,
 )
-from recovar.em.local.local_batch_planning import (
-    _exact_local_xhalf_projection_target_row_pixels,
-)
 from recovar.em.sparse_pass2.resident_scoring import (
     project_resident_rows,
     resident_row_projection_bytes,
@@ -151,6 +148,24 @@ _IMAGE_CAPACITY_LADDER_ENV = "RECOVAR_LOCAL_SEARCH_RESIDENT_IMAGE_CAPACITIES"
 # serialises work that normally overlaps and inflates the loop; never use a
 # profiled arm for a wall-time comparison.
 _CHUNK_PROFILE_ENV = "RECOVAR_LOCAL_SEARCH_RESIDENT_CHUNK_PROFILE"
+_PROJECTION_CALL_MAX_BYTES_ENV = "RECOVAR_LOCAL_SEARCH_RESIDENT_PROJECTION_CALL_MAX_BYTES"
+# One projector call's transient. The exact local engine budgets its own fused
+# projection matmul at 4 GiB by default
+# (local_batch_planning.EXACT_LOCAL_BIG_JIT_MATMUL_MAX_GB); use the same figure
+# so the two engines reserve comparable headroom.
+_DEFAULT_PROJECTION_CALL_MAX_BYTES = 4 * 1024**3
+
+
+def _projection_call_transient_max_bytes() -> int:
+    """Bytes one projector call may hold for its full-half-spectrum rows."""
+
+    raw = os.environ.get(_PROJECTION_CALL_MAX_BYTES_ENV, "").strip()
+    if not raw:
+        return _DEFAULT_PROJECTION_CALL_MAX_BYTES
+    value = int(raw)
+    if value <= 0:
+        raise ValueError(f"{_PROJECTION_CALL_MAX_BYTES_ENV} must be positive, got {raw!r}")
+    return value
 
 # Row capacities are powers of two so a chunk decomposes into whole M-step
 # blocks; the ladder is truncated at run time by the projection byte budget,
@@ -615,16 +630,23 @@ def compute_local_search_resident(
         max_block_bytes=_max_adjoint_block_bytes_for_pass(device_memory_bytes),
         row_capacity_ladder=row_ladder,
     )
-    # Bound one projector call the way the exact local engine bounds its own:
-    # a row-pixel budget over the union projection window, not a byte model of
-    # the outputs. The projector's transient depends on Projector::data's dtype
-    # and on which interpolator the slab selects, and the unnarrowed complex128
-    # slab is twice the width a byte model of the complex64 outputs assumes; a
-    # 32768-row call at current size 92 asked for 16.1 GiB and was refused.
-    # RECOVAR_EXACT_LOCAL_XHALF_PROJECTION_TARGET_ROW_PIXELS moves both engines.
+    # Bound one projector call by the array it actually materializes. The
+    # compact projection-block helper returns *full half-spectrum* rows and
+    # windows them afterwards (projection.py, the dense_scale multiply runs on
+    # proj_half before any gather), so the transient is
+    # rows x n_half x itemsize(Projector::data), not rows x windowed pixels.
+    # Budgeting on the window is what refused a 16.1 GiB allocation twice: at
+    # current size 92 with 32768 rows, and again at 52 where the window is
+    # 1104 px but the materialized row is still 33024.
+    #
+    # The exact local engine does not hit this because it hands the projector
+    # its compact pixel indices; this driver goes through the shared compact
+    # helper, so it pays the full row and must budget for it.
     n_projection_pixels = int(getattr(window_spec, "n_projection", n_recon_windowed))
+    projector_slab_bytes = int(jnp.asarray(relion_projector_half).dtype.itemsize)
+    projection_call_max_bytes = _projection_call_transient_max_bytes()
     projection_block_rows = max(
-        1, _exact_local_xhalf_projection_target_row_pixels() // max(n_projection_pixels, 1)
+        1, projection_call_max_bytes // max(n_half * projector_slab_bytes, 1)
     )
     chunks = plan_local_capacity_chunks(
         tables,
@@ -652,6 +674,7 @@ def compute_local_search_resident(
         * per_row_bytes
         / float(1024**3),
         n_projection_pixels,
+        projector_slab_bytes,
         table_s,
     )
 
