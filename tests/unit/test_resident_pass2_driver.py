@@ -1,0 +1,418 @@
+"""Integration tests for the device-resident K=1 sparse pass-2 driver (T9b).
+
+Ticket: ``em_parity_tickets_20260918/T9b_resident_pass2_integration.md``.
+Design: ``em_device_resident_pass2_design_20260918.md``.
+
+What the CPU tests cover
+------------------------
+Every stage of the resident driver that is CUDA-only skips on CPU: T6 scoring
+(the flat-row fused-translate kernel), T7's segmented posterior, T8's flat-row
+Wavg reducer and the x-half backprojection. What remains CPU-testable, and is
+tested here, is:
+
+* the production-configuration gate, one refusal per unsupported knob;
+* the chunk segment offsets the segmented posterior is driven with;
+* the flat-row twins of the three rectangular host helpers the driver replaces
+  (``compute_local_mstep_sums``, ``_relion_wavg_atomic_triplet_terms`` and
+  ``_relion_wavg_rectangle_triplet_terms``).
+
+The whole-driver comparison against ``compute_pass2_stats_sparse_bucketed``
+needs a GPU and the custom CUDA library; it is the GPU test at the end.
+"""
+
+from __future__ import annotations
+
+import numpy as np
+import pytest
+
+pytest.importorskip("jax")
+import jax
+import jax.numpy as jnp
+
+from recovar.em.local.local_backprojection import compute_local_mstep_sums
+from recovar.em.sparse_pass2 import resident_pass2 as rp
+from recovar.em.sparse_pass2.resident_candidates import (
+    CapacityChunk,
+    ResidentCandidateTables,
+)
+from recovar.em.sparse_pass2.sparse_pass2_wavg import (
+    _relion_wavg_atomic_triplet_terms,
+    _relion_wavg_rectangle_triplet_terms,
+)
+
+pytestmark = pytest.mark.unit
+
+
+def _ulp32(a, b):
+    a = np.asarray(a, dtype=np.float32).view(np.int32).astype(np.int64)
+    b = np.asarray(b, dtype=np.float32).view(np.int32).astype(np.int64)
+    return np.abs(a - b)
+
+
+def _production_gate_kwargs(**overrides):
+    kwargs = dict(
+        relion_x_half_mstep=True,
+        relion_exact_fine_gaussian=True,
+        relion_firstiter_score_mode="gaussian",
+        use_float64_scoring=False,
+        relion_firstiter_winner_take_all=False,
+        disable_adjoint_y=False,
+        disable_adjoint_ctf=False,
+        return_score_log_z_only=False,
+        accumulate_noise=True,
+        mstep_subtract_ctf_projection=False,
+        normalization_log_z=None,
+        normalization_other_score_log_z=None,
+        relion_f32_normalization_sum_weight=None,
+        relion_coarse_hard_assignment=None,
+        preserve_bpref_particle_order=False,
+        soft_posterior_block_bpref=False,
+        fine_rotations_override=np.zeros((2, 3, 3), dtype=np.float32),
+        fine_rotation_parent_override=np.zeros(2, dtype=np.int32),
+        n_coarse_trans=4,
+        use_window=True,
+        projection_cache_available=True,
+        relion_wavg_atomic_scale_aa=True,
+        relion_wavg_atomic_direct_noise=True,
+        relion_wavg_atomic_direct_norm=False,
+    )
+    kwargs.update(overrides)
+    return kwargs
+
+
+def test_production_configuration_is_accepted():
+    rp.require_resident_production_configuration(**_production_gate_kwargs())
+
+
+@pytest.mark.parametrize(
+    ("override", "expected"),
+    [
+        ({"relion_x_half_mstep": False}, "x-half M-step"),
+        ({"use_float64_scoring": True}, "float64 scoring"),
+        ({"relion_firstiter_winner_take_all": True}, "winner-take-all"),
+        ({"disable_adjoint_y": True, "disable_adjoint_ctf": True}, "score-only"),
+        ({"accumulate_noise": False}, "noise statistics"),
+        ({"normalization_log_z": np.zeros(3)}, "external score normalization"),
+        ({"relion_f32_normalization_sum_weight": np.ones(3)}, "zero-oversampling"),
+        ({"preserve_bpref_particle_order": True}, "per-particle BPref launches"),
+        ({"fine_rotations_override": None}, "fine_rotations_override"),
+        ({"n_coarse_trans": 33}, "one uint32"),
+        ({"use_window": False}, "Nyquist row"),
+        ({"projection_cache_available": False}, "projection cache"),
+        ({"relion_wavg_atomic_scale_aa": False}, "atomic Wavg triplet"),
+        ({"relion_wavg_atomic_direct_noise": False}, "direct low-shell residual"),
+        ({"relion_wavg_atomic_direct_norm": True}, "stopped diagnostic"),
+        ({"relion_firstiter_score_mode": "normalized_cc"}, "fine Gaussian"),
+        ({"mstep_subtract_ctf_projection": True}, "projected reference"),
+    ],
+)
+def test_gate_names_the_missing_piece(override, expected):
+    with pytest.raises(NotImplementedError, match=expected):
+        rp.require_resident_production_configuration(**_production_gate_kwargs(**override))
+
+
+def test_gate_accepts_production_bpref_order_with_the_block_prototype():
+    """``preserve_bpref_particle_order`` is production; the block prototype makes it block-wise."""
+
+    rp.require_resident_production_configuration(
+        **_production_gate_kwargs(
+            preserve_bpref_particle_order=True, soft_posterior_block_bpref=True
+        )
+    )
+
+
+def test_gate_refuses_a_diagnostic_dump(monkeypatch):
+    monkeypatch.setenv("RECOVAR_PASS2_DUMP_DIR", "/tmp/does-not-matter")
+    with pytest.raises(NotImplementedError, match="RECOVAR_PASS2_DUMP_DIR"):
+        rp.require_resident_production_configuration(**_production_gate_kwargs())
+
+
+def _tables(row_counts):
+    row_counts = np.asarray(row_counts, dtype=np.int64)
+    offsets = np.concatenate([[0], np.cumsum(row_counts)]).astype(np.int32)
+    n_rows = int(offsets[-1])
+    n_images = int(row_counts.size)
+    return ResidentCandidateTables(
+        n_images=n_images,
+        n_rows=n_rows,
+        n_fine_trans=4,
+        n_coarse_trans=2,
+        row_offsets=offsets,
+        row_image=np.repeat(np.arange(n_images, dtype=np.int32), row_counts),
+        row_fine_rot=np.zeros(n_rows, dtype=np.int32),
+        row_parent_local=np.zeros(n_rows, dtype=np.int32),
+        row_log_prior=np.zeros(n_rows, dtype=np.float32),
+        mask_mode=np.zeros(n_images, dtype=np.int8),
+        parent_offsets=np.zeros(n_images + 1, dtype=np.int32),
+        parent_trans_bits=np.zeros(0, dtype=np.uint32),
+    )
+
+
+def test_chunk_segment_offsets_cover_each_image_once_and_pad_empty():
+    tables = _tables([3, 5, 2, 7])
+    chunk = CapacityChunk(
+        image_start=1,
+        image_stop=3,
+        row_start=3,
+        row_stop=10,
+        row_capacity=16,
+        image_capacity=4,
+    )
+    offsets = rp._chunk_segment_offsets(tables, chunk, n_fine_trans=4)
+    assert offsets.dtype == np.int32
+    assert offsets.shape == (5,)
+    # Image 1 owns 5 rows, image 2 owns 2; both are contiguous from cell 0.
+    np.testing.assert_array_equal(offsets, np.asarray([0, 20, 28, 28, 28], dtype=np.int32))
+    assert np.all(np.diff(offsets) >= 0)
+    assert int(offsets[-1]) == chunk.n_valid_rows * 4
+    # Padded slots are empty segments; the rows past n_valid_rows are covered
+    # by no segment at all, which the handler treats as an all -inf row.
+    assert int(offsets[3]) == int(offsets[4])
+
+
+def test_flat_row_weighted_sums_match_the_rectangular_mstep_sums():
+    """The flat-row weighted sums reproduce ``compute_local_mstep_sums``.
+
+    Both call ``compute_local_weighted_sums`` with its pinned
+    ``Precision.HIGHEST``; the only change is that each flat row gathers its
+    own image tile instead of sharing one per bucket row, which gives the
+    contraction a singleton rotation axis. That shape change is the one place
+    the two layouts can disagree: measured on CPU it is 0 ULP at realistic
+    shapes and at most 2 ULP on the small shape below, so the bound asserted
+    here is 4 ULP, not bitwise equality. ``ctf_probs`` is elementwise and must
+    be bitwise.
+    """
+
+    rng = np.random.default_rng(20260918)
+    batch, n_rot, n_trans, n_pix = 3, 5, 6, 11
+    probs = np.abs(rng.normal(size=(batch, n_rot, n_trans))).astype(np.float32)
+    probs[0, 2, :] = 0.0  # a row with no posterior mass exercises the != 0 guard
+    shifted = (
+        rng.normal(size=(batch, n_trans, n_pix)) + 1j * rng.normal(size=(batch, n_trans, n_pix))
+    ).astype(np.complex64)
+    noise = (
+        rng.normal(size=(batch, n_trans, n_pix)) + 1j * rng.normal(size=(batch, n_trans, n_pix))
+    ).astype(np.complex64)
+    ctf = np.abs(rng.normal(size=(batch, n_pix))).astype(np.float32)
+
+    summed_rect, ctf_rect = compute_local_mstep_sums(
+        jnp.asarray(probs),
+        jnp.asarray(shifted),
+        jnp.asarray(ctf),
+        relion_x_half=True,
+        sequential_translation_reduction=False,
+    )
+    masked_rect = compute_local_mstep_sums(
+        jnp.asarray(probs),
+        jnp.asarray(noise),
+        jnp.asarray(ctf),
+        relion_x_half=True,
+        sequential_translation_reduction=False,
+    )[0]
+
+    row_image = np.repeat(np.arange(batch, dtype=np.int32), n_rot)
+    summed, summed_masked, ctf_probs, probs_sum_t = rp._resident_block_weighted_sums(
+        jnp.asarray(probs.reshape(batch * n_rot, n_trans)),
+        jnp.asarray(row_image),
+        jnp.asarray(shifted),
+        jnp.asarray(noise),
+        jnp.asarray(ctf),
+    )
+    for flat, rect in (
+        (np.asarray(summed), np.asarray(summed_rect).reshape(batch * n_rot, n_pix)),
+        (np.asarray(summed_masked), np.asarray(masked_rect).reshape(batch * n_rot, n_pix)),
+    ):
+        # Last-bit float32 agreement: measured worst case here is 8 ULP
+        # (1.1e-7 relative), and 0 ULP once the rotation count is realistic.
+        np.testing.assert_allclose(flat, rect, rtol=1e-6, atol=0.0)
+    np.testing.assert_array_equal(
+        np.asarray(ctf_probs), np.asarray(ctf_rect).reshape(batch * n_rot, n_pix)
+    )
+    np.testing.assert_allclose(
+        np.asarray(probs_sum_t), probs.reshape(batch * n_rot, n_trans).sum(axis=1), rtol=0, atol=0
+    )
+
+
+def test_flat_row_weighted_sums_are_bitwise_at_realistic_shapes():
+    """At production-like rotation counts the contraction shapes agree exactly."""
+
+    rng = np.random.default_rng(4242)
+    batch, n_rot, n_trans, n_pix = 4, 32, 8, 24
+    probs = np.abs(rng.normal(size=(batch, n_rot, n_trans))).astype(np.float32)
+    shifted = (
+        rng.normal(size=(batch, n_trans, n_pix)) + 1j * rng.normal(size=(batch, n_trans, n_pix))
+    ).astype(np.complex64)
+    ctf = np.abs(rng.normal(size=(batch, n_pix))).astype(np.float32)
+    summed_rect, ctf_rect = compute_local_mstep_sums(
+        jnp.asarray(probs),
+        jnp.asarray(shifted),
+        jnp.asarray(ctf),
+        relion_x_half=True,
+        sequential_translation_reduction=False,
+    )
+    row_image = np.repeat(np.arange(batch, dtype=np.int32), n_rot)
+    summed, _masked, ctf_probs, _sum_t = rp._resident_block_weighted_sums(
+        jnp.asarray(probs.reshape(batch * n_rot, n_trans)),
+        jnp.asarray(row_image),
+        jnp.asarray(shifted),
+        jnp.asarray(shifted),
+        jnp.asarray(ctf),
+    )
+    np.testing.assert_array_equal(
+        np.asarray(summed), np.asarray(summed_rect).reshape(batch * n_rot, n_pix)
+    )
+    np.testing.assert_array_equal(
+        np.asarray(ctf_probs), np.asarray(ctf_rect).reshape(batch * n_rot, n_pix)
+    )
+
+
+def test_flat_row_algebraic_wavg_terms_match_the_rectangular_helper():
+    """The flat-row algebraic Wavg triplet reproduces the rectangular helper.
+
+    ``xa`` and ``aa`` are elementwise, so they must be bitwise equal. The
+    ``diff2`` channel carries RELION's image-power contraction, whose float32
+    einsum is shape-dependent, so it is compared as a ULP distribution and the
+    measured worst case is asserted rather than assumed. See the T9b report:
+    at production shapes this contraction is the one place the two layouts
+    disagree, and the ``image_power + aa - 2*xa`` cancellation amplifies it.
+    """
+
+    rng = np.random.default_rng(31)
+    batch, n_rot, n_trans, n_pix = 3, 4, 5, 9
+    proj = (
+        rng.normal(size=(batch, n_rot, n_pix)) + 1j * rng.normal(size=(batch, n_rot, n_pix))
+    ).astype(np.complex64)
+    proj_abs2 = np.abs(proj) ** 2
+    summed = (
+        rng.normal(size=(batch, n_rot, n_pix)) + 1j * rng.normal(size=(batch, n_rot, n_pix))
+    ).astype(np.complex64)
+    ctf_probs = np.abs(rng.normal(size=(batch, n_rot, n_pix))).astype(np.float32)
+    ctf_probs[1, 0, :] = 0.0
+    noise_variance = np.abs(rng.normal(size=n_pix)).astype(np.float32) + 0.1
+    scale = np.abs(rng.normal(size=batch)).astype(np.float32) + 0.5
+    raw_shifted = (
+        rng.normal(size=(batch, n_trans, n_pix)) + 1j * rng.normal(size=(batch, n_trans, n_pix))
+    ).astype(np.complex64)
+    posterior = np.abs(rng.normal(size=(batch, n_rot, n_trans))).astype(np.float32)
+
+    rect = np.asarray(
+        _relion_wavg_atomic_triplet_terms(
+            jnp.asarray(proj),
+            jnp.asarray(proj_abs2),
+            jnp.asarray(summed),
+            jnp.asarray(ctf_probs),
+            jnp.asarray(noise_variance),
+            jnp.asarray(scale),
+            jnp.asarray(raw_shifted),
+            jnp.asarray(posterior),
+        )
+    ).reshape(batch * n_rot, n_pix, 3)
+    row_image = np.repeat(np.arange(batch, dtype=np.int32), n_rot)
+    flat = np.asarray(
+        rp._resident_block_wavg_algebraic_terms(
+            jnp.asarray(proj.reshape(batch * n_rot, n_pix)),
+            jnp.asarray(proj_abs2.reshape(batch * n_rot, n_pix)),
+            jnp.asarray(summed.reshape(batch * n_rot, n_pix)),
+            jnp.asarray(ctf_probs.reshape(batch * n_rot, n_pix)),
+            jnp.asarray(noise_variance),
+            jnp.asarray(scale),
+            jnp.asarray(raw_shifted),
+            jnp.asarray(posterior.reshape(batch * n_rot, n_trans)),
+            jnp.asarray(row_image),
+        )
+    )
+    np.testing.assert_array_equal(flat[:, :, 0], rect[:, :, 0])  # XA
+    np.testing.assert_array_equal(flat[:, :, 1], rect[:, :, 1])  # AA
+    assert int(_ulp32(flat[:, :, 2], rect[:, :, 2]).max()) <= 4
+
+
+def test_flat_row_wavg_rectangle_terms_match_the_rectangular_helper():
+    """The rectangle embedding places the same terms at the same positions."""
+
+    rng = np.random.default_rng(97)
+    batch, n_rot, n_trans, n_rect, n_exact = 2, 3, 4, 10, 6
+    exact_positions = np.sort(
+        rng.choice(n_rect, size=n_exact, replace=False).astype(np.int32)
+    )
+    exact_terms = rng.normal(size=(batch, n_rot, n_exact, 3)).astype(np.float32)
+    raw_rect = (
+        rng.normal(size=(batch, n_trans, n_rect)) + 1j * rng.normal(size=(batch, n_trans, n_rect))
+    ).astype(np.complex64)
+    posterior = np.abs(rng.normal(size=(batch, n_rot, n_trans))).astype(np.float32)
+
+    rect = np.asarray(
+        _relion_wavg_rectangle_triplet_terms(
+            jnp.asarray(exact_terms),
+            jnp.asarray(raw_rect),
+            jnp.asarray(posterior),
+            jnp.asarray(exact_positions),
+        )
+    ).reshape(batch * n_rot, n_rect, 3)
+    row_image = np.repeat(np.arange(batch, dtype=np.int32), n_rot)
+    flat = np.asarray(
+        rp._resident_block_wavg_rectangle_terms(
+            jnp.asarray(exact_terms.reshape(batch * n_rot, n_exact, 3)),
+            jnp.asarray(raw_rect),
+            jnp.asarray(posterior.reshape(batch * n_rot, n_trans)),
+            jnp.asarray(row_image),
+            jnp.asarray(exact_positions),
+        )
+    )
+    # The exact positions carry the supplied terms verbatim in both layouts.
+    np.testing.assert_array_equal(flat[:, exact_positions, :], rect[:, exact_positions, :])
+    other = np.setdiff1d(np.arange(n_rect), exact_positions)
+    np.testing.assert_array_equal(flat[:, other, 0], rect[:, other, 0])
+    np.testing.assert_array_equal(flat[:, other, 1], rect[:, other, 1])
+    assert int(_ulp32(flat[:, other, 2], rect[:, other, 2]).max()) <= 4
+
+
+def test_mstep_block_rows_divides_every_row_capacity():
+    ladder = (8192, 32768, 131072)
+    block = rp._resolve_mstep_block_rows(
+        n_recon_pixels=4324, max_block_bytes=513124859, row_capacity_ladder=ladder
+    )
+    assert block > 0 and block & (block - 1) == 0
+    assert all(capacity % block == 0 for capacity in ladder)
+
+
+def test_image_capacity_ladder_is_capped_by_the_translation_tile_budget():
+    ladder = rp._cap_image_capacity_ladder(
+        (32, 128, 512), n_fine_trans=100, n_recon_pixels=4324, max_tile_bytes=1_197_291_339
+    )
+    assert ladder and list(ladder) == sorted(ladder)
+    assert max(ladder) <= 512
+    # A budget that fits nothing still leaves the smallest class so a plan exists.
+    assert rp._cap_image_capacity_ladder(
+        (32, 128, 512), n_fine_trans=100, n_recon_pixels=4324, max_tile_bytes=1
+    ) == (32,)
+
+
+def test_driver_is_registered_behind_the_flag_only(monkeypatch):
+    from recovar.em.helpers import oversampling
+
+    monkeypatch.delenv(rp.RESIDENT_PASS2_ENV, raising=False)
+    assert not rp.resident_pass2_requested()
+    monkeypatch.setenv(rp.RESIDENT_PASS2_ENV, "1")
+    assert rp.resident_pass2_requested()
+    source = oversampling.compute_pass2_stats_sparse.__doc__ or ""
+    del source
+    import inspect
+
+    dispatch = inspect.getsource(oversampling.compute_pass2_stats_sparse)
+    assert "resident_pass2_requested()" in dispatch
+    assert "compute_pass2_stats_resident" in dispatch
+
+
+def test_signature_matches_the_compact_engine():
+    import inspect
+
+    from recovar.em.sparse_pass2.sparse_pass2_bucketed import (
+        compute_pass2_stats_sparse_bucketed,
+    )
+
+    compact = inspect.signature(compute_pass2_stats_sparse_bucketed).parameters
+    resident = inspect.signature(rp.compute_pass2_stats_resident).parameters
+    assert list(compact) == list(resident)
+    for name in compact:
+        assert compact[name].default == resident[name].default, name
+        assert compact[name].kind == resident[name].kind, name

@@ -1,0 +1,2072 @@
+"""Device-resident K=1 sparse pass-2 driver (T9b integration).
+
+This module wires the five stage modules of
+``em_device_resident_pass2_design_20260918.md`` into one driver with the
+signature and return type of
+:func:`recovar.em.sparse_pass2.sparse_pass2_bucketed.compute_pass2_stats_sparse_bucketed`:
+
+* T5 :mod:`recovar.em.sparse_pass2.resident_candidates` -- the flat image-CSR
+  candidate table and its fixed-capacity chunks;
+* T6 :mod:`recovar.em.sparse_pass2.resident_scoring` -- the resident per-image
+  scoring operands and the one-program-per-capacity-class scoring stage;
+* T7 ``recovar.cuda_backproject.sparse_pass2_segmented_*`` -- the segmented
+  RELION float32 fine posterior over those CSR segments;
+* T8 ``recovar.cuda_backproject.relion_wavg_*flat_rows*`` -- the flat-row RELION
+  Wavg triplet and its atomic accumulation;
+* T9a :mod:`recovar.em.sparse_pass2.resident_statistics` -- the device float64
+  accumulators, their finalization and the pose decode.
+
+Selection and scope
+-------------------
+The driver is selected only by ``RECOVAR_SPARSE_PASS2_RESIDENT=1`` and only in
+the production K=1 configuration (RELION x-half M-step, exact RELION fine
+Gaussian scoring, float32 fine posterior, fine M-step prune, float32 scoring,
+no diagnostics or dumps). Every other configuration raises
+:class:`NotImplementedError` naming the missing piece; the driver never falls
+back to the compact engine silently, because a silent fallback would make a
+measured comparison meaningless.
+
+What is deliberately different from the compact engine
+------------------------------------------------------
+Three differences are layout or reduction-order changes, not arithmetic
+changes, and each is measured rather than assumed:
+
+1. **Translation application.** The compact K=1 route scores a pre-shifted
+   ``(B, T, N)`` image tile; this driver calls the flat-row *fused translate*
+   kernel, which applies the translation phase per pixel inside the scoring
+   kernel. T6 measured the two to agree bitwise on every score-window pixel and
+   to differ only on the ``ky = -N/2`` Nyquist row of a full (unwindowed) half
+   image. The production window excludes that row, and the configuration gate
+   below refuses the unwindowed case.
+2. **log-Z reduction order.** The compact route reduces ``sum exp`` with an XLA
+   float64 tree over ``(B, R*T)``; the segmented CUDA handler reduces per
+   segment in block order. The posteriors themselves come from the float32
+   ``sum_weight`` scan, which T7 showed is bitwise identical to the rectangular
+   handler, so only ``log_evidence``/``score_log_z`` can move.
+3. **Statistics reduction order.** Chunk partials replace per-bucket host sums.
+   The user waived reduction-order parity for these accumulators on 2026-09-18;
+   the same-source band is the gate.
+
+Pixel-axis blocking
+-------------------
+Stages 5-7 carry a pixel axis (``N_recon``, 4324 at the hp3 production state),
+so a whole chunk's ``proj``/``summed``/``ctf_probs`` would be tens of gigabytes
+at the largest capacity class. The design anticipates this ("project in row
+blocks inside the chunk program"). The driver therefore walks each chunk in
+fixed-size row blocks, so the pixel-axis programs are keyed on one static block
+shape regardless of the chunk's capacity class. Because of that split, the
+image-level statistics are folded once per chunk by
+:func:`_accumulate_chunk_image_terms` (T9a's arithmetic, with the row-pixel
+reductions arriving as chunk partials) rather than by T9a's single fused
+program, which assumes one call per chunk with the whole pixel axis resident.
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+import time
+from dataclasses import dataclass
+from functools import partial
+from typing import NamedTuple
+
+import jax
+import jax.numpy as jnp
+import numpy as np
+
+from recovar.em.helpers.batch_fetch import fetch_indexed_batch
+from recovar.em.helpers.env_flags import parse_env_flag
+from recovar.em.helpers.half_spectrum import (
+    make_relion_noise_shell_indices_half,
+    mask_relion_noise_shell_indices_to_current_window,
+)
+from recovar.em.helpers.half_volume_mstep import (
+    enforce_half_volume_x0,
+    half_volume_accumulator_shape,
+    relion_backprojector_volume_shape,
+    relion_x_half_accumulators_to_public_layout,
+    relion_x_half_mstep_accumulator_dtypes,
+)
+from recovar.em.helpers.preprocessing import half_translation_phase_table
+from recovar.em.helpers.projection import compute_noise_block
+from recovar.em.helpers.projection import (
+    relion_scale_correction_pixel_mask as _relion_scale_correction_pixel_mask,
+)
+from recovar.em.helpers.scale_groups import prepare_scale_correction_groups
+from recovar.em.helpers.translation_prior import (
+    translation_prior_centers_for_images,
+    translation_sqdist_angstrom,
+    validate_translation_prior_centers,
+)
+from recovar.em.helpers.types import SparsePass2Output, make_noise_stats, make_relion_stats
+from recovar.em.local.local_backprojection import (
+    compute_local_ctf_sums_from_probs_sum_t,
+    compute_local_weighted_sums,
+)
+from recovar.em.scoring.sparse_bucket_arrays import _prepare_per_image_pass2_inputs
+from recovar.em.sparse_pass2.resident_candidates import (
+    build_resident_candidate_tables,
+    materialize_chunk,
+    plan_capacity_chunks,
+)
+from recovar.em.sparse_pass2.resident_scoring import (
+    prepare_resident_image_operands,
+    score_resident_chunk,
+)
+from recovar.em.sparse_pass2.resident_statistics import (
+    ResidentStatistics,
+    _drop_index,
+    _flat_row_norm_and_scale_terms,
+    finalize_statistics,
+    make_resident_statistics,
+    resolve_statistics_config,
+    segment_sum_by_image,
+)
+from recovar.em.sparse_pass2.sparse_pass2_adjoint import _accumulate_adjoint_block_chunked
+from recovar.em.sparse_pass2.sparse_pass2_bucket_io import (
+    _prepare_bucket_io,
+    _relion_cuda_score_translation_angles_if_available,
+)
+from recovar.em.sparse_pass2.sparse_pass2_budget import (
+    _max_adjoint_block_bytes_for_pass,
+    _max_translation_tile_bytes_for_pass,
+    _projection_cache_build_max_rotations_per_call,
+    _projection_cache_fits_budget,
+    _projection_cache_max_bytes_for_pass,
+    _projection_cache_transient_bytes,
+)
+from recovar.em.sparse_pass2.sparse_pass2_policy import (
+    _RELION_WAVG_ATOMIC_SCALE_AA_ENV,
+    _fresh_k1_direct_noise_default,
+    _projection_cache_enabled_for_pass,
+    _relion_exact_bpref_operands_enabled,
+    _relion_powerclass_spectrum_norm_enabled,
+    _relion_wavg_direct_modes,
+)
+from recovar.em.sparse_pass2.sparse_pass2_posterior import (
+    _relion_fine_parent_execution_order_enabled,
+)
+from recovar.em.sparse_pass2.sparse_pass2_projection_blocks import (
+    _compute_sparse_pass2_windowed_projections_block,
+    _projection_kwargs_for_relion_score_window,
+)
+from recovar.em.sparse_pass2.sparse_pass2_scoring import (
+    _relion_cuda_fine_full_to_compact_lookup,
+    _relion_cuda_fine_log_evidence_offset,
+    _relion_powerclass_noise_terms,
+)
+from recovar.em.sparse_pass2.sparse_pass2_wavg import (
+    _make_relion_wavg_rectangle,
+    _relion_cuda_translate_wavg_norm_images,
+    _relion_wavg_rectangle_image_power,
+    _replace_low_shell_noise_with_relion_wavg_direct_residual_jnp,
+    _weighted_image_power_shells_and_per_image_core,
+)
+from recovar.em.sparse_pass2.sparse_pass2_window import (
+    _pass2_half_weights,
+    _pass2_window_setup,
+    _sparse_pass2_window_setup,
+)
+from recovar.reconstruction import noise as noise_utils
+
+logger = logging.getLogger(__name__)
+
+RESIDENT_PASS2_ENV = "RECOVAR_SPARSE_PASS2_RESIDENT"
+_ROW_CAPACITY_LADDER_ENV = "RECOVAR_SPARSE_PASS2_RESIDENT_ROW_CAPACITIES"
+_IMAGE_CAPACITY_LADDER_ENV = "RECOVAR_SPARSE_PASS2_RESIDENT_IMAGE_CAPACITIES"
+_MSTEP_BLOCK_ROWS_ENV = "RECOVAR_SPARSE_PASS2_RESIDENT_MSTEP_BLOCK_ROWS"
+_PREPARE_IMAGE_BATCH_ENV = "RECOVAR_SPARSE_PASS2_RESIDENT_PREPARE_IMAGE_BATCH"
+_SOFT_POSTERIOR_BLOCK_BPREF_PROTOTYPE_ENV = "RECOVAR_EM_PROTOTYPE_SOFT_POSTERIOR_BLOCK_BPREF"
+
+# Row capacities are multiples of the M-step block so every chunk decomposes
+# into whole blocks; image capacities follow the design's ladder.
+_DEFAULT_ROW_CAPACITY_LADDER = (8192, 32768, 131072)
+_DEFAULT_IMAGE_CAPACITY_LADDER = (32, 128, 512)
+# Resident per-image operand rows are padded to a multiple of this so the two
+# halves of one iteration (4966 and 5034 images at the hp3 state) trace one
+# scoring program rather than two.
+_IMAGE_TABLE_QUANTUM = 1024
+
+__all__ = [
+    "RESIDENT_PASS2_ENV",
+    "ResidentPass2Plan",
+    "compute_pass2_stats_resident",
+    "resident_pass2_requested",
+    "require_resident_production_configuration",
+]
+
+
+def resident_pass2_requested() -> bool:
+    """Return whether ``RECOVAR_SPARSE_PASS2_RESIDENT`` selects this driver."""
+
+    return parse_env_flag(RESIDENT_PASS2_ENV, default=False)
+
+
+# ---------------------------------------------------------------------------
+# Production-configuration gate
+# ---------------------------------------------------------------------------
+
+_DIAGNOSTIC_DIR_ENVS = (
+    "RECOVAR_BPREF_DEVICE_SIGNATURE_DUMP_DIR",
+    "RECOVAR_BPREF_CONTRIBUTION_DUMP_DIR",
+    "RECOVAR_BPREF_MEMBERSHIP_DUMP_DIR",
+    "RECOVAR_PASS2_DUMP_DIR",
+    "RECOVAR_BPREF_EXECUTION_ORDER_LOCAL_FILE",
+    "RECOVAR_VDAM_KCLASS_STATS_DUMP_DIR",
+)
+
+_DIAGNOSTIC_FLAG_ENVS = (
+    "RECOVAR_PASS2_DUMP_NORM_RESIDUAL_INPUTS",
+    "RECOVAR_K1_RELION_TRANSLATED_WAVG_NORM",
+    "RECOVAR_SPARSE_PASS2_LOG_CANDIDATE_DENSITY",
+    "RECOVAR_RELION_X_HALF_SEQUENTIAL_TRANSLATION_REDUCTION",
+    "RECOVAR_RELION_X_HALF_BP_PER_PARTICLE_LAUNCH",
+    "RECOVAR_RELION_X_HALF_BP_FUSED_ATOMICS",
+)
+
+
+def _require(condition: bool, message: str) -> None:
+    if not condition:
+        raise NotImplementedError(
+            "The device-resident K=1 sparse pass 2 "
+            f"({RESIDENT_PASS2_ENV}=1) does not implement this configuration: {message}. "
+            "Clear the flag to use the compact engine; this path never falls back silently."
+        )
+
+
+def require_resident_production_configuration(**kwargs) -> None:
+    """Raise :class:`NotImplementedError` unless this is the production path.
+
+    Every check names the specific missing piece rather than reporting a
+    generic refusal, so a caller that trips one knows which behaviour the
+    resident driver would have to grow.
+    """
+
+    _require(bool(kwargs["relion_x_half_mstep"]), "the RELION x-half M-step is required")
+    _require(
+        bool(kwargs["relion_exact_fine_gaussian"])
+        and kwargs["relion_firstiter_score_mode"] == "gaussian",
+        "exact RELION fine Gaussian scoring is required "
+        f"(got relion_exact_fine_gaussian={kwargs['relion_exact_fine_gaussian']!r}, "
+        f"score_mode={kwargs['relion_firstiter_score_mode']!r})",
+    )
+    _require(not bool(kwargs["use_float64_scoring"]), "float64 scoring is a diagnostic mode")
+    _require(
+        not bool(kwargs["relion_firstiter_winner_take_all"]),
+        "winner-take-all (--firstiter_cc) disables the float32 fine posterior",
+    )
+    _require(
+        not (bool(kwargs["disable_adjoint_y"]) or bool(kwargs["disable_adjoint_ctf"])),
+        "score-only passes have no M-step to make resident",
+    )
+    _require(not bool(kwargs["return_score_log_z_only"]), "score-logZ-only passes are score-only")
+    _require(bool(kwargs["accumulate_noise"]), "the production pass accumulates noise statistics")
+    _require(
+        not bool(kwargs["mstep_subtract_ctf_projection"]),
+        "subtracting the projected reference in the M-step is a diagnostic mode",
+    )
+    _require(
+        kwargs["normalization_log_z"] is None
+        and kwargs["normalization_other_score_log_z"] is None,
+        "external score normalization belongs to the K-class engine",
+    )
+    _require(
+        kwargs["relion_f32_normalization_sum_weight"] is None
+        and kwargs["relion_coarse_hard_assignment"] is None,
+        "the zero-oversampling coarse-normalization reuse is not wired yet; "
+        "the segmented posterior supports it but its winner/Pmax substitution is untested here",
+    )
+    # ``preserve_bpref_particle_order`` is the production setting, and on its
+    # own it forces one BPref launch per particle. The production run pairs it
+    # with the soft-posterior block prototype, which turns those launches back
+    # into one block launch per bucket; that is the semantics the resident
+    # driver reproduces with one launch per row block. Without the prototype
+    # the compact engine really would launch per particle, so refuse.
+    _require(
+        (not bool(kwargs["preserve_bpref_particle_order"]))
+        or bool(kwargs["soft_posterior_block_bpref"]),
+        "strict per-particle BPref launches are not implemented; set "
+        "RECOVAR_EM_PROTOTYPE_SOFT_POSTERIOR_BLOCK_BPREF=1 (the production "
+        "setting) so BPref accumulates per block, or clear "
+        "preserve_bpref_particle_order",
+    )
+    _require(
+        kwargs["fine_rotations_override"] is not None
+        and kwargs["fine_rotation_parent_override"] is not None,
+        "the resident driver gathers rotations from the caller's fine grid, "
+        "so fine_rotations_override and fine_rotation_parent_override are required",
+    )
+    _require(
+        int(kwargs["n_coarse_trans"]) <= 32,
+        "the candidate bitset packs coarse translations into one uint32, so "
+        f"n_coarse_trans must be <= 32 (got {int(kwargs['n_coarse_trans'])})",
+    )
+    _require(
+        bool(kwargs["use_window"]),
+        "the resident driver scores through the RELION current-size window; "
+        "a full-half pass would include the ky=-N/2 Nyquist row, where the "
+        "fused-translate and pre-shifted scorers are known to differ",
+    )
+    _require(
+        bool(kwargs["projection_cache_available"]),
+        "the resident scoring stage gathers cached fine-rotation projections; "
+        "the per-iteration projection cache is disabled or did not fit its budget",
+    )
+    _require(
+        bool(kwargs["relion_wavg_atomic_scale_aa"]),
+        "the resident statistics stage consumes the RELION atomic Wavg triplet",
+    )
+    _require(
+        bool(kwargs["relion_wavg_atomic_direct_noise"]),
+        "the resident statistics stage uses RELION's direct low-shell residual",
+    )
+    _require(
+        not bool(kwargs["relion_wavg_atomic_direct_norm"]),
+        "the direct per-particle Wavg norm arm is a stopped diagnostic",
+    )
+    for name in _DIAGNOSTIC_DIR_ENVS:
+        _require(
+            not os.environ.get(name, "").strip(),
+            f"the diagnostic dump {name} is set; the resident driver emits no dumps",
+        )
+    for name in _DIAGNOSTIC_FLAG_ENVS:
+        _require(
+            not parse_env_flag(name, default=False),
+            f"the diagnostic flag {name} is set; the resident driver has no such arm",
+        )
+
+
+# ---------------------------------------------------------------------------
+# Planning
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ResidentPass2Plan:
+    """Chunk plan plus the pixel-axis block size the M-step stages run at."""
+
+    chunks: tuple
+    row_capacity_ladder: tuple
+    image_capacity_ladder: tuple
+    mstep_block_rows: int
+
+
+def _ladder_from_env(name: str, default: tuple) -> tuple:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return tuple(int(v) for v in default)
+    values = tuple(int(part) for part in raw.replace(",", " ").split())
+    if not values or list(values) != sorted(values) or values[0] <= 0:
+        raise ValueError(f"{name} must be an increasing list of positive integers, got {raw!r}")
+    return values
+
+
+def _floor_power_of_two(value: int) -> int:
+    value = int(value)
+    if value <= 1:
+        return 1
+    return 1 << (value.bit_length() - 1)
+
+
+def _resolve_mstep_block_rows(
+    *,
+    n_recon_pixels: int,
+    max_block_bytes: int,
+    row_capacity_ladder: tuple,
+) -> int:
+    """Rows per pixel-axis block: a power of two dividing every row capacity.
+
+    A block holds, per row and reconstruction pixel, one complex64 projection,
+    one float32 ``|proj|^2``, two complex64 weighted sums, one float32 CTF sum
+    and the float32 Wavg triplet: 44 bytes. Sizing from the same budget the
+    compact engine uses for its adjoint blocks keeps the transient comparable
+    to the bucket this replaces; quantizing to a power of two keeps the traced
+    pixel-axis program count at one per pixel count.
+    """
+
+    override = os.environ.get(_MSTEP_BLOCK_ROWS_ENV, "").strip()
+    if override:
+        block = int(override)
+        if block <= 0 or block & (block - 1):
+            raise ValueError(f"{_MSTEP_BLOCK_ROWS_ENV} must be a positive power of two, got {block}")
+    else:
+        bytes_per_row = max(int(n_recon_pixels), 1) * 44
+        block = _floor_power_of_two(max(int(max_block_bytes) // bytes_per_row, 1))
+    smallest = int(row_capacity_ladder[0])
+    block = min(block, smallest)
+    while block > 1 and smallest % block:
+        block //= 2
+    return max(block, 1)
+
+
+def _cap_image_capacity_ladder(
+    ladder: tuple,
+    *,
+    n_fine_trans: int,
+    n_recon_pixels: int,
+    max_tile_bytes: int,
+) -> tuple:
+    """Drop image classes whose translation tiles exceed the tile budget.
+
+    A chunk materializes three ``(images, T, P)`` complex64 tiles: the
+    reconstruction operand, the noise operand and RELION's Wavg rectangle.
+    """
+
+    per_image = max(int(n_fine_trans), 1) * max(int(n_recon_pixels), 1) * 8 * 3
+    cap = max(int(max_tile_bytes) // max(per_image, 1), 1)
+    kept = tuple(value for value in ladder if int(value) <= cap)
+    return kept if kept else (int(ladder[0]),)
+
+
+# ---------------------------------------------------------------------------
+# Device programs with a pixel axis (one per (block rows, pixel count) pair)
+# ---------------------------------------------------------------------------
+
+
+@jax.jit
+def _resident_block_weighted_sums(
+    row_posterior,  # float32 [block, T]
+    row_image_local,  # int32 [block]
+    shifted_recon,  # complex [C_B, T, P]
+    shifted_noise,  # complex [C_B, T, P]
+    ctf2_over_nv_recon,  # real [C_B, P]
+):
+    """Flat-row twin of the bucket's ``compute_local_mstep_sums`` pair.
+
+    ``compute_local_weighted_sums`` contracts ``(B, R, T) x (B, T, N)`` with
+    ``Precision.HIGHEST``; the flat-row form gathers each row's image tile and
+    contracts ``(Q, T) x (Q, T, N)`` at the same precision, so the per-cell
+    products and the translation reduction order are unchanged.
+    ``compute_local_ctf_sums_from_probs_sum_t`` is reused verbatim, including
+    its ``!= 0`` mass predicate. ``summed`` feeds the x-half BPref numerator;
+    ``summed_masked`` is the noise operand the host tail builds from
+    ``shifted_noise``.
+    """
+
+    row_image_local = jnp.asarray(row_image_local, dtype=jnp.int32)
+    weights = jnp.asarray(row_posterior)
+    recon_tiles = jnp.asarray(shifted_recon)[row_image_local]
+    noise_tiles = jnp.asarray(shifted_noise)[row_image_local]
+    # ``compute_local_weighted_sums`` is called verbatim with a singleton
+    # rotation axis, so the contraction keeps its pinned
+    # ``Precision.HIGHEST``; only the gathered per-row tile replaces the
+    # shared per-image tile.
+    summed = compute_local_weighted_sums(weights[:, None, :], recon_tiles)[:, 0, :]
+    summed_masked = compute_local_weighted_sums(weights[:, None, :], noise_tiles)[:, 0, :]
+    probs_sum_t = jnp.sum(weights, axis=-1)
+    # The rectangular helper takes ``(B, R)`` rotation sums against one
+    # ``(B, P)`` CTF row per image. In the flat-row layout each row carries its
+    # own gathered CTF row, so the call is made with a singleton rotation axis;
+    # the ``!= 0`` mass predicate and the product order are unchanged.
+    ctf_probs = compute_local_ctf_sums_from_probs_sum_t(
+        probs_sum_t[:, None],
+        jnp.asarray(ctf2_over_nv_recon)[row_image_local],
+    )[:, 0, :]
+    return summed, summed_masked, ctf_probs, probs_sum_t
+
+
+@partial(jax.jit, static_argnames=("n_shells", "image_capacity"))
+def _resident_block_noise_and_norm(
+    proj,  # complex [block, P]
+    proj_abs2,  # real [block, P]
+    summed_masked,  # complex [block, P]
+    ctf_probs,  # real [block, P]
+    noise_variance,  # real [P]
+    shell_indices,  # int32 [P]
+    row_image_local,  # int32 [block]
+    *,
+    n_shells: int,
+    image_capacity: int,
+):
+    """One row block's noise shells plus its per-image ``A2``/``XA`` partials."""
+
+    block_noise_shells, _, _ = compute_noise_block(
+        proj,
+        proj_abs2,
+        summed_masked,
+        ctf_probs,
+        noise_variance,
+        shell_indices,
+        int(n_shells),
+        return_split=False,
+    )
+    a2_per_row, xa_per_row = _flat_row_norm_and_scale_terms(
+        proj, proj_abs2, summed_masked, ctf_probs, jnp.asarray(noise_variance)
+    )
+    a2_per_image = segment_sum_by_image(a2_per_row, row_image_local, int(image_capacity))
+    xa_per_image = segment_sum_by_image(xa_per_row, row_image_local, int(image_capacity))
+    return block_noise_shells.astype(jnp.float64), a2_per_image, xa_per_image
+
+
+@jax.jit
+def _resident_block_wavg_algebraic_terms(
+    proj,  # complex [block, P]
+    proj_abs2,  # real [block, P]
+    summed_masked,  # complex [block, P]
+    ctf_probs,  # real [block, P]
+    noise_variance,  # real [P]
+    scale,  # real [C_B]
+    raw_shifted_images,  # complex64 [C_B, T, P]
+    row_posterior,  # float32 [block, T]
+    row_image_local,  # int32 [block]
+):
+    """Flat-row twin of ``_relion_wavg_atomic_triplet_terms``.
+
+    Used when the pass does not carry RELION's RFLOAT CTF operand, which is
+    the branch the host bucket tail takes when ``direct_ctf_rfloat_recon`` is
+    ``None``. Term for term it is the rectangular helper with the
+    ``(image, rotation)`` axes folded into the row axis: the two ``!= 0`` mass
+    predicates, the per-image scale division, the float32 casts and the
+    optimization barrier between the real and imaginary image-power halves all
+    stay where they are.
+    """
+
+    proj = jnp.asarray(proj, dtype=jnp.complex64)
+    proj_abs2 = jnp.asarray(proj_abs2, dtype=jnp.float32)
+    summed_masked = jnp.asarray(summed_masked, dtype=jnp.complex64)
+    ctf_probs = jnp.asarray(ctf_probs, dtype=jnp.float32)
+    noise_variance = jnp.asarray(noise_variance, dtype=jnp.float32).reshape(-1)
+    row_image_local = jnp.asarray(row_image_local, dtype=jnp.int32)
+    row_scale = jnp.asarray(scale, dtype=jnp.float32).reshape(-1)[row_image_local]
+    posterior = jnp.asarray(row_posterior, dtype=jnp.float32)
+
+    ctf_has_mass = ctf_probs != 0.0
+    ctf_posterior_raw = jnp.where(ctf_has_mass, ctf_probs * noise_variance[None, :], 0.0)
+    aa_raw = jnp.where(ctf_has_mass, proj_abs2 * ctf_posterior_raw, 0.0).astype(jnp.float32)
+    cross_has_mass = summed_masked != 0.0
+    cross = jnp.where(cross_has_mass, proj * jnp.conj(summed_masked), 0.0)
+    xa_raw = (noise_variance[None, :] * cross.real).astype(jnp.float32)
+    safe_scale = jnp.maximum(row_scale, jnp.asarray(1e-30, dtype=jnp.float32))
+    xa = (xa_raw / safe_scale[:, None]).astype(jnp.float32)
+    aa = (aa_raw / (safe_scale[:, None] ** 2)).astype(jnp.float32)
+
+    tiles = jnp.asarray(raw_shifted_images, dtype=jnp.complex64)[row_image_local]
+    image_power = _relion_wavg_rectangle_image_power(tiles, posterior[:, None, :])[:, 0, :]
+    diff2 = (
+        (image_power + aa_raw) - jnp.asarray(2.0, dtype=jnp.float32) * xa_raw
+    ).astype(jnp.float32)
+    return jnp.stack((xa, aa, diff2), axis=-1)
+
+
+@jax.jit
+def _resident_block_wavg_rectangle_terms(
+    exact_terms,  # float32 [block, P_exact, 3]
+    raw_shifted_rectangle,  # complex64 [C_B, T, P_rect]
+    row_posterior,  # float32 [block, T]
+    row_image_local,  # int32 [block]
+    exact_positions,  # int32 [P_exact]
+):
+    """Flat-row twin of ``_relion_wavg_rectangle_triplet_terms``.
+
+    Same two statements as the rectangular helper: fill the whole rectangle's
+    ``diff2`` slot with RELION's posterior-weighted image power, then overwrite
+    the exact-radius positions with the projected triplet.
+    """
+
+    row_image_local = jnp.asarray(row_image_local, dtype=jnp.int32)
+    tiles = jnp.asarray(raw_shifted_rectangle, dtype=jnp.complex64)[row_image_local]
+    image_power = _relion_wavg_rectangle_image_power(
+        tiles, jnp.asarray(row_posterior, dtype=jnp.float32)[:, None, :]
+    )[:, 0, :]
+    rectangle_terms = jnp.zeros(image_power.shape + (3,), dtype=jnp.float32)
+    rectangle_terms = rectangle_terms.at[..., 2].set(image_power)
+    return rectangle_terms.at[:, jnp.asarray(exact_positions, dtype=jnp.int32), :].set(
+        jnp.asarray(exact_terms, dtype=jnp.float32)
+    )
+
+
+# ---------------------------------------------------------------------------
+# Per-chunk image-level statistics (every term without a row-pixel axis)
+# ---------------------------------------------------------------------------
+
+
+class _ChunkImageOperands(NamedTuple):
+    """One chunk's image-level statistics operands, all already on the device."""
+
+    row_posterior: jax.Array  # float32 [C_R, T]
+    row_image_local: jax.Array  # int32 [C_R]
+    row_coarse_rot: jax.Array  # int32 [C_R], padded -> >= n_coarse_rot
+    image_ids: jax.Array  # int32 [C_B], padded -> -1
+    group_ids: jax.Array  # int32 [C_B], padded -> -1
+    processed_image_half: jax.Array  # complex [C_B, P_half]
+    relion_norm_high_shell: jax.Array  # real [C_B]
+    wavg_triplet_pixels: jax.Array  # float32 [C_B, P_rect, 3]
+    block_noise_shells: jax.Array  # float64 [n_shells]
+    a2_per_image: jax.Array  # real [C_B]
+    xa_per_image: jax.Array  # real [C_B]
+    class_log_z: jax.Array  # float64 [C_B]
+    min_diff2: jax.Array  # real [C_B]
+    best_log_score: jax.Array  # float32 [C_B]
+    max_posterior: jax.Array  # float32 [C_B]
+    best_cell_index: jax.Array  # int64 [C_B], segment-relative (r_local * T + t)
+    best_fine_rot: jax.Array  # int64 [C_B], global fine rotation id of the winner
+
+
+class _ChunkImageTables(NamedTuple):
+    """Iteration-global tables the image-level program reads every chunk."""
+
+    shell_indices_half: jax.Array  # int32 [P_half]
+    wavg_shell_indices: jax.Array  # int32 [P_rect]
+    wavg_scale_pixel_mask: jax.Array  # bool [P_rect]
+    translation_sqdist_ang: jax.Array | None  # real [T] or [C_B, T] or None
+
+
+@partial(jax.jit, static_argnames=("config",))
+def _accumulate_chunk_image_terms(
+    stats: ResidentStatistics,
+    operands: _ChunkImageOperands,
+    tables: _ChunkImageTables,
+    *,
+    config,
+) -> ResidentStatistics:
+    """Fold one chunk's image-level terms into the device accumulators.
+
+    Statement for statement this is the host bucket tail in its production
+    configuration; the only change is that the row-pixel reductions arrive as
+    already-summed chunk partials, because the pixel axis is walked in blocks.
+    """
+
+    n_shells = int(config.n_shells)
+    n_fine_trans = int(config.n_fine_trans)
+    image_capacity = int(operands.image_ids.shape[0])
+
+    probs = operands.row_posterior
+    row_image = jnp.asarray(operands.row_image_local, dtype=jnp.int32)
+    image_ids = jnp.asarray(operands.image_ids, dtype=jnp.int32)
+    valid_image = image_ids >= 0
+    image_slot = _drop_index(image_ids, int(config.n_images))
+
+    # --- 1/2. sigma2 offset and support mass -------------------------------
+    translation_posterior = segment_sum_by_image(probs, row_image, image_capacity)
+    sigma2_offset = stats.sigma2_offset
+    if tables.translation_sqdist_ang is not None:
+        sqdist = jnp.asarray(tables.translation_sqdist_ang, dtype=jnp.float64)
+        sigma2_offset = sigma2_offset + jnp.sum(
+            translation_posterior.astype(jnp.float64) * sqdist
+        )
+    support_mass = jnp.sum(translation_posterior, axis=1)
+    support_mass = jnp.where(valid_image, support_mass, jnp.zeros((), support_mass.dtype))
+    sumw = stats.sumw + jnp.sum(support_mass.astype(jnp.float64))
+
+    # --- 3. weighted image power shells and per-image norm power -----------
+    weighted_img_shells, weighted_img_per_image = _weighted_image_power_shells_and_per_image_core(
+        operands.processed_image_half,
+        tables.shell_indices_half,
+        support_mass,
+        operands.relion_norm_high_shell,
+        valid_image,
+        shell_count=n_shells,
+        norm_unweighted_shell_cutoff=config.norm_unweighted_shell_cutoff,
+        include_unweighted_high_shell=config.include_unweighted_high_shell,
+        disable_cuda_binning=config.disable_cuda_binning,
+        deterministic_norm_reduction=config.deterministic_norm_reduction,
+    )
+
+    # --- 4. per-particle norm correction (production algebraic mode) -------
+    # The host adds the image-power term and the A2-2XA residual in two
+    # separate ``+=`` statements; keep both scatters separate.
+    norm_correction = stats.norm_correction.at[image_slot].add(
+        jnp.where(valid_image, weighted_img_per_image, 0.0).astype(jnp.float64),
+        mode="drop",
+    )
+
+    # --- 5/6. noise shells with RELION's direct low-shell replacement ------
+    residual_shells, image_power_shells = (
+        _replace_low_shell_noise_with_relion_wavg_direct_residual_jnp(
+            jnp.asarray(operands.block_noise_shells, dtype=jnp.float64),
+            weighted_img_shells.astype(jnp.float64),
+            operands.wavg_triplet_pixels[:, :, 2],
+            tables.wavg_shell_indices,
+            exclusive_shell_stop=int(config.direct_noise_exclusive_shell_stop),
+            shell_count=n_shells,
+        )
+    )
+    wsum_sigma2_noise = stats.wsum_sigma2_noise + residual_shells
+    wsum_img_power = stats.wsum_img_power + image_power_shells
+
+    # --- 7. per-image norm residual ---------------------------------------
+    block_norm_residual = operands.a2_per_image - 2.0 * operands.xa_per_image
+    norm_correction = norm_correction.at[image_slot].add(
+        jnp.where(valid_image, block_norm_residual, 0.0).astype(jnp.float64),
+        mode="drop",
+    )
+
+    # --- 8. group scale sufficient statistics ------------------------------
+    scale_xa = stats.scale_xa
+    scale_aa = stats.scale_aa
+    if config.accumulate_scale:
+        mask_rect = jnp.asarray(tables.wavg_scale_pixel_mask, dtype=bool).reshape(1, -1)
+        zero_f32 = jnp.float32(0.0)
+        scale_xa_per_image = jnp.sum(
+            jnp.where(mask_rect, operands.wavg_triplet_pixels[:, :, 0], zero_f32).astype(
+                jnp.float64
+            ),
+            axis=1,
+        )
+        scale_aa_per_image = jnp.sum(
+            jnp.where(mask_rect, operands.wavg_triplet_pixels[:, :, 1], zero_f32).astype(
+                jnp.float64
+            ),
+            axis=1,
+        )
+        group_slot = _drop_index(operands.group_ids, int(config.n_scale_groups))
+        keep_group = valid_image & (jnp.asarray(operands.group_ids, dtype=jnp.int32) >= 0)
+        scale_xa = scale_xa.at[group_slot].add(
+            jnp.where(keep_group, scale_xa_per_image, 0.0).astype(jnp.float64), mode="drop"
+        )
+        scale_aa = scale_aa.at[group_slot].add(
+            jnp.where(keep_group, scale_aa_per_image, 0.0).astype(jnp.float64), mode="drop"
+        )
+
+    # --- 9. rotation posterior sums ----------------------------------------
+    probs_sum_t = jnp.sum(probs, axis=-1)
+    coarse_slot = _drop_index(operands.row_coarse_rot, int(config.n_coarse_rot))
+    rotation_posterior_sums = stats.rotation_posterior_sums.at[coarse_slot].add(
+        probs_sum_t.astype(jnp.float64), mode="drop"
+    )
+
+    # --- 10. per-image score and pose fields -------------------------------
+    # ``_relion_cuda_fine_log_evidence_offset`` is exactly ``-min_diff2``.
+    log_score_offset = (-jnp.asarray(operands.min_diff2)).astype(jnp.float64)
+    class_log_z = jnp.asarray(operands.class_log_z, dtype=jnp.float64)
+    best_log_score_chunk = jnp.asarray(operands.best_log_score, dtype=jnp.float64)
+    finite = jnp.isfinite(best_log_score_chunk)
+    neg_inf = jnp.asarray(-jnp.inf, dtype=jnp.float64)
+    absolute = class_log_z + log_score_offset
+
+    log_evidence = stats.log_evidence.at[image_slot].set(
+        jnp.where(finite, absolute, neg_inf), mode="drop"
+    )
+    score_log_z = stats.score_log_z.at[image_slot].set(
+        jnp.where(finite, absolute, neg_inf), mode="drop"
+    )
+    best_log_score = stats.best_log_score.at[image_slot].set(
+        best_log_score_chunk + log_score_offset, mode="drop"
+    )
+    max_posterior = stats.max_posterior.at[image_slot].set(
+        jnp.asarray(operands.max_posterior, dtype=stats.max_posterior.dtype), mode="drop"
+    )
+
+    best_cell_index = jnp.asarray(operands.best_cell_index, dtype=jnp.int64)
+    best_local_rot = (best_cell_index // jnp.int64(n_fine_trans)).astype(jnp.int32)
+    best_translation = best_cell_index % jnp.int64(n_fine_trans)
+    best_cell_values = (
+        jnp.asarray(operands.best_fine_rot, dtype=jnp.int64) * jnp.int64(n_fine_trans)
+        + best_translation
+    )
+    best_cell = stats.best_cell.at[image_slot].set(best_cell_values, mode="drop")
+    best_local_rot_out = stats.best_local_rot.at[image_slot].set(best_local_rot, mode="drop")
+
+    return ResidentStatistics(
+        wsum_sigma2_noise=wsum_sigma2_noise,
+        wsum_img_power=wsum_img_power,
+        sigma2_offset=sigma2_offset,
+        sumw=sumw,
+        norm_correction=norm_correction,
+        scale_xa=scale_xa,
+        scale_aa=scale_aa,
+        rotation_posterior_sums=rotation_posterior_sums,
+        log_evidence=log_evidence,
+        best_log_score=best_log_score,
+        max_posterior=max_posterior,
+        best_cell=best_cell,
+        score_log_z=score_log_z,
+        best_local_rot=best_local_rot_out,
+        invalid_best_rows=stats.invalid_best_rows,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Driver
+# ---------------------------------------------------------------------------
+
+
+def _gather_to_requested_order(values, fetched_indices, position_of, n_requested):
+    """Reorder a fetched batch back to the requested image order.
+
+    The dataset may return a batch in its own order. The compact engine
+    reorders its bucket arrays to follow the fetch; the resident driver instead
+    keeps the table's (RELION particle) order and permutes the operands, which
+    is a pure gather and changes no arithmetic.
+    """
+
+    fetched_indices = np.asarray(fetched_indices).reshape(-1)
+    order = np.empty(n_requested, dtype=np.int64)
+    seen = np.zeros(n_requested, dtype=bool)
+    for local, dataset_index in enumerate(fetched_indices.tolist()):
+        position = position_of.get(int(dataset_index))
+        if position is None:
+            raise ValueError(
+                f"the dataset returned image {dataset_index}, which was not requested"
+            )
+        order[position] = local
+        seen[position] = True
+    if not bool(seen.all()):
+        raise ValueError("the dataset did not return every requested image")
+    if values is None:
+        return None
+    return jnp.asarray(values)[jnp.asarray(order, dtype=jnp.int32)]
+
+
+def _pad_image_axis(values, image_capacity: int):
+    """Pad an ``[n, ...]`` device array up to ``image_capacity`` rows with zeros."""
+
+    values = jnp.asarray(values)
+    n = int(values.shape[0])
+    if n == image_capacity:
+        return values
+    if n > image_capacity:
+        raise ValueError(f"cannot pad {n} images down to capacity {image_capacity}")
+    pad = [(0, image_capacity - n)] + [(0, 0)] * (values.ndim - 1)
+    return jnp.pad(values, pad)
+
+
+def compute_pass2_stats_resident(
+    experiment_dataset,
+    volume,
+    noise_variance,
+    translations,
+    significant_sample_indices,
+    nside_level,
+    disc_type,
+    *,
+    oversampling_order,
+    current_size,
+    reconstruction_current_size=None,
+    translation_step,
+    rotation_log_prior,
+    score_with_masked_images,
+    return_stats,
+    translation_log_prior,
+    accumulate_noise,
+    half_spectrum_scoring,
+    projection_padding_factor,
+    projection_mask_current_image_disk=True,
+    reconstruction_padding_factor,
+    image_corrections,
+    scale_corrections,
+    image_pre_shifts,
+    use_float64_scoring,
+    translation_prior_centers=None,
+    do_gridding_correction=False,
+    square_window=False,
+    random_perturbation,
+    group_ids=None,
+    scale_correction_group_count=None,
+    scale_correction_data_vs_prior=None,
+    normalization_log_z=None,
+    relion_f32_normalization_sum_weight=None,
+    relion_coarse_hard_assignment=None,
+    relion_coarse_max_posterior=None,
+    normalization_other_score_log_z=None,
+    normalization_score_mode=None,
+    return_score_log_z=False,
+    return_score_log_z_only=False,
+    disable_adjoint_y=False,
+    disable_adjoint_ctf=False,
+    rotation_block_size_for_quantization=5000,
+    fine_source_eulers_override=None,
+    return_source_eulers=False,
+    fine_rotations_override=None,
+    fine_mstep_rotations_override=None,
+    fine_rotation_parent_override=None,
+    fine_translations_override=None,
+    fine_translation_parent_override=None,
+    relion_half_volume_mstep=False,
+    relion_x_half_mstep=False,
+    mstep_subtract_ctf_projection=False,
+    relion_fine_mstep_prune=False,
+    relion_firstiter_score_mode="gaussian",
+    relion_firstiter_winner_take_all=False,
+    relion_exact_fine_gaussian=True,
+    relion_fine_diff2_fused_ffi=False,
+    relion_f32_fine_posterior=False,
+    relion_exact_fine_normalized_cc=False,
+    relion_projector_half=None,
+    relion_projector_r_max=None,
+    adaptive_fraction=0.999,
+    bpref_device_signature_active: bool = False,
+    bpref_class_index: int = 0,
+    include_unweighted_norm_high_shell: bool = True,
+    preserve_bpref_particle_order: bool = False,
+    source_faithful_spectrum_norm: bool = False,
+):
+    """Device-resident K=1 sparse pass 2; same signature and return as the compact engine.
+
+    See the module docstring for what is layout-equal to the compact engine and
+    what is a deliberate reduction-order change. The configuration gate runs
+    before any device work, so an unsupported pass fails immediately instead of
+    part way through a half.
+    """
+
+    from recovar import cuda_backproject
+    from recovar.em.sampling import (
+        get_oversampled_translation_grid,
+        infer_translation_step,
+        rotation_grid_size,
+    )
+    from recovar.em.sparse_pass2.sparse_pass2_window import (
+        _pass2_projection_budget,
+        _pass2_relion_flags,
+    )
+    from recovar.em.sparse_pass2.sparse_pass2_window import (
+        _fine_translation_prior_2d,
+    )
+
+    overall_t0 = time.time()
+    (
+        use_exact_relion_gaussian,
+        _use_relion_fine_diff2_fused_ffi,
+        use_relion_f32_fine_posterior,
+    ) = _pass2_relion_flags(
+        relion_exact_fine_gaussian=relion_exact_fine_gaussian,
+        relion_firstiter_score_mode=relion_firstiter_score_mode,
+        relion_fine_diff2_fused_ffi=relion_fine_diff2_fused_ffi,
+        relion_f32_fine_posterior=relion_f32_fine_posterior,
+    )
+
+    n_images = experiment_dataset.n_units
+    n_coarse_trans = int(np.asarray(translations).shape[0])
+    n_coarse_rot = rotation_grid_size(nside_level)
+    image_shape = experiment_dataset.image_shape
+    volume_shape = experiment_dataset.volume_shape
+
+    (
+        mstep_current_size,
+        n_half,
+        window_spec_kwargs,
+        budget_window_spec,
+        device_memory_bytes,
+        precision_policy,
+    ) = _pass2_window_setup(
+        image_shape,
+        current_size=current_size,
+        reconstruction_current_size=reconstruction_current_size,
+        half_spectrum_scoring=half_spectrum_scoring,
+        square_window=square_window,
+        relion_firstiter_score_mode=relion_firstiter_score_mode,
+        use_exact_relion_gaussian=use_exact_relion_gaussian,
+        use_float64_scoring=use_float64_scoring,
+    )
+
+    fresh_k1_guard = bool(source_faithful_spectrum_norm)
+    resolved_spectrum_norm = _relion_powerclass_spectrum_norm_enabled(
+        fresh_k1_guard=fresh_k1_guard,
+    )
+    relion_exact_bpref_operands = _relion_exact_bpref_operands_enabled(
+        fresh_k1_guard=fresh_k1_guard,
+        source_faithful_spectrum_norm=resolved_spectrum_norm,
+    )
+    direct_noise_default = _fresh_k1_direct_noise_default(
+        preserve_bpref_particle_order=preserve_bpref_particle_order,
+        relion_exact_bpref_operands=relion_exact_bpref_operands,
+    )
+    scale_groups_available = group_ids is not None
+    relion_wavg_atomic_scale_aa = bool(
+        accumulate_noise
+        and scale_groups_available
+        and parse_env_flag(_RELION_WAVG_ATOMIC_SCALE_AA_ENV, default=direct_noise_default)
+    )
+    relion_wavg_atomic_direct_noise, relion_wavg_atomic_direct_norm = _relion_wavg_direct_modes(
+        accumulate_noise=bool(accumulate_noise),
+        scale_groups_available=scale_groups_available,
+        scale_aa_enabled=bool(relion_wavg_atomic_scale_aa),
+        direct_noise_only_default=direct_noise_default,
+    )
+
+    soft_posterior_block_bpref = parse_env_flag(
+        _SOFT_POSTERIOR_BLOCK_BPREF_PROTOTYPE_ENV, default=False
+    )
+    projection_cache_enabled = _projection_cache_enabled_for_pass(
+        fine_rotations_override=fine_rotations_override,
+        dump_pass2_operands=False,
+    )
+    require_resident_production_configuration(
+        relion_x_half_mstep=relion_x_half_mstep,
+        relion_exact_fine_gaussian=relion_exact_fine_gaussian,
+        relion_firstiter_score_mode=relion_firstiter_score_mode,
+        use_float64_scoring=use_float64_scoring,
+        relion_firstiter_winner_take_all=relion_firstiter_winner_take_all,
+        disable_adjoint_y=disable_adjoint_y,
+        disable_adjoint_ctf=disable_adjoint_ctf,
+        return_score_log_z_only=return_score_log_z_only,
+        accumulate_noise=accumulate_noise,
+        mstep_subtract_ctf_projection=mstep_subtract_ctf_projection,
+        normalization_log_z=normalization_log_z,
+        normalization_other_score_log_z=normalization_other_score_log_z,
+        relion_f32_normalization_sum_weight=relion_f32_normalization_sum_weight,
+        relion_coarse_hard_assignment=relion_coarse_hard_assignment,
+        preserve_bpref_particle_order=preserve_bpref_particle_order,
+        soft_posterior_block_bpref=soft_posterior_block_bpref,
+        fine_rotations_override=fine_rotations_override,
+        fine_rotation_parent_override=fine_rotation_parent_override,
+        n_coarse_trans=n_coarse_trans,
+        use_window=budget_window_spec.use_window,
+        projection_cache_available=projection_cache_enabled,
+        relion_wavg_atomic_scale_aa=relion_wavg_atomic_scale_aa,
+        relion_wavg_atomic_direct_noise=relion_wavg_atomic_direct_noise,
+        relion_wavg_atomic_direct_norm=relion_wavg_atomic_direct_norm,
+    )
+    _require(
+        bool(use_relion_f32_fine_posterior),
+        "the RELION float32 fine posterior is the segmented kernel's contract",
+    )
+    _require(
+        bool(relion_fine_mstep_prune) or bool(relion_x_half_mstep),
+        "the resident M-step reconstructs from RELION's pruned fine weights",
+    )
+    _require(
+        jax.default_backend() == "gpu" and cuda_backproject.custom_cuda_requested(),
+        "every resident stage is a CUDA FFI target",
+    )
+
+    # ---- accumulator layout (identical to the compact engine) -------------
+    recon_volume_shape = relion_backprojector_volume_shape(
+        volume_shape,
+        reconstruction_padding_factor,
+        current_size=mstep_current_size,
+    )
+    recon_accum_shape = half_volume_accumulator_shape(recon_volume_shape)
+    recon_volume_size = int(np.prod(recon_accum_shape))
+    recon_y_accum_dtype, recon_ctf_accum_dtype = relion_x_half_mstep_accumulator_dtypes(
+        experiment_dataset.dtype,
+        use_relion_x_half_mstep=True,
+    )
+    logger.info(
+        "Resident pass-2 RELION x-half current-size BPref accumulator shape: "
+        "volume_shape=%s score_current_size=%s model_current_size=%s padding_factor=%s "
+        "recon_volume_shape=%s half_accum_shape=%s voxels=%d",
+        tuple(volume_shape),
+        current_size,
+        mstep_current_size,
+        reconstruction_padding_factor,
+        tuple(recon_volume_shape),
+        tuple(recon_accum_shape),
+        recon_volume_size,
+    )
+
+    # ---- projection volume ------------------------------------------------
+    use_relion_projector = relion_projector_half is not None
+    if use_relion_projector:
+        if relion_projector_r_max is None:
+            raise ValueError("relion_projector_r_max is required when relion_projector_half is provided")
+        relion_projector_half = jnp.asarray(relion_projector_half)
+        if not use_float64_scoring and relion_projector_half.dtype == jnp.complex128:
+            relion_projector_half = relion_projector_half.astype(jnp.complex64)
+    if projection_padding_factor > 1 and not use_relion_projector:
+        from recovar.reconstruction.relion_functions import pad_volume_for_projection
+
+        mean_for_proj, proj_volume_shape = pad_volume_for_projection(
+            volume,
+            volume_shape,
+            projection_padding_factor,
+            do_gridding_correction=do_gridding_correction,
+            current_size=mstep_current_size,
+        )
+    else:
+        mean_for_proj = volume
+        proj_volume_shape = volume_shape
+
+    # ---- fine translations and priors -------------------------------------
+    translations_source_np = np.asarray(translations)
+    translations_np = np.asarray(translations_source_np, dtype=precision_policy.score_real_dtype)
+    if translation_step is None:
+        translation_step = infer_translation_step(translations_np)
+    if fine_translations_override is None and fine_translation_parent_override is None:
+        fine_translations_source, fine_translation_parent = get_oversampled_translation_grid(
+            translations_source_np,
+            translation_step,
+            oversampling_order=oversampling_order,
+        )
+        fine_translations = np.asarray(
+            fine_translations_source, dtype=precision_policy.score_real_dtype
+        )
+        fine_translation_parent = np.asarray(fine_translation_parent, dtype=np.int32)
+    elif fine_translations_override is not None and fine_translation_parent_override is not None:
+        fine_translations_source = np.asarray(fine_translations_override)
+        fine_translations = np.asarray(
+            fine_translations_source, dtype=precision_policy.score_real_dtype
+        )
+        fine_translation_parent = np.asarray(fine_translation_parent_override, dtype=np.int32)
+    else:
+        raise ValueError(
+            "fine_translations_override and fine_translation_parent_override must be provided together",
+        )
+    n_fine_trans = int(fine_translations.shape[0])
+
+    translation_prior_centers_np = validate_translation_prior_centers(
+        translation_prior_centers,
+        n_images=n_images,
+        n_dims=translations_np.shape[1],
+    )
+    fine_translation_prior_2d = _fine_translation_prior_2d(
+        translation_log_prior,
+        fine_translation_parent,
+        n_images=n_images,
+        n_fine_trans=n_fine_trans,
+        dtype=precision_policy.score_real_dtype,
+    )
+
+    # ---- per-image hypotheses (unchanged) ---------------------------------
+    prep_t0 = time.time()
+    per_image_inputs = _prepare_per_image_pass2_inputs(
+        significant_sample_indices,
+        n_coarse_rot=n_coarse_rot,
+        n_coarse_trans=n_coarse_trans,
+        nside_level=nside_level,
+        oversampling_order=oversampling_order,
+        n_fine_trans=n_fine_trans,
+        fine_translation_parent=fine_translation_parent,
+        rotation_log_prior=rotation_log_prior,
+        random_perturbation=random_perturbation,
+        fine_source_eulers_override=fine_source_eulers_override,
+        fine_rotations_override=fine_rotations_override,
+        fine_mstep_rotations_override=fine_mstep_rotations_override,
+        fine_rotation_parent_override=fine_rotation_parent_override,
+        relion_parent_execution_order=_relion_fine_parent_execution_order_enabled(
+            use_relion_f32_fine_posterior=use_relion_f32_fine_posterior,
+        ),
+        dtype=precision_policy.score_real_dtype,
+    )
+    prep_s = time.time() - prep_t0
+
+    # ---- T5: candidate table and capacity chunks --------------------------
+    table_t0 = time.time()
+    tables = build_resident_candidate_tables(
+        per_image_inputs,
+        n_coarse_trans=n_coarse_trans,
+        n_fine_trans=n_fine_trans,
+        fine_translation_parent=fine_translation_parent,
+    )
+    if int(tables.n_images) != int(n_images):
+        raise ValueError(
+            f"candidate table covers {tables.n_images} images but the dataset has {n_images}"
+        )
+
+    # ---- window / weights / lookups (unchanged) ---------------------------
+    window_setup = _sparse_pass2_window_setup(
+        experiment_dataset,
+        disc_type=disc_type,
+        image_shape=image_shape,
+        current_size=current_size,
+        n_half=n_half,
+        mstep_current_size=mstep_current_size,
+        square_window=square_window,
+        window_spec_kwargs=window_spec_kwargs,
+        use_relion_x_half_mstep=True,
+        log_label="Resident pass-2",
+    )
+    config = window_setup.config
+    window_spec = window_setup.window_spec
+    window_indices_np = window_setup.window_indices_np
+    window_indices = window_setup.window_indices
+    recon_window_indices = window_setup.recon_window_indices
+    relion_x_half_recon_indices = window_setup.relion_x_half_recon_indices
+    windowed_prepare = window_setup.windowed_prepare
+    n_windowed = window_setup.n_windowed
+    n_recon_windowed = window_setup.n_recon_windowed
+
+    half_weights, half_weights_windowed = _pass2_half_weights(
+        image_shape,
+        window_spec,
+        half_spectrum_scoring=half_spectrum_scoring,
+        relion_firstiter_score_mode=relion_firstiter_score_mode,
+        use_float64_scoring=use_float64_scoring,
+    )
+    relion_score_full_to_compact = jnp.asarray(
+        _relion_cuda_fine_full_to_compact_lookup(image_shape, current_size, window_indices_np),
+        dtype=jnp.int32,
+    )
+    noise_variance_half = noise_utils.to_batched_half_pixel_noise(
+        noise_variance, image_shape
+    ).squeeze()
+    relion_score_translation_angles = _relion_cuda_score_translation_angles_if_available(
+        fine_translations_source,
+        image_shape,
+        enabled=True,
+        dtype=np.float64 if use_float64_scoring else np.float32,
+    )
+    if relion_score_translation_angles is None:
+        raise ValueError("the resident scoring stage requires RELION translation angles")
+    translation_phases_half = (
+        None if windowed_prepare else half_translation_phase_table(fine_translations, image_shape)
+    )
+
+    n_shells = image_shape[0] // 2 + 1
+    shell_indices_half = mask_relion_noise_shell_indices_to_current_window(
+        make_relion_noise_shell_indices_half(image_shape),
+        image_shape,
+        current_size,
+        window_indices,
+    )
+    shell_indices_noise = window_spec.recon_values(shell_indices_half)
+    noise_variance_for_noise = window_spec.recon_values(noise_variance_half)
+    scale_correction_pixel_mask = _relion_scale_correction_pixel_mask(
+        scale_correction_data_vs_prior,
+        shell_indices_noise,
+        n_shells=n_shells,
+    )
+    relion_wavg_rectangle = _make_relion_wavg_rectangle(
+        image_shape,
+        current_size,
+        recon_window_indices,
+        reconstruction_current_size=mstep_current_size,
+    )
+    n_rect = int(relion_wavg_rectangle.centered_indices.size)
+    scale_pixel_mask_rect_np = np.zeros(n_rect, dtype=bool)
+    scale_pixel_mask_rect_np[relion_wavg_rectangle.exact_positions] = np.asarray(
+        scale_correction_pixel_mask, dtype=bool
+    )
+    group_ids_np, n_scale_groups = prepare_scale_correction_groups(
+        group_ids, scale_correction_group_count, n_images=n_images,
+    )
+
+    # ---- projection cache (same admission and build as the compact engine) -
+    n_fine_rot = int(np.asarray(fine_rotations_override).shape[0])
+    (
+        _projection_complex_dtype,
+        _projection_budget_pixels,
+        max_projected_rotations_per_projection_call,
+    ) = _pass2_projection_budget(
+        jnp.asarray(mean_for_proj).dtype,
+        precision_policy,
+        n_half=n_half,
+        use_relion_projector=use_relion_projector,
+        budget_window_spec=budget_window_spec,
+        device_memory_bytes=device_memory_bytes,
+        include_abs2=False,
+    )
+    transient_projection_bytes = _projection_cache_transient_bytes(
+        n_fine_rot,
+        n_windowed,
+        projection_complex_dtype=precision_policy.score_complex_dtype,
+        include_abs2=False,
+    ) + _projection_cache_transient_bytes(
+        n_fine_rot,
+        n_recon_windowed,
+        projection_complex_dtype=precision_policy.score_complex_dtype,
+        include_abs2=True,
+    )
+    max_projection_cache_bytes = _projection_cache_max_bytes_for_pass(device_memory_bytes)
+    _require(
+        _projection_cache_fits_budget(transient_projection_bytes, max_projection_cache_bytes),
+        "the per-iteration projection cache did not fit its budget "
+        f"({transient_projection_bytes / float(1024 ** 3):.2f} GiB > "
+        f"{max_projection_cache_bytes / float(1024 ** 3):.2f} GiB)",
+    )
+    cache_t0 = time.time()
+    projection_kwargs = _projection_kwargs_for_relion_score_window(
+        window_spec.projection_kwargs(return_abs2=False),
+        use_relion_projector=use_relion_projector,
+        current_size=current_size,
+    )
+    projection_kwargs["mask_current_image_disk"] = bool(projection_mask_current_image_disk)
+    score_cache, recon_cache, recon_abs2_cache = _compute_sparse_pass2_windowed_projections_block(
+        mean_for_proj,
+        jnp.asarray(fine_rotations_override, dtype=precision_policy.score_real_dtype),
+        image_shape,
+        proj_volume_shape,
+        disc_type,
+        score_indices=window_indices,
+        recon_indices=recon_window_indices,
+        max_projected_rotations=_projection_cache_build_max_rotations_per_call(
+            max_projected_rotations_per_projection_call,
+            n_fine_rot,
+        ),
+        output_complex_dtype=precision_policy.score_complex_dtype,
+        output_abs2_dtype=precision_policy.score_real_dtype,
+        relion_projector_half=relion_projector_half,
+        relion_projector_r_max=relion_projector_r_max,
+        projection_padding_factor=projection_padding_factor,
+        **projection_kwargs,
+    )
+    recon_cache, recon_abs2_cache = precision_policy.cast_local_noise_projection_scores(
+        recon_cache, recon_abs2_cache
+    )
+    logger.info(
+        "Resident pass-2 projection cache: cached %d fine rotations in %.2fs "
+        "(estimated transient %.2f GiB)",
+        n_fine_rot,
+        time.time() - cache_t0,
+        transient_projection_bytes / float(1024**3),
+    )
+
+    # ---- capacity plan ----------------------------------------------------
+    row_ladder = _ladder_from_env(_ROW_CAPACITY_LADDER_ENV, _DEFAULT_ROW_CAPACITY_LADDER)
+    image_ladder = _cap_image_capacity_ladder(
+        _ladder_from_env(_IMAGE_CAPACITY_LADDER_ENV, _DEFAULT_IMAGE_CAPACITY_LADDER),
+        n_fine_trans=n_fine_trans,
+        n_recon_pixels=n_recon_windowed,
+        max_tile_bytes=_max_translation_tile_bytes_for_pass(
+            device_memory_bytes, has_external_normalization=False
+        ),
+    )
+    mstep_block_rows = _resolve_mstep_block_rows(
+        n_recon_pixels=n_recon_windowed,
+        max_block_bytes=_max_adjoint_block_bytes_for_pass(device_memory_bytes),
+        row_capacity_ladder=row_ladder,
+    )
+    chunks = plan_capacity_chunks(
+        tables,
+        row_capacity_ladder=row_ladder,
+        image_capacity_ladder=image_ladder,
+    )
+    plan = ResidentPass2Plan(
+        chunks=tuple(chunks),
+        row_capacity_ladder=tuple(row_ladder),
+        image_capacity_ladder=tuple(image_ladder),
+        mstep_block_rows=int(mstep_block_rows),
+    )
+    table_s = time.time() - table_t0
+    logger.info(
+        "Resident pass-2 plan: %d images, %d candidate rows -> %d chunks "
+        "(row capacities %s, image capacities %s, M-step block rows %d); "
+        "setup hypothesis_prep=%.2fs table+plan=%.2fs",
+        tables.n_images,
+        tables.n_rows,
+        len(chunks),
+        ",".join(str(v) for v in plan.row_capacity_ladder),
+        ",".join(str(v) for v in plan.image_capacity_ladder),
+        plan.mstep_block_rows,
+        prep_s,
+        table_s,
+    )
+
+    # ---- T6: resident per-image scoring operands --------------------------
+    prepare_batch = os.environ.get(_PREPARE_IMAGE_BATCH_ENV, "").strip()
+    prepare_batch = int(prepare_batch) if prepare_batch else 256
+    bucket_io_kwargs = dict(
+        noise_variance_half=noise_variance_half,
+        fine_translations=fine_translations,
+        config=config,
+        n_trans=n_fine_trans,
+        score_with_masked_images=score_with_masked_images,
+        half_spectrum_scoring=half_spectrum_scoring,
+        image_corrections=image_corrections,
+        scale_corrections=scale_corrections,
+        image_pre_shifts=image_pre_shifts,
+        use_float64_scoring=use_float64_scoring,
+        score_only=False,
+        score_mode=relion_firstiter_score_mode,
+        window_indices=window_indices,
+        recon_window_indices=recon_window_indices,
+        translation_phases_half=translation_phases_half,
+        relion_score_translation_angles=relion_score_translation_angles,
+        return_windowed_shifted=windowed_prepare,
+        relion_exact_normalized_cc_operands=relion_exact_fine_normalized_cc,
+        relion_exact_bpref_operands=relion_exact_bpref_operands,
+    )
+    operands_t0 = time.time()
+    operands = prepare_resident_image_operands(
+        experiment_dataset,
+        np.arange(n_images, dtype=np.int64),
+        bucket_io_kwargs=bucket_io_kwargs,
+        half_weights=half_weights_windowed,
+        full_to_compact=relion_score_full_to_compact,
+        translation_angles=relion_score_translation_angles,
+        window_indices=window_indices,
+        windowed_prepare=windowed_prepare,
+        image_shape=image_shape,
+        current_size=current_size,
+        n_fine_trans=n_fine_trans,
+        use_exact_relion_gaussian=use_exact_relion_gaussian,
+        accumulate_noise=accumulate_noise,
+        source_faithful_spectrum_norm=resolved_spectrum_norm,
+        fine_translation_prior_2d=fine_translation_prior_2d,
+        score_real_dtype=precision_policy.score_real_dtype,
+        image_batch_size=prepare_batch,
+    )
+    logger.info(
+        "Resident pass-2 image operands: %d images x %d score pixels resident in %.2fs (%.2f GiB)",
+        operands.n_images,
+        operands.n_score_pixels,
+        time.time() - operands_t0,
+        operands.nbytes()["total"] / float(1024**3),
+    )
+
+    # ---- resident row-aligned tables --------------------------------------
+    fine_grid = jnp.asarray(fine_rotations_override, dtype=precision_policy.score_real_dtype)
+    mstep_grid = (
+        fine_grid
+        if fine_mstep_rotations_override is None
+        else jnp.asarray(fine_mstep_rotations_override, dtype=precision_policy.score_real_dtype)
+    )
+    coarse_parent_grid = jnp.asarray(
+        np.asarray(fine_rotation_parent_override, dtype=np.int32), dtype=jnp.int32
+    )
+    projection_score_cache = jnp.asarray(score_cache)
+    projection_recon_cache = jnp.asarray(recon_cache)
+    projection_recon_abs2_cache = jnp.asarray(recon_abs2_cache)
+    fine_translation_parent_device = jnp.asarray(fine_translation_parent, dtype=jnp.int32)
+
+    scale_corrections_np = (
+        None
+        if scale_corrections is None
+        else np.asarray(scale_corrections, dtype=precision_policy.score_real_dtype)
+    )
+
+    # ---- statistics accumulators ------------------------------------------
+    stats_config = resolve_statistics_config(
+        n_shells=n_shells,
+        n_fine_trans=n_fine_trans,
+        n_images=n_images,
+        n_coarse_rot=n_coarse_rot,
+        n_scale_groups=n_scale_groups,
+        current_size=current_size,
+        include_unweighted_high_shell=include_unweighted_norm_high_shell,
+        use_exact_relion_gaussian=use_exact_relion_gaussian,
+        relion_wavg_atomic_direct_noise=relion_wavg_atomic_direct_noise,
+        relion_wavg_atomic_scale_aa=relion_wavg_atomic_scale_aa,
+        accumulate_scale=scale_groups_available,
+        source_faithful_spectrum_norm=resolved_spectrum_norm,
+    )
+    stats = make_resident_statistics(
+        stats_config, max_posterior_dtype=precision_policy.score_real_dtype
+    )
+    image_tables = _ChunkImageTables(
+        shell_indices_half=jnp.asarray(shell_indices_half, dtype=jnp.int32),
+        wavg_shell_indices=jnp.asarray(relion_wavg_rectangle.shell_indices, dtype=jnp.int32),
+        wavg_scale_pixel_mask=jnp.asarray(scale_pixel_mask_rect_np, dtype=bool),
+        translation_sqdist_ang=None,
+    )
+
+    Ft_y_total = jnp.zeros(recon_volume_size, dtype=recon_y_accum_dtype)
+    Ft_ctf_total = jnp.zeros(recon_volume_size, dtype=recon_ctf_accum_dtype)
+    max_adjoint_block_bytes = _max_adjoint_block_bytes_for_pass(device_memory_bytes)
+    exact_positions_device = jnp.asarray(relion_wavg_rectangle.exact_positions, dtype=jnp.int32)
+    rect_indices_device = jnp.asarray(relion_wavg_rectangle.centered_indices, dtype=jnp.int32)
+    noise_variance_for_noise_device = jnp.asarray(noise_variance_for_noise)
+    shell_indices_noise_device = jnp.asarray(shell_indices_noise, dtype=jnp.int32)
+
+    # ---- chunk loop --------------------------------------------------------
+    loop_t0 = time.time()
+    for chunk in chunks:
+        Ft_y_total, Ft_ctf_total, stats = _run_resident_chunk(
+            chunk,
+            tables=tables,
+            experiment_dataset=experiment_dataset,
+            operands=operands,
+            bucket_io_kwargs=bucket_io_kwargs,
+            projection_score_cache=projection_score_cache,
+            projection_recon_cache=projection_recon_cache,
+            projection_recon_abs2_cache=projection_recon_abs2_cache,
+            fine_translation_parent_device=fine_translation_parent_device,
+            mstep_grid=mstep_grid,
+            coarse_parent_grid=coarse_parent_grid,
+            n_fine_trans=n_fine_trans,
+            n_recon_windowed=n_recon_windowed,
+            n_rect=n_rect,
+            mstep_block_rows=mstep_block_rows,
+            adaptive_fraction=float(adaptive_fraction),
+            windowed_prepare=windowed_prepare,
+            window_indices=window_indices,
+            recon_window_indices=recon_window_indices,
+            relion_x_half_recon_indices=relion_x_half_recon_indices,
+            exact_positions_device=exact_positions_device,
+            rect_indices_device=rect_indices_device,
+            image_shape=image_shape,
+            current_size=current_size,
+            mstep_current_size=mstep_current_size,
+            recon_volume_shape=recon_volume_shape,
+            max_adjoint_block_bytes=max_adjoint_block_bytes,
+            noise_variance_for_noise=noise_variance_for_noise_device,
+            shell_indices_noise=shell_indices_noise_device,
+            group_ids_np=group_ids_np,
+            scale_corrections_np=scale_corrections_np,
+            translation_prior_centers_np=translation_prior_centers_np,
+            fine_translations=fine_translations,
+            voxel_size=experiment_dataset.voxel_size,
+            precision_policy=precision_policy,
+            use_exact_relion_gaussian=use_exact_relion_gaussian,
+            accumulate_noise=accumulate_noise,
+            source_faithful_spectrum_norm=resolved_spectrum_norm,
+            stats=stats,
+            stats_config=stats_config,
+            image_tables=image_tables,
+            Ft_y_total=Ft_y_total,
+            Ft_ctf_total=Ft_ctf_total,
+            cuda_backproject=cuda_backproject,
+        )
+    loop_s = time.time() - loop_t0
+
+    # ---- finalize (identical to the compact return block) ------------------
+    Ft_y_total, Ft_ctf_total = enforce_half_volume_x0(
+        Ft_y_total,
+        Ft_ctf_total,
+        recon_volume_shape,
+        logger=logger,
+        label="Resident pass-2",
+    )
+    Ft_y_total, Ft_ctf_total = relion_x_half_accumulators_to_public_layout(
+        Ft_y_total,
+        Ft_ctf_total,
+        recon_volume_shape,
+    )
+
+    finalized = finalize_statistics(stats, config=stats_config)
+    hard_assignment = np.asarray(finalized.hard_assignment, dtype=np.int32)
+    best_fine_rotation_indices = np.asarray(finalized.best_fine_rotation_indices, dtype=np.int64)
+    best_rotations = np.asarray(fine_rotations_override, dtype=precision_policy.score_real_dtype)[
+        best_fine_rotation_indices
+    ]
+    best_translations = fine_translations[hard_assignment % n_fine_trans]
+    best_eulers = None
+    if return_source_eulers and fine_source_eulers_override is not None:
+        best_eulers = np.asarray(fine_source_eulers_override, dtype=np.float64)[
+            best_fine_rotation_indices
+        ]
+
+    merged_noise_stats = make_noise_stats(
+        wsum_sigma2_noise=finalized.wsum_sigma2_noise,
+        wsum_img_power=finalized.wsum_img_power,
+        wsum_sigma2_offset=finalized.wsum_sigma2_offset,
+        sumw=finalized.sumw,
+        wsum_norm_correction=finalized.wsum_norm_correction,
+        wsum_scale_correction_xa=finalized.wsum_scale_correction_xa,
+        wsum_scale_correction_aa=finalized.wsum_scale_correction_aa,
+    )
+    relion_stats = None
+    if return_stats:
+        relion_stats = make_relion_stats(
+            log_evidence_per_image=finalized.log_evidence_per_image,
+            best_log_score_per_image=finalized.best_log_score_per_image,
+            max_posterior_per_image=finalized.max_posterior_per_image,
+            rotation_posterior_sums=finalized.rotation_posterior_sums,
+        )
+    logger.info(
+        "Resident pass-2: %d images, %d chunks, %.2fs chunk loop, %.2fs total",
+        n_images,
+        len(chunks),
+        loop_s,
+        time.time() - overall_t0,
+    )
+    return SparsePass2Output(
+        Ft_y_total,
+        Ft_ctf_total,
+        hard_assignment,
+        best_rotations,
+        best_translations,
+        best_fine_rotation_indices,
+        relion_stats=relion_stats,
+        score_log_z=(
+            finalized.score_log_z_per_image if (return_stats and return_score_log_z) else None
+        ),
+        noise_stats=merged_noise_stats,
+        source_eulers=best_eulers if return_source_eulers else None,
+    )
+
+
+def _chunk_segment_offsets(tables, chunk, n_fine_trans: int) -> np.ndarray:
+    """Cell offsets of each chunk image slot, in the segmented handler's units.
+
+    Slot ``b`` of the chunk owns the cells of image ``image_start + b``; padded
+    slots and the rows past ``n_valid_rows`` are covered by no segment, which
+    the handler treats exactly as an all ``-inf`` rectangular row.
+    """
+
+    image_capacity = int(chunk.image_capacity)
+    n_valid_images = int(chunk.n_valid_images)
+    offsets = np.full(image_capacity + 1, chunk.n_valid_rows * int(n_fine_trans), dtype=np.int64)
+    starts = (
+        np.asarray(
+            tables.row_offsets[chunk.image_start : chunk.image_start + n_valid_images + 1],
+            dtype=np.int64,
+        )
+        - int(chunk.row_start)
+    ) * int(n_fine_trans)
+    offsets[: n_valid_images + 1] = starts
+    if int(offsets[-1]) > int(chunk.row_capacity) * int(n_fine_trans):
+        raise ValueError("chunk segment offsets exceed the chunk's cell capacity")
+    return offsets.astype(np.int32)
+
+
+def _prepare_chunk_reconstruction_operands(
+    *,
+    chunk,
+    image_indices,
+    experiment_dataset,
+    bucket_io_kwargs,
+    windowed_prepare,
+    recon_window_indices,
+    n_fine_trans,
+    n_recon_windowed,
+    image_shape,
+    current_size,
+    use_exact_relion_gaussian,
+    accumulate_noise,
+    source_faithful_spectrum_norm,
+    relion_score_translation_angles,
+    rect_indices_device,
+    exact_positions_device,
+    scale_corrections_np,
+    group_ids_np,
+    precision_policy,
+):
+    """Build one chunk's translated reconstruction, noise and Wavg tiles.
+
+    These tiles carry the ``(images, translations, pixels)`` axis, so they are
+    the one operand family the driver cannot keep resident for a whole half
+    (17 GiB at the hp3 state). They are rebuilt per chunk exactly as the
+    compact engine rebuilds them per bucket, from the same
+    :func:`_prepare_bucket_io` call with the same keyword arguments, and then
+    permuted back into the table's image order.
+    """
+
+    image_capacity = int(chunk.image_capacity)
+    n_valid_images = int(chunk.n_valid_images)
+    batch_data, ctf_params, fetched_indices = fetch_indexed_batch(
+        experiment_dataset, image_indices
+    )
+    prepared = _prepare_bucket_io(
+        experiment_dataset,
+        jnp.asarray(batch_data),
+        ctf_params,
+        np.asarray(fetched_indices),
+        return_direct_scoring_io=True,
+        **bucket_io_kwargs,
+    )
+    (
+        _shifted_score_half,
+        shifted_recon_half,
+        _batch_norm,
+        _ctf2_over_nv_half,
+        ctf2_over_nv_half_with_dc,
+        shifted_score_half_with_dc,
+        processed_score_half_for_noise,
+        _shifted_corrected_score_half,
+        _direct_score_input,
+        _direct_preprocessed_score_input,
+        _direct_pixel_correction,
+        _direct_preprocess_normalization_factors,
+        _direct_integer_pre_shifts,
+        _direct_batch_image_corrections,
+        _direct_batch_scale_corrections,
+        _direct_inverse_noise_half,
+        direct_ctf_rfloat_half,
+    ) = prepared
+
+    gather_recon = jnp.asarray(recon_window_indices, dtype=jnp.int32)
+    if windowed_prepare:
+        shifted_recon = shifted_recon_half
+        ctf2_over_nv_recon = ctf2_over_nv_half_with_dc
+        shifted_noise = shifted_score_half_with_dc
+    else:
+        shifted_recon = shifted_recon_half[:, gather_recon]
+        ctf2_over_nv_recon = ctf2_over_nv_half_with_dc[:, gather_recon]
+        shifted_noise = shifted_score_half_with_dc[:, gather_recon]
+    direct_ctf_rfloat_recon = (
+        None if direct_ctf_rfloat_half is None else direct_ctf_rfloat_half[:, gather_recon]
+    )
+
+    relion_highres_xi2_half, relion_norm_high_shell = _relion_powerclass_noise_terms(
+        processed_score_half_for_noise,
+        image_shape=image_shape,
+        current_size=current_size,
+        use_exact_relion_gaussian=use_exact_relion_gaussian,
+        accumulate_noise=accumulate_noise,
+        source_faithful_spectrum_norm=source_faithful_spectrum_norm,
+    )
+    del relion_highres_xi2_half  # the resident scorer reads the same value from T6's operands
+    raw_translated_wavg_rectangle = _relion_cuda_translate_wavg_norm_images(
+        processed_score_half_for_noise,
+        relion_score_translation_angles,
+        rect_indices_device,
+        image_shape,
+    )
+
+    position_of = {int(index): position for position, index in enumerate(np.asarray(image_indices).tolist())}
+    reorder = partial(
+        _gather_to_requested_order,
+        fetched_indices=fetched_indices,
+        position_of=position_of,
+        n_requested=n_valid_images,
+    )
+    shifted_recon = reorder(shifted_recon.reshape(n_valid_images, n_fine_trans, -1))
+    shifted_noise = reorder(shifted_noise.reshape(n_valid_images, n_fine_trans, -1))
+    ctf2_over_nv_recon = reorder(ctf2_over_nv_recon)
+    direct_ctf_rfloat_recon = (
+        None if direct_ctf_rfloat_recon is None else reorder(direct_ctf_rfloat_recon)
+    )
+    processed_score_half_for_noise = reorder(processed_score_half_for_noise)
+    relion_norm_high_shell = reorder(relion_norm_high_shell)
+    raw_translated_wavg_rectangle = reorder(raw_translated_wavg_rectangle)
+    raw_translated_wavg_for_atomic = raw_translated_wavg_rectangle[:, :, exact_positions_device]
+    if int(shifted_recon.shape[-1]) != int(n_recon_windowed):
+        raise ValueError(
+            "reconstruction tile pixel count does not match the reconstruction window: "
+            f"{int(shifted_recon.shape[-1])} vs {int(n_recon_windowed)}"
+        )
+
+    scale = (
+        jnp.ones(n_valid_images, dtype=precision_policy.score_real_dtype)
+        if scale_corrections_np is None
+        else jnp.asarray(scale_corrections_np[np.asarray(image_indices)])
+    )
+    group_ids_chunk = np.full(image_capacity, -1, dtype=np.int32)
+    if group_ids_np is not None:
+        group_ids_chunk[:n_valid_images] = np.asarray(
+            group_ids_np[np.asarray(image_indices)], dtype=np.int32
+        )
+
+    return {
+        "shifted_recon": _pad_image_axis(shifted_recon, image_capacity),
+        "shifted_noise": _pad_image_axis(shifted_noise, image_capacity),
+        "ctf2_over_nv_recon": _pad_image_axis(ctf2_over_nv_recon, image_capacity),
+        "direct_ctf_rfloat_recon": (
+            None
+            if direct_ctf_rfloat_recon is None
+            else _pad_image_axis(direct_ctf_rfloat_recon, image_capacity)
+        ),
+        "processed_image_half": _pad_image_axis(processed_score_half_for_noise, image_capacity),
+        "relion_norm_high_shell": _pad_image_axis(relion_norm_high_shell, image_capacity),
+        "raw_translated_wavg_rectangle": _pad_image_axis(
+            raw_translated_wavg_rectangle, image_capacity
+        ),
+        "raw_translated_wavg_for_atomic": _pad_image_axis(
+            raw_translated_wavg_for_atomic, image_capacity
+        ),
+        # Padded slots keep scale 1 so the Wavg kernel never divides by zero;
+        # their posterior is zero, so the value is never observable.
+        "scale": jnp.concatenate(
+            [
+                jnp.asarray(scale, dtype=jnp.float32),
+                jnp.ones(image_capacity - n_valid_images, dtype=jnp.float32),
+            ]
+        ),
+        "group_ids": jnp.asarray(group_ids_chunk, dtype=jnp.int32),
+    }
+
+
+def _run_resident_chunk(
+    chunk,
+    *,
+    tables,
+    experiment_dataset,
+    operands,
+    bucket_io_kwargs,
+    projection_score_cache,
+    projection_recon_cache,
+    projection_recon_abs2_cache,
+    fine_translation_parent_device,
+    mstep_grid,
+    coarse_parent_grid,
+    n_fine_trans,
+    n_recon_windowed,
+    n_rect,
+    mstep_block_rows,
+    adaptive_fraction,
+    windowed_prepare,
+    window_indices,
+    recon_window_indices,
+    relion_x_half_recon_indices,
+    exact_positions_device,
+    rect_indices_device,
+    image_shape,
+    current_size,
+    mstep_current_size,
+    recon_volume_shape,
+    max_adjoint_block_bytes,
+    noise_variance_for_noise,
+    shell_indices_noise,
+    group_ids_np,
+    scale_corrections_np,
+    translation_prior_centers_np,
+    fine_translations,
+    voxel_size,
+    precision_policy,
+    use_exact_relion_gaussian,
+    accumulate_noise,
+    source_faithful_spectrum_norm,
+    stats,
+    stats_config,
+    image_tables,
+    Ft_y_total,
+    Ft_ctf_total,
+    cuda_backproject,
+):
+    """Run every resident stage for one capacity chunk.
+
+    Returns the updated ``(Ft_y_total, Ft_ctf_total, stats)``. The only host
+    work inside is the chunk's operand upload and the T7 offsets readback the
+    segmented posterior performs internally; no per-chunk result is pulled.
+    """
+
+    row_capacity = int(chunk.row_capacity)
+    image_capacity = int(chunk.image_capacity)
+    n_valid_rows = int(chunk.n_valid_rows)
+    n_valid_images = int(chunk.n_valid_images)
+    image_indices = np.arange(chunk.image_start, chunk.image_stop, dtype=np.int64)
+
+    host_chunk = materialize_chunk(tables, chunk)
+    row_image_local = jnp.asarray(host_chunk["row_image_local"], dtype=jnp.int32)
+    row_fine_rot = jnp.asarray(host_chunk["row_fine_rot"], dtype=jnp.int32)
+    row_log_prior = jnp.asarray(host_chunk["row_log_prior"], dtype=jnp.float32)
+    row_mask_bits = jnp.asarray(host_chunk["row_mask_bits"], dtype=jnp.uint32)
+    row_mask_mode = jnp.asarray(host_chunk["row_mask_mode"], dtype=jnp.int8)
+    image_ids = jnp.asarray(host_chunk["image_ids"], dtype=jnp.int32)
+    n_valid_rows_device = jnp.asarray(host_chunk["n_valid_rows"], dtype=jnp.int32)
+    n_valid_images_device = jnp.asarray(host_chunk["n_valid_images"], dtype=jnp.int32)
+    row_is_valid = jnp.arange(row_capacity, dtype=jnp.int32) < n_valid_rows_device
+    kernel_row_image_ids = jnp.where(row_is_valid, row_image_local, jnp.int32(-1))
+
+    # --- stages 1-3: gather, cached projection, score ----------------------
+    scored = score_resident_chunk(
+        row_image_local,
+        row_fine_rot,
+        row_log_prior,
+        row_mask_bits,
+        row_mask_mode,
+        n_valid_rows_device,
+        image_ids,
+        projection_score_cache,
+        operands.score_input,
+        operands.corr_img_score,
+        operands.highres_xi2_half,
+        operands.translation_prior,
+        half_weights=operands.half_weights,
+        translation_angles=operands.translation_angles,
+        full_to_compact=operands.full_to_compact,
+        fine_translation_parent=fine_translation_parent_device,
+        logical_current_size=jnp.asarray(operands.current_size, dtype=jnp.int32),
+        row_capacity=row_capacity,
+        image_capacity=image_capacity,
+        n_fine_trans=int(n_fine_trans),
+        n_score_pixels=int(operands.n_score_pixels),
+    )
+    scores_flat = jnp.asarray(scored.scores, dtype=jnp.float32).reshape(-1)
+
+    # --- stage 4: segmented RELION float32 fine posterior -------------------
+    segment_offsets = jnp.asarray(
+        _chunk_segment_offsets(tables, chunk, n_fine_trans), dtype=jnp.int32
+    )
+    log_z = cuda_backproject.sparse_pass2_segmented_log_z_f64(
+        scores_flat, segment_offsets, n_valid_images_device
+    )
+    posterior = cuda_backproject.sparse_pass2_segmented_posterior_f32(
+        scores_flat,
+        segment_offsets,
+        n_valid_images_device,
+        log_z,
+        jnp.ones((image_capacity,), dtype=jnp.float32),
+        adaptive_fraction=float(adaptive_fraction),
+        keep_all=False,
+        use_external_sum_weight=False,
+    )
+    (
+        log_z_out,
+        best_log_score,
+        best_cell_index,
+        max_posterior,
+        _probs,
+        _normalized_weights,
+        reconstruction_probs,
+        _mask,
+        _n_significant,
+        _sum_weight,
+        _threshold,
+    ) = posterior
+    row_posterior = jnp.asarray(reconstruction_probs, dtype=jnp.float32).reshape(
+        row_capacity, int(n_fine_trans)
+    )
+
+    # --- stages 5-7 operands: the per-chunk translated tiles ----------------
+    recon = _prepare_chunk_reconstruction_operands(
+        chunk=chunk,
+        image_indices=image_indices,
+        experiment_dataset=experiment_dataset,
+        bucket_io_kwargs=bucket_io_kwargs,
+        windowed_prepare=windowed_prepare,
+        recon_window_indices=recon_window_indices,
+        n_fine_trans=int(n_fine_trans),
+        n_recon_windowed=int(n_recon_windowed),
+        image_shape=image_shape,
+        current_size=current_size,
+        use_exact_relion_gaussian=use_exact_relion_gaussian,
+        accumulate_noise=accumulate_noise,
+        source_faithful_spectrum_norm=source_faithful_spectrum_norm,
+        relion_score_translation_angles=operands.translation_angles,
+        rect_indices_device=rect_indices_device,
+        exact_positions_device=exact_positions_device,
+        scale_corrections_np=scale_corrections_np,
+        group_ids_np=group_ids_np,
+        precision_policy=precision_policy,
+    )
+
+    n_shells = int(stats_config.n_shells)
+    block_noise_shells = jnp.zeros(n_shells, dtype=jnp.float64)
+    a2_per_image = None
+    xa_per_image = None
+    wavg_triplet_pixels = jnp.zeros((image_capacity, int(n_rect), 3), dtype=jnp.float32)
+    logical_recon_pixels = jnp.asarray(n_recon_windowed, dtype=jnp.int32)
+    logical_rect_pixels = jnp.asarray(n_rect, dtype=jnp.int32)
+
+    for start in range(0, row_capacity, int(mstep_block_rows)):
+        stop = start + int(mstep_block_rows)
+        rows = slice(start, stop)
+        block_row_image = row_image_local[rows]
+        block_kernel_ids = kernel_row_image_ids[rows]
+        block_posterior = row_posterior[rows]
+        block_fine_rot = row_fine_rot[rows]
+        proj = projection_recon_cache[block_fine_rot]
+        proj_abs2 = projection_recon_abs2_cache[block_fine_rot]
+
+        summed, summed_masked, ctf_probs, _probs_sum_t = _resident_block_weighted_sums(
+            block_posterior,
+            block_row_image,
+            recon["shifted_recon"],
+            recon["shifted_noise"],
+            recon["ctf2_over_nv_recon"],
+        )
+
+        # RELION Wavg triplet in the flat-row layout, then its rotation atomics.
+        # The host tail picks the sequential RELION reducer when the pass
+        # carries the RFLOAT CTF operand and the algebraic form otherwise;
+        # follow the same branch.
+        if recon["direct_ctf_rfloat_recon"] is None:
+            exact_terms = _resident_block_wavg_algebraic_terms(
+                proj,
+                proj_abs2,
+                summed_masked,
+                ctf_probs,
+                noise_variance_for_noise,
+                recon["scale"],
+                recon["raw_translated_wavg_for_atomic"],
+                block_posterior,
+                block_row_image,
+            )
+        else:
+            exact_terms = cuda_backproject.relion_wavg_sequential_runtime_flat_rows_triplet_f32(
+                jnp.asarray(proj, dtype=jnp.complex64),
+                block_kernel_ids,
+                jnp.asarray(recon["direct_ctf_rfloat_recon"], dtype=jnp.float32),
+                jnp.asarray(recon["scale"], dtype=jnp.float32),
+                jnp.asarray(recon["raw_translated_wavg_for_atomic"], dtype=jnp.complex64),
+                block_posterior,
+                logical_recon_pixels,
+            )
+        rectangle_terms = _resident_block_wavg_rectangle_terms(
+            exact_terms,
+            recon["raw_translated_wavg_rectangle"],
+            block_posterior,
+            block_row_image,
+            exact_positions_device,
+        )
+        wavg_triplet_pixels = (
+            cuda_backproject.relion_wavg_rotation_atomic_runtime_flat_rows_triplet_add_f32(
+                rectangle_terms,
+                block_kernel_ids,
+                wavg_triplet_pixels,
+                logical_rect_pixels,
+            )
+        )
+
+        block_shells, block_a2, block_xa = _resident_block_noise_and_norm(
+            proj,
+            proj_abs2,
+            summed_masked,
+            ctf_probs,
+            noise_variance_for_noise,
+            shell_indices_noise,
+            block_row_image,
+            n_shells=n_shells,
+            image_capacity=image_capacity,
+        )
+        block_noise_shells = block_noise_shells + block_shells
+        a2_per_image = block_a2 if a2_per_image is None else a2_per_image + block_a2
+        xa_per_image = block_xa if xa_per_image is None else xa_per_image + block_xa
+
+        block_mstep_rotations = mstep_grid[block_fine_rot]
+        Ft_y_total = _accumulate_adjoint_block_chunked(
+            summed,
+            block_mstep_rotations,
+            Ft_y_total,
+            window_indices=relion_x_half_recon_indices,
+            use_windowed_adjoint=True,
+            image_shape=image_shape,
+            volume_shape=recon_volume_shape,
+            disc_type="linear_interp",
+            half_image=True,
+            half_volume=True,
+            max_r=float(mstep_current_size // 2),
+            relion_x_half=True,
+            max_block_bytes=max_adjoint_block_bytes,
+            log_label="resident-y-window",
+        )
+        Ft_ctf_total = _accumulate_adjoint_block_chunked(
+            ctf_probs,
+            block_mstep_rotations,
+            Ft_ctf_total,
+            window_indices=relion_x_half_recon_indices,
+            use_windowed_adjoint=True,
+            image_shape=image_shape,
+            volume_shape=recon_volume_shape,
+            disc_type="linear_interp",
+            half_image=True,
+            half_volume=True,
+            max_r=float(mstep_current_size // 2),
+            relion_x_half=True,
+            max_block_bytes=max_adjoint_block_bytes,
+            log_label="resident-ctf-window",
+        )
+
+    # --- stage 7: image-level statistics ------------------------------------
+    translation_sqdist_ang = image_tables.translation_sqdist_ang
+    if translation_prior_centers_np is not None:
+        centers = translation_prior_centers_for_images(
+            translation_prior_centers_np,
+            image_indices,
+            batch_size=n_valid_images,
+        )
+        sqdist = jnp.asarray(
+            translation_sqdist_angstrom(fine_translations, centers, voxel_size)
+        )
+        translation_sqdist_ang = _pad_image_axis(sqdist, image_capacity)
+    chunk_tables = image_tables._replace(translation_sqdist_ang=translation_sqdist_ang)
+
+    # Chunk-local first row and row count of every image slot; padded slots sit
+    # at the chunk's valid-row end with zero rows, so their winner can never
+    # point at a real row.
+    segment_offsets_np = np.asarray(_chunk_segment_offsets(tables, chunk, n_fine_trans), dtype=np.int64)
+    image_row_start_np = segment_offsets_np[:image_capacity] // int(n_fine_trans)
+    image_row_count_np = (segment_offsets_np[1:] - segment_offsets_np[:-1]) // int(n_fine_trans)
+    image_row_start = jnp.asarray(image_row_start_np, dtype=jnp.int64)
+    image_row_count = jnp.asarray(image_row_count_np, dtype=jnp.int64)
+
+    best_row_local = jnp.asarray(best_cell_index, dtype=jnp.int64) // jnp.int64(n_fine_trans)
+    slot_is_valid = jnp.arange(image_capacity, dtype=jnp.int32) < n_valid_images_device
+    invalid_best = slot_is_valid & ((best_row_local < 0) | (best_row_local >= image_row_count))
+    best_chunk_row = jnp.clip(
+        image_row_start + best_row_local, 0, jnp.int64(max(row_capacity - 1, 0))
+    ).astype(jnp.int32)
+    best_fine_rot = jnp.asarray(row_fine_rot, dtype=jnp.int64)[best_chunk_row]
+
+    chunk_operands = _ChunkImageOperands(
+        row_posterior=row_posterior,
+        row_image_local=row_image_local,
+        row_coarse_rot=jnp.where(
+            row_is_valid,
+            coarse_parent_grid[row_fine_rot],
+            jnp.int32(int(stats_config.n_coarse_rot)),
+        ),
+        image_ids=jnp.asarray(host_chunk["image_ids"], dtype=jnp.int32),
+        group_ids=recon["group_ids"],
+        processed_image_half=recon["processed_image_half"],
+        relion_norm_high_shell=recon["relion_norm_high_shell"],
+        wavg_triplet_pixels=wavg_triplet_pixels,
+        block_noise_shells=block_noise_shells,
+        a2_per_image=a2_per_image,
+        xa_per_image=xa_per_image,
+        class_log_z=jnp.asarray(log_z_out, dtype=jnp.float64),
+        min_diff2=scored.min_diff2,
+        best_log_score=best_log_score,
+        max_posterior=max_posterior,
+        best_cell_index=jnp.asarray(best_cell_index, dtype=jnp.int64),
+        best_fine_rot=best_fine_rot,
+    )
+    stats = _accumulate_chunk_image_terms(
+        stats, chunk_operands, chunk_tables, config=stats_config
+    )
+    stats = stats._replace(
+        invalid_best_rows=stats.invalid_best_rows + jnp.sum(invalid_best.astype(jnp.int64))
+    )
+    return Ft_y_total, Ft_ctf_total, stats

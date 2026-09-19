@@ -775,9 +775,22 @@ def compute_pass2_stats_sparse(
         )
     )
     if not use_perimage_reference and not full_grid_reference:
+        from recovar.em.sparse_pass2.resident_pass2 import (
+            compute_pass2_stats_resident,
+            resident_pass2_requested,
+        )
         from recovar.em.sparse_pass2.sparse_pass2_bucketed import compute_pass2_stats_sparse_bucketed
 
-        return compute_pass2_stats_sparse_bucketed(
+        # RECOVAR_SPARSE_PASS2_RESIDENT selects the device-resident K=1 driver.
+        # It implements only the production configuration and raises a named
+        # NotImplementedError otherwise; it never falls back silently, so a
+        # measured comparison always knows which engine produced a result.
+        sparse_pass2_impl = (
+            compute_pass2_stats_resident
+            if resident_pass2_requested()
+            else compute_pass2_stats_sparse_bucketed
+        )
+        return sparse_pass2_impl(
             experiment_dataset,
             volume,
             noise_variance,
