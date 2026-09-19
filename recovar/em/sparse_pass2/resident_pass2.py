@@ -1528,12 +1528,12 @@ def compute_pass2_stats_resident(
         table_s,
     )
 
-    # ---- per-chunk preparation arguments ----------------------------------
-    # The score and reconstruction operands both come from one
-    # ``_prepare_bucket_io`` call per chunk. An earlier revision also made a
-    # per-half pass for the score side; that was 1.8-2.5 s per half of
-    # duplicate work, and the preparation is per-image pure, so the per-chunk
-    # call gives the same arrays.
+    # ---- preparation arguments --------------------------------------------
+    # One keyword set, used by whichever preparation the pass selects: the
+    # once-per-half resident preparation below, or the per-chunk call that
+    # stays as its oracle. The preparation is per-image pure, so the two return
+    # the same rows; the resident form runs it once for the half instead of
+    # once per chunk, which is where the chunk loop's launches came from.
     bucket_io_kwargs = dict(
         noise_variance_half=noise_variance_half,
         fine_translations=fine_translations,
@@ -1661,6 +1661,17 @@ def compute_pass2_stats_resident(
                 )
                 resident_operands = None
             else:
+                if int(resident_operands.n_score_pixels) != int(n_windowed):
+                    raise ValueError(
+                        "resident score operand pixel count does not match the score window: "
+                        f"{resident_operands.n_score_pixels} vs {int(n_windowed)}"
+                    )
+                if int(resident_operands.n_recon_pixels) != int(n_recon_windowed):
+                    raise ValueError(
+                        "resident reconstruction operand pixel count does not match the "
+                        f"reconstruction window: {resident_operands.n_recon_pixels} vs "
+                        f"{int(n_recon_windowed)}"
+                    )
                 logger.info(
                     "Resident pass-2 per-half operand preparation: %.2fs",
                     time.time() - operands_t0,
@@ -1845,11 +1856,16 @@ def _prepare_chunk_reconstruction_operands(
 ):
     """Build one chunk's translated reconstruction, noise and Wavg tiles.
 
-    These tiles carry the ``(images, translations, pixels)`` axis, so they are
-    the one operand family the driver cannot keep resident for a whole half
-    (17 GiB at the hp3 state). They are rebuilt per chunk from the same
-    :func:`_prepare_bucket_io` call, with the same keyword arguments, that the
-    compact engine makes per bucket.
+    The oracle path, kept selectable by
+    ``RECOVAR_SPARSE_PASS2_RESIDENT_OPERANDS=0``. These tiles carry the
+    ``(images, translations, pixels)`` axis, so they are the one operand family
+    that cannot be kept resident for a whole half (17 GiB at the hp3 state);
+    they are rebuilt per chunk from the same :func:`_prepare_bucket_io` call,
+    with the same keyword arguments, that the compact engine makes per bucket.
+    The default path instead keeps the *unshifted* per-image operands resident
+    (:mod:`recovar.em.sparse_pass2.resident_operands`) and lets T15's kernel
+    apply the translations inside the M-step reduction, so no tile is built at
+    all.
 
     Shape stability. The batch handed to ``_prepare_bucket_io`` is padded on
     the host to the chunk's image capacity before anything is traced, so every
