@@ -130,8 +130,12 @@ def _compact_program():
         )
         # Rank of each selected cell inside its image, shifted to the batch's
         # flat CSR position; unselected cells scatter out of bounds and drop.
+        # The drop sentinel is ``capacity`` rather than -1: a negative scatter
+        # index is not reliably dropped, and with a full buffer it lands on
+        # the last slot and overwrites a real id (regression test
+        # ``test_compaction_fills_an_exactly_full_capacity``).
         rank = jnp.cumsum(mask, axis=1, dtype=jnp.int32) - jnp.int32(1)
-        position = jnp.where(mask, starts[:, None] + rank, jnp.int32(-1))
+        position = jnp.where(mask, starts[:, None] + rank, jnp.int32(capacity))
         sample_ids = jnp.broadcast_to(
             jnp.arange(mask.shape[1], dtype=jnp.int32)[None, :],
             mask.shape,

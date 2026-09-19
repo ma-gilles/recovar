@@ -433,3 +433,31 @@ def test_fixture_exercises_both_mask_modes():
     assert modes == {"coarse", "empty"}, (
         f"fixture built modes {modes}; update the fixture, not the assertion"
     )
+
+
+def test_compaction_fills_an_exactly_full_capacity():
+    """A total support equal to the id capacity must not be corrupted.
+
+    Cells outside the support scatter with an out-of-bounds index and are
+    dropped.  When the total exactly fills the buffer there is no slack left,
+    so this is the case that would expose a dropped index being wrapped to the
+    last slot instead.
+    """
+
+    n_coarse_rot, n_coarse_trans = 2048, 8
+    n_samples = n_coarse_rot * n_coarse_trans
+    capacity = csr_capacity_for_total(0)
+    rng = np.random.default_rng(5)
+    ids = np.sort(rng.choice(n_samples, size=capacity, replace=False)).astype(np.int32)
+    mask = np.zeros((2, n_samples), dtype=bool)
+    mask[0, ids.astype(np.int64)] = True
+
+    counts, compacted, _rot_any = compact_batch_significance(
+        mask,
+        actual_batch_size=2,
+        n_coarse_rot=n_coarse_rot,
+        n_coarse_trans=n_coarse_trans,
+        batch_n_sig=mask.sum(axis=1).astype(np.int32),
+    )
+    assert int(counts.sum()) == capacity
+    np.testing.assert_array_equal(compacted, ids)
