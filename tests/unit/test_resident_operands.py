@@ -299,7 +299,11 @@ def test_unmasked_scoring_is_refused():
             window_indices=case["window_indices"],
             recon_window_indices=case["window_indices"],
             image_shape=case["image_shape"],
+            current_size=case["current_size"],
             n_fine_trans=N_FINE_TRANS,
+            use_exact_relion_gaussian=False,
+            accumulate_noise=False,
+            source_faithful_spectrum_norm=False,
         )
 
 
@@ -322,7 +326,11 @@ def _resident_operands(case):
         window_indices=case["window_indices"],
         recon_window_indices=case["window_indices"],
         image_shape=case["image_shape"],
+        current_size=case["current_size"],
         n_fine_trans=N_FINE_TRANS,
+        use_exact_relion_gaussian=False,
+        accumulate_noise=False,
+        source_faithful_spectrum_norm=False,
         image_batch_size=4,
     )
 
@@ -488,10 +496,6 @@ def test_chunk_gather_reproduces_the_capacity_padding(
             rect_indices=rect_indices,
             exact_positions=np.arange(rect_indices.size, dtype=np.int32),
             image_shape=IMAGE_SHAPE,
-            current_size=case["current_size"],
-            use_exact_relion_gaussian=False,
-            accumulate_noise=False,
-            source_faithful_spectrum_norm=False,
         )
 
     for name, source in (
@@ -507,3 +511,68 @@ def test_chunk_gather_reproduces_the_capacity_padding(
     assert np.all(np.asarray(gathered["scale"])[5:] == 1.0)
     assert np.all(np.asarray(gathered["group_ids"])[5:] == -1)
     assert np.all(np.asarray(gathered["raw_translated_wavg_rectangle"])[5:] == 0)
+
+
+@pytest.mark.gpu
+def test_shell_binning_is_a_racing_scatter_and_the_opt_in_fixes_it(
+    monkeypatch, custom_cuda_lib, gpu_device
+):
+    """``relion_norm_high_shell`` is the one operand that is never bitwise.
+
+    Its shell binning is ``bins.at[idx].add(values)``, a scatter-add over
+    duplicate indices, and it races: two calls on the *same* array in one
+    process disagree. That is why the once-per-half preparation of it is not
+    held to bitwise equality against a per-chunk preparation -- no two
+    preparations of it are equal, including two of the per-chunk path. Under
+    ``RECOVAR_EM_DETERMINISTIC_REDUCTIONS=1`` the binning becomes a fixed-order
+    masked reduction and all three comparisons below are exact.
+    """
+
+    from recovar.em.sparse_pass2.sparse_pass2_scoring import _relion_powerclass_noise_terms
+
+    _gpu_case(monkeypatch, custom_cuda_lib)
+    rng = np.random.default_rng(4242)
+    rows, current_size = 32, 6
+    values = (
+        rng.normal(size=(rows, HALF_PIXELS)) + 1j * rng.normal(size=(rows, HALF_PIXELS))
+    ).astype(np.complex64)
+
+    def terms(array):
+        return _relion_powerclass_noise_terms(
+            array,
+            image_shape=IMAGE_SHAPE,
+            current_size=current_size,
+            use_exact_relion_gaussian=True,
+            accumulate_noise=True,
+            source_faithful_spectrum_norm=True,
+        )
+
+    for deterministic in (False, True):
+        monkeypatch.setenv("RECOVAR_EM_DETERMINISTIC_REDUCTIONS", "1" if deterministic else "0")
+        # The flag is read at trace time, and JAX caches a traced program by
+        # shape alone, so the second pass would reuse the first's program.
+        jax.clear_caches()
+        with jax.default_device(gpu_device):
+            device = jnp.asarray(values)
+            _x1, first = terms(device)
+            _x2, second = terms(device)
+            _x3, gathered = terms(device[jnp.arange(rows, dtype=jnp.int32)])
+            _x4, halved = terms(device[: rows // 2])
+        first, second, gathered, halved = (
+            np.asarray(x, dtype=np.float64) for x in (first, second, gathered, halved)
+        )
+        scale = np.maximum(np.abs(first), 1e-30)
+        half_scale = scale[: rows // 2]
+        worst = max(
+            float((np.abs(first - second) / scale).max()),
+            float((np.abs(first - gathered) / scale).max()),
+            float((np.abs(first[: rows // 2] - halved) / half_scale).max()),
+        )
+        if deterministic:
+            np.testing.assert_array_equal(second, first)
+            np.testing.assert_array_equal(gathered, first)
+            np.testing.assert_array_equal(halved, first[: rows // 2])
+        else:
+            # Not asserted to differ -- a small fixture may happen to agree --
+            # but bounded well inside one float32 ulp of the shell power.
+            assert worst <= 7e-7, worst

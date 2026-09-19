@@ -75,6 +75,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from recovar.em.helpers.batch_fetch import fetch_indexed_batch
+from recovar.em.helpers.deterministic_reduce import deterministic_reductions_enabled
 from recovar.em.helpers.env_flags import parse_env_flag
 from recovar.em.helpers.half_spectrum import (
     make_relion_noise_shell_indices_half,
@@ -215,6 +216,10 @@ _RESIDENT_OPERANDS_VERIFY_ENV = "RECOVAR_SPARSE_PASS2_RESIDENT_OPERANDS_VERIFY"
 # of the XLA statement. Measurement only: see
 # ``_resident_block_weighted_sums_kernel`` for why it is not the default.
 _KERNEL_CTF_PROBS_ENV = "RECOVAR_SPARSE_PASS2_RESIDENT_KERNEL_CTF_PROBS"
+# Relative band the racing shell-binning scatter is allowed in the verification
+# arm: 12x the measured same-call spread of 5.8e-8, still far inside one
+# float32 ulp of the accumulated shell power.
+_RACING_SCATTER_RELATIVE_BAND = 7e-7
 _SOFT_POSTERIOR_BLOCK_BPREF_PROTOTYPE_ENV = "RECOVAR_EM_PROTOTYPE_SOFT_POSTERIOR_BLOCK_BPREF"
 
 # Row capacities are multiples of the M-step block so every chunk decomposes
@@ -1660,7 +1665,11 @@ def compute_pass2_stats_resident(
                     window_indices=window_indices,
                     recon_window_indices=recon_window_indices,
                     image_shape=image_shape,
+                    current_size=current_size,
                     n_fine_trans=int(n_fine_trans),
+                    use_exact_relion_gaussian=use_exact_relion_gaussian,
+                    accumulate_noise=accumulate_noise,
+                    source_faithful_spectrum_norm=resolved_spectrum_norm,
                     fine_translation_prior_2d=fine_translation_prior_2d,
                     scale_corrections_np=scale_corrections_np,
                     group_ids_np=group_ids_np,
@@ -2187,25 +2196,51 @@ def _verify_resident_chunk_operands(
             raise AssertionError(f"resident operand {name} presence differs from the per-chunk path")
         checks[name] = (np.asarray(actual), np.asarray(expected))
 
+    # ``relion_norm_high_shell`` bins the image power with a scatter-add over
+    # duplicate indices. That races: two calls on the same array in one process
+    # differ by about 6e-8 relative, so no two preparations of it are bitwise,
+    # including two of the per-chunk path. It is checked against that spread
+    # here, and exactly under ``RECOVAR_EM_DETERMINISTIC_REDUCTIONS=1``, where
+    # the binning becomes a fixed-order masked reduction.
+    racing_scatter = () if deterministic_reductions_enabled() else ("relion_norm_high_shell",)
     mismatched = []
     for name, (actual, expected) in checks.items():
         if actual.shape != expected.shape or actual.dtype != expected.dtype:
             mismatched.append(f"{name}: {actual.shape}/{actual.dtype} vs {expected.shape}/{expected.dtype}")
-        elif not np.array_equal(actual, expected):
-            differing = int(np.count_nonzero(actual != expected))
-            worst = float(np.max(np.abs(actual.astype(np.complex128) - expected.astype(np.complex128))))
-            mismatched.append(f"{name}: {differing}/{actual.size} cells differ, max |delta| {worst:.3e}")
+            continue
+        if np.array_equal(actual, expected):
+            continue
+        differing = int(np.count_nonzero(actual != expected))
+        left = actual.astype(np.complex128)
+        right = expected.astype(np.complex128)
+        worst = float(np.max(np.abs(left - right)))
+        relative = float(
+            np.max(np.abs(left - right) / np.maximum(np.abs(right), 1e-30))
+        )
+        if name in racing_scatter and relative <= _RACING_SCATTER_RELATIVE_BAND:
+            logger.info(
+                "Resident pass-2 operand verification on %s: %s is inside its racing "
+                "scatter-add band (%d/%d cells, max |delta| %.3e, max relative %.3e); "
+                "set RECOVAR_EM_DETERMINISTIC_REDUCTIONS=1 for an exact check",
+                label, name, differing, actual.size, worst, relative,
+            )
+            continue
+        mismatched.append(
+            f"{name}: {differing}/{actual.size} cells differ, max |delta| {worst:.3e}, "
+            f"max relative {relative:.3e}"
+        )
     if mismatched:
         raise AssertionError(
             f"resident per-half operands differ from the per-chunk preparation on {label}: "
             + "; ".join(mismatched)
         )
     logger.info(
-        "Resident pass-2 operand verification on %s: %d operands bitwise equal to the "
-        "per-chunk preparation (BPref reconstruction operand=%d)",
+        "Resident pass-2 operand verification on %s: %d operands equal to the per-chunk "
+        "preparation (BPref reconstruction operand=%d, deterministic reductions=%d)",
         label,
         len(checks),
         int(bpref_recon_operand),
+        int(deterministic_reductions_enabled()),
     )
 
 
@@ -3006,10 +3041,6 @@ def _run_resident_chunk(
             rect_indices=rect_indices_device,
             exact_positions=exact_positions_device,
             image_shape=image_shape,
-            current_size=current_size,
-            use_exact_relion_gaussian=use_exact_relion_gaussian,
-            accumulate_noise=accumulate_noise,
-            source_faithful_spectrum_norm=source_faithful_spectrum_norm,
         )
         if verify_operands:
             _verify_resident_chunk_operands(
