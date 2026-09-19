@@ -660,7 +660,8 @@ def compute_local_search_resident(
     logger.info(
         "Resident local pass-2 plan: %d images, %d candidate rows, %d translations -> %d chunks "
         "(row capacities %s, image capacities %s, M-step block rows %d, projection block rows %d); "
-        "row projections %.2f KiB/row, largest chunk %.2f GiB, projection window %d px; setup %.2fs",
+        "row projections %.2f KiB/row, largest chunk %.2f GiB, projection window %d px, "
+        "projector slab %d B/element; setup %.2fs",
         tables.n_images,
         tables.n_rows,
         n_fine_trans,

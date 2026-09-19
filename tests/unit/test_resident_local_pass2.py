@@ -310,6 +310,56 @@ def test_gate_names_the_missing_piece(override, expected):
         rlp.require_resident_local_configuration(**kwargs)
 
 
+def test_projector_call_bound_covers_the_shape_that_ran_out_of_memory():
+    """The end-to-end on arm died at current size 52, order 4, asking 16.12 GiB.
+
+    The shared compact projection-block helper returns full half-spectrum rows
+    and windows them afterwards, so one call holds
+    ``rows x n_half x itemsize(Projector::data)`` whatever the window is. At a
+    256 box with a complex128 slab that is 528 KiB per row, and the 32768-row
+    chunk the window-based budget allowed asked for 16.12 GiB. Pin the bound at
+    that shape and at the state-C shape beside it.
+    """
+
+    n_half = 256 * (256 // 2 + 1)
+    assert n_half == 33024
+    budget = rlp._projection_call_transient_max_bytes()
+    for window_px, slab_bytes in ((1104, 16), (3387, 16), (1022, 16), (3387, 8)):
+        rows = max(1, budget // max(n_half * slab_bytes, 1))
+        peak = rows * n_half * slab_bytes
+        assert peak <= budget, (window_px, slab_bytes, peak)
+        # The window must not enter the bound: the helper materializes n_half.
+        assert rows == max(1, budget // (n_half * slab_bytes))
+    # The allocation that failed, and what the bound permits in its place.
+    failed_rows, slab_bytes = 32768, 16
+    assert failed_rows * n_half * slab_bytes / 1024 ** 3 > 16.0
+    bounded_rows = max(1, budget // (n_half * slab_bytes))
+    assert bounded_rows == 8128
+    assert bounded_rows * n_half * slab_bytes / 1024 ** 3 <= 4.0
+
+
+def test_plan_log_line_formats_without_a_logging_error(caplog):
+    """The plan line's placeholders and arguments must agree.
+
+    A mismatch does not fail the run, because logging swallows it, but it
+    replaces every plan line in a measured arm's log with a traceback, which is
+    how the projector-call bound was nearly impossible to read back.
+    """
+
+    import inspect
+    import re
+
+    src = inspect.getsource(rlp.compute_local_search_resident)
+    start = src.index('"Resident local pass-2 plan:')
+    block = src[start : src.index("\n    )\n", start)]
+    fmt = "".join(re.findall(r'"((?:[^"\\]|\\.)*)"', block))
+    placeholders = len(re.findall(r"%[-0-9.]*[dsfgex]", fmt))
+    arguments = len(
+        [line for line in block.split("\n") if line.strip() and not line.strip().startswith('"')]
+    )
+    assert placeholders == arguments, (placeholders, arguments)
+
+
 def test_row_capacity_ladder_is_capped_by_the_projection_budget():
     ladder = rlp._cap_row_capacity_ladder(
         (1024, 4096, 16384),
