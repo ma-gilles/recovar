@@ -152,7 +152,6 @@ from recovar.em.sparse_pass2.sparse_pass2_projection_blocks import (
 )
 from recovar.em.sparse_pass2.sparse_pass2_scoring import (
     _relion_cuda_fine_full_to_compact_lookup,
-    _relion_cuda_fine_log_evidence_offset,
     _relion_powerclass_noise_terms,
 )
 from recovar.em.sparse_pass2.sparse_pass2_wavg import (
@@ -182,10 +181,6 @@ _SOFT_POSTERIOR_BLOCK_BPREF_PROTOTYPE_ENV = "RECOVAR_EM_PROTOTYPE_SOFT_POSTERIOR
 # into whole blocks; image capacities follow the design's ladder.
 _DEFAULT_ROW_CAPACITY_LADDER = (8192, 32768, 131072)
 _DEFAULT_IMAGE_CAPACITY_LADDER = (32, 128, 512)
-# Resident per-image operand rows are padded to a multiple of this so the two
-# halves of one iteration (4966 and 5034 images at the hp3 state) trace one
-# scoring program rather than two.
-_IMAGE_TABLE_QUANTUM = 1024
 
 __all__ = [
     "RESIDENT_PASS2_ENV",
@@ -923,11 +918,9 @@ def compute_pass2_stats_resident(
         rotation_grid_size,
     )
     from recovar.em.sparse_pass2.sparse_pass2_window import (
+        _fine_translation_prior_2d,
         _pass2_projection_budget,
         _pass2_relion_flags,
-    )
-    from recovar.em.sparse_pass2.sparse_pass2_window import (
-        _fine_translation_prior_2d,
     )
 
     overall_t0 = time.time()
