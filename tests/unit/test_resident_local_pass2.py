@@ -152,7 +152,7 @@ def _case(seed=20260919):
     )
 
 
-def _run(case, *, resident: bool, monkeypatch):
+def _run(case, *, resident: bool, monkeypatch, current_size=CURRENT_SIZE):
     """One fine pass 2 through the production dispatch."""
 
     if resident:
@@ -175,8 +175,8 @@ def _run(case, *, resident: bool, monkeypatch):
         "linear_interp",
         image_batch_size=4,
         rotation_block_size=64,
-        current_size=CURRENT_SIZE,
-        reconstruction_current_size=CURRENT_SIZE,
+        current_size=current_size,
+        reconstruction_current_size=current_size,
         accumulate_noise=True,
         projection_padding_factor=1,
         reconstruction_padding_factor=1,
@@ -221,7 +221,10 @@ def test_dispatch_routes_only_the_fine_pass():
     import inspect
 
     source = inspect.getsource(local_search_iteration._run_local_search_iteration)
-    assert "resident_local_search_requested() and not score_only" in source
+    assert "resident_local_search_requested()" in source
+    assert "and not score_only" in source
+    # and only below the full image box (RELION's final all-data shape)
+    assert "int(current_size) < int(experiment_dataset.image_shape[0])" in source
     assert "compute_local_search_resident" in source
     # K-class with the flag on refuses rather than running a K=1 driver.
     assert "K=1 only; K-class local search keeps the exact local engine" in source
@@ -241,7 +244,7 @@ def test_dispatch_routes_only_the_fine_pass():
         ({"group_ids": None}, "group scale terms"),
         ({"normalization_log_evidence": np.zeros(3)}, "externally supplied normalizer"),
         ({"return_reconstruction_sample_indices": True}, "significant-sample capture"),
-        ({"use_window": False}, "current-size window"),
+        ({"use_window": False}, "scientific decision"),
     ],
 )
 def test_gate_names_the_missing_piece(override, expected):
@@ -287,6 +290,34 @@ def test_row_capacity_ladder_is_capped_by_the_projection_budget():
     assert rlp._cap_row_capacity_ladder(
         (1024, 4096), n_score_pixels=3386, n_recon_pixels=4324, max_bytes=1
     ) == (1024,)
+
+
+@requires_resident_gpu
+def test_final_all_data_shape_keeps_the_exact_local_engine(monkeypatch, _resident_local_env):
+    """``current_size == image box`` is RELION's final all-data shape.
+
+    The dispatch leaves that iteration on the exact local engine and says so,
+    because the two engines disagree about the scoring support there, not about
+    its layout: the exact engine scores the whole centred half including the
+    FFTW rectangle's corners, while RELION's radial support (the one every
+    windowed size uses, and the one the RELION Wavg rectangle requires) stops at
+    ``|k| <= current_size/2``. Running the pass on the radial support was
+    measured on this fixture to move the maps by 0.45 relative L2 and to flip a
+    winner, so it is not a rounding-level difference.
+    """
+
+    case = _case()
+    full = IMAGE_SHAPE[0]
+    with_flag = _run(case, resident=True, monkeypatch=monkeypatch, current_size=full)
+    without = _run(case, resident=False, monkeypatch=monkeypatch, current_size=full)
+    np.testing.assert_array_equal(
+        np.asarray(with_flag.hard_assignment), np.asarray(without.hard_assignment)
+    )
+    # Both arms ran the same engine, so they agree to that engine's own repeat
+    # band (float32 backprojection atomics), not bitwise.
+    a = np.asarray(with_flag.Ft_y, dtype=np.complex128)
+    b = np.asarray(without.Ft_y, dtype=np.complex128)
+    assert float(np.linalg.norm(a - b) / np.linalg.norm(b)) < 1e-6
 
 
 @requires_resident_gpu

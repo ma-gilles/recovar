@@ -368,7 +368,12 @@ def _run_local_search_iteration(
             else None,
             noise_stats=k_class_result.aggregate_noise_stats if accumulate_noise else None,
         )
-    elif resident_local_search_requested() and not score_only:
+    elif (
+        resident_local_search_requested()
+        and not score_only
+        and current_size is not None
+        and int(current_size) < int(experiment_dataset.image_shape[0])
+    ):
         # The device-resident local pass 2 (T12). Only the fine pass is routed
         # here: the pass-1 parent probe selects pass 2's candidate set with
         # RELION's ``maximum_significants`` cap, which the segmented float32
@@ -435,12 +440,23 @@ def _run_local_search_iteration(
     else:
         class_details = None
         if resident_local_search_requested():
-            logger.info(
-                "%s=1: the pass-1 parent probe keeps the exact local engine "
-                "(its RELION maximum_significants cap is outside the segmented "
-                "posterior's contract, and changing it would change pass 2's support)",
-                RESIDENT_LOCAL_SEARCH_ENV,
-            )
+            if score_only:
+                logger.info(
+                    "%s=1: the pass-1 parent probe keeps the exact local engine "
+                    "(its RELION maximum_significants cap is outside the segmented "
+                    "posterior's contract, and changing it would change pass 2's support)",
+                    RESIDENT_LOCAL_SEARCH_ENV,
+                )
+            else:
+                logger.info(
+                    "%s=1: this pass scores at current_size=%s, the full image box "
+                    "(RELION's final all-data iteration), where the exact local engine "
+                    "scores the whole centred half and RELION's radial support does "
+                    "not; the choice between them is a scientific decision, so this "
+                    "iteration keeps the exact local engine",
+                    RESIDENT_LOCAL_SEARCH_ENV,
+                    current_size,
+                )
         engine_outputs = run_local_em_exact(
             experiment_dataset,
             mean,
