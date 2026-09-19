@@ -1996,130 +1996,46 @@ def _run_resident_chunk(
         jax.block_until_ready(row_posterior)
         stage_t["posterior"] = time.time() - chunk_t0
 
-    n_shells = int(stats_config.n_shells)
-    block_noise_shells = jnp.zeros(n_shells, dtype=jnp.float64)
-    a2_per_image = None
-    xa_per_image = None
-    wavg_triplet_pixels = jnp.zeros((image_capacity, int(n_rect), 3), dtype=jnp.float32)
-    logical_recon_pixels = jnp.asarray(n_recon_windowed, dtype=jnp.int32)
-    logical_rect_pixels = jnp.asarray(n_rect, dtype=jnp.int32)
-
-    for start in range(0, row_capacity, int(mstep_block_rows)):
-        if start >= n_valid_rows:
-            # Every row of this block is chunk padding: its posterior is zero,
-            # so the weighted sums, the Wavg terms, the noise partials and both
-            # adjoint scatters are all exactly zero and adding them changes no
-            # accumulator bit. The chunker fills a chunk to its image capacity
-            # and then rounds the row count up to the next class, so at the hp3
-            # state this skips about half of the pixel-axis work.
-            break
-        stop = start + int(mstep_block_rows)
-        rows = slice(start, stop)
-        block_row_image = row_image_local[rows]
-        block_kernel_ids = kernel_row_image_ids[rows]
-        block_posterior = row_posterior[rows]
-        block_fine_rot = row_fine_rot[rows]
-        proj = projection_recon_cache[block_fine_rot]
-        proj_abs2 = projection_recon_abs2_cache[block_fine_rot]
-
-        summed, summed_masked, ctf_probs, _probs_sum_t = _resident_block_weighted_sums(
-            block_posterior,
-            block_row_image,
-            recon["shifted_recon"],
-            recon["shifted_noise"],
-            recon["ctf2_over_nv_recon"],
+    def block_projections(start, stop):
+        block_fine_rot = row_fine_rot[start:stop]
+        return (
+            projection_recon_cache[block_fine_rot],
+            projection_recon_abs2_cache[block_fine_rot],
+            mstep_grid[block_fine_rot],
         )
 
-        # RELION Wavg triplet in the flat-row layout, then its rotation atomics.
-        # The host tail picks the sequential RELION reducer when the pass
-        # carries the RFLOAT CTF operand and the algebraic form otherwise;
-        # follow the same branch.
-        if recon["direct_ctf_rfloat_recon"] is None:
-            exact_terms = _resident_block_wavg_algebraic_terms(
-                proj,
-                proj_abs2,
-                summed_masked,
-                ctf_probs,
-                noise_variance_for_noise,
-                recon["scale"],
-                recon["raw_translated_wavg_for_atomic"],
-                block_posterior,
-                block_row_image,
-            )
-        else:
-            exact_terms = cuda_backproject.relion_wavg_sequential_runtime_flat_rows_triplet_f32(
-                jnp.asarray(proj, dtype=jnp.complex64),
-                block_kernel_ids,
-                jnp.asarray(recon["direct_ctf_rfloat_recon"], dtype=jnp.float32),
-                jnp.asarray(recon["scale"], dtype=jnp.float32),
-                jnp.asarray(recon["raw_translated_wavg_for_atomic"], dtype=jnp.complex64),
-                block_posterior,
-                logical_recon_pixels,
-            )
-        rectangle_terms = _resident_block_wavg_rectangle_terms(
-            exact_terms,
-            recon["raw_translated_wavg_rectangle"],
-            block_posterior,
-            block_row_image,
-            exact_positions_device,
-        )
-        wavg_triplet_pixels = (
-            cuda_backproject.relion_wavg_rotation_atomic_runtime_flat_rows_triplet_add_f32(
-                rectangle_terms,
-                block_kernel_ids,
-                wavg_triplet_pixels,
-                logical_rect_pixels,
-            )
-        )
-
-        block_shells, block_a2, block_xa = _resident_block_noise_and_norm(
-            proj,
-            proj_abs2,
-            summed_masked,
-            ctf_probs,
-            noise_variance_for_noise,
-            shell_indices_noise,
-            block_row_image,
-            n_shells=n_shells,
-            image_capacity=image_capacity,
-        )
-        block_noise_shells = block_noise_shells + block_shells
-        a2_per_image = block_a2 if a2_per_image is None else a2_per_image + block_a2
-        xa_per_image = block_xa if xa_per_image is None else xa_per_image + block_xa
-
-        block_mstep_rotations = mstep_grid[block_fine_rot]
-        Ft_y_total = _accumulate_adjoint_block_chunked(
-            summed,
-            block_mstep_rotations,
-            Ft_y_total,
-            window_indices=relion_x_half_recon_indices,
-            use_windowed_adjoint=True,
-            image_shape=image_shape,
-            volume_shape=recon_volume_shape,
-            disc_type="linear_interp",
-            half_image=True,
-            half_volume=True,
-            max_r=float(mstep_current_size // 2),
-            relion_x_half=True,
-            max_block_bytes=max_adjoint_block_bytes,
-            log_label="resident-y-window",
-        )
-        Ft_ctf_total = _accumulate_adjoint_block_chunked(
-            ctf_probs,
-            block_mstep_rotations,
-            Ft_ctf_total,
-            window_indices=relion_x_half_recon_indices,
-            use_windowed_adjoint=True,
-            image_shape=image_shape,
-            volume_shape=recon_volume_shape,
-            disc_type="linear_interp",
-            half_image=True,
-            half_volume=True,
-            max_r=float(mstep_current_size // 2),
-            relion_x_half=True,
-            max_block_bytes=max_adjoint_block_bytes,
-            log_label="resident-ctf-window",
-        )
+    (
+        Ft_y_total,
+        Ft_ctf_total,
+        wavg_triplet_pixels,
+        block_noise_shells,
+        a2_per_image,
+        xa_per_image,
+    ) = run_resident_mstep_blocks(
+        block_projections,
+        row_capacity=row_capacity,
+        n_valid_rows=n_valid_rows,
+        mstep_block_rows=int(mstep_block_rows),
+        image_capacity=image_capacity,
+        row_image_local=row_image_local,
+        kernel_row_image_ids=kernel_row_image_ids,
+        row_posterior=row_posterior,
+        recon=recon,
+        n_rect=int(n_rect),
+        n_shells=int(stats_config.n_shells),
+        n_recon_windowed=int(n_recon_windowed),
+        noise_variance_for_noise=noise_variance_for_noise,
+        shell_indices_noise=shell_indices_noise,
+        exact_positions_device=exact_positions_device,
+        Ft_y_total=Ft_y_total,
+        Ft_ctf_total=Ft_ctf_total,
+        image_shape=image_shape,
+        recon_volume_shape=recon_volume_shape,
+        mstep_current_size=mstep_current_size,
+        relion_x_half_recon_indices=relion_x_half_recon_indices,
+        max_adjoint_block_bytes=max_adjoint_block_bytes,
+        cuda_backproject=cuda_backproject,
+    )
 
     # --- stage 7: image-level statistics ------------------------------------
     translation_sqdist_ang = image_tables.translation_sqdist_ang
@@ -2204,3 +2120,174 @@ def _run_resident_chunk(
             total,
         )
     return Ft_y_total, Ft_ctf_total, stats
+
+
+def run_resident_mstep_blocks(
+    block_projections,
+    *,
+    row_capacity: int,
+    n_valid_rows: int,
+    mstep_block_rows: int,
+    image_capacity: int,
+    row_image_local,
+    kernel_row_image_ids,
+    row_posterior,
+    recon,
+    n_rect: int,
+    n_shells: int,
+    n_recon_windowed: int,
+    noise_variance_for_noise,
+    shell_indices_noise,
+    exact_positions_device,
+    Ft_y_total,
+    Ft_ctf_total,
+    image_shape,
+    recon_volume_shape,
+    mstep_current_size,
+    relion_x_half_recon_indices,
+    max_adjoint_block_bytes,
+    cuda_backproject,
+):
+    """Walk one chunk's pixel axis in row blocks: Wavg, noise and BPref.
+
+    ``block_projections(start, stop)`` returns this block's reconstruction-window
+    projection, its ``|proj|^2`` and its M-step rotations. The global pass 2
+    gathers all three out of the per-iteration fine-rotation caches; local
+    search slices them out of the chunk's own projections, which were computed
+    for the chunk's rows because its fine grid is not cacheable. Nothing else
+    differs between the two routes, so every accumulator below is formed by one
+    implementation.
+
+    Returns the updated accumulators plus the chunk partials the image-level
+    statistics program consumes.
+    """
+
+    block_noise_shells = jnp.zeros(int(n_shells), dtype=jnp.float64)
+    a2_per_image = None
+    xa_per_image = None
+    wavg_triplet_pixels = jnp.zeros((image_capacity, int(n_rect), 3), dtype=jnp.float32)
+    logical_recon_pixels = jnp.asarray(n_recon_windowed, dtype=jnp.int32)
+    logical_rect_pixels = jnp.asarray(n_rect, dtype=jnp.int32)
+
+    for start in range(0, row_capacity, int(mstep_block_rows)):
+        if start >= n_valid_rows:
+            # Every row of this block is chunk padding: its posterior is zero,
+            # so the weighted sums, the Wavg terms, the noise partials and both
+            # adjoint scatters are all exactly zero and adding them changes no
+            # accumulator bit. The chunker fills a chunk to its image capacity
+            # and then rounds the row count up to the next class, so at the hp3
+            # state this skips about half of the pixel-axis work.
+            break
+        stop = start + int(mstep_block_rows)
+        rows = slice(start, stop)
+        block_row_image = row_image_local[rows]
+        block_kernel_ids = kernel_row_image_ids[rows]
+        block_posterior = row_posterior[rows]
+        proj, proj_abs2, block_mstep_rotations = block_projections(start, stop)
+
+        summed, summed_masked, ctf_probs, _probs_sum_t = _resident_block_weighted_sums(
+            block_posterior,
+            block_row_image,
+            recon["shifted_recon"],
+            recon["shifted_noise"],
+            recon["ctf2_over_nv_recon"],
+        )
+
+        # RELION Wavg triplet in the flat-row layout, then its rotation atomics.
+        # The host tail picks the sequential RELION reducer when the pass
+        # carries the RFLOAT CTF operand and the algebraic form otherwise;
+        # follow the same branch.
+        if recon["direct_ctf_rfloat_recon"] is None:
+            exact_terms = _resident_block_wavg_algebraic_terms(
+                proj,
+                proj_abs2,
+                summed_masked,
+                ctf_probs,
+                noise_variance_for_noise,
+                recon["scale"],
+                recon["raw_translated_wavg_for_atomic"],
+                block_posterior,
+                block_row_image,
+            )
+        else:
+            exact_terms = cuda_backproject.relion_wavg_sequential_runtime_flat_rows_triplet_f32(
+                jnp.asarray(proj, dtype=jnp.complex64),
+                block_kernel_ids,
+                jnp.asarray(recon["direct_ctf_rfloat_recon"], dtype=jnp.float32),
+                jnp.asarray(recon["scale"], dtype=jnp.float32),
+                jnp.asarray(recon["raw_translated_wavg_for_atomic"], dtype=jnp.complex64),
+                block_posterior,
+                logical_recon_pixels,
+            )
+        rectangle_terms = _resident_block_wavg_rectangle_terms(
+            exact_terms,
+            recon["raw_translated_wavg_rectangle"],
+            block_posterior,
+            block_row_image,
+            exact_positions_device,
+        )
+        wavg_triplet_pixels = (
+            cuda_backproject.relion_wavg_rotation_atomic_runtime_flat_rows_triplet_add_f32(
+                rectangle_terms,
+                block_kernel_ids,
+                wavg_triplet_pixels,
+                logical_rect_pixels,
+            )
+        )
+
+        block_shells, block_a2, block_xa = _resident_block_noise_and_norm(
+            proj,
+            proj_abs2,
+            summed_masked,
+            ctf_probs,
+            noise_variance_for_noise,
+            shell_indices_noise,
+            block_row_image,
+            n_shells=n_shells,
+            image_capacity=image_capacity,
+        )
+        block_noise_shells = block_noise_shells + block_shells
+        a2_per_image = block_a2 if a2_per_image is None else a2_per_image + block_a2
+        xa_per_image = block_xa if xa_per_image is None else xa_per_image + block_xa
+
+        Ft_y_total = _accumulate_adjoint_block_chunked(
+            summed,
+            block_mstep_rotations,
+            Ft_y_total,
+            window_indices=relion_x_half_recon_indices,
+            use_windowed_adjoint=True,
+            image_shape=image_shape,
+            volume_shape=recon_volume_shape,
+            disc_type="linear_interp",
+            half_image=True,
+            half_volume=True,
+            max_r=float(mstep_current_size // 2),
+            relion_x_half=True,
+            max_block_bytes=max_adjoint_block_bytes,
+            log_label="resident-y-window",
+        )
+        Ft_ctf_total = _accumulate_adjoint_block_chunked(
+            ctf_probs,
+            block_mstep_rotations,
+            Ft_ctf_total,
+            window_indices=relion_x_half_recon_indices,
+            use_windowed_adjoint=True,
+            image_shape=image_shape,
+            volume_shape=recon_volume_shape,
+            disc_type="linear_interp",
+            half_image=True,
+            half_volume=True,
+            max_r=float(mstep_current_size // 2),
+            relion_x_half=True,
+            max_block_bytes=max_adjoint_block_bytes,
+            log_label="resident-ctf-window",
+        )
+
+    return (
+        Ft_y_total,
+        Ft_ctf_total,
+        wavg_triplet_pixels,
+        block_noise_shells,
+        a2_per_image,
+        xa_per_image,
+    )
