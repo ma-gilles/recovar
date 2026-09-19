@@ -60,6 +60,7 @@ _CUDA_BUILD_SOURCE_NAMES = (
     "relion_vdam_mstep.cuh",
     "relion_scoring.cuh",
     "sparse_pass2_posterior.cuh",
+    "relion_translate_sum.cuh",
     "cuda_backproject.cu",
     "relion_coarse_diff2_projector_body.inc",
     "Makefile",
@@ -708,6 +709,9 @@ _TARGET_RELION_WAVG_SEQUENTIAL_RUNTIME_FLAT_ROWS_TRIPLET_F32 = (
 _TARGET_RELION_WAVG_ROTATION_ATOMIC_RUNTIME_FLAT_ROWS_TRIPLET_ADD_F32 = (
     "cuda_relion_wavg_rotation_atomic_runtime_flat_rows_triplet_add_f32"
 )
+_TARGET_RELION_TRANSLATE_SUM_FLAT_ROWS_F32 = (
+    "cuda_relion_translate_sum_flat_rows_f32"
+)
 _TARGET_RELION_WAVG_NATIVE_PREFIX_F32 = "cuda_relion_wavg_native_prefix_f32"
 _TARGET_RELION_WAVG_NATIVE_PREFIX_DEBUG_F32 = "cuda_relion_wavg_native_prefix_debug_f32"
 _wavg_native_prefix_ffi_registered = False
@@ -1197,6 +1201,10 @@ _OPTIONAL_FFI_REGISTRATIONS = {
     _TARGET_RELION_WAVG_ROTATION_ATOMIC_RUNTIME_FLAT_ROWS_TRIPLET_ADD_F32: (
         "RelionWavgRotationAtomicRuntimeFlatRowsTripletAddF32",
         "Flat-row RELION Wavg atomics require an explicit CUDA build with RelionWavgRotationAtomicRuntimeFlatRowsTripletAddF32",
+    ),
+    _TARGET_RELION_TRANSLATE_SUM_FLAT_ROWS_F32: (
+        "RelionTranslateSumFlatRowsF32",
+        "Flat-row translate-and-sum requires an explicit CUDA build with RelionTranslateSumFlatRowsF32",
     ),
 }
 
@@ -7232,6 +7240,156 @@ def relion_wavg_rotation_atomic_runtime_flat_rows_triplet_add_f32(
         input_output_aliases={2: 0},
         vmap_method="sequential",
     )(terms, row_image_ids, accumulator, logical_pixel_count)
+
+
+def relion_translate_sum_flat_rows_f32_supported() -> bool:
+    """Return whether the loaded library exports the translate-and-sum target."""
+
+    return _optional_target_supported(_TARGET_RELION_TRANSLATE_SUM_FLAT_ROWS_F32)
+
+
+@functools.partial(
+    jax.jit, static_argnames=("image_shape", "rows_per_block")
+)
+def relion_translate_sum_flat_rows_f32(
+    recon_image: jax.Array,
+    noise_image: jax.Array,
+    row_image_ids: jax.Array,
+    posterior: jax.Array,
+    translation_angles: jax.Array,
+    pixel_indices: jax.Array,
+    n_valid_rows: jax.Array,
+    logical_pixel_count: jax.Array,
+    *,
+    image_shape: Tuple[int, int],
+    rows_per_block: int = 0,
+) -> tuple[jax.Array, jax.Array, jax.Array]:
+    """Translate and posterior-weight two per-image operands over packed rows.
+
+    This is the flat-row form of the resident M-step's weighted sums. For every
+    row ``r`` with image ``row_image_ids[r]`` and every reconstruction pixel
+    ``p`` it returns
+
+    ``summed[r, p]        = sum_t posterior[r, t] * shift_t(recon_image[id, p])``
+    ``summed_masked[r, p] = sum_t posterior[r, t] * shift_t(noise_image[id, p])``
+    ``probs_sum_t[r]      = sum_t posterior[r, t]``
+
+    The translation is applied inside the reduction with the phase and complex
+    rotation of :func:`relion_translate_score_f32`, so the kernel replaces a
+    pre-shifted ``[images, translations, pixels]`` tile and its contraction
+    without ever materialising the tile. ``pixel_indices`` are RECOVAR's
+    centered packed-half indices, the same operand
+    :func:`relion_translate_score_f32` takes.
+
+    ``n_valid_rows`` and ``logical_pixel_count`` are device int32 scalars, so a
+    capacity-shaped chunk keeps one traced program: rows at or past
+    ``n_valid_rows``, rows whose image id is negative, and pixels at or past
+    ``logical_pixel_count`` are written as zeros and read nothing. The sum over
+    translations is sequential in increasing ``t`` with a rounded multiply and a
+    rounded add; the XLA path it replaces contracts the same products at
+    ``Precision.HIGHEST``, so the two agree to a few float32 ulp and exactly at
+    ``T == 1``.
+
+    ``rows_per_block`` selects how many packed rows share one ``sincosf``
+    evaluation. Zero picks the kernel's default; it changes performance only,
+    never the arithmetic.
+    """
+
+    recon_image = jnp.asarray(recon_image)
+    noise_image = jnp.asarray(noise_image)
+    row_image_ids = jnp.asarray(row_image_ids)
+    posterior = jnp.asarray(posterior)
+    translation_angles = jnp.asarray(translation_angles)
+    pixel_indices = jnp.asarray(pixel_indices)
+    n_valid_rows = jnp.asarray(n_valid_rows, dtype=jnp.int32)
+    logical_pixel_count = jnp.asarray(logical_pixel_count, dtype=jnp.int32)
+    if recon_image.dtype != jnp.complex64 or noise_image.dtype != jnp.complex64:
+        raise TypeError(
+            "flat-row translate-and-sum expects complex64 image operands, got "
+            f"{recon_image.dtype} and {noise_image.dtype}"
+        )
+    if recon_image.ndim != 2 or noise_image.shape != recon_image.shape:
+        raise ValueError(
+            "flat-row translate-and-sum expects matching [batch, pixels] image "
+            f"operands, got {recon_image.shape} and {noise_image.shape}"
+        )
+    batch_size, pixel_capacity = (int(size) for size in recon_image.shape)
+    if row_image_ids.dtype != jnp.int32 or row_image_ids.ndim != 1:
+        raise ValueError(
+            "flat-row translate-and-sum expects int32 row_image_ids[Q]"
+        )
+    row_count = int(row_image_ids.shape[0])
+    if translation_angles.dtype != jnp.float32 or (
+        translation_angles.ndim != 2 or translation_angles.shape[1] != 2
+    ):
+        raise ValueError(
+            "flat-row translate-and-sum expects float32 translation_angles[T,2]"
+        )
+    n_trans = int(translation_angles.shape[0])
+    if posterior.dtype != jnp.float32 or posterior.shape != (row_count, n_trans):
+        raise ValueError(
+            "flat-row translate-and-sum expects float32 posterior[Q,T], got "
+            f"{posterior.shape} {posterior.dtype}"
+        )
+    if pixel_indices.dtype != jnp.int32 or pixel_indices.shape != (
+        pixel_capacity,
+    ):
+        raise ValueError(
+            "flat-row translate-and-sum expects int32 pixel_indices[P], got "
+            f"{pixel_indices.shape} {pixel_indices.dtype}"
+        )
+    if n_valid_rows.shape != () or logical_pixel_count.shape != ():
+        raise ValueError(
+            "n_valid_rows and logical_pixel_count must be int32 scalars"
+        )
+    if len(image_shape) != 2 or any(int(size) <= 0 for size in image_shape):
+        raise ValueError(
+            f"image_shape must contain two positive sizes, got {image_shape}"
+        )
+    if int(rows_per_block) not in (0, 1, 2, 4, 8):
+        raise ValueError(
+            f"rows_per_block must be 0, 1, 2, 4 or 8, got {rows_per_block}"
+        )
+    if batch_size <= 0 or pixel_capacity <= 0 or row_count <= 0 or n_trans <= 0:
+        raise ValueError(
+            "flat-row translate-and-sum operands must be non-empty, got "
+            f"batch={batch_size} pixels={pixel_capacity} rows={row_count} "
+            f"translations={n_trans}"
+        )
+    if jax.default_backend() != "gpu":
+        raise RuntimeError(
+            "flat-row translate-and-sum requires a JAX GPU backend"
+        )
+    if not custom_cuda_requested():
+        raise RuntimeError(
+            "flat-row translate-and-sum was explicitly requested but custom "
+            "CUDA is disabled"
+        )
+    _ensure_optional_ffi(_TARGET_RELION_TRANSLATE_SUM_FLAT_ROWS_F32)
+
+    image_h, image_w = (int(size) for size in image_shape)
+    outputs = (
+        jax.ShapeDtypeStruct((row_count, pixel_capacity), jnp.complex64),
+        jax.ShapeDtypeStruct((row_count, pixel_capacity), jnp.complex64),
+        jax.ShapeDtypeStruct((row_count,), jnp.float32),
+    )
+    return jax.ffi.ffi_call(
+        _TARGET_RELION_TRANSLATE_SUM_FLAT_ROWS_F32,
+        outputs,
+        vmap_method="sequential",
+    )(
+        recon_image,
+        noise_image,
+        row_image_ids,
+        posterior,
+        translation_angles,
+        pixel_indices,
+        n_valid_rows,
+        logical_pixel_count,
+        image_h=np.int64(image_h),
+        image_half_width=np.int64(image_w // 2 + 1),
+        rows_per_block=np.int64(int(rows_per_block)),
+    )
 
 
 @jax.jit
