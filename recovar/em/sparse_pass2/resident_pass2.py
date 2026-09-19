@@ -793,44 +793,66 @@ def _accumulate_chunk_image_terms(
 # ---------------------------------------------------------------------------
 
 
-def _gather_to_requested_order(values, fetched_indices, position_of, n_requested):
-    """Reorder a fetched batch back to the requested image order.
+def _pad_batch_to_capacity(values, capacity: int):
+    """Repeat a host batch's first row up to ``capacity`` rows.
 
-    The dataset may return a batch in its own order. The compact engine
-    reorders its bucket arrays to follow the fetch; the resident driver instead
-    keeps the table's (RELION particle) order and permutes the operands, which
-    is a pure gather and changes no arithmetic.
+    Every per-chunk device program is keyed on its operand shapes, so a batch
+    whose length is the chunk's *valid* image count traces a new program for
+    every distinct occupancy. Padding the batch on the host, before anything
+    is traced, gives one program per image-capacity class instead. The padded
+    rows carry a duplicate image's real data and are zeroed after preparation
+    by :func:`_zero_padded_images`, which is itself capacity-shaped.
     """
 
-    fetched_indices = np.asarray(fetched_indices).reshape(-1)
-    order = np.empty(n_requested, dtype=np.int64)
-    seen = np.zeros(n_requested, dtype=bool)
-    for local, dataset_index in enumerate(fetched_indices.tolist()):
+    values = np.asarray(values)
+    n = int(values.shape[0])
+    if n == capacity:
+        return values
+    if n > capacity or n == 0:
+        raise ValueError(f"cannot pad a batch of {n} rows to capacity {capacity}")
+    pad = np.repeat(values[:1], capacity - n, axis=0)
+    return np.concatenate([values, pad], axis=0)
+
+
+def _reorder_permutation(fetched_indices, requested_indices, capacity: int) -> np.ndarray:
+    """Host permutation from the fetched batch order to the table order.
+
+    The dataset may return a batch in its own order. The compact engine
+    reorders its bucket arrays to follow the fetch; the resident driver keeps
+    the table's (RELION particle) order and permutes the operands, which is a
+    pure gather and changes no arithmetic. Padded slots point at fetched row
+    0; :func:`_zero_padded_images` removes whatever they gathered.
+    """
+
+    fetched = np.asarray(fetched_indices).reshape(-1)
+    requested = np.asarray(requested_indices).reshape(-1)
+    n = int(requested.shape[0])
+    position_of = {int(index): position for position, index in enumerate(requested.tolist())}
+    if len(position_of) != n:
+        raise ValueError("a chunk must not request the same image twice")
+    order = np.zeros(capacity, dtype=np.int32)
+    seen = np.zeros(n, dtype=bool)
+    for slot, dataset_index in enumerate(fetched[:n].tolist()):
         position = position_of.get(int(dataset_index))
         if position is None:
-            raise ValueError(
-                f"the dataset returned image {dataset_index}, which was not requested"
-            )
-        order[position] = local
+            raise ValueError(f"the dataset returned image {dataset_index}, which was not requested")
+        order[position] = slot
         seen[position] = True
     if not bool(seen.all()):
         raise ValueError("the dataset did not return every requested image")
-    if values is None:
-        return None
-    return jnp.asarray(values)[jnp.asarray(order, dtype=jnp.int32)]
+    return order
 
 
-def _pad_image_axis(values, image_capacity: int):
-    """Pad an ``[n, ...]`` device array up to ``image_capacity`` rows with zeros."""
+def _zero_padded_images(values, valid_images):
+    """Zero the padded image slots of a capacity-shaped operand.
+
+    ``valid_images`` is a capacity-shaped bool, so this traces one program per
+    (capacity, trailing shape) pair regardless of how many slots are valid.
+    """
 
     values = jnp.asarray(values)
-    n = int(values.shape[0])
-    if n == image_capacity:
-        return values
-    if n > image_capacity:
-        raise ValueError(f"cannot pad {n} images down to capacity {image_capacity}")
-    pad = [(0, image_capacity - n)] + [(0, 0)] * (values.ndim - 1)
-    return jnp.pad(values, pad)
+    mask = jnp.asarray(valid_images, dtype=bool).reshape((-1,) + (1,) * (values.ndim - 1))
+    return jnp.where(mask, values, jnp.zeros((), dtype=values.dtype))
 
 
 def compute_pass2_stats_resident(
@@ -916,6 +938,9 @@ def compute_pass2_stats_resident(
         get_oversampled_translation_grid,
         infer_translation_step,
         rotation_grid_size,
+    )
+    from recovar.em.sparse_pass2.sparse_pass2_bucketed import (
+        _pass2_projector_complex64_enabled,
     )
     from recovar.em.sparse_pass2.sparse_pass2_window import (
         _fine_translation_prior_2d,
@@ -1061,7 +1086,16 @@ def compute_pass2_stats_resident(
         if relion_projector_r_max is None:
             raise ValueError("relion_projector_r_max is required when relion_projector_half is provided")
         relion_projector_half = jnp.asarray(relion_projector_half)
-        if not use_float64_scoring and relion_projector_half.dtype == jnp.complex128:
+        # Narrowing the Projector::data slab engages the texture projector and
+        # changes float32 projection arithmetic, so the compact engine keeps it
+        # behind its own opt-in flag. Read the same gate: narrowing here on our
+        # own would change every projection, every score and every posterior
+        # relative to the engine this driver is measured against.
+        if (
+            _pass2_projector_complex64_enabled()
+            and not use_float64_scoring
+            and relion_projector_half.dtype == jnp.complex128
+        ):
             relion_projector_half = relion_projector_half.astype(jnp.complex64)
     if projection_padding_factor > 1 and not use_relion_projector:
         from recovar.reconstruction.relion_functions import pad_volume_for_projection
@@ -1616,22 +1650,32 @@ def _prepare_chunk_reconstruction_operands(
 
     These tiles carry the ``(images, translations, pixels)`` axis, so they are
     the one operand family the driver cannot keep resident for a whole half
-    (17 GiB at the hp3 state). They are rebuilt per chunk exactly as the
-    compact engine rebuilds them per bucket, from the same
-    :func:`_prepare_bucket_io` call with the same keyword arguments, and then
-    permuted back into the table's image order.
+    (17 GiB at the hp3 state). They are rebuilt per chunk from the same
+    :func:`_prepare_bucket_io` call, with the same keyword arguments, that the
+    compact engine makes per bucket.
+
+    Shape stability. The batch handed to ``_prepare_bucket_io`` is padded on
+    the host to the chunk's image capacity before anything is traced, so every
+    chunk of one capacity class runs the same program instead of one program
+    per distinct occupancy. The padded slots carry a duplicate image's real
+    data through preparation and are zeroed afterwards by a capacity-shaped
+    mask. Nothing downstream reads them: their posterior rows are zero and
+    their image ids are -1.
     """
 
     image_capacity = int(chunk.image_capacity)
     n_valid_images = int(chunk.n_valid_images)
+    image_indices = np.asarray(image_indices)
+
     batch_data, ctf_params, fetched_indices = fetch_indexed_batch(
         experiment_dataset, image_indices
     )
+    order = _reorder_permutation(fetched_indices, image_indices, image_capacity)
     prepared = _prepare_bucket_io(
         experiment_dataset,
-        jnp.asarray(batch_data),
-        ctf_params,
-        np.asarray(fetched_indices),
+        jnp.asarray(_pad_batch_to_capacity(batch_data, image_capacity)),
+        _pad_batch_to_capacity(ctf_params, image_capacity),
+        _pad_batch_to_capacity(np.asarray(fetched_indices), image_capacity),
         return_direct_scoring_io=True,
         **bucket_io_kwargs,
     )
@@ -1668,7 +1712,7 @@ def _prepare_chunk_reconstruction_operands(
         None if direct_ctf_rfloat_half is None else direct_ctf_rfloat_half[:, gather_recon]
     )
 
-    relion_highres_xi2_half, relion_norm_high_shell = _relion_powerclass_noise_terms(
+    _highres_xi2_half, relion_norm_high_shell = _relion_powerclass_noise_terms(
         processed_score_half_for_noise,
         image_shape=image_shape,
         current_size=current_size,
@@ -1676,7 +1720,7 @@ def _prepare_chunk_reconstruction_operands(
         accumulate_noise=accumulate_noise,
         source_faithful_spectrum_norm=source_faithful_spectrum_norm,
     )
-    del relion_highres_xi2_half  # the resident scorer reads the same value from T6's operands
+    del _highres_xi2_half  # the resident scorer reads the per-half operand instead
     raw_translated_wavg_rectangle = _relion_cuda_translate_wavg_norm_images(
         processed_score_half_for_noise,
         relion_score_translation_angles,
@@ -1684,22 +1728,23 @@ def _prepare_chunk_reconstruction_operands(
         image_shape,
     )
 
-    position_of = {int(index): position for position, index in enumerate(np.asarray(image_indices).tolist())}
-    reorder = partial(
-        _gather_to_requested_order,
-        fetched_indices=fetched_indices,
-        position_of=position_of,
-        n_requested=n_valid_images,
+    permutation = jnp.asarray(order, dtype=jnp.int32)
+    valid_images = jnp.asarray(
+        np.arange(image_capacity) < n_valid_images, dtype=bool
     )
-    shifted_recon = reorder(shifted_recon.reshape(n_valid_images, n_fine_trans, -1))
-    shifted_noise = reorder(shifted_noise.reshape(n_valid_images, n_fine_trans, -1))
-    ctf2_over_nv_recon = reorder(ctf2_over_nv_recon)
-    direct_ctf_rfloat_recon = (
-        None if direct_ctf_rfloat_recon is None else reorder(direct_ctf_rfloat_recon)
-    )
-    processed_score_half_for_noise = reorder(processed_score_half_for_noise)
-    relion_norm_high_shell = reorder(relion_norm_high_shell)
-    raw_translated_wavg_rectangle = reorder(raw_translated_wavg_rectangle)
+
+    def take(values):
+        return None if values is None else _zero_padded_images(
+            jnp.asarray(values)[permutation], valid_images
+        )
+
+    shifted_recon = take(shifted_recon.reshape(image_capacity, n_fine_trans, -1))
+    shifted_noise = take(shifted_noise.reshape(image_capacity, n_fine_trans, -1))
+    ctf2_over_nv_recon = take(ctf2_over_nv_recon)
+    direct_ctf_rfloat_recon = take(direct_ctf_rfloat_recon)
+    processed_image_half = take(processed_score_half_for_noise)
+    relion_norm_high_shell = take(relion_norm_high_shell)
+    raw_translated_wavg_rectangle = take(raw_translated_wavg_rectangle)
     raw_translated_wavg_for_atomic = raw_translated_wavg_rectangle[:, :, exact_positions_device]
     if int(shifted_recon.shape[-1]) != int(n_recon_windowed):
         raise ValueError(
@@ -1707,43 +1752,30 @@ def _prepare_chunk_reconstruction_operands(
             f"{int(shifted_recon.shape[-1])} vs {int(n_recon_windowed)}"
         )
 
-    scale = (
-        jnp.ones(n_valid_images, dtype=precision_policy.score_real_dtype)
-        if scale_corrections_np is None
-        else jnp.asarray(scale_corrections_np[np.asarray(image_indices)])
-    )
+    # Padded slots keep scale 1 so the Wavg kernel never divides by zero; their
+    # posterior is zero, so the value is never observable.
+    scale_chunk = np.ones(image_capacity, dtype=np.float32)
+    if scale_corrections_np is not None:
+        scale_chunk[:n_valid_images] = np.asarray(
+            scale_corrections_np[image_indices], dtype=np.float32
+        )
     group_ids_chunk = np.full(image_capacity, -1, dtype=np.int32)
     if group_ids_np is not None:
         group_ids_chunk[:n_valid_images] = np.asarray(
-            group_ids_np[np.asarray(image_indices)], dtype=np.int32
+            group_ids_np[image_indices], dtype=np.int32
         )
 
     return {
-        "shifted_recon": _pad_image_axis(shifted_recon, image_capacity),
-        "shifted_noise": _pad_image_axis(shifted_noise, image_capacity),
-        "ctf2_over_nv_recon": _pad_image_axis(ctf2_over_nv_recon, image_capacity),
-        "direct_ctf_rfloat_recon": (
-            None
-            if direct_ctf_rfloat_recon is None
-            else _pad_image_axis(direct_ctf_rfloat_recon, image_capacity)
-        ),
-        "processed_image_half": _pad_image_axis(processed_score_half_for_noise, image_capacity),
-        "relion_norm_high_shell": _pad_image_axis(relion_norm_high_shell, image_capacity),
-        "raw_translated_wavg_rectangle": _pad_image_axis(
-            raw_translated_wavg_rectangle, image_capacity
-        ),
-        "raw_translated_wavg_for_atomic": _pad_image_axis(
-            raw_translated_wavg_for_atomic, image_capacity
-        ),
-        # Padded slots keep scale 1 so the Wavg kernel never divides by zero;
-        # their posterior is zero, so the value is never observable.
-        "scale": jnp.concatenate(
-            [
-                jnp.asarray(scale, dtype=jnp.float32),
-                jnp.ones(image_capacity - n_valid_images, dtype=jnp.float32),
-            ]
-        ),
-        "group_ids": jnp.asarray(group_ids_chunk, dtype=jnp.int32),
+        "shifted_recon": shifted_recon,
+        "shifted_noise": shifted_noise,
+        "ctf2_over_nv_recon": ctf2_over_nv_recon,
+        "direct_ctf_rfloat_recon": direct_ctf_rfloat_recon,
+        "processed_image_half": processed_image_half,
+        "relion_norm_high_shell": relion_norm_high_shell,
+        "raw_translated_wavg_rectangle": raw_translated_wavg_rectangle,
+        "raw_translated_wavg_for_atomic": raw_translated_wavg_for_atomic,
+        "scale": jnp.asarray(scale_chunk),
+        "group_ids": jnp.asarray(group_ids_chunk),
     }
 
 
@@ -2030,15 +2062,21 @@ def _run_resident_chunk(
     # --- stage 7: image-level statistics ------------------------------------
     translation_sqdist_ang = image_tables.translation_sqdist_ang
     if translation_prior_centers_np is not None:
+        # Build the centres at capacity on the host so the squared-distance
+        # program is keyed on the capacity class, not the occupancy; padded
+        # rows multiply a zero posterior, so their value is never observable.
+        padded_image_indices = _pad_batch_to_capacity(
+            np.asarray(image_indices).reshape(-1, 1), image_capacity
+        ).reshape(-1)
         centers = translation_prior_centers_for_images(
             translation_prior_centers_np,
-            image_indices,
-            batch_size=n_valid_images,
+            padded_image_indices,
+            batch_size=image_capacity,
         )
-        sqdist = jnp.asarray(
-            translation_sqdist_angstrom(fine_translations, centers, voxel_size)
+        translation_sqdist_ang = _zero_padded_images(
+            jnp.asarray(translation_sqdist_angstrom(fine_translations, centers, voxel_size)),
+            jnp.asarray(np.arange(image_capacity) < n_valid_images, dtype=bool),
         )
-        translation_sqdist_ang = _pad_image_axis(sqdist, image_capacity)
     chunk_tables = image_tables._replace(translation_sqdist_ang=translation_sqdist_ang)
 
     # Chunk-local first row and row count of every image slot; padded slots sit

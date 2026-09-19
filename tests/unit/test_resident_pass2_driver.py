@@ -721,3 +721,83 @@ def test_resident_driver_refuses_an_unsupported_pass(_resident_production_env):
     args["relion_x_half_mstep"] = False
     with pytest.raises(NotImplementedError, match="x-half M-step"):
         rp.compute_pass2_stats_resident(**args)
+
+
+def test_driver_reads_the_compact_engine_behaviour_gates():
+    """The driver must not turn on behaviour-changing knobs the engine gates.
+
+    The 10k/256 matched pair diverged on 9987 of 10000 images because the
+    driver narrowed ``Projector::data`` to complex64 unconditionally while the
+    compact engine keeps that behind an opt-in flag, whose own docstring says
+    narrowing changes float32 projection arithmetic. The fixture datasets have
+    no RELION projector, so only a source check catches this class of bug.
+    """
+
+    import inspect
+
+    from recovar.em.sparse_pass2 import sparse_pass2_bucketed
+
+    driver = inspect.getsource(rp.compute_pass2_stats_resident)
+    assert "_pass2_projector_complex64_enabled()" in driver
+    narrowing = driver[driver.index("complex64 slab") if "complex64 slab" in driver else 0:]
+    del narrowing
+    # The cast must be guarded by the gate, not by dtype alone.
+    cast = driver.index("astype(jnp.complex64)")
+    guard = driver.rindex("_pass2_projector_complex64_enabled()", 0, cast)
+    assert cast - guard < 400, "the projector cast is not inside the gated branch"
+    # The gate itself still defaults off in the engine that owns it.
+    assert "default=False" in inspect.getsource(
+        sparse_pass2_bucketed._pass2_projector_complex64_enabled
+    )
+
+
+def test_chunk_operands_are_padded_on_the_host():
+    """Per-chunk shapes must not depend on a chunk's occupancy.
+
+    Every traced program is keyed on its operand shapes, so an operand sized
+    by the chunk's valid image count compiles once per distinct occupancy. The
+    early-state cold arm traced 9352 programs in one iteration for this
+    reason. The batch handed to the preparation is padded on the host instead.
+    """
+
+    import inspect
+
+    source = inspect.getsource(rp._prepare_chunk_reconstruction_operands)
+    assert "_pad_batch_to_capacity(batch_data, image_capacity)" in source
+    assert "_pad_batch_to_capacity(ctf_params, image_capacity)" in source
+    assert "_zero_padded_images" in source
+    # jnp.pad with an occupancy-dependent width is what this replaced.
+    assert "jnp.pad" not in source
+    driver = inspect.getsource(rp)
+    assert "def _pad_image_axis" not in driver
+
+
+def test_pad_batch_to_capacity_repeats_the_first_row():
+    batch = np.arange(12, dtype=np.float32).reshape(3, 4)
+    padded = rp._pad_batch_to_capacity(batch, 5)
+    assert padded.shape == (5, 4)
+    np.testing.assert_array_equal(padded[:3], batch)
+    np.testing.assert_array_equal(padded[3], batch[0])
+    np.testing.assert_array_equal(padded[4], batch[0])
+    np.testing.assert_array_equal(rp._pad_batch_to_capacity(batch, 3), batch)
+    with pytest.raises(ValueError, match="cannot pad"):
+        rp._pad_batch_to_capacity(batch, 2)
+
+
+def test_zero_padded_images_clears_only_the_padded_slots():
+    values = np.arange(24, dtype=np.float32).reshape(4, 3, 2)
+    valid = np.asarray([True, True, False, False])
+    out = np.asarray(rp._zero_padded_images(jnp.asarray(values), jnp.asarray(valid)))
+    np.testing.assert_array_equal(out[:2], values[:2])
+    np.testing.assert_array_equal(out[2:], np.zeros_like(values[2:]))
+
+
+def test_reorder_permutation_inverts_a_shuffled_fetch():
+    requested = np.asarray([7, 3, 9, 1])
+    fetched = np.asarray([1, 9, 7, 3])
+    order = rp._reorder_permutation(fetched, requested, capacity=6)
+    assert order.shape == (6,)
+    # Position p of the table must read fetched slot order[p].
+    np.testing.assert_array_equal(fetched[order[:4]], requested)
+    with pytest.raises(ValueError, match="did not return every requested image"):
+        rp._reorder_permutation(np.asarray([1, 9, 7, 7]), requested, capacity=6)
