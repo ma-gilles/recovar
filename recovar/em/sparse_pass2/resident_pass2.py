@@ -1918,6 +1918,14 @@ def _run_resident_chunk(
     logical_rect_pixels = jnp.asarray(n_rect, dtype=jnp.int32)
 
     for start in range(0, row_capacity, int(mstep_block_rows)):
+        if start >= n_valid_rows:
+            # Every row of this block is chunk padding: its posterior is zero,
+            # so the weighted sums, the Wavg terms, the noise partials and both
+            # adjoint scatters are all exactly zero and adding them changes no
+            # accumulator bit. The chunker fills a chunk to its image capacity
+            # and then rounds the row count up to the next class, so at the hp3
+            # state this skips about half of the pixel-axis work.
+            break
         stop = start + int(mstep_block_rows)
         rows = slice(start, stop)
         block_row_image = row_image_local[rows]

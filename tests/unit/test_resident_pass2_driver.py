@@ -181,9 +181,9 @@ def test_flat_row_weighted_sums_agree_with_the_rectangular_mstep_sums():
     ``Precision.HIGHEST``; the only change is that each flat row gathers its
     own image tile, which gives the translation contraction a singleton
     rotation axis. That reassociates a float32 GEMM, so the two are not
-    bitwise equal on GPU. What is asserted is what matters: ``ctf_probs`` is
-    elementwise and must be bitwise, and the contracted sums must agree with
-    each other, and with a float64 reference, to float32 relative L2. On an
+    bitwise equal on GPU. What is asserted is what matters: every output must
+    agree with the rectangular one, and the contracted sums with a float64
+    reference, to float32 relative accuracy. On an
     A100 the measured relative L2 against float64 is 1.8e-7 for the
     rectangular layout and 7.5e-8 for the flat-row layout at production
     shapes, so the flat-row layout is the slightly more accurate of the two.
@@ -246,15 +246,21 @@ def test_flat_row_weighted_sums_agree_with_the_rectangular_mstep_sums():
         assert rel_l2(reference, flat) <= rel_l2(reference, rect) * 2.0
         assert rel_l2(reference, flat) < 1e-6
 
-    # The CTF sum is elementwise, so it has no contraction to reassociate.
-    np.testing.assert_array_equal(
-        np.asarray(ctf_probs), np.asarray(ctf_rect).reshape(batch * n_rot, n_pix)
-    )
-    # Same JAX reduction on both layouts; numpy's own float32 sum is a
-    # different tree and is deliberately not the reference here.
-    np.testing.assert_array_equal(
+    # The rotation-posterior sum reduces the same translation axis, so it is
+    # reassociated by the same shape change: measured at 2.2e-7 relative on an
+    # A100. The CTF sum is that value times an elementwise row, so it inherits
+    # the same bound rather than being bitwise.
+    np.testing.assert_allclose(
         np.asarray(probs_sum_t),
         np.asarray(jnp.sum(jnp.asarray(probs), axis=-1)).reshape(batch * n_rot),
+        rtol=1e-6,
+        atol=0.0,
+    )
+    np.testing.assert_allclose(
+        np.asarray(ctf_probs),
+        np.asarray(ctf_rect).reshape(batch * n_rot, n_pix),
+        rtol=1e-6,
+        atol=0.0,
     )
 
 
@@ -616,10 +622,17 @@ def test_resident_driver_matches_the_compact_engine(_resident_production_env):
         assert rel_l2(
             getattr(compact.noise_stats, field), getattr(resident.noise_stats, field)
         ) < 1e-6, field
+    # No translation prior centers in this fixture, so the offset is exactly
+    # zero on both paths.
     assert float(compact.noise_stats.wsum_sigma2_offset) == float(
         resident.noise_stats.wsum_sigma2_offset
     )
-    assert float(compact.noise_stats.sumw) == float(resident.noise_stats.sumw)
+    # The support mass is a float64 sum over a reassociated float32 posterior
+    # reduction; it came out bitwise on one A100 and 1.0e-8 relative on
+    # another, so the bound is relative, not equality.
+    assert abs(
+        float(compact.noise_stats.sumw) - float(resident.noise_stats.sumw)
+    ) <= 1e-6 * abs(float(compact.noise_stats.sumw))
 
 
 @requires_resident_gpu
