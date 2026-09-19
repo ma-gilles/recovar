@@ -816,3 +816,65 @@ def test_reorder_permutation_inverts_a_shuffled_fetch():
     np.testing.assert_array_equal(fetched[order[:4]], requested)
     with pytest.raises(ValueError, match="did not return every requested image"):
         rp._reorder_permutation(np.asarray([1, 9, 7, 7]), requested, capacity=6)
+
+
+@pytest.mark.parametrize(
+    ("mode", "winner", "expected"),
+    [
+        ("normalized_cc", False, "normalized-CC scoring"),
+        ("gaussian", True, "winner-take-all"),
+        ("normalized_cc", True, "normalized-CC scoring"),
+    ],
+)
+def test_out_of_scope_scoring_modes_are_named_not_raised(mode, winner, expected):
+    """The firstiter_cc route is out of scope, not a configuration mismatch.
+
+    An end-to-end run at d6b3d3d57 stopped at iteration 1 because the driver
+    raised on RELION's --firstiter_cc pass, which scores with normalized
+    cross-correlation and takes the winner outright. That is a separate pass-2
+    route the driver never covered, so the caller sends it to the compact
+    engine; a mismatch inside the covered path still raises.
+    """
+
+    reason = rp.resident_pass2_out_of_scope_reason(
+        relion_firstiter_score_mode=mode, relion_firstiter_winner_take_all=winner
+    )
+    assert reason is not None and expected in reason
+
+
+def test_the_production_gaussian_pass_is_in_scope():
+    assert (
+        rp.resident_pass2_out_of_scope_reason(
+            relion_firstiter_score_mode="gaussian", relion_firstiter_winner_take_all=False
+        )
+        is None
+    )
+
+
+def test_dispatcher_routes_out_of_scope_passes_to_the_compact_engine():
+    """Selection, not the gate, decides which engine an out-of-scope pass uses."""
+
+    import inspect
+
+    from recovar.em.helpers import oversampling
+
+    dispatch = inspect.getsource(oversampling.compute_pass2_stats_sparse)
+    assert "resident_pass2_out_of_scope_reason(" in dispatch
+    # The default must be the compact engine, with the resident driver chosen
+    # only when the pass is both requested and in scope.
+    assert "sparse_pass2_impl = compute_pass2_stats_sparse_bucketed" in dispatch
+    assert "if out_of_scope is None:" in dispatch
+    assert "does not cover %s" in dispatch
+
+
+def test_gate_still_raises_for_in_scope_mismatches():
+    """Everything that is not an out-of-scope scoring mode still raises."""
+
+    with pytest.raises(NotImplementedError, match="x-half M-step"):
+        rp.require_resident_production_configuration(
+            **_production_gate_kwargs(relion_x_half_mstep=False)
+        )
+    with pytest.raises(NotImplementedError, match="float64 scoring"):
+        rp.require_resident_production_configuration(
+            **_production_gate_kwargs(use_float64_scoring=True)
+        )

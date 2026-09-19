@@ -194,6 +194,7 @@ __all__ = [
     "compute_pass2_stats_resident",
     "resident_pass2_requested",
     "require_resident_production_configuration",
+    "resident_pass2_out_of_scope_reason",
 ]
 
 
@@ -233,6 +234,30 @@ def _require(condition: bool, message: str) -> None:
             f"({RESIDENT_PASS2_ENV}=1) does not implement this configuration: {message}. "
             "Clear the flag to use the compact engine; this path never falls back silently."
         )
+
+
+def resident_pass2_out_of_scope_reason(
+    *, relion_firstiter_score_mode, relion_firstiter_winner_take_all
+) -> str | None:
+    """Name the scoring modes the resident driver was never scoped to cover.
+
+    These are not configuration drift inside the covered path, so they are not
+    a reason to stop a run: RELION's ``--firstiter_cc`` iteration scores with
+    normalized cross-correlation and takes the winner outright, which is a
+    different pass-2 route with its own kernels. The caller sends those to the
+    compact engine and says so. Everything else still raises through
+    :func:`require_resident_production_configuration`, because a silent
+    fallback there would hide a real mismatch.
+    """
+
+    if relion_firstiter_score_mode != "gaussian":
+        return (
+            "RELION normalized-CC scoring "
+            f"(relion_firstiter_score_mode={relion_firstiter_score_mode!r})"
+        )
+    if relion_firstiter_winner_take_all:
+        return "RELION --firstiter_cc winner-take-all posteriors"
+    return None
 
 
 def require_resident_production_configuration(**kwargs) -> None:

@@ -777,19 +777,33 @@ def compute_pass2_stats_sparse(
     if not use_perimage_reference and not full_grid_reference:
         from recovar.em.sparse_pass2.resident_pass2 import (
             compute_pass2_stats_resident,
+            resident_pass2_out_of_scope_reason,
             resident_pass2_requested,
         )
         from recovar.em.sparse_pass2.sparse_pass2_bucketed import compute_pass2_stats_sparse_bucketed
 
         # RECOVAR_SPARSE_PASS2_RESIDENT selects the device-resident K=1 driver.
-        # It implements only the production configuration and raises a named
-        # NotImplementedError otherwise; it never falls back silently, so a
-        # measured comparison always knows which engine produced a result.
-        sparse_pass2_impl = (
-            compute_pass2_stats_resident
-            if resident_pass2_requested()
-            else compute_pass2_stats_sparse_bucketed
-        )
+        # Inside the path it covers it raises a named NotImplementedError on
+        # any configuration mismatch rather than falling back, so a measured
+        # comparison always knows which engine produced a result. The scoring
+        # modes it was never scoped to cover are different: RELION's
+        # --firstiter_cc iteration scores with normalized cross-correlation and
+        # takes the winner outright, a separate pass-2 route, so that iteration
+        # goes to the compact engine and says which iteration and why.
+        sparse_pass2_impl = compute_pass2_stats_sparse_bucketed
+        if resident_pass2_requested():
+            out_of_scope = resident_pass2_out_of_scope_reason(
+                relion_firstiter_score_mode=relion_firstiter_score_mode,
+                relion_firstiter_winner_take_all=relion_firstiter_winner_take_all,
+            )
+            if out_of_scope is None:
+                sparse_pass2_impl = compute_pass2_stats_resident
+            else:
+                logger.info(
+                    "Device-resident sparse pass 2 is enabled but does not cover %s; "
+                    "this pass runs on the compact engine",
+                    out_of_scope,
+                )
         return sparse_pass2_impl(
             experiment_dataset,
             volume,
