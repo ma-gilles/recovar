@@ -44,6 +44,7 @@ def preread_images_requested() -> bool:
         raise ValueError(f"{PREREAD_IMAGES_ENV} must be 0 or 1, got {token!r}")
     return token == "1"
 
+
 NVTX_DOMAIN_DATA_IO = "data_io"
 
 
@@ -278,7 +279,8 @@ class ImageLoader:
         self._num_images = num_images
         self._image_size = image_size
         self._dtype = dtype
-        self._cached = None
+        # Host-memory image stack, populated by ``load_all`` or a preread.
+        self._cached: Optional[np.ndarray] = None
         self._selection_indices = np.arange(int(num_images), dtype=np.int32)
 
     # -- Properties ----------------------------------------------------------
@@ -434,8 +436,27 @@ class MRCLoader(ImageLoader):
     """
 
     def __init__(
-        self, filepath: str, indices: Optional[np.ndarray] = None, lazy: bool = True, skip_staging: bool = False
+        self,
+        filepath: str,
+        indices: Optional[np.ndarray] = None,
+        lazy: bool = True,
+        skip_staging: bool = False,
+        preread: Optional[bool] = None,
     ):
+        """Open an MRC/MRCS stack.
+
+        Args:
+            filepath: Path to the ``.mrc``/``.mrcs`` stack.
+            indices: Optional subset of file rows this loader represents.
+            lazy: If False, read every selected image at construction.
+            skip_staging: If True, bypass the local staging copy.
+            preread: Override the ``RECOVAR_PREREAD_IMAGES`` decision. ``None``
+                (the default) follows the environment, which is what every
+                existing caller gets. Multi-file wrappers pass ``False`` and
+                then call :meth:`preread_positions` with the rows their own
+                metadata selects, so a subset never reads the whole stack.
+        """
+
         import mrcfile
 
         from recovar.data_io.staging import get_cache_dir, stage_mrc
@@ -481,18 +502,24 @@ class MRCLoader(ImageLoader):
         super().__init__(len(self._file_indices), ny, self._file_dtype)
         self._selection_indices = self._file_indices.astype(np.int32, copy=False)
 
+        # Slot of each selection position inside ``_cached``, or None when the
+        # cache holds every position in order (``_cached[position]`` is then the
+        # image, exactly as before this indirection existed).
+        self._cache_slot_of_position: Optional[np.ndarray] = None
+
+        preread_requested = preread_images_requested() if preread is None else bool(preread)
         if not lazy:
             self.load_all()
-        elif preread_images_requested():
+        elif preread_requested:
             self._preread_into_memory()
 
     def __repr__(self) -> str:
         return f"MRCLoader(filepath={self._filepath!r}, n={self._num_images}, D={self._image_size})"
 
-    def _preread_into_memory(self) -> None:
-        """Read every selected image into host memory once (``RECOVAR_PREREAD_IMAGES=1``)."""
+    def _preread_fits_in_host_memory(self, n_images: int) -> bool:
+        """Whether ``n_images`` of this stack stay under ``RECOVAR_PREREAD_MAX_GB``."""
 
-        n_bytes = int(self._num_images) * int(self._bytes_per_image)
+        n_bytes = int(n_images) * int(self._bytes_per_image)
         max_gb = float(os.environ.get(PREREAD_MAX_GB_ENV, DEFAULT_PREREAD_MAX_GB))
         if n_bytes / 1e9 > max_gb:
             logger.warning(
@@ -503,15 +530,75 @@ class MRCLoader(ImageLoader):
                 PREREAD_MAX_GB_ENV,
                 max_gb,
             )
+            return False
+        return True
+
+    def _preread_into_memory(self) -> None:
+        """Read every selected image into host memory once (``RECOVAR_PREREAD_IMAGES=1``)."""
+
+        if not self._preread_fits_in_host_memory(self._num_images):
             return
         t0 = time.monotonic()
         self.load_all()
+        self._log_preread(int(self._num_images), time.monotonic() - t0)
+
+    def preread_positions(self, positions) -> None:
+        """Read only ``positions`` of this loader's selection into host memory.
+
+        ``positions`` index this loader the same way :meth:`_load` is indexed.
+        Multi-file wrappers hold the metadata that says which rows of a shared
+        stack they will ever ask for; without this, a wrapper's child loader
+        prereads the whole file to serve a subset of it (a 10,045-particle STAR
+        over a 130,000-image stack read 34 GB to use 2.6 GB).
+
+        Reading is coalesced: consecutive file rows become one sequential read,
+        so a selection that happens to be the whole stack issues exactly the
+        single read :meth:`load_all` would have issued, with the same bytes.
+        """
+
+        if self._cached is not None:
+            return
+        wanted = np.unique(np.asarray(positions, dtype=np.int64))
+        if wanted.size == 0:
+            return
+        if wanted[0] < 0 or wanted[-1] >= self._num_images:
+            raise IndexError(f"preread_positions out of range [0, {self._num_images}) for {self._filepath}")
+        if not self._preread_fits_in_host_memory(wanted.size):
+            return
+
+        t0 = time.monotonic()
+        cached = self._read_positions_coalesced(wanted)
+        slot_of_position = np.full(self._num_images, -1, dtype=np.int64)
+        slot_of_position[wanted] = np.arange(wanted.size, dtype=np.int64)
+        self._cached = cached
+        self._cache_slot_of_position = slot_of_position
+        self._log_preread(int(wanted.size), time.monotonic() - t0)
+
+    def _read_positions_coalesced(self, positions: np.ndarray) -> np.ndarray:
+        """Read ``positions`` (ascending, unique) as runs of adjacent file rows."""
+
+        file_rows = self._file_indices[positions].astype(np.int64, copy=False)
+        order = np.argsort(file_rows, kind="stable")
+        sorted_rows = file_rows[order]
+        # Split where the physical row number is not one past the previous row.
+        breaks = np.flatnonzero(np.diff(sorted_rows) != 1) + 1
+        runs = np.split(np.arange(sorted_rows.size), breaks)
+
+        out = np.empty((positions.size, self._image_size, self._image_size), dtype=self._file_dtype)
+        for run in runs:
+            first = int(sorted_rows[run[0]])
+            out[order[run]] = self._read_contiguous(first, int(run.size))
+        return out
+
+    def _log_preread(self, n_images: int, seconds: float) -> None:
+        n_bytes = int(n_images) * int(self._bytes_per_image)
         logger.info(
-            "Preread %d images (%.2f GB) from %s into host memory in %.1fs",
-            int(self._num_images),
+            "Preread %d of %d images (%.2f GB) from %s into host memory in %.1fs",
+            n_images,
+            int(self._total_file_images),
             n_bytes / 1e9,
             os.path.basename(self._filepath),
-            time.monotonic() - t0,
+            seconds,
         )
 
     # -- Memory-mapped access ------------------------------------------------
@@ -558,12 +645,37 @@ class MRCLoader(ImageLoader):
             )
         return data.reshape(count, self._image_size, self._image_size)
 
+    def _serve_from_cache(self, indices: np.ndarray) -> np.ndarray:
+        """Return cached images for ``indices``, reading any uncached row from disk."""
+
+        cached = self._cached
+        if cached is None:
+            raise RuntimeError("_serve_from_cache called before a preread populated the cache")
+        if self._cache_slot_of_position is None:
+            return cached[indices]
+        slots = self._cache_slot_of_position[indices]
+        missing = slots < 0
+        if not missing.any():
+            return cached[slots]
+        # A caller asked for a row outside the preread subset. Serve what is
+        # cached and read the rest, rather than returning the wrong image.
+        out = np.empty((indices.size, self._image_size, self._image_size), dtype=self._file_dtype)
+        present = ~missing
+        if present.any():
+            out[present] = cached[slots[present]]
+        missing_positions = np.unique(indices[missing])
+        read = self._read_positions_coalesced(missing_positions)
+        lookup = np.full(self._num_images, -1, dtype=np.int64)
+        lookup[missing_positions] = np.arange(missing_positions.size, dtype=np.int64)
+        out[missing] = read[lookup[indices[missing]]]
+        return out
+
     @nvtx.annotate("MRCLoader._load", color="blue", domain=NVTX_DOMAIN_DATA_IO)
     def _load(self, indices: np.ndarray) -> np.ndarray:
         """Load images from MRC file."""
         if self._cached is not None:
             # Multi-file wrappers call ``_load`` directly; serve preread stacks here too.
-            return self._cached[np.asarray(indices)]
+            return self._serve_from_cache(np.asarray(indices))
         file_idx = self._file_indices[indices]
         if len(file_idx) == 0:
             return np.empty((0, self._image_size, self._image_size), dtype=self._file_dtype)
@@ -601,9 +713,7 @@ class MRCLoader(ImageLoader):
                 source_positions = read_idx.astype(np.int64, copy=False) - int(sorted_idx[0])
                 return _permute_image_rows_in_place(data, source_positions)
             else:
-                read_output = np.empty(
-                    (len(read_idx), self._image_size, self._image_size), dtype=self._file_dtype
-                )
+                read_output = np.empty((len(read_idx), self._image_size, self._image_size), dtype=self._file_dtype)
                 with nvtx.annotate("random_access_read", color="red", domain=NVTX_DOMAIN_DATA_IO):
                     with open(self._filepath, "rb") as f:
                         for i, idx in enumerate(read_idx):
@@ -663,12 +773,14 @@ class MultiMRCLoader(ImageLoader):
         ext_swaps: dict[str, str] = {}  # original -> swapped path
         for filepath in self._file_map["mrc_file"].unique():
             try:
-                self._loaders[filepath] = MRCLoader(filepath, lazy=True, skip_staging=skip_staging)
+                # ``preread=False``: this wrapper's metadata, not the file's image
+                # count, decides which rows are worth reading (see _preread_selection).
+                self._loaders[filepath] = MRCLoader(filepath, lazy=True, skip_staging=skip_staging, preread=False)
             except FileNotFoundError:
                 # Try .mrc <-> .mrcs swap (common in cryo-EM workflows)
                 swapped = _swap_mrc_ext(filepath)
                 if swapped and os.path.isfile(swapped):
-                    self._loaders[filepath] = MRCLoader(swapped, lazy=True, skip_staging=skip_staging)
+                    self._loaders[filepath] = MRCLoader(swapped, lazy=True, skip_staging=skip_staging, preread=False)
                     ext_swaps[filepath] = swapped
                     logger.info("File not found: %s, using %s instead", filepath, swapped)
                 else:
@@ -746,6 +858,19 @@ class MultiMRCLoader(ImageLoader):
 
         if not lazy:
             self.load_all()
+        elif preread_images_requested():
+            self._preread_selection()
+
+    def _preread_selection(self) -> None:
+        """Preread only the stack rows this wrapper's metadata selects.
+
+        ``_load`` reaches a child through its file rows, so each child is asked
+        for exactly the ``mrc_index`` values that appear in this file map.
+        """
+
+        for filepath, group in self._file_map.groupby("mrc_file", sort=False):
+            rows = group["mrc_index"].to_numpy(dtype=np.int64, copy=False)
+            self._loaders[filepath].preread_positions(rows)
 
     def __repr__(self) -> str:
         n_files = len(self._loaders)
