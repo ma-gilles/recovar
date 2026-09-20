@@ -11992,3 +11992,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(PerImageBackproject,
 
 // Fused sparse pass-2 posterior handlers (needs relion_ampere_inclusive_sum_f32).
 #include "sparse_pass2_posterior.cuh"
+
+// Flat-row translate-and-sum for the device-resident pass-2 M-step
+// (needs relion_score_translate_f32's phase and rotation).
+#include "relion_translate_sum.cuh"
