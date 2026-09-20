@@ -15,6 +15,8 @@ Covered here:
   promotion rather than a 0-d device allocation read for its dtype;
 * the four zero accumulators of the M-step carry are one program per
   capacity class;
+* the chunk operand permutation, reshape and padded-slot mask are one
+  program;
 """
 
 from __future__ import annotations
@@ -146,5 +148,101 @@ def test_zero_block_partials_reuses_one_program_per_class():
     assert rp._zero_block_partials(key) is rp._zero_block_partials(key)
     other = (((7,), jnp.dtype(jnp.float32)),)
     assert rp._zero_block_partials(other) is not rp._zero_block_partials(key)
+
+
+# -------------------------------------------------- chunk operand row prep ---
+
+
+def _chunk_operand_case(seed=0, image_capacity=6, n_valid=4, n_fine_trans=3, pixels=5):
+    rng = np.random.default_rng(seed)
+    shape = (image_capacity, pixels)
+    arrays = rp._ChunkOperandRowInputs(
+        score_input=jnp.asarray(rng.standard_normal(shape) + 1j * rng.standard_normal(shape),
+                                dtype=jnp.complex64),
+        corr_img_score=jnp.asarray(rng.standard_normal(shape), dtype=jnp.float32),
+        highres_xi2_half=jnp.asarray(rng.standard_normal((image_capacity,)), dtype=jnp.float32),
+        shifted_recon=jnp.asarray(
+            rng.standard_normal((image_capacity, n_fine_trans * pixels)), dtype=jnp.complex64
+        ),
+        shifted_noise=jnp.asarray(
+            rng.standard_normal((image_capacity, n_fine_trans * pixels)), dtype=jnp.complex64
+        ),
+        ctf2_over_nv_recon=jnp.asarray(rng.standard_normal(shape), dtype=jnp.float32),
+        direct_ctf_rfloat_recon=None,
+        processed_score_half_for_noise=jnp.asarray(rng.standard_normal(shape), dtype=jnp.float32),
+        relion_norm_high_shell=None,
+        raw_translated_wavg_rectangle=jnp.asarray(
+            rng.standard_normal((image_capacity, n_fine_trans, pixels)), dtype=jnp.float32
+        ),
+    )
+    permutation = jnp.asarray(rng.permutation(image_capacity), dtype=jnp.int32)
+    valid_images = jnp.asarray(np.arange(image_capacity) < n_valid, dtype=bool)
+    exact_positions = jnp.asarray([0, 2, 4], dtype=jnp.int32)
+    return arrays, permutation, valid_images, exact_positions, image_capacity, n_fine_trans
+
+
+def _chunk_operand_rows_loose(arrays, permutation, valid_images, exact_positions,
+                              image_capacity, n_fine_trans):
+    """The expression the fold replaces, statement for statement."""
+
+    def take(values):
+        return None if values is None else rp._zero_padded_images(
+            jnp.asarray(values)[permutation], valid_images
+        )
+
+    raw = take(arrays.raw_translated_wavg_rectangle)
+    return (
+        take(arrays.score_input),
+        take(arrays.corr_img_score),
+        None if arrays.highres_xi2_half is None else take(arrays.highres_xi2_half),
+        take(arrays.shifted_recon.reshape(image_capacity, n_fine_trans, -1)),
+        take(arrays.shifted_noise.reshape(image_capacity, n_fine_trans, -1)),
+        take(arrays.ctf2_over_nv_recon),
+        take(arrays.direct_ctf_rfloat_recon),
+        take(arrays.processed_score_half_for_noise),
+        take(arrays.relion_norm_high_shell),
+        raw,
+        raw[:, :, exact_positions],
+    )
+
+
+def test_chunk_operand_rows_match_the_loose_dispatch_bitwise():
+    case = _chunk_operand_case()
+    arrays, permutation, valid_images, exact_positions, capacity, n_trans = case
+    folded = rp._chunk_operand_rows(
+        arrays, permutation, valid_images, exact_positions,
+        image_capacity=capacity, n_fine_trans=n_trans,
+    )
+    loose = _chunk_operand_rows_loose(*case)
+    assert len(folded) == len(loose)
+    for got, want in zip(folded, loose):
+        assert _same(got, want)
+
+
+def test_chunk_operand_rows_zero_the_padded_slots():
+    case = _chunk_operand_case(seed=3, image_capacity=6, n_valid=4)
+    arrays, permutation, valid_images, exact_positions, capacity, n_trans = case
+    folded = rp._chunk_operand_rows(
+        arrays, permutation, valid_images, exact_positions,
+        image_capacity=capacity, n_fine_trans=n_trans,
+    )
+    for value in folded:
+        if value is None:
+            continue
+        assert np.all(np.asarray(value)[4:] == 0)
+
+
+def test_chunk_operand_rows_issue_no_eager_dispatch():
+    case = _chunk_operand_case(seed=5)
+    arrays, permutation, valid_images, exact_positions, capacity, n_trans = case
+    rp._chunk_operand_rows(arrays, permutation, valid_images, exact_positions,
+                           image_capacity=capacity, n_fine_trans=n_trans)
+    with _DispatchCounter() as folded:
+        rp._chunk_operand_rows(arrays, permutation, valid_images, exact_positions,
+                               image_capacity=capacity, n_fine_trans=n_trans)
+    with _DispatchCounter() as loose:
+        _chunk_operand_rows_loose(*case)
+    assert folded.count == 0, folded.by_primitive
+    assert loose.count >= 30, loose.by_primitive
 
 

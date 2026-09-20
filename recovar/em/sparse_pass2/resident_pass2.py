@@ -1026,6 +1026,68 @@ def _reorder_permutation(fetched_indices, requested_indices, capacity: int) -> n
     return order
 
 
+class _ChunkOperandRowInputs(NamedTuple):
+    """The per-chunk operands that are permuted into row order and zero-padded.
+
+    Each optional field is ``None`` on the paths that do not produce it;
+    ``None`` is a pytree structure, so those paths key their own program
+    rather than carry a dead operand.
+    """
+
+    score_input: jax.Array
+    corr_img_score: jax.Array
+    highres_xi2_half: jax.Array | None
+    shifted_recon: jax.Array
+    shifted_noise: jax.Array
+    ctf2_over_nv_recon: jax.Array
+    direct_ctf_rfloat_recon: jax.Array | None
+    processed_score_half_for_noise: jax.Array
+    relion_norm_high_shell: jax.Array | None
+    raw_translated_wavg_rectangle: jax.Array
+
+
+@partial(jax.jit, static_argnames=("image_capacity", "n_fine_trans"))
+def _chunk_operand_rows(
+    arrays: _ChunkOperandRowInputs,
+    permutation: jax.Array,
+    valid_images: jax.Array,
+    exact_positions: jax.Array,
+    *,
+    image_capacity: int,
+    n_fine_trans: int,
+) -> tuple:
+    """Permute a chunk's operands into row order and zero the padded slots.
+
+    Same statements, same order, same dtypes as the loose dispatch: two
+    reshapes, ten permutation gathers, ten ``where`` masks and one rectangle
+    gather. None of it is arithmetic, so no value can move; what leaves the
+    host is the dispatch count. Eagerly, ``values[permutation]`` is five
+    primitives rather than one, because JAX normalizes a fancy index
+    (``add``, ``broadcast_in_dim``, ``select_n``) before every gather, and the
+    resident local pass runs this once per chunk.
+    """
+
+    def take(values):
+        return None if values is None else _zero_padded_images(
+            values[permutation], valid_images
+        )
+
+    raw_translated_wavg_rectangle = take(arrays.raw_translated_wavg_rectangle)
+    return (
+        take(arrays.score_input),
+        take(arrays.corr_img_score),
+        take(arrays.highres_xi2_half),
+        take(arrays.shifted_recon.reshape(image_capacity, n_fine_trans, -1)),
+        take(arrays.shifted_noise.reshape(image_capacity, n_fine_trans, -1)),
+        take(arrays.ctf2_over_nv_recon),
+        take(arrays.direct_ctf_rfloat_recon),
+        take(arrays.processed_score_half_for_noise),
+        take(arrays.relion_norm_high_shell),
+        raw_translated_wavg_rectangle,
+        raw_translated_wavg_rectangle[:, :, exact_positions],
+    )
+
+
 def _zero_padded_images(values, valid_images):
     """Zero the padded image slots of a capacity-shaped operand.
 
@@ -2011,22 +2073,37 @@ def _prepare_chunk_reconstruction_operands(
         np.arange(image_capacity) < n_valid_images, dtype=bool
     )
 
-    def take(values):
-        return None if values is None else _zero_padded_images(
-            jnp.asarray(values)[permutation], valid_images
-        )
-
-    score_input = take(score_input)
-    corr_img_score = take(corr_img_score)
-    highres_xi2_half = None if highres_xi2_half is None else take(highres_xi2_half)
-    shifted_recon = take(shifted_recon.reshape(image_capacity, n_fine_trans, -1))
-    shifted_noise = take(shifted_noise.reshape(image_capacity, n_fine_trans, -1))
-    ctf2_over_nv_recon = take(ctf2_over_nv_recon)
-    direct_ctf_rfloat_recon = take(direct_ctf_rfloat_recon)
-    processed_image_half = take(processed_score_half_for_noise)
-    relion_norm_high_shell = take(relion_norm_high_shell)
-    raw_translated_wavg_rectangle = take(raw_translated_wavg_rectangle)
-    raw_translated_wavg_for_atomic = raw_translated_wavg_rectangle[:, :, exact_positions_device]
+    (
+        score_input,
+        corr_img_score,
+        highres_xi2_half,
+        shifted_recon,
+        shifted_noise,
+        ctf2_over_nv_recon,
+        direct_ctf_rfloat_recon,
+        processed_image_half,
+        relion_norm_high_shell,
+        raw_translated_wavg_rectangle,
+        raw_translated_wavg_for_atomic,
+    ) = _chunk_operand_rows(
+        _ChunkOperandRowInputs(
+            score_input=score_input,
+            corr_img_score=corr_img_score,
+            highres_xi2_half=highres_xi2_half,
+            shifted_recon=shifted_recon,
+            shifted_noise=shifted_noise,
+            ctf2_over_nv_recon=ctf2_over_nv_recon,
+            direct_ctf_rfloat_recon=direct_ctf_rfloat_recon,
+            processed_score_half_for_noise=processed_score_half_for_noise,
+            relion_norm_high_shell=relion_norm_high_shell,
+            raw_translated_wavg_rectangle=raw_translated_wavg_rectangle,
+        ),
+        permutation,
+        valid_images,
+        exact_positions_device,
+        image_capacity=int(image_capacity),
+        n_fine_trans=int(n_fine_trans),
+    )
     if int(shifted_recon.shape[-1]) != int(n_recon_windowed):
         raise ValueError(
             "reconstruction tile pixel count does not match the reconstruction window: "
