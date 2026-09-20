@@ -83,6 +83,56 @@ identified native libraries. Follow the local GPU0 reservation and scoped
 and [agent workflow](agent_workflow.md). Repeat checks only for changed behavior,
 failures, unresolved concerns or required qualification.
 
+## K=1 auto-refine speed program (September 18-20, 2026)
+
+Active conclusion: on the 10k EMPIAR-10097 fixture at 256 px on one H100, the
+device-resident K=1 candidate runs the cold auto-refine in 1087-1249 s against
+RELION's 617-678 s band, **1.68x at matched iteration count and 1.81x at the
+median**, from 3.26x at the program's start; the unchanged compact engine is
+2.9x. Quality is neutral: regime-matched FSC-AUC against RELION's per-iteration
+maps agrees with the control to 0.0011 at orders 2 and 3, and the order-4
+difference is explained entirely by how many order-3 iterations preceded, not by
+the engine. Speed work therefore continues from a quality-accepted checkpoint
+**for this fixture only**; the 100k/256 K=1 and exactly-K=4 completion gates
+above are untouched by this program and remain open.
+
+Per-iteration cost is now shape-dependent rather than uniformly behind. RELION's
+current-size and order schedule is identical to ours iteration by iteration, and
+against it an iteration that repeats an already-compiled shape costs 0.81-0.99x
+RELION while an iteration that introduces a new shape costs 1.34-1.98x. Four of
+seventeen iterations are true repeats, so nearly the whole remaining factor is
+paid at shape transitions and in the final all-data iteration.
+
+The three open levers, largest first:
+
+* **The final all-data iteration**, 178-195 s against RELION's rough 60-75. The
+  local pass-2 route pins `use_translate_sum_kernel=False` and takes its weighted
+  sums from XLA, so at current size 256 the CUDA translate-and-sum and Wavg
+  kernels that serve the global route do not run at all. Node-granularity traces
+  put 64.6 s of the 71.2 s of per-half GPU work in XLA fusions and only 6.6 s in
+  our kernels.
+* **First sight of a new shape.** A warm persistent compilation cache removes the
+  whole XLA-compile part of it; whether production runs warm is a user decision,
+  and the gate here runs cold. Hiding compile behind pass one was measured and
+  rejected: it regressed the new-size regime by 60 s.
+* **Convergence trajectory.** The candidate takes 18-23 iterations where the
+  control takes 17-18 and RELION 17, all of the excess at order 3, where the
+  hidden-variable stall test misses its 3 percent window in our favour. This is a
+  parity question, not a speed one.
+
+Next check: the four-arm qualification at the merged head (controls bracketing
+the native-projector and device-projector candidates) decides whether the
+projector default flips, and the full-box M-step needs the kernel path before its
+130 s can be claimed. Evidence, job identities and the ticket board are in the
+[coordination archive](/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/pr179_coordination/handoffs/em_speed_phase0_budget_20260918.md).
+
+A durable correctness finding came out of this program: the BPref accumulator can
+become non-finite on the compact engine, seen three times at iterations 2, 9 and
+15 on three different GPUs, once as a CUDA illegal address under the platform
+allocator. The once-per-iteration accumulator guard is now on by default in raise
+mode, at a measured cost inside the wall band, so the failure stops located
+instead of producing a silently corrupt map. The mechanism is an open defect.
+
 ## Historical evidence
 
 The [previous status](https://github.com/ma-gilles/recovar-experiments/blob/5dc0795a8fb2f96ec994e29937951f7488df5c4d/docs/development/em_status_20260916_e4bca3705.md) preserves the detailed
