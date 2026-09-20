@@ -2646,7 +2646,14 @@ def refine_single_volume(
                 Ft_ctf_1=Ft_ctf_1,
             )
 
-        if finite_check.half_accumulator_guard_enabled():
+        _half_accumulator_guard_mode = finite_check.half_accumulator_guard_mode()
+        if iteration == 0:
+            logger.info(
+                "BPref accumulator guard (%s): mode=%s",
+                finite_check.HALF_ACCUMULATOR_GUARD_ENV,
+                _half_accumulator_guard_mode,
+            )
+        if _half_accumulator_guard_mode != "off":
             # Before the join, so a report names the half that is actually
             # damaged rather than the one the join copied it into.
             finite_check.check_half_accumulators(
