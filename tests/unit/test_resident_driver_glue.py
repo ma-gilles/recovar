@@ -54,6 +54,7 @@ def _spec(**overrides):
         use_translate_sum_kernel=False,
         bpref_recon_operand=False,
         kernel_ctf_probs=False,
+        wavg_power_per_image=False,
         block_unroll=1,
         static_block_trip=False,
     )

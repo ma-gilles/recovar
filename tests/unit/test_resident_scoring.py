@@ -445,18 +445,17 @@ def test_resident_raw_diff2_matches_the_compact_engine_rows(
         assert fused_mismatches == 0, (
             f"{fused_mismatches}/{fused_cells} cells differ from the compact fused-translate scorer"
         )
-        if current_size < IMAGE_SHAPE[0]:
-            # A production score window never contains the ky = -cs/2 row, and
-            # without it the in-kernel and pre-shift translations agree bitwise.
-            assert max_ulp == 0, f"rectangular pre-shifted path is {max_ulp} ULP away"
-        else:
-            # The full half does contain that row, where the two translate
-            # conventions differ by construction (see the focused test below).
-            assert max_ulp > 0, (
-                "the full half is expected to disagree on the ky = -N/2 row; "
-                "if it no longer does, the conventions were reconciled and this "
-                "test and the T6 report should be updated"
-            )
+        # A production score window never contains the ky = -cs/2 row, and the
+        # full half does. Both agree bitwise since P4-B's Nyquist repair
+        # (96fc45a7b), which gave the translate paths RELION's row label
+        # ip = (i < XSIZE) ? i : i - YSIZE, so the in-kernel and pre-shift
+        # translations now use one convention everywhere.
+        #
+        # This assertion used to require max_ulp > 0 at the full half and said
+        # in its own message that reconciling the conventions should update it.
+        # That is what happened; the focused test below, which drops that row
+        # and requires the rest to agree, is unchanged and still passes.
+        assert max_ulp == 0, f"rectangular pre-shifted path is {max_ulp} ULP away"
 
 
 @pytest.mark.gpu
