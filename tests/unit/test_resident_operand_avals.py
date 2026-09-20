@@ -40,8 +40,9 @@ DTYPES = dict(
     score_complex_dtype=jnp.complex64,
     score_real_dtype=jnp.float32,
     acc_real_dtype=jnp.float32,
-    # float64 to match what the admission check assumes for the exact RELION
-    # CTF; see the constructor's docstring for why that is not yet settled.
+    # float64 because that is what the source places: relion_ctf.py returns the
+    # exact RELION CTF as binary64 and the window slice does not cast it, so the
+    # admission check's rfloat_ctf_bytes=8 is exact rather than conservative.
     rfloat_ctf_dtype=jnp.float64,
 )
 
@@ -106,6 +107,32 @@ def test_the_dtypes_are_the_callers():
     # these two are not policy-dependent
     assert operands.scale.dtype == jnp.dtype(jnp.float32)
     assert operands.group_ids.dtype == jnp.dtype(jnp.int32)
+
+
+def test_the_avals_agree_with_the_byte_estimate_in_the_production_combination():
+    """float32 images with source-faithful normalization on: the norm high-shell
+    term is float64 while every other real operand is float32. Both the byte
+    estimate and the avals have to know that, or the admission check admits a
+    half whose operands are four bytes per image larger than it thought."""
+
+    operands = resident_half_operand_avals(
+        **SHAPE_ARGS,
+        **DTYPES,
+        norm_high_shell_dtype=jnp.float64,
+        has_recon_weight=True,
+        has_direct_ctf_rfloat=True,
+    )
+    counted = 0
+    for name in ARRAY_FIELDS:
+        value = getattr(operands, name)
+        if value is None:
+            continue
+        counted += int(np.prod(value.shape)) * jnp.dtype(value.dtype).itemsize
+    estimate = resident_half_operand_bytes(**SHAPE_ARGS, norm_high_shell_bytes=8)
+    assert counted == estimate, (
+        f"the avals sum to {counted} bytes and the admission check estimates "
+        f"{estimate} in the production dtype combination"
+    )
 
 
 def test_the_avals_agree_with_the_byte_estimate():

@@ -168,6 +168,7 @@ from recovar.em.sparse_pass2.sparse_pass2_projection_blocks import (
 from recovar.em.sparse_pass2.sparse_pass2_scoring import (
     _relion_cuda_fine_full_to_compact_lookup,
     _relion_powerclass_noise_terms,
+    relion_powerclass_noise_dtypes,
 )
 from recovar.em.sparse_pass2.sparse_pass2_wavg import (
     _make_relion_wavg_rectangle,
@@ -1741,6 +1742,10 @@ def compute_pass2_stats_resident(
     # over the half produces the same rows; the chunk loop then gathers them.
     resident_operands = None
     if _resident_operands_requested():
+        _, _norm_high_shell_dtype = relion_powerclass_noise_dtypes(
+            real_dtype=precision_policy.score_real_dtype,
+            source_faithful_spectrum_norm=resolved_spectrum_norm,
+        )
         operand_bytes = resident_half_operand_bytes(
             n_images=int(n_images),
             n_score_pixels=int(n_windowed),
@@ -1749,6 +1754,7 @@ def compute_pass2_stats_resident(
             n_fine_trans=int(n_fine_trans),
             score_complex_bytes=np.dtype(precision_policy.score_complex_dtype).itemsize,
             real_bytes=np.dtype(precision_policy.score_real_dtype).itemsize,
+            norm_high_shell_bytes=np.dtype(_norm_high_shell_dtype).itemsize,
         )
         budget_bytes = resident_operands_max_bytes(device_memory_bytes)
         if operand_bytes > budget_bytes:
@@ -1795,6 +1801,7 @@ def compute_pass2_stats_resident(
                             score_complex_dtype=precision_policy.score_complex_dtype,
                             score_real_dtype=precision_policy.score_real_dtype,
                             acc_real_dtype=jnp.float64 if use_float64_scoring else jnp.float32,
+                            norm_high_shell_dtype=_norm_high_shell_dtype,
                             has_recon_weight=presence.has_recon_weight,
                             has_direct_ctf_rfloat=presence.has_direct_ctf_rfloat,
                             has_highres_xi2=presence.has_highres_xi2,

@@ -62,6 +62,7 @@ from recovar.em.helpers.half_spectrum import make_shell_indices_half
 from recovar.em.sparse_pass2.sparse_pass2_bucket_io import prepare_unshifted_bucket_operands
 from recovar.em.sparse_pass2.sparse_pass2_scoring import (
     _relion_powerclass_noise_terms,
+    relion_powerclass_noise_dtypes,
     relion_powerclass_noise_presence,
 )
 from recovar.em.sparse_pass2.sparse_pass2_wavg import _relion_cuda_translate_wavg_norm_images
@@ -209,6 +210,7 @@ def resident_half_operand_bytes(
     score_complex_bytes: int = 8,
     real_bytes: int = 4,
     rfloat_ctf_bytes: int = 8,
+    norm_high_shell_bytes: int | None = None,
 ) -> int:
     """Host estimate of the resident operand bytes, before any device work.
 
@@ -217,6 +219,11 @@ def resident_half_operand_bytes(
     """
 
     n_images = int(n_images)
+    # The four per-image scalars are highres_Xi2, the norm high shell, the scale
+    # and the group id. Only the norm term can be wider than the policy's real
+    # dtype: source-faithful normalization accumulates it in float64.
+    if norm_high_shell_bytes is None:
+        norm_high_shell_bytes = real_bytes
     return int(
         n_images
         * (
@@ -225,7 +232,8 @@ def resident_half_operand_bytes(
             * (2 * int(score_complex_bytes) + 2 * int(real_bytes) + int(rfloat_ctf_bytes))
             + int(n_half_pixels) * int(score_complex_bytes)
             + int(n_fine_trans) * int(real_bytes)
-            + 4 * int(real_bytes)
+            + 3 * int(real_bytes)
+            + int(norm_high_shell_bytes)
         )
     )
 
@@ -321,6 +329,7 @@ def resident_half_operand_avals(
     score_real_dtype,
     acc_real_dtype,
     rfloat_ctf_dtype=None,
+    norm_high_shell_dtype=None,
     has_recon_weight: bool,
     has_direct_ctf_rfloat: bool,
     has_highres_xi2: bool = True,
@@ -339,6 +348,14 @@ def resident_half_operand_avals(
     precision policy owns them and a second copy of that decision would be a
     second place to get it wrong; ``has_*`` say which optional operands the
     configuration produces.
+
+    ``norm_high_shell_dtype`` is separate because the norm high-shell term is
+    not the policy's real dtype in production: source-faithful normalization
+    accumulates it in float64 while ``highres_Xi2`` stays float32. Leave it
+    ``None`` only when the caller knows the two agree; the driver takes it from
+    :func:`~recovar.em.sparse_pass2.sparse_pass2_scoring.relion_powerclass_noise_dtypes`.
+    Getting this wrong is what the driver's after-the-fact comparison caught on
+    2026-09-20, before any measurement was believed.
 
     ``rfloat_ctf_dtype`` is separate and defaults to float64 because that is
     what :func:`resident_half_operand_bytes` assumes for the exact RELION CTF
@@ -384,7 +401,12 @@ def resident_half_operand_avals(
         ),
         processed_image_half=aval(half_shape, score_complex_dtype),
         relion_norm_high_shell=(
-            aval(per_image, score_real_dtype) if has_relion_norm_high_shell else None
+            aval(
+                per_image,
+                score_real_dtype if norm_high_shell_dtype is None else norm_high_shell_dtype,
+            )
+            if has_relion_norm_high_shell
+            else None
         ),
         scale=aval(per_image, jnp.float32),
         group_ids=aval(per_image, jnp.int32),

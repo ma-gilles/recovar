@@ -50,6 +50,7 @@ from recovar.em.sparse_pass2.resident_operands import (  # noqa: E402
 )
 from recovar.em.sparse_pass2.sparse_pass2_scoring import (  # noqa: E402
     _relion_powerclass_noise_terms,
+    relion_powerclass_noise_dtypes,
     relion_powerclass_noise_presence,
 )
 
@@ -141,6 +142,54 @@ def test_the_powerclass_predicate_agrees_with_the_function_that_decides(
         current_size=current_size,
     )
     assert predicted == (xi2 is not None, norm is not None)
+
+
+@pytest.mark.parametrize("real_dtype", [jnp.float32, jnp.float64])
+@pytest.mark.parametrize("source_faithful", [False, True])
+def test_the_powerclass_dtypes_agree_with_the_function_that_produces_them(
+    real_dtype, source_faithful
+):
+    """The two terms do not share a dtype in production.
+
+    `highres_Xi2` keeps the image's real dtype; the norm high-shell term is
+    accumulated in float64 under source-faithful normalization. Production runs
+    float32 images with that mode on, so predicting the norm term from the
+    policy's real dtype is wrong there. It was, and the resident driver's own
+    after-the-fact comparison is what reported it, in a run, on 2026-09-20.
+    """
+
+    complex_dtype = jnp.complex64 if jnp.dtype(real_dtype) == jnp.float32 else jnp.complex128
+    images = jnp.asarray(
+        np.random.default_rng(0).normal(size=(3, 8 * 5)), dtype=complex_dtype
+    )
+    xi2, norm = _relion_powerclass_noise_terms(
+        images,
+        image_shape=(8, 8),
+        current_size=6,
+        use_exact_relion_gaussian=True,
+        accumulate_noise=True,
+        source_faithful_spectrum_norm=source_faithful,
+    )
+    predicted = relion_powerclass_noise_dtypes(
+        real_dtype=real_dtype, source_faithful_spectrum_norm=source_faithful
+    )
+    assert predicted == (jnp.dtype(xi2.dtype), jnp.dtype(norm.dtype))
+
+
+def test_the_production_combination_has_two_different_dtypes():
+    """Guard the case that actually broke: float32 images, source-faithful on."""
+
+    xi2_dtype, norm_dtype = relion_powerclass_noise_dtypes(
+        real_dtype=jnp.float32, source_faithful_spectrum_norm=True
+    )
+    assert xi2_dtype == jnp.dtype(jnp.float32)
+    assert norm_dtype == jnp.dtype(jnp.float64)
+
+
+def test_the_avals_take_the_norm_dtype_from_the_caller():
+    operands = _half_avals(norm_high_shell_dtype=jnp.float64)
+    assert operands.relion_norm_high_shell.dtype == jnp.dtype(jnp.float64)
+    assert operands.highres_xi2_half.dtype == jnp.dtype(jnp.float32)
 
 
 @pytest.mark.parametrize("exact_bpref", [False, True])
