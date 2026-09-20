@@ -570,3 +570,83 @@ def test_the_optional_operands_against_a_star_backed_preparation(
         assert jnp.dtype(real.relion_norm_high_shell.dtype) == jnp.dtype(
             jnp.float64 if source_faithful else jnp.float32
         )
+
+
+# ------------------------------- the exact-BPref guard is not resident-specific ---
+
+
+def test_exact_bpref_is_refused_by_name_on_a_dataset_that_is_not_production_shaped():
+    """The refusal I first mistook for a resident-path bug.
+
+    Exact BPref needs two things a mock dataset does not have: a STAR to read
+    the source-precision CTF from, and the RELION CUDA preprocess backend,
+    without which `prepare_batch_preprocess_operands` produces no preprocess
+    kwargs. Either is refused by name. Which one fires first is not the point;
+    that the refusal is specific and correct is.
+    """
+
+    from test_resident_operands import _case
+
+    from recovar.em.sparse_pass2.sparse_pass2_bucket_io import (
+        prepare_unshifted_bucket_operands,
+    )
+
+    case = _case(relion_angles=True)
+    kwargs = dict(case["bucket_io_kwargs"])
+    dataset = case["dataset"]
+    with pytest.raises(
+        ValueError,
+        match="RELION CUDA preprocessing|STAR-backed dataset",
+    ):
+        prepare_unshifted_bucket_operands(
+            dataset,
+            jnp.zeros((2, dataset.image_size), dtype=jnp.complex64),
+            np.zeros((2, 9), dtype=np.float32),
+            np.arange(2),
+            noise_variance_half=kwargs["noise_variance_half"],
+            config=kwargs["config"],
+            score_with_masked_images=True,
+            image_corrections=None,
+            scale_corrections=None,
+            image_pre_shifts=None,
+            use_float64_scoring=False,
+            window_indices=case["window_indices"],
+            relion_exact_bpref_operands=True,
+        )
+
+
+def test_the_per_chunk_oracle_meets_the_same_guard():
+    """Why declaring exact BPref unsupported in the resident path would not help.
+
+    The driver's fallback for a configuration the resident preparation refuses
+    is `_prepare_bucket_io`, the per-chunk oracle. It reaches the same guard
+    through the same helper, so it refuses identically and falling back buys
+    nothing. Read out of the bytecode rather than out of the source, because a
+    reading of the source is how I got this wrong the first time.
+    """
+
+    from recovar.em.sparse_pass2 import sparse_pass2_bucket_io as io
+
+    assert "prepare_unshifted_bucket_operands" in io._prepare_bucket_io.__code__.co_names
+
+
+def test_the_backend_pairing_is_enforced_before_pass_2():
+    """Exact BPref never meets a dataset without the backend it needs.
+
+    `refine_single_volume` refuses source-faithful normalization, which is what
+    turns exact BPref on by default, against any backend but `relion_cuda`, and
+    its own comment says it fails there rather than inside the first sparse
+    pass 2. So the configuration that trips the guard above cannot reach pass 2
+    at all, which is the last reason the resident path needs no refusal of its
+    own.
+    """
+
+    import inspect
+
+    from recovar.em.refinement.iteration_loop import refine_single_volume
+
+    source = inspect.getsource(refine_single_volume)
+    assert 'relion_fourier_backend", None) not in (None, "relion_cuda")' in source, (
+        "the upstream pairing guard is gone from refine_single_volume"
+    )
+    assert "require RELION CUDA image preprocessing" in source
