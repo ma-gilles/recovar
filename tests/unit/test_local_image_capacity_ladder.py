@@ -379,14 +379,38 @@ def test_padding_the_image_axis_does_not_change_any_engine_output():
     padded = _result_fields(_run_at_capacity(dataset, layout, mean, noise_variance, 16))
     repeat = _result_fields(_run_at_capacity(dataset, layout, mean, noise_variance, 16))
 
+    from recovar.em.helpers.deterministic_reduce import (
+        deterministic_reductions_enabled,
+    )
+
     assert set(unpadded) == set(padded) == set(repeat)
     for name in sorted(unpadded):
         if name in _ACCUMULATOR_FIELDS:
             continue
-        np.testing.assert_array_equal(
-            np.asarray(unpadded[name]),
-            np.asarray(padded[name]),
-            err_msg=f"image-axis padding changed {name}",
+        left = np.asarray(unpadded[name])
+        right = np.asarray(padded[name])
+        if left.dtype.kind not in "fc" or deterministic_reductions_enabled():
+            # Poses, assignments, counts and sample indices are bitwise always,
+            # and so is everything else once the racing reductions are pinned.
+            np.testing.assert_array_equal(
+                left, right, err_msg=f"image-axis padding changed {name}"
+            )
+            continue
+        # The float per-image scores ride the same reductions the two
+        # accumulators below do. Holding them to bitwise is session-dependent:
+        # this assertion passes in a long GPU session and fails in an isolated
+        # run at one float32 ulp, at this commit and at 4edb611eb before the
+        # P3-E merge. The band is the engine's own repeat, measured here, with
+        # one float32 ulp as its floor because a single repeat of a racing sum
+        # can read exactly zero.
+        same = np.asarray(repeat[name])
+        band = np.abs(right.astype(np.float64) - same.astype(np.float64))
+        ulp = np.spacing(np.abs(right).astype(np.float32)).astype(np.float64)
+        moved = np.abs(left.astype(np.float64) - right.astype(np.float64))
+        assert np.all(moved <= np.maximum(band, ulp)), (
+            f"image-axis padding moved {name} by {moved.max()}, outside the "
+            f"engine's own repeat band {band.max()} and one float32 ulp "
+            f"{ulp.max()}"
         )
 
     for name in _ACCUMULATOR_FIELDS:
