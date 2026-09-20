@@ -3988,6 +3988,22 @@ __device__ __forceinline__ float2 relion_coarse_score_translate_f32(
     return make_float2(translated_real, translated_imag);
 }
 
+// RELION's row label for a half image it is not cropping.  ``fftw.h:99-109``
+// sets ``ip = (i < XSIZE) ? i : i - YSIZE`` with ``XSIZE`` the half width, so
+// the Nyquist row of an uncropped half image is ``+N/2``; recovar's centered
+// packed layout stores that same physical row at ``ky = -N/2``.  Every scoring
+// kernel in ``relion_scoring.cuh`` already walks RELION's layout and therefore
+// derives ``+N/2`` itself (``if (y > cs/2) y -= cs``); the translate kernels
+// below take centered indices instead and must convert.  The two labels differ
+// only for non-integer shifts, where ``exp(-i*pi*dy)`` and ``exp(+i*pi*dy)``
+// are conjugates.  A cropped window never contains that row.
+__device__ __forceinline__ int relion_centered_row_to_relion_label(
+    int centered_row,
+    int image_h)
+{
+    return centered_row == -(image_h / 2) ? image_h / 2 : centered_row;
+}
+
 __global__ void relion_translate_score_f32_kernel(
     const float2* images,
     const float* translation_angles,
@@ -4009,7 +4025,8 @@ __global__ void relion_translate_score_f32_kernel(
     int64_t image = batch_translation / translation_count;
     int pixel_index = pixel_indices[pixel_row];
     int x = pixel_index % image_half_width;
-    int y = pixel_index / image_half_width - image_h / 2;
+    int y = relion_centered_row_to_relion_label(
+        pixel_index / image_half_width - image_h / 2, image_h);
     float tx = translation_angles[2 * translation];
     float ty = translation_angles[2 * translation + 1];
     float2 value = images[image * pixel_count + pixel_row];
@@ -4068,7 +4085,8 @@ __global__ void relion_translate_score_f64_kernel(
     int64_t image = batch_translation / translation_count;
     int pixel_index = pixel_indices[pixel_row];
     int x = pixel_index % image_half_width;
-    int y = pixel_index / image_half_width - image_h / 2;
+    int y = relion_centered_row_to_relion_label(
+        pixel_index / image_half_width - image_h / 2, image_h);
     double tx = translation_angles[2 * translation];
     double ty = translation_angles[2 * translation + 1];
     double sine;
@@ -4134,7 +4152,8 @@ __global__ void relion_translate_bpref_f32_kernel(
     int64_t image = batch_translation / translation_count;
     int pixel_index = pixel_indices[pixel_row];
     int x = pixel_index % image_half_width;
-    int y = pixel_index / image_half_width - image_h / 2;
+    int y = relion_centered_row_to_relion_label(
+        pixel_index / image_half_width - image_h / 2, image_h);
     float tx = translation_angles[2 * translation];
     float ty = translation_angles[2 * translation + 1];
     float sine;
@@ -4205,7 +4224,8 @@ __global__ void relion_translate_bpref_f64_kernel(
     int64_t image = batch_translation / translation_count;
     int pixel_index = pixel_indices[pixel_row];
     int x = pixel_index % image_half_width;
-    int y = pixel_index / image_half_width - image_h / 2;
+    int y = relion_centered_row_to_relion_label(
+        pixel_index / image_half_width - image_h / 2, image_h);
     double tx = translation_angles[2 * translation];
     double ty = translation_angles[2 * translation + 1];
     double sine;
@@ -4282,8 +4302,10 @@ __global__ void relion_vdam_mstep_sums_f32_kernel(
         int pixel_index = pixel_indices[pixel_row];
         int x = pixel_index % image_half_width;
         // RECOVAR's centered half-rFFT stores ky=0 in row image_h/2,
-        // exactly as relion_translate_bpref_f32_kernel expects.
-        int y = pixel_index / image_half_width - image_h / 2;
+        // exactly as relion_translate_bpref_f32_kernel expects, and its
+        // Nyquist row at ky=-N/2 carries RELION's +N/2 label.
+        int y = relion_centered_row_to_relion_label(
+            pixel_index / image_half_width - image_h / 2, image_h);
 
         float2 image_value = images[image_pixel];
         float image_ctf = ctf[image_pixel];
