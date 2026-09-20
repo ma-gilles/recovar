@@ -693,9 +693,18 @@ def test_glue_programs_match_the_loose_dispatch(_resident_production_env, monkey
     :func:`test_resident_driver_repeats_itself` measures.
     """
 
+    from recovar.em.helpers.deterministic_reduce import (
+        deterministic_reductions_enabled,
+    )
+
     args = _driver_fixture_args()
     monkeypatch.setenv("RECOVAR_SPARSE_PASS2_RESIDENT_GLUE_JIT", "0")
     loose = rp.compute_pass2_stats_resident(**args)
+    # The loose path's own repeat, in this process: the self-repeat band the
+    # racing accumulators below are read against. It is measured, not assumed,
+    # because the float32 BPref atomics and the CUDA shell binning do not
+    # reproduce between two identical calls.
+    loose_repeat = rp.compute_pass2_stats_resident(**args)
     monkeypatch.setenv("RECOVAR_SPARSE_PASS2_RESIDENT_GLUE_JIT", "1")
     programs = rp.compute_pass2_stats_resident(**args)
 
@@ -719,11 +728,30 @@ def test_glue_programs_match_the_loose_dispatch(_resident_production_env, monkey
             np.asarray(getattr(programs.relion_stats, field)),
             err_msg=field,
         )
+    # ``wsum_sigma2_noise`` and ``wsum_norm_correction`` are shell sums fed by
+    # the CUDA binning scatter, so they are bitwise only when the order is
+    # pinned. Under ``RECOVAR_EM_DETERMINISTIC_REDUCTIONS=1`` that is the
+    # assertion; otherwise each is held to the loose path's own repeat spread
+    # measured just above, never to a fixed tolerance. Holding them to bitwise
+    # without the opt-in is what made this test fail in long GPU sessions at
+    # 3.5e-08 relative on one entry of twelve while passing in isolation.
     for field in ("wsum_sigma2_noise", "wsum_norm_correction"):
-        np.testing.assert_array_equal(
-            np.asarray(getattr(loose.noise_stats, field)),
-            np.asarray(getattr(programs.noise_stats, field)),
-            err_msg=field,
+        candidate = np.asarray(getattr(programs.noise_stats, field), dtype=np.float64)
+        reference = np.asarray(getattr(loose.noise_stats, field), dtype=np.float64)
+        if deterministic_reductions_enabled():
+            np.testing.assert_array_equal(candidate, reference, err_msg=field)
+            continue
+        repeat = np.asarray(getattr(loose_repeat.noise_stats, field), dtype=np.float64)
+        band = np.abs(repeat - reference)
+        # One repeat is one sample of a racing sum and can read exactly zero,
+        # so the band is that sample or one float32 ulp of the value, whichever
+        # is larger. Both are measurements of this reduction, not a tolerance
+        # chosen to pass.
+        ulp = np.spacing(np.abs(reference).astype(np.float32)).astype(np.float64)
+        assert np.all(np.abs(candidate - reference) <= np.maximum(band, ulp)), (
+            f"{field}: max deviation {np.abs(candidate - reference).max()} "
+            f"exceeds the repeat band {band.max()} and one float32 ulp "
+            f"{ulp.max()}"
         )
 
     def rel_l2(a, b):
@@ -732,11 +760,28 @@ def test_glue_programs_match_the_loose_dispatch(_resident_production_env, monkey
         den = float(np.linalg.norm(a))
         return float(np.linalg.norm(a - b) / den) if den else 0.0
 
-    assert rel_l2(loose.Ft_y, programs.Ft_y) < 1e-7
-    assert rel_l2(loose.Ft_ctf, programs.Ft_ctf) < 1e-7
-    assert rel_l2(
-        loose.noise_stats.wsum_img_power, programs.noise_stats.wsum_img_power
-    ) < 1e-7
+    # The maps ride the same racing BPref atomics; their band is the loose
+    # path's own repeat, measured in this process.
+    for name, candidate, reference, repeat in (
+        ("Ft_y", programs.Ft_y, loose.Ft_y, loose_repeat.Ft_y),
+        ("Ft_ctf", programs.Ft_ctf, loose.Ft_ctf, loose_repeat.Ft_ctf),
+        (
+            "wsum_img_power",
+            programs.noise_stats.wsum_img_power,
+            loose.noise_stats.wsum_img_power,
+            loose_repeat.noise_stats.wsum_img_power,
+        ),
+    ):
+        if deterministic_reductions_enabled():
+            np.testing.assert_array_equal(
+                np.asarray(candidate), np.asarray(reference), err_msg=name
+            )
+            continue
+        band = rel_l2(reference, repeat)
+        observed = rel_l2(reference, candidate)
+        assert observed <= max(band, float(np.finfo(np.float32).eps)), (
+            f"{name}: {observed} exceeds the repeat band {band}"
+        )
 
 
 @requires_resident_gpu

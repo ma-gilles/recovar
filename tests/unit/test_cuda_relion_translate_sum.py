@@ -728,7 +728,38 @@ def test_ctf_probs_matches_the_resident_block_reduction(
             logical_pixels=n_pixels,
             with_ctf=True,
         )
-    # At 21 translations both paths sum the mass identically, so the whole
-    # fourth output is bitwise; a shape where the masses differ would show the
-    # reduction gap here rather than a multiply gap.
-    _assert_bitwise(ctf_probs, ctf_ref)
+        # The kernel's own repeat, in this process, is the self-repeat band the
+        # comparison below is read against.
+        _su2, _ma2, _mass2, ctf_probs_repeat = _kernel(
+            cuda_backproject,
+            operands,
+            n_valid_rows=rows,
+            logical_pixels=n_pixels,
+            with_ctf=True,
+        )
+    _assert_bitwise(ctf_probs_repeat, ctf_probs)
+
+    # Both paths form the same per-translation products and differ only in the
+    # order of the sum over translations, so the gap is the rounding of a
+    # 21-term non-negative sum, which is this file's own ``probs_sum_t`` bound.
+    # Holding it to bitwise instead was an observation, not a contract: it held
+    # in most sessions and failed in others at 3.8e-07 relative, because the
+    # XLA side's reduction plan for this expression is not fixed across
+    # sessions.
+    #
+    # ``RECOVAR_EM_DETERMINISTIC_REDUCTIONS=1`` does **not** rescue the bitwise
+    # form here, and that is measured, not assumed: with the flag set, this
+    # comparison still fails, because the flag pins recovar's own racing
+    # scatters and not the XLA reduction inside
+    # ``_resident_block_weighted_sums``. The kernel's self-repeat above is
+    # bitwise in both modes, so what moves is the reference, not the kernel.
+    mass_scale = np.abs(operands["posterior"]).sum(axis=1).astype(np.float64)
+    _assert_close(
+        np.asarray(ctf_probs),
+        np.asarray(ctf_ref),
+        mass_scale[:, None] * np.abs(np.asarray(operands["ctf2"]))[
+            np.asarray(operands["row_image_ids"])
+        ],
+        "ctf_probs",
+        max_ulp_of_scale=_MAX_MASS_ULP_PER_TRANSLATION * 21,
+    )
