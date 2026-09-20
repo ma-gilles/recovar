@@ -2484,7 +2484,7 @@ class _ChunkRowArrays(NamedTuple):
     row_image_local: jax.Array  # int32 [C_R]
     row_fine_rot: jax.Array  # int32 [C_R]
     row_log_prior: jax.Array  # float32 [C_R]
-    row_mask_bits: jax.Array  # uint32 [C_R, W]
+    row_mask_bits: jax.Array  # uint32 [C_R], one packed word per row
     row_mask_mode: jax.Array  # int8 [C_R]
     image_ids: jax.Array  # int32 [C_B], global image id, -1 when padded
     n_valid_rows: jax.Array  # int32 []
