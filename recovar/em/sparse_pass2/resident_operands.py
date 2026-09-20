@@ -50,6 +50,7 @@ import logging
 import os
 from dataclasses import dataclass
 from functools import partial
+from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
@@ -257,6 +258,95 @@ def _require_supported(condition: bool, message: str) -> None:
         )
 
 
+@jax.jit
+def _concatenate_and_reorder(parts: tuple, reorder: jax.Array) -> jax.Array:
+    """Concatenate one named per-batch operand and put it in dataset order.
+
+    Pure data movement: a concatenation and a gather, no arithmetic, so the
+    bytes are the bytes the two eager dispatches produced. As two eager
+    programs this was two traces, two lowerings and two XLA compilations per
+    named operand per half -- 129 of them on the early state, because each name
+    has its own pixel extent and dtype -- where the fused pair is one.
+    """
+
+    return jnp.concatenate(parts, axis=0)[reorder]
+
+
+class _BatchWindowInputs(NamedTuple):
+    """The per-image-batch arrays the window gather and cast consume.
+
+    ``weighted_ctf_half`` and ``ctf_half_rfloat`` are ``None`` on the paths
+    that do not produce them; ``None`` is a pytree structure, so those paths
+    key their own program instead of carrying a dead operand.
+    """
+
+    ctf2_over_nv_half: jax.Array
+    sparse_score_input_half: jax.Array
+    processed_score_half_for_noise: jax.Array
+    recon_input_half: jax.Array
+    weighted_ctf_half: jax.Array | None
+    score_weighted_half: jax.Array
+    ctf2_over_nv_recon_half: jax.Array
+    ctf_half_rfloat: jax.Array | None
+    dc_mask: jax.Array | None
+    score_indices: jax.Array
+    recon_indices: jax.Array
+
+
+@partial(
+    jax.jit,
+    static_argnames=("mask_dc", "score_real_dtype", "score_complex_dtype", "acc_real_dtype"),
+)
+def _batch_window_operands(
+    arrays: _BatchWindowInputs,
+    *,
+    mask_dc: bool,
+    score_real_dtype,
+    score_complex_dtype,
+    acc_real_dtype,
+) -> dict:
+    """The window gather and cast of one image batch, as one program.
+
+    Same statements, same order, same dtypes as the loose dispatch: a DC mask
+    on the score correction, seven ``values[:, indices]`` gathers and their
+    casts. Nothing here is arithmetic, so the values cannot move; what leaves
+    the host is the dispatch count. Each ``values[:, indices]`` was five eager
+    primitives, not one -- JAX normalizes a fancy index eagerly (``add``,
+    ``broadcast_in_dim``, ``select_n``) before the gather -- and the driver
+    runs one of these per image batch per half, which on the early and hp3
+    states was 1400 eager dispatches per iteration for a constant index array.
+
+    ``weighted_ctf_half is None`` selects the non-BPref reconstruction operand
+    and ``ctf_half_rfloat is None`` the path with no direct RFLOAT CTF, exactly
+    as the Python branches did.
+    """
+
+    ctf2_score = arrays.ctf2_over_nv_half
+    if mask_dc:
+        ctf2_score = jnp.where(arrays.dc_mask[None, :], 0.0, ctf2_score)
+    score_indices = arrays.score_indices
+    recon_indices = arrays.recon_indices
+    batch_arrays = {
+        "score_input": arrays.sparse_score_input_half[:, score_indices],
+        "corr_img_score": ctf2_score[:, score_indices].astype(score_real_dtype),
+        "processed_image_half": arrays.processed_score_half_for_noise,
+        "recon_image": jnp.asarray(
+            arrays.recon_input_half[:, recon_indices], dtype=score_complex_dtype
+        ),
+        "noise_image": jnp.asarray(
+            arrays.score_weighted_half[:, recon_indices], dtype=score_complex_dtype
+        ),
+        "ctf2_over_nv_recon": arrays.ctf2_over_nv_recon_half[:, recon_indices],
+    }
+    if arrays.weighted_ctf_half is not None:
+        batch_arrays["recon_weight"] = jnp.asarray(
+            arrays.weighted_ctf_half[:, recon_indices], dtype=acc_real_dtype
+        )
+    if arrays.ctf_half_rfloat is not None:
+        batch_arrays["direct_ctf_rfloat_recon"] = arrays.ctf_half_rfloat[:, recon_indices]
+    return batch_arrays
+
+
 def prepare_resident_half_operands(
     experiment_dataset,
     image_indices,
@@ -377,34 +467,31 @@ def prepare_resident_half_operands(
             **unshifted_kwargs,
         )
 
-        # --- score side: the tail's DC mask, window gather and cast ---------
-        ctf2_score = unshifted.ctf2_over_nv_half
-        if half_spectrum_scoring and not unshifted.use_normalized_cc:
-            ctf2_score = jnp.where(dc_mask[None, :], 0.0, ctf2_score)
-        batch_arrays = {
-            "score_input": unshifted.sparse_score_input_half[:, score_indices],
-            "corr_img_score": ctf2_score[:, score_indices].astype(score_real_dtype),
-            "processed_image_half": unshifted.processed_score_half_for_noise,
-        }
-
-        # --- reconstruction side: the operands the translate primitives take -
-        if relion_exact_bpref_operands:
-            batch_arrays["recon_image"] = jnp.asarray(
-                unshifted.recon_bpref_input_half[:, recon_indices], dtype=score_complex_dtype
-            )
-            batch_arrays["recon_weight"] = jnp.asarray(
-                unshifted.weighted_ctf_half[:, recon_indices], dtype=unshifted.acc_real_dtype
-            )
-        else:
-            batch_arrays["recon_image"] = jnp.asarray(
-                unshifted.recon_weighted_half[:, recon_indices], dtype=score_complex_dtype
-            )
-        batch_arrays["noise_image"] = jnp.asarray(
-            unshifted.score_weighted_half[:, recon_indices], dtype=score_complex_dtype
+        batch_arrays = _batch_window_operands(
+            _BatchWindowInputs(
+                ctf2_over_nv_half=unshifted.ctf2_over_nv_half,
+                sparse_score_input_half=unshifted.sparse_score_input_half,
+                processed_score_half_for_noise=unshifted.processed_score_half_for_noise,
+                recon_input_half=(
+                    unshifted.recon_bpref_input_half
+                    if relion_exact_bpref_operands
+                    else unshifted.recon_weighted_half
+                ),
+                weighted_ctf_half=(
+                    unshifted.weighted_ctf_half if relion_exact_bpref_operands else None
+                ),
+                score_weighted_half=unshifted.score_weighted_half,
+                ctf2_over_nv_recon_half=unshifted.ctf2_over_nv_recon_half,
+                ctf_half_rfloat=unshifted.ctf_half_rfloat,
+                dc_mask=dc_mask,
+                score_indices=score_indices,
+                recon_indices=recon_indices,
+            ),
+            mask_dc=bool(half_spectrum_scoring and not unshifted.use_normalized_cc),
+            score_real_dtype=jnp.dtype(score_real_dtype),
+            score_complex_dtype=jnp.dtype(score_complex_dtype),
+            acc_real_dtype=jnp.dtype(unshifted.acc_real_dtype),
         )
-        batch_arrays["ctf2_over_nv_recon"] = unshifted.ctf2_over_nv_recon_half[:, recon_indices]
-        if unshifted.ctf_half_rfloat is not None:
-            batch_arrays["direct_ctf_rfloat_recon"] = unshifted.ctf_half_rfloat[:, recon_indices]
 
         highres_xi2_half, relion_norm_high_shell = _relion_powerclass_noise_terms(
             unshifted.processed_score_half_for_noise,
@@ -454,8 +541,7 @@ def prepare_resident_half_operands(
             raise ValueError(f"the per-image preparation did not produce {name}")
         if not present or not optional_available.get(name, True):
             return None
-        stacked = jnp.concatenate([batch[name] for batch in batches], axis=0)
-        return stacked[reorder]
+        return _concatenate_and_reorder(tuple(batch[name] for batch in batches), reorder)
 
     if fine_translation_prior_2d is None:
         translation_prior = jnp.zeros((n_images, int(n_fine_trans)), dtype=score_real_dtype)

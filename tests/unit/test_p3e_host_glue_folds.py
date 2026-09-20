@@ -17,6 +17,8 @@ Covered here:
   capacity class;
 * the chunk operand permutation, reshape and padded-slot mask are one
   program;
+* the per-image-batch window gather and the per-half concatenate-and-reorder
+  are one program each.
 """
 
 from __future__ import annotations
@@ -28,6 +30,7 @@ pytest.importorskip("jax")
 import jax
 import jax.numpy as jnp
 
+from recovar.em.sparse_pass2 import resident_operands as ro
 from recovar.em.sparse_pass2 import resident_pass2 as rp
 
 pytestmark = pytest.mark.unit
@@ -246,3 +249,123 @@ def test_chunk_operand_rows_issue_no_eager_dispatch():
     assert loose.count >= 30, loose.by_primitive
 
 
+# ------------------------------------------------- per-batch window gather ---
+
+
+def _window_case(seed=0, n_images=4, half_pixels=11, score=5, recon=4, bpref=True, rfloat=True):
+    rng = np.random.default_rng(seed)
+
+    def complex_half():
+        real = rng.standard_normal((n_images, half_pixels))
+        imag = rng.standard_normal((n_images, half_pixels))
+        return jnp.asarray(real + 1j * imag, dtype=jnp.complex64)
+
+    def real_half():
+        return jnp.asarray(rng.standard_normal((n_images, half_pixels)), dtype=jnp.float32)
+
+    arrays = ro._BatchWindowInputs(
+        ctf2_over_nv_half=real_half(),
+        sparse_score_input_half=complex_half(),
+        processed_score_half_for_noise=real_half(),
+        recon_input_half=complex_half(),
+        weighted_ctf_half=real_half() if bpref else None,
+        score_weighted_half=complex_half(),
+        ctf2_over_nv_recon_half=real_half(),
+        ctf_half_rfloat=real_half() if rfloat else None,
+        dc_mask=jnp.asarray(np.arange(half_pixels) == 0, dtype=bool),
+        score_indices=jnp.asarray(rng.choice(half_pixels, size=score, replace=False),
+                                  dtype=jnp.int32),
+        recon_indices=jnp.asarray(rng.choice(half_pixels, size=recon, replace=False),
+                                  dtype=jnp.int32),
+    )
+    return arrays
+
+
+def _window_loose(arrays, mask_dc, score_real_dtype, score_complex_dtype, acc_real_dtype):
+    """The expression the fold replaces, statement for statement."""
+
+    ctf2_score = arrays.ctf2_over_nv_half
+    if mask_dc:
+        ctf2_score = jnp.where(arrays.dc_mask[None, :], 0.0, ctf2_score)
+    batch = {
+        "score_input": arrays.sparse_score_input_half[:, arrays.score_indices],
+        "corr_img_score": ctf2_score[:, arrays.score_indices].astype(score_real_dtype),
+        "processed_image_half": arrays.processed_score_half_for_noise,
+    }
+    batch["recon_image"] = jnp.asarray(
+        arrays.recon_input_half[:, arrays.recon_indices], dtype=score_complex_dtype
+    )
+    if arrays.weighted_ctf_half is not None:
+        batch["recon_weight"] = jnp.asarray(
+            arrays.weighted_ctf_half[:, arrays.recon_indices], dtype=acc_real_dtype
+        )
+    batch["noise_image"] = jnp.asarray(
+        arrays.score_weighted_half[:, arrays.recon_indices], dtype=score_complex_dtype
+    )
+    batch["ctf2_over_nv_recon"] = arrays.ctf2_over_nv_recon_half[:, arrays.recon_indices]
+    if arrays.ctf_half_rfloat is not None:
+        batch["direct_ctf_rfloat_recon"] = arrays.ctf_half_rfloat[:, arrays.recon_indices]
+    return batch
+
+
+@pytest.mark.parametrize("mask_dc", [True, False])
+@pytest.mark.parametrize("bpref,rfloat", [(True, True), (False, False), (True, False)])
+def test_batch_window_operands_match_the_loose_dispatch_bitwise(mask_dc, bpref, rfloat):
+    arrays = _window_case(seed=1, bpref=bpref, rfloat=rfloat)
+    kwargs = dict(
+        mask_dc=mask_dc,
+        score_real_dtype=jnp.dtype(jnp.float32),
+        score_complex_dtype=jnp.dtype(jnp.complex64),
+        acc_real_dtype=jnp.dtype(jnp.float32),
+    )
+    folded = ro._batch_window_operands(arrays, **kwargs)
+    loose = _window_loose(arrays, **kwargs)
+    assert set(folded) == set(loose)
+    for name in loose:
+        assert _same(folded[name], loose[name]), name
+
+
+def test_batch_window_operands_issue_no_eager_dispatch():
+    arrays = _window_case(seed=2)
+    kwargs = dict(
+        mask_dc=True,
+        score_real_dtype=jnp.dtype(jnp.float32),
+        score_complex_dtype=jnp.dtype(jnp.complex64),
+        acc_real_dtype=jnp.dtype(jnp.float32),
+    )
+    ro._batch_window_operands(arrays, **kwargs)
+    with _DispatchCounter() as folded:
+        ro._batch_window_operands(arrays, **kwargs)
+    with _DispatchCounter() as loose:
+        _window_loose(arrays, **kwargs)
+    assert folded.count == 0, folded.by_primitive
+    # Each ``values[:, indices]`` is five eager primitives, not one: JAX
+    # normalizes the index array before every gather.
+    assert loose.count >= 25, loose.by_primitive
+
+
+# ------------------------------------------------ concatenate and reorder ----
+
+
+def test_concatenate_and_reorder_matches_the_loose_dispatch_bitwise():
+    rng = np.random.default_rng(7)
+    parts = tuple(
+        jnp.asarray(rng.standard_normal((size, 3)), dtype=jnp.float32) for size in (4, 4, 2)
+    )
+    reorder = jnp.asarray(rng.permutation(10), dtype=jnp.int64)
+    folded = ro._concatenate_and_reorder(parts, reorder)
+    loose = jnp.concatenate(list(parts), axis=0)[reorder]
+    assert _same(folded, loose)
+
+
+def test_concatenate_and_reorder_issues_no_eager_dispatch():
+    rng = np.random.default_rng(8)
+    parts = tuple(jnp.asarray(rng.standard_normal((3, 2)), dtype=jnp.float32) for _ in range(4))
+    reorder = jnp.asarray(rng.permutation(12), dtype=jnp.int64)
+    ro._concatenate_and_reorder(parts, reorder)
+    with _DispatchCounter() as folded:
+        ro._concatenate_and_reorder(parts, reorder)
+    with _DispatchCounter() as loose:
+        jnp.concatenate(list(parts), axis=0)[reorder]
+    assert folded.count == 0, folded.by_primitive
+    assert loose.count >= 2, loose.by_primitive
