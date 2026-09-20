@@ -41,6 +41,7 @@ from recovar.em.classification.k_class_results import (
     SparseKClassNoiseStatistics,
 )
 from recovar.em.diagnostics import bpref_diagnostics
+from recovar.em.diagnostics import finite_check
 from recovar.em.diagnostics import norm_scale as norm_scale_diagnostics
 from recovar.em.diagnostics import pass2 as pass2_diagnostics
 from recovar.em.diagnostics.compact_candidate_capture import (
@@ -3006,6 +3007,32 @@ def compute_pass2_stats_sparse_bucketed(
                         relion_x_half=use_relion_x_half_mstep,
                         sequential_translation_reduction=use_sequential_translation_reduction,
                     )
+                    if finite_check.finite_check_enabled():
+                        finite_check.check_bundle(
+                            "mstep-operands-and-sums-chunked",
+                            {
+                                "mstep_probs": mstep_probs,
+                                "shifted_recon_split": shifted_recon_split,
+                                "ctf2_over_nv_recon": ctf2_over_nv_recon,
+                                "summed": summed,
+                                "ctf_probs": ctf_probs,
+                            },
+                            posterior=mstep_probs,
+                            posterior_name="mstep-posterior-chunked",
+                            dominated_by=(
+                                ("ctf_probs", "ctf2_over_nv_recon", 1e-3),
+                                ("summed", "shifted_recon_split", 1e-3),
+                            ),
+                            context=finite_check.describe_context(
+                                iteration=bpref_diagnostics._bpref_contribution_context.get("iteration"),
+                                half=bpref_diagnostics._bpref_contribution_context.get("half"),
+                                bucket_images=int(np.asarray(image_indices).size),
+                                first_image=int(np.asarray(image_indices).reshape(-1)[0]),
+                                chunk=chunk_idx,
+                                current_size=current_size,
+                            ),
+                            image_ids=image_indices,
+                        )
                     if mstep_subtract_ctf_projection:
                         summed = subtract_projected_reference_from_sparse_mstep_sums(
                             summed,
@@ -4405,6 +4432,35 @@ def compute_pass2_stats_sparse_bucketed(
                 relion_x_half=use_relion_x_half_mstep,
                 sequential_translation_reduction=use_sequential_translation_reduction,
             )
+            if finite_check.finite_check_enabled():
+                # P4-D. Operands and sums together in one synchronisation: the
+                # report still says which came first, and the posterior bound
+                # fires on a denominator that is only slightly wrong.
+                _p4d_context = finite_check.describe_context(
+                    iteration=bpref_diagnostics._bpref_contribution_context.get("iteration"),
+                    half=bpref_diagnostics._bpref_contribution_context.get("half"),
+                    bucket_images=int(np.asarray(image_indices).size),
+                    first_image=int(np.asarray(image_indices).reshape(-1)[0]),
+                    current_size=current_size,
+                )
+                finite_check.check_bundle(
+                    "mstep-operands-and-sums",
+                    {
+                        "mstep_probs": mstep_probs,
+                        "shifted_recon_split": shifted_recon_split,
+                        "ctf2_over_nv_recon": ctf2_over_nv_recon,
+                        "summed": summed,
+                        "ctf_probs": ctf_probs,
+                    },
+                    posterior=mstep_probs,
+                    posterior_name="mstep-posterior",
+                    dominated_by=(
+                        ("ctf_probs", "ctf2_over_nv_recon", 1e-3),
+                        ("summed", "shifted_recon_split", 1e-3),
+                    ),
+                    context=_p4d_context,
+                    image_ids=image_indices,
+                )
             if mstep_subtract_ctf_projection:
                 summed = subtract_projected_reference_from_sparse_mstep_sums(
                     summed,
@@ -4653,6 +4709,23 @@ def compute_pass2_stats_sparse_bucketed(
                     max_block_bytes=max_adjoint_block_bytes,
                     log_label=f"single-ctf-{adjoint_layout}",
                 )
+                if finite_check.finite_check_enabled():
+                    # P4-D. The accumulators after this bucket's scatter. Both
+                    # the sums and the slabs are checked, so a report says
+                    # whether the bucket arrived non-finite or the scatter made
+                    # it so.
+                    finite_check.check_bundle(
+                        "bpref-accumulators",
+                        {"Ft_y_total": Ft_y_total, "Ft_ctf_total": Ft_ctf_total},
+                        context=finite_check.describe_context(
+                            iteration=bpref_diagnostics._bpref_contribution_context.get("iteration"),
+                            half=bpref_diagnostics._bpref_contribution_context.get("half"),
+                            bucket_images=int(np.asarray(image_indices).size),
+                            first_image=int(np.asarray(image_indices).reshape(-1)[0]),
+                            layout=adjoint_layout,
+                        ),
+                        operands={"flat_summed": flat_summed, "flat_ctf_probs": flat_ctf_probs},
+                    )
 
         # Noise accumulation
         _tail_locals = locals()
@@ -4687,6 +4760,14 @@ def compute_pass2_stats_sparse_bucketed(
         int(np.median(local_rot_counts)) if local_rot_counts else 0,
         float(np.mean(local_rot_counts)) if local_rot_counts else 0.0,
         int(np.median(valid_candidate_counts)) if valid_candidate_counts else 0,
+    )
+    finite_check.report_tracked(
+        finite_check.describe_context(
+            iteration=bpref_diagnostics._bpref_contribution_context.get("iteration"),
+            half=bpref_diagnostics._bpref_contribution_context.get("half"),
+            current_size=current_size,
+            images=n_images,
+        )
     )
 
     if return_score_log_z_only:
