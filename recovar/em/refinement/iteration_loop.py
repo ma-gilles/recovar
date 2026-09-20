@@ -305,6 +305,75 @@ def _initial_coarse_grids(
     return _CoarseGrids(rotations, rotation_eulers, base_translations, current_translations, int(healpix_order))
 
 
+_BPREF_DUMP_ENV_VARS = (
+    "RECOVAR_BPREF_MEMBERSHIP_DUMP_DIR",
+    "RECOVAR_BPREF_CONTRIBUTION_DUMP_DIR",
+    "RECOVAR_BPREF_DEVICE_SIGNATURE_DUMP_DIR",
+)
+
+
+def _half_overlap_active(requested: bool, *, diagnostic_half_indices, log) -> bool:
+    """Decide whether the two halves' E-steps may run concurrently.
+
+    Refuses rather than degrades. Each guard is a place where running the two
+    halves at once would change what is observed, not merely when:
+
+    * a subset of halves is being scored, so there is nothing to overlap;
+    * a BPref dump is armed. The dump context is process-global and is set per
+      half at the top of the half's work, so two halves in flight would write
+      each other's context. The dump is a diagnostic, so the overlap yields.
+    """
+
+    if not requested:
+        return False
+    if tuple(diagnostic_half_indices) != (0, 1):
+        log.info("Half overlap off: scoring halves %s, not both", tuple(diagnostic_half_indices))
+        return False
+    armed = [name for name in _BPREF_DUMP_ENV_VARS if os.environ.get(name, "").strip()]
+    if armed:
+        log.info("Half overlap off: a BPref dump is armed (%s)", ", ".join(armed))
+        return False
+    log.info("Half overlap ON: the two halves' E-steps run in one thread each")
+    return True
+
+
+def _run_halves_overlapped(run_half, diagnostic_half_indices) -> None:
+    """Run each half's E-step in its own thread and re-raise in half order.
+
+    Kernels still serialise on JAX's single compute stream, so the device order
+    within a half is unchanged and the two halves' kernels cannot interleave
+    mid-kernel. What overlaps is host work: one half's dispatch and operand
+    preparation proceed while the other's kernels run.
+
+    The halves write disjoint state, each indexed by its own half, so no
+    accumulator is shared. Exceptions are collected and re-raised in half order
+    so a failure reports the same way it would have when the halves ran one
+    after another.
+    """
+
+    import threading
+
+    errors: dict[int, BaseException] = {}
+
+    def _target(half_index):
+        try:
+            run_half(half_index)
+        except BaseException as exc:  # re-raised below, in half order
+            errors[half_index] = exc
+
+    threads = [
+        threading.Thread(target=_target, args=(int(k),), name=f"em-half-{int(k)}")
+        for k in diagnostic_half_indices
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    for k in diagnostic_half_indices:
+        if int(k) in errors:
+            raise errors[int(k)]
+
+
 class DenseHalfScoringPlan(NamedTuple):
     """One half's dense E-step call, gathered as a value before it runs.
 
@@ -1946,7 +2015,14 @@ def refine_single_volume(
             n_classes=n_classes,
             experiment_datasets=experiment_datasets,
         )
-        for k in diagnostic_half_indices:
+        # The two halves are independent inside the E-step. Extracting one
+        # half's work into a function changes neither what runs nor its
+        # order; it makes the two callable independently, which is what the
+        # overlap option uses. Serial dispatch stays the default.
+        Ft_y_0 = Ft_ctf_0 = Ft_y_1 = Ft_ctf_1 = None
+
+        def _run_half_estep(k):
+            nonlocal Ft_y_0, Ft_ctf_0, Ft_y_1, Ft_ctf_1
             bpref_diagnostics.set_bpref_contribution_dump_context(
                 iteration=iteration + 1,
                 half=k + 1,
@@ -2165,7 +2241,7 @@ def refine_single_volume(
                     translation_search_base=translation_search_bases[k],
                     original_image_indices=np.zeros(0, dtype=np.int64),
                 )
-                continue
+                return
             if use_local:
                 local_parent_oversampling_order = int(state.adaptive_oversampling) if state.adaptive_oversampling > 0 else 0
                 local_result = _score_half_local_in_bpref_scope(
@@ -2434,6 +2510,18 @@ def refine_single_volume(
                 original_image_indices=_half_orig_idx,
             )
 
+
+        _overlap_active = _half_overlap_active(
+            options.overlap.overlap_halves,
+            diagnostic_half_indices=diagnostic_half_indices,
+            log=logger,
+        )
+        if _overlap_active:
+            _run_halves_overlapped(_run_half_estep, diagnostic_half_indices)
+            k = diagnostic_half_indices[-1]
+        else:
+            for k in diagnostic_half_indices:
+                _run_half_estep(k)
         if diagnostic_half_indices != (0, 1):
             raise RuntimeError(
                 "targeted half-only significance diagnostic returned without writing its "
