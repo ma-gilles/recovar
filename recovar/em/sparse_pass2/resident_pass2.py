@@ -2237,9 +2237,16 @@ def _kernel_ctf_probs_enabled() -> bool:
 
 
 def _wavg_power_per_image_enabled() -> bool:
-    """Whether the Wavg rectangle is squared per image rather than per row."""
+    """Whether the Wavg rectangle is squared per image rather than per row.
 
-    return parse_env_flag(_WAVG_POWER_PER_IMAGE_ENV, default=False)
+    Default **on** since the P4-F/P4-G merge. P4-G measured the two forms
+    bitwise on GPU at production shapes, 0 ULP over 6.3 million values, and the
+    hoisted form 2.2 s per steady hp3 iteration faster;
+    ``RECOVAR_SPARSE_PASS2_RESIDENT_WAVG_POWER_PER_IMAGE=0`` restores the
+    per-row square as the oracle that equality is measured against.
+    """
+
+    return parse_env_flag(_WAVG_POWER_PER_IMAGE_ENV, default=True)
 
 
 def _resident_operands_verify_enabled() -> bool:

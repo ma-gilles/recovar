@@ -412,10 +412,17 @@ def test_wavg_power_per_image_is_bitwise_against_the_per_row_path(
     )
 
 
-def test_wavg_power_per_image_flag_defaults_off_and_reaches_the_spec(monkeypatch):
-    """The flag is opt-in and the block body reads it from the program spec."""
+def test_wavg_power_per_image_flag_defaults_on_and_reaches_the_spec(monkeypatch):
+    """The flag is the default and the block body reads it from the spec.
+
+    P4-G shipped the hoist opt-in and measured the two forms bitwise on GPU at
+    production shapes; it is the default from the P4-F/P4-G merge, with ``0``
+    restoring the per-row square as the oracle.
+    """
 
     monkeypatch.delenv(rp._WAVG_POWER_PER_IMAGE_ENV, raising=False)
+    assert rp._wavg_power_per_image_enabled() is True
+    monkeypatch.setenv(rp._WAVG_POWER_PER_IMAGE_ENV, "0")
     assert rp._wavg_power_per_image_enabled() is False
     monkeypatch.setenv(rp._WAVG_POWER_PER_IMAGE_ENV, "1")
     assert rp._wavg_power_per_image_enabled() is True
