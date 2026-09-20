@@ -102,29 +102,6 @@ def _ladder_image_capacity(max_images: int, ladder: tuple[int, ...]) -> int:
     return int(rungs[-1])
 
 
-def _ladder_tail_capacity(
-    group_images: int,
-    capacity: int,
-    ladder: tuple[int, ...],
-) -> int:
-    """Padded capacity for one planned group: a rung, never above ``capacity``.
-
-    A full group is already at ``capacity``. The remainder group is padded UP to
-    the smallest rung that holds it instead of all the way to ``capacity``: both
-    are ladder values, so the image axis stays on the ladder either way, and
-    padding a 7-image remainder to 128 would have cost more device work than the
-    retrace the ladder removes.
-    """
-
-    group_images = int(group_images)
-    capacity = int(capacity)
-    if not ladder or group_images >= capacity:
-        return capacity
-    rungs = [rung for rung in ladder if rung >= group_images]
-    if not rungs:
-        return capacity
-    return min(capacity, int(rungs[0]))
-
 
 def _resolve_exact_local_bucket_radix(explicit: int | None = None) -> int:
     """Resolve and validate the exact-local small-bucket radix."""
@@ -1499,20 +1476,22 @@ def plan_local_hypothesis_buckets(
                 # Keep static-shape FFI boundaries on pool boundaries so a new call
                 # never changes which physical particles may update BPref together.
                 max_images = max(3, (max_images // 3) * 3)
-                group_ladder: tuple[int, ...] = ()
             else:
                 # Only when the pool rule is not in force: ladder rungs are not
                 # multiples of three, so snapping here would move an InitialModel
                 # FFI boundary off a particle pool.
                 max_images = _ladder_image_capacity(max_images, image_capacity_ladder)
-                group_ladder = image_capacity_ladder
+            # Every group of this rotation class keeps the SAME capacity, the
+            # remainder group included. Giving the remainder its own smaller rung
+            # saves a little padding and costs a whole extra compiled program per
+            # rotation class, which measured 7.96 s -> 16.26 s of local-engine
+            # compile at the 10k/256 order-4 state.
             for start in range(0, bucket_images.shape[0], max_images):
-                group = np.asarray(bucket_images[start : start + max_images], dtype=np.int32)
                 planned_groups.append(
                     (
-                        group,
+                        np.asarray(bucket_images[start : start + max_images], dtype=np.int32),
                         bucket_size,
-                        _ladder_tail_capacity(group.shape[0], max_images, group_ladder),
+                        max_images,
                     )
                 )
 
@@ -1702,20 +1681,19 @@ def _plan_local_bucket_groups(
             # Keep static-shape FFI boundaries on pool boundaries so a new call
             # never changes which physical particles may update BPref together.
             max_images = max(3, (max_images // 3) * 3)
-            group_ladder: tuple[int, ...] = ()
         else:
             # Only when the pool rule is not in force: ladder rungs are not
             # multiples of three, so snapping here would move an InitialModel
             # FFI boundary off a particle pool.
             max_images = _ladder_image_capacity(max_images, image_capacity_ladder)
-            group_ladder = image_capacity_ladder
+        # One capacity per rotation class, the remainder group included; see
+        # plan_local_hypothesis_buckets for why the remainder keeps it.
         for start in range(0, bucket_images.shape[0], max_images):
-            group = np.asarray(bucket_images[start : start + max_images], dtype=np.int32)
             planned_groups.append(
                 (
-                    group,
+                    np.asarray(bucket_images[start : start + max_images], dtype=np.int32),
                     bucket_size,
-                    _ladder_tail_capacity(group.shape[0], max_images, group_ladder),
+                    max_images,
                 )
             )
     return planned_groups

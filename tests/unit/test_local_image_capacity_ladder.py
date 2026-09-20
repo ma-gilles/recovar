@@ -164,40 +164,38 @@ def test_planner_stabilizes_the_image_axis_across_batch_size_estimates():
     assert [_capacities(p) for p in on] == [[128], [128]]
 
 
-def test_planner_capacities_are_rungs_and_do_not_add_padding():
+def test_planner_capacities_are_rungs():
     counts = np.repeat([40, 100, 300], 400).astype(np.int32)
     off = _plan(None, counts=counts, image_batch_size=135)
     on = _plan(True, counts=counts, image_batch_size=135)
 
     assert set(_capacities(on)) <= set(DEFAULT_LOCAL_IMAGE_CAPACITY_LADDER)
     assert max(_capacities(on)) <= max(_capacities(off))
-    # Snapping down splits buckets; the remainder group keeps its own rung so
-    # the plan never pads more than the unladdered one.
-    assert _padding_ratio(on) <= _padding_ratio(off)
-    assert _padding_ratio(on) <= 1.5
 
 
-def test_remainder_group_is_padded_to_its_own_rung_not_to_the_class_rung():
-    """400 images at a 128 rung: 3 full groups plus a 16-image remainder."""
+def test_one_capacity_per_rotation_class_including_the_remainder_group():
+    """A second capacity would be a second compiled program per class.
+
+    Giving the remainder its own smaller rung pads less but costs an extra
+    ``run_local_bucket_big_jit`` compile per rotation class; that variant
+    measured 7.96 s -> 16.26 s of local-engine compile at the 10k/256 order-4
+    state, so the remainder keeps the class capacity.
+    """
 
     counts = np.full(400, 180, dtype=np.int32)
     plans = _plan(True, counts=counts, image_batch_size=135)
-    capacities = [int(plan.bucket_image_count) for plan in plans]
-    physical = [int(plan.image_indices.shape[0]) for plan in plans]
 
-    assert physical == [128, 128, 128, 16]
-    assert capacities == [128, 128, 128, 16]
-    assert set(capacities) <= set(DEFAULT_LOCAL_IMAGE_CAPACITY_LADDER)
-    assert _padding_ratio(plans) == 1.0
+    assert [int(plan.image_indices.shape[0]) for plan in plans] == [128, 128, 128, 16]
+    assert _capacities(plans) == [128]
 
 
-def test_a_small_class_is_not_doubled_by_the_ladder():
-    """A 135-image class must not become two full 128-image groups."""
+def test_padding_stays_small_when_a_class_is_much_larger_than_its_rung():
+    """The production case: one rung per class over thousands of images."""
 
-    counts = np.full(135, 180, dtype=np.int32)
+    counts = np.full(4966, 180, dtype=np.int32)
     on = _plan(True, counts=counts, image_batch_size=135)
-    assert [int(plan.bucket_image_count) for plan in on] == [128, 16]
-    assert _padding_ratio(on) < 1.1
+    assert _capacities(on) == [128]
+    assert _padding_ratio(on) < 1.05
 
 
 def test_planner_preserves_the_image_set_and_its_order():
@@ -246,11 +244,7 @@ def test_class_segmented_bucketer_uses_the_same_ladder():
         layouts, priors, image_capacity_ladder=True, **kwargs
     )
     assert sorted({int(b.bucket_image_count) for b in off}) == [135]
-    # 400 images -> three 128-image groups plus a 16-image remainder rung.
-    assert sorted({int(b.bucket_image_count) for b in on}) == [16, 128]
-    assert set(int(b.bucket_image_count) for b in on) <= set(
-        DEFAULT_LOCAL_IMAGE_CAPACITY_LADDER
-    )
+    assert sorted({int(b.bucket_image_count) for b in on}) == [128]
 
 
 # ----------------------------------------------------- engine plumbing / numerics ---
