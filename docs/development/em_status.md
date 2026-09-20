@@ -105,12 +105,14 @@ paid at shape transitions and in the final all-data iteration.
 
 The three open levers, largest first:
 
-* **The final all-data iteration**, 178-195 s against RELION's rough 60-75. The
-  local pass-2 route pins `use_translate_sum_kernel=False` and takes its weighted
-  sums from XLA, so at current size 256 the CUDA translate-and-sum and Wavg
-  kernels that serve the global route do not run at all. Node-granularity traces
-  put 64.6 s of the 71.2 s of per-half GPU work in XLA fusions and only 6.6 s in
-  our kernels.
+* **The final all-data iteration**, 178-195 s against RELION's rough 60-75. It
+  runs on the exact local engine, because routing the full box through the
+  device-resident path is an open scientific decision: the exact engine scores
+  the whole centred half and RELION's radial support does not. Of a 95-99 s
+  half, the fine bucket loop is 81 s, the pass-1 parent probe 11 s, and two host
+  expansions of the 515-cubed accumulator about 5 s. Inside the fine loop the
+  CUDA texture projector is unavailable, because that path asks for complex128
+  and the projector is complex64, so it falls back to a vmapped JAX projection.
 * **First sight of a new shape.** A warm persistent compilation cache removes the
   whole XLA-compile part of it; whether production runs warm is a user decision,
   and the gate here runs cold. Hiding compile behind pass one was measured and
