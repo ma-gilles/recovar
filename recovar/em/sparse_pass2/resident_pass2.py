@@ -3333,6 +3333,12 @@ def run_resident_mstep_blocks(
         translation_prior=None,
         shifted_recon=recon["shifted_recon"],
         shifted_noise=recon["shifted_noise"],
+        # The unshifted per-image images are T16's once-per-half operands; the
+        # local pass prepares pre-shifted tiles per chunk, so this pair stays
+        # empty and the M-step body takes the XLA weighted sums.
+        recon_image=None,
+        recon_weight=None,
+        noise_image=None,
         ctf2_over_nv_recon=recon["ctf2_over_nv_recon"],
         direct_ctf_rfloat_recon=recon["direct_ctf_rfloat_recon"],
         processed_image_half=None,
@@ -3356,6 +3362,9 @@ def run_resident_mstep_blocks(
         noise_variance_for_noise=noise_variance_for_noise,
         shell_indices_noise=shell_indices_noise,
         exact_positions=exact_positions_device,
+        # T16's kernel path addresses the reconstruction window by pixel index;
+        # the XLA path this caller takes does not read it.
+        recon_pixel_indices=None,
         relion_x_half_recon_indices=relion_x_half_recon_indices,
         shell_indices_half=None,
         wavg_shell_indices=None,
