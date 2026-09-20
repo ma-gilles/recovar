@@ -787,3 +787,47 @@ def test_local_chunk_runs_with_the_once_per_half_operand_flag(
         rtol=0,
         atol=1e-6,
     )
+
+
+@requires_resident_gpu
+def test_block_row_program_matches_the_slicing_callback(monkeypatch, _resident_local_env):
+    """P3-G: the chunk-array form against the per-block Python callback.
+
+    With ``RECOVAR_LOCAL_SEARCH_RESIDENT_BLOCK_ROW_PROGRAM=1`` the chunk's three
+    row arrays go to ``run_resident_mstep_blocks`` whole and the block program
+    reads its own rows; with the flag off the callback slices them per block.
+    The rows the two forms hand the M-step body are bitwise equal, which
+    ``tests/unit/test_p3g_local_glue_programs.py`` asserts directly on CPU, so
+    every discrete output must agree exactly here. The accumulators go through
+    the x-half BPref atomics and the flat-row Wavg rotation atomic, which are
+    not bit-reproducible in either arm, so they are held to the driver's own
+    repeat band (``test_resident_local_repeats_itself``) rather than bitwise.
+    """
+
+    case = _case()
+    monkeypatch.setenv(rlp._BLOCK_ROW_PROGRAM_ENV, "0")
+    off = _run(case, resident=True, monkeypatch=monkeypatch, production_shapes=True)
+    monkeypatch.setenv(rlp._BLOCK_ROW_PROGRAM_ENV, "1")
+    on = _run(case, resident=True, monkeypatch=monkeypatch, production_shapes=True)
+
+    np.testing.assert_array_equal(
+        np.asarray(off.hard_assignment), np.asarray(on.hard_assignment)
+    )
+    np.testing.assert_array_equal(
+        np.asarray(off.best_pose_rotation_ids), np.asarray(on.best_pose_rotation_ids)
+    )
+    np.testing.assert_array_equal(
+        np.asarray(off.best_pose_translations), np.asarray(on.best_pose_translations)
+    )
+
+    def rel_l2(a, b):
+        a = np.asarray(a, dtype=np.complex128)
+        b = np.asarray(b, dtype=np.complex128)
+        den = float(np.linalg.norm(a))
+        return float(np.linalg.norm(a - b) / den) if den else 0.0
+
+    assert rel_l2(off.Ft_y, on.Ft_y) < 1e-6
+    assert rel_l2(off.Ft_ctf, on.Ft_ctf) < 1e-6
+    assert rel_l2(
+        off.noise_stats.wsum_sigma2_noise, on.noise_stats.wsum_sigma2_noise
+    ) < 1e-6

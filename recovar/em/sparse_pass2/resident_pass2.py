@@ -3574,8 +3574,9 @@ def _run_resident_chunk(
 
 
 def run_resident_mstep_blocks(
-    block_projections,
+    block_projections=None,
     *,
+    chunk_projections=None,
     row_capacity: int,
     n_valid_rows: int,
     mstep_block_rows: int,
@@ -3601,11 +3602,21 @@ def run_resident_mstep_blocks(
 ):
     """Walk one chunk's pixel axis in row blocks: Wavg, noise and both adjoints.
 
+    Exactly one of ``block_projections`` and ``chunk_projections`` is given.
+
     ``block_projections(start, stop)`` returns this block's reconstruction-window
     projection, its ``|proj|^2`` and its M-step rotations. The global pass 2
     gathers all three out of the per-iteration fine-rotation caches; local
     search (T12) slices them out of the projections it computed for the chunk's
     own rows, because its fine grid is not cacheable.
+
+    ``chunk_projections`` (P3-G) is the same three arrays for the **whole**
+    chunk, in the layout's flat row order. The caller then does no slicing at
+    all: the arrays ride in the stage tables and the block program takes a
+    ``dynamic_slice`` of the chunk's row ids and reads its rows inside the jit,
+    exactly as the global pass reads its per-iteration caches at the block's
+    fine-rotation ids. The row ids are ``0 .. row_capacity-1``, so the read is
+    the identity gather of the rows the callback sliced, value for value.
 
     The body is ``_resident_mstep_block``, the same copy the global pass runs in
     both its per-stage and its jitted form, so no accumulator has a second
@@ -3629,6 +3640,28 @@ def run_resident_mstep_blocks(
             "give this entry point the kernel path before handing it resident "
             "operands."
         )
+
+    if (block_projections is None) == (chunk_projections is None):
+        raise ValueError(
+            "run_resident_mstep_blocks takes exactly one of block_projections "
+            "(a callback returning one block's arrays) and chunk_projections "
+            "(the chunk's whole row arrays); got "
+            f"block_projections={'set' if block_projections is not None else 'None'} "
+            f"and chunk_projections={'set' if chunk_projections is not None else 'None'}."
+        )
+    if chunk_projections is not None:
+        chunk_proj, chunk_proj_abs2, chunk_mstep_rotations = chunk_projections
+        for name, value in (
+            ("projection", chunk_proj),
+            ("|projection|^2", chunk_proj_abs2),
+            ("M-step rotations", chunk_mstep_rotations),
+        ):
+            if int(value.shape[0]) != int(row_capacity):
+                raise ValueError(
+                    "chunk_projections must carry the chunk's whole row axis: "
+                    f"the {name} array has {int(value.shape[0])} rows, the chunk "
+                    f"capacity is {int(row_capacity)}."
+                )
 
     spec = _ChunkProgramSpec(
         row_capacity=int(row_capacity),
@@ -3680,9 +3713,14 @@ def run_resident_mstep_blocks(
     )
     tables = _ChunkStageTables(
         projection_score_cache=None,
-        projection_recon_cache=None,
-        projection_recon_abs2_cache=None,
-        mstep_grid=None,
+        # P3-G: the chunk's own row arrays stand where the global pass keeps
+        # its per-iteration fine-rotation caches, so the block program reads
+        # its rows inside the jit instead of taking them from a host callback.
+        projection_recon_cache=None if chunk_projections is None else chunk_proj,
+        projection_recon_abs2_cache=(
+            None if chunk_projections is None else chunk_proj_abs2
+        ),
+        mstep_grid=None if chunk_projections is None else chunk_mstep_rotations,
         coarse_parent_grid=None,
         fine_translation_parent=None,
         half_weights=None,
@@ -3703,6 +3741,14 @@ def run_resident_mstep_blocks(
     block_rows = int(mstep_block_rows)
     carry = None
     glue_jit = _resident_glue_jit_enabled()
+    if chunk_projections is None:
+        chunk_row_ids = None
+        projection_dtypes = None
+    else:
+        # A host-side index vector, so it costs one transfer for the chunk and
+        # no eager primitive: the block program slices it and gathers the rows.
+        chunk_row_ids = jnp.asarray(np.arange(int(row_capacity), dtype=np.int32))
+        projection_dtypes = (chunk_proj.dtype, chunk_proj_abs2.dtype)
 
     def start_carry(projections):
         return _initial_mstep_carry(
@@ -3711,7 +3757,11 @@ def run_resident_mstep_blocks(
             operands,
             tables,
             spec=spec,
-            projection_dtypes=(projections[0].dtype, projections[1].dtype),
+            projection_dtypes=(
+                projection_dtypes
+                if projections is None
+                else (projections[0].dtype, projections[1].dtype)
+            ),
         )
 
     for start in range(0, int(row_capacity), block_rows):
@@ -3723,7 +3773,10 @@ def run_resident_mstep_blocks(
             break
         stop = start + block_rows
         block = slice(start, stop)
-        projections = block_projections(start, stop)
+        if chunk_projections is None:
+            projections = block_projections(start, stop)
+        else:
+            projections = None
         if carry is None:
             carry = start_carry(projections)
         if glue_jit:
@@ -3733,7 +3786,7 @@ def run_resident_mstep_blocks(
                     row_image_local=row_image_local,
                     kernel_row_image_ids=kernel_row_image_ids,
                     row_posterior=row_posterior,
-                    row_fine_rot=None,
+                    row_fine_rot=chunk_row_ids,
                     projections=projections,
                 ),
                 operands,
@@ -3746,7 +3799,11 @@ def run_resident_mstep_blocks(
             block_row_image=row_image_local[block],
             block_kernel_ids=kernel_row_image_ids[block],
             block_posterior=row_posterior[block],
-            block_projections=projections,
+            block_projections=(
+                _cached_block_projections(tables, chunk_row_ids[block])
+                if projections is None
+                else projections
+            ),
             operands=operands,
             tables=tables,
             carry=carry,
@@ -3756,7 +3813,9 @@ def run_resident_mstep_blocks(
     if carry is None:
         # A chunk with no live rows: the accumulators are the incoming ones and
         # the partials are the zeros the statistics program expects.
-        carry = start_carry(block_projections(0, block_rows))
+        carry = start_carry(
+            block_projections(0, block_rows) if chunk_projections is None else None
+        )
 
     return (
         carry.Ft_y,
