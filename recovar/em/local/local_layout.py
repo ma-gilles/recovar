@@ -33,6 +33,98 @@ EXACT_LOCAL_BUCKET_QUANTUM_ENV = "RECOVAR_EXACT_LOCAL_BUCKET_QUANTUM"
 EXACT_LOCAL_BUCKET_RADIX_ENV = "RECOVAR_EXACT_LOCAL_BUCKET_RADIX"
 EXACT_LOCAL_BUCKET_MIN_QUANTUM = 256
 
+LOCAL_IMAGE_CAPACITY_LADDER_ENV = "RECOVAR_LOCAL_IMAGE_CAPACITY_LADDER"
+DEFAULT_LOCAL_IMAGE_CAPACITY_LADDER = (16, 32, 64, 128, 256)
+
+
+def resolve_local_image_capacity_ladder(explicit=None) -> tuple[int, ...]:
+    """Resolve the opt-in image-axis capacity ladder; ``()`` means off.
+
+    The exact local engine's images-per-bucket capacity is
+    ``min(image_batch_size, max_hypotheses_per_microbatch // bucket_rotations)``.
+    ``image_batch_size`` comes from a memory estimate that moves by a few images
+    between iterations, and it is the leading axis of every per-bucket program,
+    so a one-image change recompiles the whole bucket program set. Snapping the
+    capacity to a fixed ladder makes that axis stable across iterations.
+
+    ``explicit`` beats the environment. Accepted values: ``None`` (consult the
+    environment), ``False``/``""``/``"0"``/``"off"`` (ladder off), ``True``/
+    ``"1"``/``"on"``/``"auto"`` (the default ladder) or an explicit sequence or
+    comma-separated string of positive capacities.
+    """
+
+    source = "local_image_capacity_ladder"
+    raw = explicit
+    if raw is None:
+        source = LOCAL_IMAGE_CAPACITY_LADDER_ENV
+        raw = os.environ.get(LOCAL_IMAGE_CAPACITY_LADDER_ENV, "")
+    if raw is False:
+        return ()
+    if raw is True:
+        return DEFAULT_LOCAL_IMAGE_CAPACITY_LADDER
+    if isinstance(raw, str):
+        token = raw.strip().lower()
+        if token in {"", "0", "off", "false", "no", "none"}:
+            return ()
+        if token in {"1", "on", "true", "yes", "auto", "default"}:
+            return DEFAULT_LOCAL_IMAGE_CAPACITY_LADDER
+        raw = [part for part in token.replace(" ", "").split(",") if part]
+    try:
+        ladder = tuple(sorted({int(value) for value in raw}))
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"{source} must be a comma-separated list of positive image capacities"
+        ) from exc
+    if not ladder:
+        return ()
+    if ladder[0] < 1:
+        raise ValueError(f"{source} capacities must be positive")
+    return ladder
+
+
+def _ladder_image_capacity(max_images: int, ladder: tuple[int, ...]) -> int:
+    """Snap an images-per-bucket capacity DOWN to the ladder.
+
+    Snapping down, never up: ``max_images`` is already the planner's memory
+    bound (the ``image_batch_size`` estimate and the hypothesis cap), so a
+    larger capacity would plan a bucket the caller's own estimate refused. A
+    capacity below the ladder's minimum is left alone for the same reason --
+    there is no smaller ladder rung to fall back to that keeps the bucket
+    non-empty, and raising it would break the bound.
+    """
+
+    max_images = int(max_images)
+    if not ladder:
+        return max_images
+    rungs = [rung for rung in ladder if rung <= max_images]
+    if not rungs:
+        return max_images
+    return int(rungs[-1])
+
+
+def _ladder_tail_capacity(
+    group_images: int,
+    capacity: int,
+    ladder: tuple[int, ...],
+) -> int:
+    """Padded capacity for one planned group: a rung, never above ``capacity``.
+
+    A full group is already at ``capacity``. The remainder group is padded UP to
+    the smallest rung that holds it instead of all the way to ``capacity``: both
+    are ladder values, so the image axis stays on the ladder either way, and
+    padding a 7-image remainder to 128 would have cost more device work than the
+    retrace the ladder removes.
+    """
+
+    group_images = int(group_images)
+    capacity = int(capacity)
+    if not ladder or group_images >= capacity:
+        return capacity
+    rungs = [rung for rung in ladder if rung >= group_images]
+    if not rungs:
+        return capacity
+    return min(capacity, int(rungs[0]))
+
 
 def _resolve_exact_local_bucket_radix(explicit: int | None = None) -> int:
     """Resolve and validate the exact-local small-bucket radix."""
@@ -1311,11 +1403,13 @@ def plan_local_hypothesis_buckets(
     preserve_image_order: bool = False,
     exact_local_bucket_radix: int | None = None,
     consecutive_mixed_bucket_size: int | None = None,
+    image_capacity_ladder=None,
 ) -> list[LocalBucketPlan]:
     """Plan static bucket shapes and image order without allocating candidate arrays."""
 
     image_batch_size = int(max(1, image_batch_size))
     max_hypotheses_per_microbatch = int(max(1, max_hypotheses_per_microbatch))
+    image_capacity_ladder = resolve_local_image_capacity_ladder(image_capacity_ladder)
     rotations_dtype = np.asarray(layout.rotations_flat).dtype
     mstep_rotations_flat = (
         np.asarray(layout.rotations_flat, dtype=rotations_dtype)
@@ -1405,12 +1499,20 @@ def plan_local_hypothesis_buckets(
                 # Keep static-shape FFI boundaries on pool boundaries so a new call
                 # never changes which physical particles may update BPref together.
                 max_images = max(3, (max_images // 3) * 3)
+                group_ladder: tuple[int, ...] = ()
+            else:
+                # Only when the pool rule is not in force: ladder rungs are not
+                # multiples of three, so snapping here would move an InitialModel
+                # FFI boundary off a particle pool.
+                max_images = _ladder_image_capacity(max_images, image_capacity_ladder)
+                group_ladder = image_capacity_ladder
             for start in range(0, bucket_images.shape[0], max_images):
+                group = np.asarray(bucket_images[start : start + max_images], dtype=np.int32)
                 planned_groups.append(
                     (
-                        np.asarray(bucket_images[start : start + max_images], dtype=np.int32),
+                        group,
                         bucket_size,
-                        max_images,
+                        _ladder_tail_capacity(group.shape[0], max_images, group_ladder),
                     )
                 )
 
@@ -1514,6 +1616,7 @@ def bucket_local_hypothesis_layout(
     preserve_image_order: bool = False,
     exact_local_bucket_radix: int | None = None,
     consecutive_mixed_bucket_size: int | None = None,
+    image_capacity_ladder=None,
 ) -> list[LocalBucketSpec]:
     """Materialize all local buckets; use plans for bounded-memory iteration."""
 
@@ -1527,6 +1630,7 @@ def bucket_local_hypothesis_layout(
         preserve_image_order=preserve_image_order,
         exact_local_bucket_radix=exact_local_bucket_radix,
         consecutive_mixed_bucket_size=consecutive_mixed_bucket_size,
+        image_capacity_ladder=image_capacity_ladder,
     )
     return [materialize_local_bucket(layout, plan) for plan in plans]
 
@@ -1539,6 +1643,7 @@ def _plan_local_bucket_groups(
     max_hypotheses_per_microbatch: int,
     preserve_image_order: bool,
     consecutive_mixed_bucket_size: int | None,
+    image_capacity_ladder=None,
 ) -> list[tuple[np.ndarray, int, int]]:
     """Group images into static-shape buckets: ``(image_indices, padded_rows, image_capacity)``.
 
@@ -1548,6 +1653,7 @@ def _plan_local_bucket_groups(
     """
     rotation_counts = np.asarray(rotation_counts)
     bucket_sizes = np.asarray(bucket_sizes)
+    image_capacity_ladder = resolve_local_image_capacity_ladder(image_capacity_ladder)
     n_images = int(rotation_counts.shape[0])
     processing_order = (
         np.arange(n_images, dtype=np.int32)
@@ -1596,12 +1702,20 @@ def _plan_local_bucket_groups(
             # Keep static-shape FFI boundaries on pool boundaries so a new call
             # never changes which physical particles may update BPref together.
             max_images = max(3, (max_images // 3) * 3)
+            group_ladder: tuple[int, ...] = ()
+        else:
+            # Only when the pool rule is not in force: ladder rungs are not
+            # multiples of three, so snapping here would move an InitialModel
+            # FFI boundary off a particle pool.
+            max_images = _ladder_image_capacity(max_images, image_capacity_ladder)
+            group_ladder = image_capacity_ladder
         for start in range(0, bucket_images.shape[0], max_images):
+            group = np.asarray(bucket_images[start : start + max_images], dtype=np.int32)
             planned_groups.append(
                 (
-                    np.asarray(bucket_images[start : start + max_images], dtype=np.int32),
+                    group,
                     bucket_size,
-                    max_images,
+                    _ladder_tail_capacity(group.shape[0], max_images, group_ladder),
                 )
             )
     return planned_groups
@@ -1619,6 +1733,7 @@ def bucket_class_local_hypothesis_layouts(
     preserve_image_order: bool = False,
     exact_local_bucket_radix: int | None = None,
     consecutive_mixed_bucket_size: int | None = None,
+    image_capacity_ladder=None,
 ) -> list[LocalBucketSpec]:
     """Bucket K per-class hypothesis layouts into class-major segmented rows.
 
@@ -1706,6 +1821,7 @@ def bucket_class_local_hypothesis_layouts(
         max_hypotheses_per_microbatch=max_hypotheses_per_microbatch,
         preserve_image_order=preserve_image_order,
         consecutive_mixed_bucket_size=consecutive_mixed_bucket_size,
+        image_capacity_ladder=image_capacity_ladder,
     )
     n_trans = int(np.asarray(first.translation_grid).shape[0])
     for image_indices, bucket_size, max_images in planned_groups:
