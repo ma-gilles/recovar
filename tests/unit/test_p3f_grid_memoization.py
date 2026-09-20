@@ -13,6 +13,8 @@ saving the change exists for.
 """
 
 import collections
+import concurrent.futures
+import threading
 
 import jax
 import jax.numpy as jnp
@@ -414,3 +416,71 @@ def test_geometry_and_ctf_callers_are_bitwise_unchanged_on_a_hit():
     warm_half = np.asarray(geometry.get_unrotated_half_plane_grid_points((64, 64)))
     assert cold_plane.tobytes() == warm_plane.tobytes()
     assert cold_half.tobytes() == warm_half.tobytes()
+
+
+def test_every_trace_kind_bypasses_the_cache():
+    """jit, vmap, grad and jvp must all read as tracing, not only jit."""
+    ftu.clear_grid_cache()
+    seen = {}
+
+    def probe(tag):
+        seen[tag] = ftu._tracing()
+        return 0.0
+
+    jax.jit(lambda x: x + probe("jit"))(jnp.float32(1.0))
+    jax.vmap(lambda x: x + probe("vmap"))(jnp.arange(3, dtype=jnp.float32))
+    jax.grad(lambda x: x * (1.0 + probe("grad")))(jnp.float32(1.0))
+    jax.jacfwd(lambda x: x * (1.0 + probe("jvp")))(jnp.float32(1.0))
+    assert seen == {"jit": True, "vmap": True, "grad": True, "jvp": True}
+    assert ftu._tracing() is False
+    assert ftu.grid_cache_size() == 0
+
+
+def test_the_default_device_key_is_thread_local():
+    """`utils/multi_gpu.py` sets one `jax.default_device` per worker thread.
+
+    The cache context must follow the thread, not the process, or the first
+    thread's grid would be handed to every other thread; because these arrays
+    are uncommitted, the downstream work would follow them to the wrong device.
+    """
+    ftu.clear_grid_cache()
+    device = jax.devices()[0]
+    barrier = threading.Barrier(2)
+
+    def with_context():
+        with jax.default_device(device):
+            barrier.wait()
+            return ftu.get_k_coordinate_of_each_pixel((16, 16), 1, scaled=False), ftu._grid_cache_context()[0]
+
+    def without_context():
+        barrier.wait()
+        return ftu.get_k_coordinate_of_each_pixel((16, 16), 1, scaled=False), ftu._grid_cache_context()[0]
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        inside = pool.submit(with_context)
+        outside = pool.submit(without_context)
+        grid_in, ctx_in = inside.result()
+        grid_out, ctx_out = outside.result()
+    assert ctx_in is not None and ctx_out is None
+    assert grid_in is not grid_out
+    assert _same_bytes(grid_in, grid_out)
+
+
+def test_two_devices_do_not_share_one_cached_grid():
+    """The same property with two real devices, when the host has two."""
+    devices = jax.devices()
+    if len(devices) < 2:
+        pytest.skip("needs at least two devices")
+    ftu.clear_grid_cache()
+    barrier = threading.Barrier(2)
+
+    def work(index):
+        with jax.default_device(devices[index]):
+            barrier.wait()
+            return ftu.get_k_coordinate_of_each_pixel((16, 16), 1, scaled=False)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        grid_a, grid_b = list(pool.map(work, (0, 1)))
+    assert grid_a is not grid_b
+    assert grid_a.devices() != grid_b.devices()
+    assert _same_bytes(grid_a, grid_b)
