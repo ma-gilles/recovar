@@ -450,8 +450,13 @@ def test_the_optional_operands_against_a_star_backed_preparation(
     normalization, because that is the flag on which the two `powerClass` terms
     stop sharing a dtype, and production has it on.
 
-    Set `RECOVAR_P4J_STAR_FIXTURE` to the STAR to use. The Slurm job that runs
-    this tier sets it; without it the test says so rather than passing quietly.
+    Two things have to line up for the operands to be built at all: the CTF
+    source, which resolves from the dataset's own `particles_file` when that is
+    a STAR and otherwise from `RECOVAR_K1_RELION_EXACT_CTF_STAR`, and the RELION
+    CUDA Fourier backend, without which the preprocess kwargs do not exist and
+    the preparation refuses. A mock dataset supplies neither, so point
+    `RECOVAR_P4J_STAR_FIXTURE` at a real STAR and run this where a dataset built
+    from it can be used. Unset, the test says so rather than passing quietly.
     """
 
     import os
@@ -503,20 +508,16 @@ def test_the_optional_operands_against_a_star_backed_preparation(
             # for this test to compare.
             pytest.xfail(f"the preparation declares this unsupported: {exc}")
         except ValueError as exc:
-            # Undeclared refusal, which is the gap this test found on
-            # 2026-09-20. `prepare_resident_half_operands` never forwards
-            # `relion_preprocess_kwargs`, so the exact-BPref path raises a bare
-            # ValueError out of `sparse_pass2_bucket_io` instead of the
-            # `ResidentOperandsUnsupported` the module's docstring promises, and
-            # the driver catches only the latter. A run with exact BPref on and
-            # the resident operands on therefore dies rather than falling back
-            # to the per-chunk oracle. Recorded here rather than worked around:
-            # the fix belongs to the operand path's owner, and it is either
-            # forwarding the kwargs or declaring the configuration unsupported.
-            pytest.xfail(
-                "the resident preparation fails open on exact BPref rather than "
-                f"closed: {exc}"
-            )
+            # The exact-BPref operands need the RELION CUDA Fourier backend:
+            # `prepare_batch_preprocess_operands` produces the preprocess
+            # kwargs only when the dataset's preprocess backend is
+            # `relion_cuda`, and without them `prepare_unshifted_bucket_operands`
+            # refuses. That guard is correct and not specific to the resident
+            # path: the per-chunk oracle calls the same helper and refuses the
+            # same way. A mock dataset has no such backend, so this fixture
+            # cannot reach the operands; a dataset built the way production
+            # builds one can, which is what `RECOVAR_P4J_STAR_FIXTURE` is for.
+            pytest.xfail(f"this dataset has no RELION CUDA preprocess backend: {exc}")
 
         presence = resident_half_operand_presence(
             relion_exact_bpref_operands=True,
