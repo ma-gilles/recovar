@@ -2241,6 +2241,29 @@ def chunk_program_path() -> str:
     return "eager"
 
 
+def chunk_programs_for_path(path: str) -> tuple:
+    """The jitted programs a chunk will submit on ``path``.
+
+    One list, read by the compile-ahead warm-up and asserted against the
+    runners by `tests/unit/test_em_compile_ahead_consumer.py`. Warming a
+    program the runner does not submit, or missing one it does, costs compile
+    time and buys nothing; that happened once, on the fused-versus-per-stage
+    split, and was found by reading a census rather than by a test.
+    """
+
+    if path == "fused":
+        return (_run_resident_chunk_program,)
+    if path == "per-stage":
+        return (
+            _resident_chunk_posterior_program,
+            _resident_mstep_block_program,
+            _resident_chunk_statistics_program,
+        )
+    if path == "eager":
+        return ()
+    raise ValueError(f"unknown chunk program path {path!r}")
+
+
 def _make_mstep_block_inputs(rows, posterior) -> "_MstepBlockInputs":
     """The M-step block program's row inputs, from the chunk and its posterior.
 
@@ -2367,6 +2390,21 @@ def _submit_resident_chunk_warmup(
             tuple(int(d) for d in np.shape(value)), jnp.dtype(value.dtype)
         )
 
+    expected_programs = chunk_programs_for_path(path)
+
+    def _checked(work):
+        # The warm-up must submit exactly the programs the runner for this path
+        # submits. Raising here lands in the pool's own error record, so a
+        # mismatch is reported and the run is untouched.
+        got = tuple(program for program, _, _ in work)
+        if set(got) != set(expected_programs):
+            raise ValueError(
+                "compile-ahead would warm "
+                f"{sorted(p.__name__ for p in got)} on the {path} path, but that path "
+                f"runs {sorted(p.__name__ for p in expected_programs)}"
+            )
+        return work
+
     table_avals = _ChunkStageTables(*(as_aval(v) for v in stage_tables))
     carry_avals = jax.tree_util.tree_map(as_aval, carry)
     angle_aval = as_aval(translation_angles)
@@ -2431,10 +2469,14 @@ def _submit_resident_chunk_warmup(
             )
             operand_avals = _make_chunk_stage_operands(recon, _sq)
             if use_chunk_jit:
-                return (
-                    _run_resident_chunk_program,
-                    (_row, operand_avals, table_avals, carry_avals),
-                    {"spec": _spec},
+                return _checked(
+                    [
+                        (
+                            _run_resident_chunk_program,
+                            (_row, operand_avals, table_avals, carry_avals),
+                            {"spec": _spec},
+                        )
+                    ]
                 )
             # The per-stage path is the default, and it runs three programs.
             # Their later inputs are earlier stages' outputs, so they are taken
@@ -2453,7 +2495,7 @@ def _submit_resident_chunk_warmup(
                 table_avals,
             )
             block_avals = _make_mstep_block_inputs(_row, posterior_avals)
-            return [
+            return _checked([
                 (
                     _resident_chunk_posterior_program,
                     (_row, operand_avals, table_avals),
@@ -2482,7 +2524,7 @@ def _submit_resident_chunk_warmup(
                     ),
                     {"spec": _spec},
                 ),
-            ]
+            ])
 
         if pool.submit_thunk(f"resident chunk rows={row_capacity} images={image_capacity}", thunk):
             submitted.append(capacity_class)

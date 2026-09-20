@@ -380,3 +380,33 @@ def test_nothing_is_queued_when_there_is_no_program_to_warm(monkeypatch):
         voxel_size=1.0,
         default_translation_sqdist=None,
     ) == ()
+
+
+def test_every_program_a_runner_submits_is_one_the_warm_up_warms():
+    """The list the warm-up reads must match what the runners actually call.
+
+    The warm-up warmed the fused chunk program while the per-stage runner was
+    the one submitting, for a whole commit. Nothing failed; the option simply
+    bought nothing, and it took reading a compile census to notice. This reads
+    the program names each runner references straight out of its bytecode and
+    holds them to `chunk_programs_for_path`, so the next such split fails here.
+    """
+
+    def referenced(fn):
+        return {n for n in fn.__code__.co_names if n.endswith("_program")}
+
+    for path, runner in (
+        ("per-stage", rp._run_resident_chunk_stages),
+        ("fused", rp._run_resident_chunk),
+    ):
+        warmed = {f.__name__ for f in rp.chunk_programs_for_path(path)}
+        assert warmed == referenced(runner), (path, warmed, referenced(runner))
+
+
+def test_the_eager_path_warms_nothing():
+    assert rp.chunk_programs_for_path("eager") == ()
+
+
+def test_an_unknown_path_is_refused_rather_than_silently_warming_nothing():
+    with pytest.raises(ValueError, match="unknown chunk program path"):
+        rp.chunk_programs_for_path("something-else")
