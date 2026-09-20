@@ -31,6 +31,14 @@ from collections.abc import MutableMapping
 from pathlib import Path
 from typing import NamedTuple
 
+# This is an EM entry point, so it opts in to recovar's EM-scoped XLA defaults
+# (currently --xla_gpu_autotune_level=0, worth 6-11 s of compile per matched
+# pair at every measured state with a steady-iteration term of 0 +- 0.5 s; see
+# recovar/jax_config.py for the receipts). It must be set before `import jax`,
+# which recovar.jax_config performs, and `setdefault` so an explicit
+# RECOVAR_EM_XLA_DEFAULTS=0 in the environment still wins.
+os.environ.setdefault("RECOVAR_EM_XLA_DEFAULTS", "1")
+
 import jax
 import jax.numpy as jnp
 import jaxlib
