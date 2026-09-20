@@ -171,3 +171,62 @@ def test_runner_wires_the_flag_into_the_option_group():
     source = _runner_path().read_text()
     assert "overlap=HalfOverlapOptions(" in source
     assert "overlap_halves=bool(args.overlap_halves)" in source
+
+
+def test_device_share_defaults_to_the_whole_device():
+    from recovar.em.sparse_pass2.sparse_pass2_budget import concurrent_device_shares
+
+    assert concurrent_device_shares() == 1
+
+
+def test_device_share_divides_the_budget(monkeypatch):
+    """Two halves on one device must each budget half of it.
+
+    Both halves sizing against the whole device is what made the order-3
+    overlap fail with RESOURCE_EXHAUSTED while building the second half's
+    projection cache.
+    """
+    from recovar.em.sparse_pass2 import sparse_pass2_budget as budget
+
+    monkeypatch.setenv("RECOVAR_SPARSE_PASS2_DEVICE_MEMORY_GB", "80")
+    whole = budget._device_memory_limit_bytes()
+    previous = budget.set_concurrent_device_shares(2)
+    try:
+        halved = budget._device_memory_limit_bytes()
+    finally:
+        budget.set_concurrent_device_shares(previous)
+    assert whole == 80 * 1024**3
+    assert halved == whole // 2
+    assert budget._device_memory_limit_bytes() == whole
+
+
+def test_device_share_rejects_a_nonsense_count():
+    from recovar.em.sparse_pass2.sparse_pass2_budget import set_concurrent_device_shares
+
+    with pytest.raises(ValueError):
+        set_concurrent_device_shares(0)
+
+
+def test_dispatcher_declares_and_restores_the_share():
+    """The share must be declared for the run and put back afterwards."""
+    from recovar.em.sparse_pass2.sparse_pass2_budget import concurrent_device_shares
+
+    seen = []
+
+    def run_half(k):
+        seen.append(concurrent_device_shares())
+
+    _run_halves_overlapped(run_half, (0, 1))
+    assert seen == [2, 2]
+    assert concurrent_device_shares() == 1
+
+
+def test_dispatcher_restores_the_share_after_a_failure():
+    from recovar.em.sparse_pass2.sparse_pass2_budget import concurrent_device_shares
+
+    def run_half(k):
+        raise RuntimeError("boom")
+
+    with pytest.raises(RuntimeError):
+        _run_halves_overlapped(run_half, (0, 1))
+    assert concurrent_device_shares() == 1

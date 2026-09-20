@@ -353,6 +353,8 @@ def _run_halves_overlapped(run_half, diagnostic_half_indices) -> None:
 
     import threading
 
+    from recovar.em.sparse_pass2.sparse_pass2_budget import set_concurrent_device_shares
+
     errors: dict[int, BaseException] = {}
 
     def _target(half_index):
@@ -365,10 +367,18 @@ def _run_halves_overlapped(run_half, diagnostic_half_indices) -> None:
         threading.Thread(target=_target, args=(int(k),), name=f"em-half-{int(k)}")
         for k in diagnostic_half_indices
     ]
-    for thread in threads:
-        thread.start()
-    for thread in threads:
-        thread.join()
+    # Every pass-2 cache budget is a fraction of the device, written for one
+    # worker at a time. Both halves sizing against the whole device is what
+    # made the order-3 overlap fail with RESOURCE_EXHAUSTED while building the
+    # second half's projection cache, so each is told it owns its share.
+    previous_shares = set_concurrent_device_shares(len(threads))
+    try:
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+    finally:
+        set_concurrent_device_shares(previous_shares)
     for k in diagnostic_half_indices:
         if int(k) in errors:
             raise errors[int(k)]
