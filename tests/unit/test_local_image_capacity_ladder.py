@@ -319,13 +319,34 @@ def _result_fields(result):
     return {name: value for name, value in fields.items() if value is not None}
 
 
+# The M-step accumulators are the only fields the local engine does not
+# reproduce run to run: ``Ft_y``/``Ft_ctf`` are built by atomic backprojection
+# scatters whose order the GPU driver chooses, so two identical calls in one
+# process already disagree in their last bits (measured on an A100:
+# ``RECOVAR_EM_DETERMINISTIC_REDUCTIONS=1`` does not remove it either).  They
+# are therefore compared against that same-process self-repeat rather than
+# bitwise; every other field must be bitwise equal.
+_ACCUMULATOR_FIELDS = ("Ft_y", "Ft_ctf")
+
+
+def _relative_l2(left, right):
+    left = np.asarray(left).ravel().astype(np.complex128)
+    right = np.asarray(right).ravel().astype(np.complex128)
+    denominator = float(np.linalg.norm(left))
+    if denominator == 0.0:
+        return float(np.linalg.norm(left - right))
+    return float(np.linalg.norm(left - right) / denominator)
+
+
 def test_padding_the_image_axis_does_not_change_any_engine_output():
     """The ladder is only safe if padded images are inert.
 
     Four images in one bucket either way: at ``image_batch_size=4`` the bucket
     carries no padding at all, at 16 it carries twelve padded rows.  Every
-    returned field must be bitwise equal, which is the contract that padded
-    images are excluded from the reductions, the scatters and the BPref rows.
+    discrete field, per-image statistic and noise accumulator must be bitwise
+    equal, which is the contract that padded images are excluded from the
+    reductions, the scatters and the BPref rows.  The two M-step accumulators
+    are held to the engine's own self-repeat band for the reason above.
     """
 
     rng = np.random.default_rng(20260920)
@@ -346,14 +367,25 @@ def test_padding_the_image_axis_does_not_change_any_engine_output():
         translation_log_priors=np.zeros((4, 1), dtype=np.float32),
     )
 
-    unpadded = _run_at_capacity(dataset, layout, mean, noise_variance, 4)
-    padded = _run_at_capacity(dataset, layout, mean, noise_variance, 16)
+    unpadded = _result_fields(_run_at_capacity(dataset, layout, mean, noise_variance, 4))
+    padded = _result_fields(_run_at_capacity(dataset, layout, mean, noise_variance, 16))
+    repeat = _result_fields(_run_at_capacity(dataset, layout, mean, noise_variance, 16))
 
-    left, right = _result_fields(unpadded), _result_fields(padded)
-    assert set(left) == set(right)
-    for name in sorted(left):
+    assert set(unpadded) == set(padded) == set(repeat)
+    for name in sorted(unpadded):
+        if name in _ACCUMULATOR_FIELDS:
+            continue
         np.testing.assert_array_equal(
-            np.asarray(left[name]),
-            np.asarray(right[name]),
+            np.asarray(unpadded[name]),
+            np.asarray(padded[name]),
             err_msg=f"image-axis padding changed {name}",
+        )
+
+    for name in _ACCUMULATOR_FIELDS:
+        self_repeat = _relative_l2(padded[name], repeat[name])
+        candidate = _relative_l2(unpadded[name], padded[name])
+        band = max(8.0 * self_repeat, 1e-13)
+        assert candidate <= band, (
+            f"image-axis padding moved {name} by {candidate:.3e}, outside the "
+            f"engine's own self-repeat band {band:.3e}"
         )
