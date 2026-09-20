@@ -935,6 +935,53 @@ def _relion_cuda_powerclass_spectrum_norm_units(
     )
 
 
+def relion_powerclass_noise_presence(
+    *,
+    use_exact_relion_gaussian,
+    accumulate_noise,
+    current_size,
+):
+    """Which ``powerClass`` terms a pass-2 batch will produce, from the flags alone.
+
+    :func:`_relion_powerclass_noise_terms` decides this while it has the image
+    array in hand. A caller that has to know before any image exists -- the
+    compile-ahead warm-up, which describes the operand set to lower a program
+    against -- asks here instead, so there is one statement of the rule rather
+    than a copy that can fall out of step with it.
+
+    Returns ``(has_highres_xi2, has_norm_high_shell)``.
+    """
+
+    has_xi2 = bool(use_exact_relion_gaussian or (accumulate_noise and current_size is not None))
+    has_norm = bool(accumulate_noise and current_size is not None and has_xi2)
+    return has_xi2, has_norm
+
+
+def relion_powerclass_noise_dtypes(
+    *,
+    real_dtype,
+    source_faithful_spectrum_norm,
+):
+    """Dtypes of the two ``powerClass`` terms, from the image dtype and the mode.
+
+    ``highres_Xi2`` keeps the image's own real dtype. The norm high-shell term
+    does too, *except* in source-faithful mode, where
+    :func:`_relion_cuda_powerclass_spectrum_highres_norm_units` accumulates the
+    selected shells in float64 to follow RELION's host-side sum. Production runs
+    float32 images with source-faithful normalization on, so in production these
+    two terms have different dtypes; predicting one from the other is wrong, and
+    was, until the resident driver's own after-the-fact check said so on
+    2026-09-20.
+
+    Returns ``(highres_xi2_dtype, norm_high_shell_dtype)``.
+    """
+
+    xi2_dtype = jnp.dtype(real_dtype)
+    if source_faithful_spectrum_norm:
+        return xi2_dtype, jnp.dtype(jnp.float64)
+    return xi2_dtype, xi2_dtype
+
+
 def _relion_powerclass_noise_terms(
     processed_score_half_for_noise,
     *,
@@ -955,8 +1002,13 @@ def _relion_powerclass_noise_terms(
     does not need.
     """
 
+    wants_xi2, _ = relion_powerclass_noise_presence(
+        use_exact_relion_gaussian=use_exact_relion_gaussian,
+        accumulate_noise=accumulate_noise,
+        current_size=current_size,
+    )
     relion_highres_xi2_half = None
-    if use_exact_relion_gaussian or (accumulate_noise and current_size is not None):
+    if wants_xi2:
         relion_highres_xi2_half = _relion_cuda_powerclass_highres_xi2_half(
             processed_score_half_for_noise,
             image_shape=image_shape,

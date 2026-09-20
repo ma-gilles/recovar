@@ -60,7 +60,10 @@ from recovar.em.helpers.batch_fetch import fetch_indexed_batch
 from recovar.em.helpers.dtype_policy import DensePrecisionPolicy
 from recovar.em.helpers.half_spectrum import make_shell_indices_half
 from recovar.em.sparse_pass2.sparse_pass2_bucket_io import prepare_unshifted_bucket_operands
-from recovar.em.sparse_pass2.sparse_pass2_scoring import _relion_powerclass_noise_terms
+from recovar.em.sparse_pass2.sparse_pass2_scoring import (
+    _relion_powerclass_noise_terms,
+    relion_powerclass_noise_presence,
+)
 from recovar.em.sparse_pass2.sparse_pass2_wavg import _relion_cuda_translate_wavg_norm_images
 
 logger = logging.getLogger(__name__)
@@ -206,6 +209,7 @@ def resident_half_operand_bytes(
     score_complex_bytes: int = 8,
     real_bytes: int = 4,
     rfloat_ctf_bytes: int = 8,
+    norm_high_shell_bytes: int | None = None,
 ) -> int:
     """Host estimate of the resident operand bytes, before any device work.
 
@@ -214,6 +218,11 @@ def resident_half_operand_bytes(
     """
 
     n_images = int(n_images)
+    # The four per-image scalars are highres_Xi2, the norm high shell, the scale
+    # and the group id. Only the norm term can be wider than the policy's real
+    # dtype: source-faithful normalization accumulates it in float64.
+    if norm_high_shell_bytes is None:
+        norm_high_shell_bytes = real_bytes
     return int(
         n_images
         * (
@@ -222,8 +231,184 @@ def resident_half_operand_bytes(
             * (2 * int(score_complex_bytes) + 2 * int(real_bytes) + int(rfloat_ctf_bytes))
             + int(n_half_pixels) * int(score_complex_bytes)
             + int(n_fine_trans) * int(real_bytes)
-            + 4 * int(real_bytes)
+            + 3 * int(real_bytes)
+            + int(norm_high_shell_bytes)
         )
+    )
+
+
+class ResidentOperandPresence(NamedTuple):
+    """Which optional half operands a configuration produces.
+
+    The real preparation learns this from the first image batch's keys. A
+    caller that must know before any image exists -- the compile-ahead warm-up
+    -- asks here. Each field cites the line that decides it, and the driver
+    verifies the answer against the real operands as soon as they exist, so a
+    drift shows up by name in the run's own log rather than as an unexplained
+    compile that the warm-up failed to cover.
+    """
+
+    has_recon_weight: bool
+    has_direct_ctf_rfloat: bool
+    has_highres_xi2: bool
+    has_relion_norm_high_shell: bool
+
+
+def resident_half_operand_presence(
+    *,
+    relion_exact_bpref_operands,
+    use_exact_relion_gaussian,
+    accumulate_noise,
+    current_size,
+) -> ResidentOperandPresence:
+    """Predict the optional operand set from the configuration flags.
+
+    ``recon_weight`` exists when ``_batch_window_operands`` is handed a
+    ``weighted_ctf_half``, and ``direct_ctf_rfloat_recon`` when it is handed a
+    ``ctf_half_rfloat``; both are supplied only in the exact-BPref
+    configuration (``sparse_pass2_bucket_io._prepare_bucket_io``). The two
+    ``powerClass`` terms follow
+    :func:`~recovar.em.sparse_pass2.sparse_pass2_scoring.relion_powerclass_noise_presence`.
+    """
+
+    has_xi2, has_norm = relion_powerclass_noise_presence(
+        use_exact_relion_gaussian=use_exact_relion_gaussian,
+        accumulate_noise=accumulate_noise,
+        current_size=current_size,
+    )
+    exact_bpref = bool(relion_exact_bpref_operands)
+    return ResidentOperandPresence(
+        has_recon_weight=exact_bpref,
+        has_direct_ctf_rfloat=exact_bpref,
+        has_highres_xi2=has_xi2,
+        has_relion_norm_high_shell=has_norm,
+    )
+
+
+def describe_resident_operand_mismatch(predicted, real) -> str:
+    """Name every field where a predicted operand tree differs from the real one.
+
+    Returns an empty string when they agree. This is the warm-up's own check:
+    the prediction is made before the preparation runs and compared after, so
+    it cannot be satisfied by construction.
+    """
+
+    import dataclasses
+
+    problems = []
+    for field in dataclasses.fields(ResidentHalfOperands):
+        got, want = getattr(predicted, field.name), getattr(real, field.name)
+        if field.name.startswith("n_"):
+            if int(got) != int(want):
+                problems.append(f"{field.name}: {int(got)} vs {int(want)}")
+            continue
+        if (got is None) != (want is None):
+            problems.append(
+                f"{field.name}: predicted {'absent' if got is None else 'present'}, "
+                f"really {'absent' if want is None else 'present'}"
+            )
+            continue
+        if got is None:
+            continue
+        if tuple(int(d) for d in got.shape) != tuple(int(d) for d in want.shape):
+            problems.append(f"{field.name}: shape {tuple(got.shape)} vs {tuple(want.shape)}")
+        elif jnp.dtype(got.dtype) != jnp.dtype(want.dtype):
+            problems.append(f"{field.name}: dtype {got.dtype} vs {want.dtype}")
+    return "; ".join(problems)
+
+
+def resident_half_operand_avals(
+    *,
+    n_images: int,
+    n_score_pixels: int,
+    n_recon_pixels: int,
+    n_half_pixels: int,
+    n_fine_trans: int,
+    score_complex_dtype,
+    score_real_dtype,
+    acc_real_dtype,
+    rfloat_ctf_dtype=None,
+    norm_high_shell_dtype=None,
+    has_recon_weight: bool,
+    has_direct_ctf_rfloat: bool,
+    has_highres_xi2: bool = True,
+    has_relion_norm_high_shell: bool = True,
+) -> "ResidentHalfOperands":
+    """The half's operands as avals, without preparing them (P4-J).
+
+    Same inputs as :func:`resident_half_operand_bytes`, which the driver's
+    admission check already computes before any device work: the shapes of this
+    half's operands are decided by the current size, the window and the image
+    count, all of them known before pass 1 runs. This returns them as
+    ``jax.ShapeDtypeStruct`` so a program that consumes the operands can be
+    lowered and compiled ahead of the preparation that fills them.
+
+    Only the SHAPES are encoded here. The dtypes are the caller's, because the
+    precision policy owns them and a second copy of that decision would be a
+    second place to get it wrong; ``has_*`` say which optional operands the
+    configuration produces.
+
+    ``norm_high_shell_dtype`` is separate because the norm high-shell term is
+    not the policy's real dtype in production: source-faithful normalization
+    accumulates it in float64 while ``highres_Xi2`` stays float32. Leave it
+    ``None`` only when the caller knows the two agree; the driver takes it from
+    :func:`~recovar.em.sparse_pass2.sparse_pass2_scoring.relion_powerclass_noise_dtypes`.
+    Getting this wrong is what the driver's after-the-fact comparison caught on
+    2026-09-20, before any measurement was believed.
+
+    ``rfloat_ctf_dtype`` is separate and defaults to float64 because that is
+    what :func:`resident_half_operand_bytes` assumes for the exact RELION CTF
+    (its ``rfloat_ctf_bytes`` default is 8, and the driver leaves it at the
+    default while passing the policy's dtypes for everything else). Whether the
+    stored array really is float64 is not settled here: the CPU test only holds
+    this function and the byte estimate to the same story, and the GPU test
+    against :func:`prepare_resident_half_operands` is what decides it. If they
+    disagree, the admission check is over-estimating by four bytes per
+    reconstruction pixel per image, which is conservative and therefore safe,
+    but this function would be wrong and the GPU test is how that surfaces.
+
+    Nothing here allocates or touches a device buffer.
+    """
+
+    n_images = int(n_images)
+    score_shape = (n_images, int(n_score_pixels))
+    recon_shape = (n_images, int(n_recon_pixels))
+    half_shape = (n_images, int(n_half_pixels))
+    per_image = (n_images,)
+
+    def aval(shape, dtype):
+        return jax.ShapeDtypeStruct(tuple(shape), jnp.dtype(dtype))
+
+    return ResidentHalfOperands(
+        n_images=n_images,
+        n_score_pixels=int(n_score_pixels),
+        n_recon_pixels=int(n_recon_pixels),
+        n_half_pixels=int(n_half_pixels),
+        n_fine_trans=int(n_fine_trans),
+        score_input=aval(score_shape, score_complex_dtype),
+        corr_img_score=aval(score_shape, score_real_dtype),
+        highres_xi2_half=aval(per_image, score_real_dtype) if has_highres_xi2 else None,
+        translation_prior=aval((n_images, int(n_fine_trans)), score_real_dtype),
+        recon_image=aval(recon_shape, score_complex_dtype),
+        recon_weight=aval(recon_shape, acc_real_dtype) if has_recon_weight else None,
+        noise_image=aval(recon_shape, score_complex_dtype),
+        ctf2_over_nv_recon=aval(recon_shape, acc_real_dtype),
+        direct_ctf_rfloat_recon=(
+            aval(recon_shape, rfloat_ctf_dtype if rfloat_ctf_dtype is not None else jnp.float64)
+            if has_direct_ctf_rfloat
+            else None
+        ),
+        processed_image_half=aval(half_shape, score_complex_dtype),
+        relion_norm_high_shell=(
+            aval(
+                per_image,
+                score_real_dtype if norm_high_shell_dtype is None else norm_high_shell_dtype,
+            )
+            if has_relion_norm_high_shell
+            else None
+        ),
+        scale=aval(per_image, jnp.float32),
+        group_ids=aval(per_image, jnp.int32),
     )
 
 
@@ -589,6 +774,16 @@ def prepare_resident_half_operands(
         operands.n_half_pixels,
         operands.nbytes()["total"] / float(1024**3),
         (n_images + batch_size - 1) // batch_size,
+    )
+    # A separate line, not an addition to the one above: the census parsers key
+    # on that line's text. The batch size and the last batch's remainder are
+    # what set the leading extent of every program inside the preparation, so
+    # P4-A's shape census could not classify those extents without them.
+    logger.info(
+        "Resident pass-2 per-half operand batching: image_batch_size=%d, "
+        "last_batch_images=%d",
+        batch_size,
+        n_images - batch_size * ((n_images - 1) // batch_size) if n_images else 0,
     )
     return operands
 
