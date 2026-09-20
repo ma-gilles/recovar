@@ -807,7 +807,11 @@ def _collate_batch_to_jax(batch):
 _SENTINEL = object()
 
 PREFETCH_DEPTH_ENV = "RECOVAR_PREFETCH_BATCH_DEPTH"
-DEFAULT_PREFETCH_DEPTH = 2
+# 4 since the P4-I merge: a counter on the queue found 22 of 63 gets in a steady
+# hp3 iteration blocking on an empty queue, and depth 4 takes a further 0.4 s off
+# that iteration for about 65 MB per extra slot. ``RECOVAR_PREFETCH_BATCH_DEPTH``
+# overrides it, and 2 restores the previous behaviour.
+DEFAULT_PREFETCH_DEPTH = 4
 
 
 def prefetch_depth(default: int = DEFAULT_PREFETCH_DEPTH) -> int:
