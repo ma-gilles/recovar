@@ -37,6 +37,7 @@ from recovar.em.local.local_layout import (
 from recovar.em.relion.relion_projector_setup import reference_to_relion_projector_half_maps
 from recovar.em.sampling import build_local_search_grid_metadata
 from recovar.em.sparse_pass2 import resident_local_pass2 as rlp
+from recovar.em.sparse_pass2 import resident_pass2 as rp
 
 pytestmark = pytest.mark.unit
 
@@ -167,6 +168,7 @@ def _run(
     source_faithful_spectrum_norm=False,
     production_shapes=False,
     projector_dtype=None,
+    resident_operands: bool | None = None,
 ):
     """``production_shapes`` mirrors what the refinement loop actually passes:
     a projector with a singleton class axis, per-image contrast and scale
@@ -178,6 +180,10 @@ def _run(
         monkeypatch.setenv(rlp.RESIDENT_LOCAL_SEARCH_ENV, "1")
     else:
         monkeypatch.delenv(rlp.RESIDENT_LOCAL_SEARCH_ENV, raising=False)
+    if resident_operands is None:
+        monkeypatch.delenv(rp._RESIDENT_OPERANDS_ENV, raising=False)
+    else:
+        monkeypatch.setenv(rp._RESIDENT_OPERANDS_ENV, "1" if resident_operands else "0")
     layout = case["layout"]
     projector = case["projector_half"]
     if projector_dtype is not None:
@@ -669,3 +675,115 @@ def test_resident_local_repeats_itself(monkeypatch, _resident_local_env):
     assert rel_l2(
         first.noise_stats.wsum_sigma2_noise, second.noise_stats.wsum_sigma2_noise
     ) < 1e-6
+
+
+def test_mstep_adapter_refuses_once_per_half_operands():
+    """The local M-step entry point fails closed on T16's operand family.
+
+    ``run_resident_mstep_blocks`` has no translate-and-sum kernel path, so a
+    ``recon`` carrying the once-per-half per-image images instead of the
+    per-chunk pre-shifted tiles must be refused by name rather than reach the
+    XLA weighted sums with ``None`` operands.
+    """
+
+    resident_recon = {
+        "shifted_recon": None,
+        "shifted_noise": None,
+        "recon_image": object(),
+        "recon_weight": None,
+        "noise_image": object(),
+        "ctf2_over_nv_recon": object(),
+        "direct_ctf_rfloat_recon": None,
+        "raw_translated_wavg_rectangle": object(),
+        "raw_translated_wavg_for_atomic": object(),
+        "scale": object(),
+    }
+    with pytest.raises(ValueError, match="pre-shifted"):
+        rp.run_resident_mstep_blocks(
+            lambda start, stop: None,
+            row_capacity=64,
+            n_valid_rows=8,
+            mstep_block_rows=64,
+            image_capacity=2,
+            row_image_local=None,
+            kernel_row_image_ids=None,
+            row_posterior=np.zeros((64, 1), dtype=np.float32),
+            recon=resident_recon,
+            n_rect=1,
+            n_shells=2,
+            n_recon_windowed=1,
+            noise_variance_for_noise=None,
+            shell_indices_noise=None,
+            exact_positions_device=None,
+            Ft_y_total=None,
+            Ft_ctf_total=None,
+            image_shape=IMAGE_SHAPE,
+            recon_volume_shape=VOLUME_SHAPE,
+            mstep_current_size=CURRENT_SIZE,
+            relion_x_half_recon_indices=None,
+            max_adjoint_block_bytes=1 << 20,
+            cuda_backproject=None,
+        )
+
+
+@requires_resident_gpu
+def test_local_chunk_runs_with_the_once_per_half_operand_flag(
+    monkeypatch, _resident_local_env
+):
+    """One local-search chunk through the M-step adapter with T16's flag on.
+
+    The T16 merge added ``recon_image``/``recon_weight``/``noise_image`` to
+    ``_ChunkStageOperands`` and ``recon_pixel_indices`` to ``_ChunkStageTables``
+    for the once-per-half kernel path. The local adapter still built the old
+    field sets, so every resident local chunk raised ``TypeError``; the
+    full-wave end-to-end (job 14168000) died at its first local search,
+    iteration 16, while every global-order matched pair passed.
+
+    The local pass prepares its own pre-shifted per-chunk tiles, so
+    ``RECOVAR_SPARSE_PASS2_RESIDENT_OPERANDS`` must be inert here: both
+    settings have to run the adapter and agree to the driver's own repeat band.
+    """
+
+    case = _case()
+    calls = []
+    real_mstep_blocks = rp.run_resident_mstep_blocks
+
+    def counting_mstep_blocks(*args, **kwargs):
+        calls.append(kwargs.get("image_capacity"))
+        return real_mstep_blocks(*args, **kwargs)
+
+    monkeypatch.setattr(rp, "run_resident_mstep_blocks", counting_mstep_blocks)
+
+    on = _run(case, resident=True, monkeypatch=monkeypatch, resident_operands=True)
+    assert calls, "the local pass must reach run_resident_mstep_blocks"
+    off = _run(case, resident=True, monkeypatch=monkeypatch, resident_operands=False)
+
+    np.testing.assert_array_equal(
+        np.asarray(on.hard_assignment), np.asarray(off.hard_assignment)
+    )
+    np.testing.assert_array_equal(
+        np.asarray(on.best_pose_rotation_ids), np.asarray(off.best_pose_rotation_ids)
+    )
+    np.testing.assert_array_equal(
+        np.asarray(on.best_pose_translations), np.asarray(off.best_pose_translations)
+    )
+
+    def rel_l2(a, b):
+        a = np.asarray(a, dtype=np.complex128)
+        b = np.asarray(b, dtype=np.complex128)
+        den = float(np.linalg.norm(a))
+        return float(np.linalg.norm(a - b) / den) if den else 0.0
+
+    # The flag selects nothing on this path, so the only spread is the same
+    # float32 atomics the repeat test bounds at 1e-6.
+    assert rel_l2(on.Ft_y, off.Ft_y) < 1e-6
+    assert rel_l2(on.Ft_ctf, off.Ft_ctf) < 1e-6
+    assert rel_l2(
+        on.noise_stats.wsum_sigma2_noise, off.noise_stats.wsum_sigma2_noise
+    ) < 1e-6
+    np.testing.assert_allclose(
+        np.asarray(on.relion_stats.max_posterior_per_image, dtype=np.float64),
+        np.asarray(off.relion_stats.max_posterior_per_image, dtype=np.float64),
+        rtol=0,
+        atol=1e-6,
+    )

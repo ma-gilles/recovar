@@ -3301,6 +3301,22 @@ def run_resident_mstep_blocks(
     statistics fields are unused by that body.
     """
 
+    if recon.get("shifted_recon") is None or recon.get("shifted_noise") is None:
+        # Fail closed rather than hand ``None`` to the XLA weighted sums: a
+        # ``recon`` without the pre-shifted tiles is T16's once-per-half
+        # preparation, whose weighted sums are the translate-and-sum kernel's,
+        # and this entry point has no kernel path (``spec`` below pins
+        # ``use_translate_sum_kernel=False``).
+        raise ValueError(
+            "run_resident_mstep_blocks takes the per-chunk pre-shifted "
+            "reconstruction operands ('shifted_recon'/'shifted_noise'); this "
+            "chunk carries T16's once-per-half per-image operands instead "
+            f"(keys present: {sorted(k for k, v in recon.items() if v is not None)}). "
+            "Prepare the chunk with _prepare_chunk_reconstruction_operands, or "
+            "give this entry point the kernel path before handing it resident "
+            "operands."
+        )
+
     spec = _ChunkProgramSpec(
         row_capacity=int(row_capacity),
         image_capacity=int(image_capacity),
