@@ -285,3 +285,106 @@ def test_the_optional_operands_dtypes_against_the_real_preparation(
         if jnp.dtype(got.dtype) != jnp.dtype(want.dtype):
             mismatches.append(f"{name}: dtype {got.dtype} vs {want.dtype}")
     assert not mismatches, "the optional operands disagree:\n  " + "\n  ".join(mismatches)
+
+
+@pytest.mark.gpu
+def test_eval_shape_through_the_real_gather_predicts_the_chunk_operands(
+    monkeypatch, custom_cuda_lib, gpu_device
+):
+    """The recipe a compile-ahead consumer uses, end to end.
+
+    The pass-2 chunk programs take the CHUNK's operands, which
+    `gather_resident_chunk_operands` produces from the half's. Rather than
+    hand-write a second aval constructor for those -- a second place to drift,
+    which is how the 476-byte disagreement above happened -- the consumer runs
+    `jax.eval_shape` through the real gather, starting from
+    `resident_half_operand_avals`. This test asserts that predicting the chunk
+    operands that way gives exactly what gathering the real operands gives.
+
+    It needs a GPU because the gather calls the RELION translate FFI, which
+    refuses a non-GPU backend; that is also why the CPU tests above cannot
+    cover it.
+    """
+
+    import dataclasses
+
+    from test_resident_operands import (
+        IMAGE_SHAPE, N_FINE_TRANS, N_IMAGES, _case, _gpu_case, _resident_operands,
+    )
+    from recovar.em.sparse_pass2.resident_operands import gather_resident_chunk_operands
+
+    _gpu_case(monkeypatch, custom_cuda_lib)
+    with jax.default_device(gpu_device):
+        case = _case(relion_angles=True)
+        real = _resident_operands(case)
+
+        image_capacity = 8
+        slots = jnp.asarray(
+            np.concatenate([np.arange(min(image_capacity, N_IMAGES)),
+                            -np.ones(max(0, image_capacity - N_IMAGES), int)])[:image_capacity],
+            dtype=jnp.int32,
+        )
+        angles = jnp.asarray(case["translation_angles"], dtype=jnp.float32)
+        window = jnp.asarray(case["window_indices"], dtype=jnp.int32)
+
+        def gather(operands):
+            return gather_resident_chunk_operands(
+                operands, slots, translation_angles=angles, rect_indices=window,
+                exact_positions=window, image_shape=IMAGE_SHAPE,
+            )
+
+        observed = gather(real)
+
+        # the consumer's path: avals only, through the same function
+        predicted_half = resident_half_operand_avals(
+            n_images=real.n_images,
+            n_score_pixels=real.n_score_pixels,
+            n_recon_pixels=real.n_recon_pixels,
+            n_half_pixels=real.n_half_pixels,
+            n_fine_trans=real.n_fine_trans,
+            score_complex_dtype=jnp.complex64,
+            score_real_dtype=jnp.float32,
+            acc_real_dtype=jnp.float32,
+            rfloat_ctf_dtype=jnp.float64,
+            has_recon_weight=real.recon_weight is not None,
+            has_direct_ctf_rfloat=real.direct_ctf_rfloat_recon is not None,
+            has_highres_xi2=real.highres_xi2_half is not None,
+            has_relion_norm_high_shell=real.relion_norm_high_shell is not None,
+        )
+        names = [f.name for f in dataclasses.fields(ResidentHalfOperands)
+                 if not f.name.startswith("n_")]
+        present = [n for n in names if getattr(predicted_half, n) is not None]
+        scalars = {f.name: getattr(predicted_half, f.name)
+                   for f in dataclasses.fields(ResidentHalfOperands)
+                   if f.name.startswith("n_")}
+
+        def rebuild(arrays):
+            kwargs = dict(scalars)
+            kwargs.update({n: None for n in names})
+            kwargs.update(dict(zip(present, arrays)))
+            return ResidentHalfOperands(**kwargs)
+
+        predicted = jax.eval_shape(
+            lambda arrays: gather(rebuild(arrays)),
+            tuple(getattr(predicted_half, n) for n in present),
+        )
+
+    assert set(predicted) == set(observed), (
+        f"predicted keys {sorted(set(predicted) ^ set(observed))} differ from the gather's"
+    )
+    mismatches = []
+    for key in sorted(observed):
+        got, want = predicted[key], observed[key]
+        if (got is None) != (want is None):
+            mismatches.append(f"{key}: predicted {got!r}, gathered {want!r}")
+            continue
+        if want is None:
+            continue
+        if tuple(int(d) for d in got.shape) != tuple(int(d) for d in want.shape):
+            mismatches.append(f"{key}: shape {got.shape} vs {want.shape}")
+        if jnp.dtype(got.dtype) != jnp.dtype(want.dtype):
+            mismatches.append(f"{key}: dtype {got.dtype} vs {want.dtype}")
+    assert not mismatches, (
+        "eval_shape through the real gather does not predict the chunk operands:\n  "
+        + "\n  ".join(mismatches)
+    )
