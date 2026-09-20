@@ -1825,6 +1825,13 @@ def run_local_em_exact(
     # bucket. At ~4400 bucket visits per 20 iterations that is tens of thousands of
     # redundant host-to-device transfers, which showed up as `batched_device_put`
     # in the host profile. Place them once.
+    # `noise_variance_half` is fixed for the iteration (assigned far above), so its
+    # reciprocal and the float64 view used to scale CTF^2 do not vary per bucket.
+    # Both were recomputed inside the loop on every bucket.
+    inverse_noise_rfloat_cast_once = np.reciprocal(
+        np.asarray(noise_variance_half, dtype=np.float64)
+    ).astype(np.float32)
+    inverse_noise_rfloat_cast_row_f64 = inverse_noise_rfloat_cast_once[None, :].astype(np.float64)
     relion_fine_full_to_compact_device = jnp.asarray(relion_fine_full_to_compact, dtype=jnp.int32)
     big_jit_relion_wavg_rectangle_indices_device = jnp.asarray(
         big_jit_relion_wavg_rectangle_indices_arg, dtype=jnp.int32,
@@ -2125,13 +2132,10 @@ def run_local_em_exact(
                     ),
                     dtype=jnp.float64,
                 )
-                inverse_noise_rfloat_cast_np = np.reciprocal(
-                    np.asarray(noise_variance_half, dtype=np.float64)
-                ).astype(np.float32)
+                inverse_noise_rfloat_cast_np = inverse_noise_rfloat_cast_once
                 ctf_squared_rfloat = ctf_rfloat_unpadded * ctf_rfloat_unpadded
                 corr_img_rfloat_square_unpadded = (
-                    inverse_noise_rfloat_cast_np[None, :].astype(np.float64)
-                    * ctf_squared_rfloat
+                    inverse_noise_rfloat_cast_row_f64 * ctf_squared_rfloat
                 ).astype(np.float32)
                 inverse_noise_rfloat_cast_arg = jnp.asarray(
                     inverse_noise_rfloat_cast_np,
