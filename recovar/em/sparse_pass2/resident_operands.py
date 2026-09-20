@@ -227,6 +227,87 @@ def resident_half_operand_bytes(
     )
 
 
+def resident_half_operand_avals(
+    *,
+    n_images: int,
+    n_score_pixels: int,
+    n_recon_pixels: int,
+    n_half_pixels: int,
+    n_fine_trans: int,
+    score_complex_dtype,
+    score_real_dtype,
+    acc_real_dtype,
+    rfloat_ctf_dtype=None,
+    has_recon_weight: bool,
+    has_direct_ctf_rfloat: bool,
+    has_highres_xi2: bool = True,
+    has_relion_norm_high_shell: bool = True,
+) -> "ResidentHalfOperands":
+    """The half's operands as avals, without preparing them (P4-J).
+
+    Same inputs as :func:`resident_half_operand_bytes`, which the driver's
+    admission check already computes before any device work: the shapes of this
+    half's operands are decided by the current size, the window and the image
+    count, all of them known before pass 1 runs. This returns them as
+    ``jax.ShapeDtypeStruct`` so a program that consumes the operands can be
+    lowered and compiled ahead of the preparation that fills them.
+
+    Only the SHAPES are encoded here. The dtypes are the caller's, because the
+    precision policy owns them and a second copy of that decision would be a
+    second place to get it wrong; ``has_*`` say which optional operands the
+    configuration produces.
+
+    ``rfloat_ctf_dtype`` is separate and defaults to float64 because that is
+    what :func:`resident_half_operand_bytes` assumes for the exact RELION CTF
+    (its ``rfloat_ctf_bytes`` default is 8, and the driver leaves it at the
+    default while passing the policy's dtypes for everything else). Whether the
+    stored array really is float64 is not settled here: the CPU test only holds
+    this function and the byte estimate to the same story, and the GPU test
+    against :func:`prepare_resident_half_operands` is what decides it. If they
+    disagree, the admission check is over-estimating by four bytes per
+    reconstruction pixel per image, which is conservative and therefore safe,
+    but this function would be wrong and the GPU test is how that surfaces.
+
+    Nothing here allocates or touches a device buffer.
+    """
+
+    n_images = int(n_images)
+    score_shape = (n_images, int(n_score_pixels))
+    recon_shape = (n_images, int(n_recon_pixels))
+    half_shape = (n_images, int(n_half_pixels))
+    per_image = (n_images,)
+
+    def aval(shape, dtype):
+        return jax.ShapeDtypeStruct(tuple(shape), jnp.dtype(dtype))
+
+    return ResidentHalfOperands(
+        n_images=n_images,
+        n_score_pixels=int(n_score_pixels),
+        n_recon_pixels=int(n_recon_pixels),
+        n_half_pixels=int(n_half_pixels),
+        n_fine_trans=int(n_fine_trans),
+        score_input=aval(score_shape, score_complex_dtype),
+        corr_img_score=aval(score_shape, score_real_dtype),
+        highres_xi2_half=aval(per_image, score_real_dtype) if has_highres_xi2 else None,
+        translation_prior=aval((n_images, int(n_fine_trans)), score_real_dtype),
+        recon_image=aval(recon_shape, score_complex_dtype),
+        recon_weight=aval(recon_shape, acc_real_dtype) if has_recon_weight else None,
+        noise_image=aval(recon_shape, score_complex_dtype),
+        ctf2_over_nv_recon=aval(recon_shape, acc_real_dtype),
+        direct_ctf_rfloat_recon=(
+            aval(recon_shape, rfloat_ctf_dtype if rfloat_ctf_dtype is not None else jnp.float64)
+            if has_direct_ctf_rfloat
+            else None
+        ),
+        processed_image_half=aval(half_shape, score_complex_dtype),
+        relion_norm_high_shell=(
+            aval(per_image, score_real_dtype) if has_relion_norm_high_shell else None
+        ),
+        scale=aval(per_image, jnp.float32),
+        group_ids=aval(per_image, jnp.int32),
+    )
+
+
 def resident_operands_max_bytes(device_memory_bytes: int | None = None) -> int:
     """Budget for one half's resident per-image operands."""
 
