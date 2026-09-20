@@ -341,6 +341,42 @@ def preprocess_batch_firstiter_cc(
     return result
 
 
+def relion_half_translation_lattice(image_shape):
+    """Packed half-spectrum frequencies with RELION's row labels.
+
+    ``get_k_coordinate_of_each_pixel_half`` labels the packed Nyquist row
+    ``ky = -N/2``, which is RECOVAR's own centered convention and is what the
+    non-EM callers of that core helper expect. RELION labels the same physical
+    row of a half image it is not cropping ``+N/2``
+    (``fftw.h:99-109``: ``ip = (i < XSIZE) ? i : i - YSIZE`` with ``XSIZE`` the
+    half width), and its scoring and translate kernels all derive that label,
+    so an EM translation phase built on the centered label is the conjugate of
+    RELION's on that row for any shift that is not a whole pixel.
+
+    The table is always built on the uncropped packed half, so RELION's label
+    is the right one for it; a cropped window simply never selects that row
+    (``windowFourierTransform`` keeps ``ip = -(cs/2-1)..+cs/2``,
+    ``fftw.h:849-855``). This wrapper is EM-local by design: the core helper
+    keeps its own convention for its other callers.
+    """
+
+    lattice = np.array(
+        fourier_transform_utils.get_k_coordinate_of_each_pixel_half(
+            image_shape,
+            voxel_size=1,
+            scaled=True,
+        ),
+        dtype=np.float64,
+        copy=True,
+    )
+    image_size = int(image_shape[0])
+    if image_size % 2 == 0:
+        ky = np.rint(lattice[:, 1] * image_size).astype(np.int64)
+        nyquist = ky == -(image_size // 2)
+        lattice[nyquist, 1] = -lattice[nyquist, 1]
+    return lattice
+
+
 def half_translation_phase_table(translations, image_shape, dtype=jnp.float32):
     """Return the complex phase-shift table for a translation grid.
 
@@ -348,12 +384,12 @@ def half_translation_phase_table(translations, image_shape, dtype=jnp.float32):
     RECOVAR's own historical default here). Pass ``jnp.float64`` to compute
     genuinely double-precision phase factors; ``jax.lax.Precision.HIGHEST``
     alone does not upcast float32 inputs, so the input dtype must change too.
+
+    Frequencies come from :func:`relion_half_translation_lattice`, so the
+    packed Nyquist row carries RELION's label rather than RECOVAR's centered
+    one.
     """
-    lattice_half = fourier_transform_utils.get_k_coordinate_of_each_pixel_half(
-        image_shape,
-        voxel_size=1,
-        scaled=True,
-    )
+    lattice_half = relion_half_translation_lattice(image_shape)
     real_dtype = jnp.float64 if jnp.dtype(dtype) == jnp.dtype(jnp.float64) else jnp.float32
     complex_dtype = jnp.complex128 if real_dtype == jnp.float64 else jnp.complex64
     phase_arg = jnp.einsum(
