@@ -1965,6 +1965,18 @@ class _ChunkProgramSpec:
     static_block_trip: bool
 
 
+class _MstepOnlyStatsConfig(NamedTuple):
+    """The single statistics field the M-step block body reads.
+
+    ``run_resident_mstep_blocks`` runs the M-step alone for a caller that owns
+    its own scoring, posterior and statistics (local search, T12). Handing it
+    the shell count in the shape ``_ChunkProgramSpec`` expects keeps one M-step
+    body without making that caller build a full statistics configuration.
+    """
+
+    n_shells: int
+
+
 class _ChunkRowArrays(NamedTuple):
     """One chunk's row-aligned tables and its runtime extents."""
 
@@ -2135,12 +2147,28 @@ def _resident_chunk_posterior(
     )
 
 
+def _cached_block_projections(tables: _ChunkStageTables, block_fine_rot):
+    """The global pass's block projections: three gathers by fine-rotation id.
+
+    Split out so the M-step block body takes its projections as operands. The
+    global pass keeps gathering them out of the per-iteration caches exactly
+    where it did before; local search (T12) has no cacheable fine grid and
+    slices the projections it computed for the chunk's own rows instead.
+    """
+
+    return (
+        tables.projection_recon_cache[block_fine_rot],
+        tables.projection_recon_abs2_cache[block_fine_rot],
+        tables.mstep_grid[block_fine_rot],
+    )
+
+
 def _resident_mstep_block(
     *,
     block_row_image,
     block_kernel_ids,
     block_posterior,
-    block_fine_rot,
+    block_projections,
     operands: _ChunkStageOperands,
     tables: _ChunkStageTables,
     carry: _ChunkMstepCarry,
@@ -2149,13 +2177,16 @@ def _resident_mstep_block(
 ) -> _ChunkMstepCarry:
     """One pixel-axis row block: weighted sums, Wavg, noise, both adjoints.
 
-    Statement for statement the body the per-stage loop ran inline; both paths
-    call this one copy, so the only difference between them is how the block's
-    rows are sliced (static Python slice versus ``dynamic_slice``).
+    Statement for statement the body the per-stage loop ran inline; every path
+    calls this one copy, so the only differences between them are how the
+    block's rows are sliced (static Python slice versus ``dynamic_slice``) and
+    where its projections come from. ``block_projections`` is the block's
+    ``(projection, |projection|^2, M-step rotations)``: the global pass passes
+    ``_cached_block_projections(tables, block_fine_rot)``, local search passes
+    a slice of the projections it computed for this chunk.
     """
 
-    proj = tables.projection_recon_cache[block_fine_rot]
-    proj_abs2 = tables.projection_recon_abs2_cache[block_fine_rot]
+    proj, proj_abs2, block_mstep_rotations = block_projections
     logical_recon_pixels = jnp.asarray(spec.n_recon_pixels, dtype=jnp.int32)
     logical_rect_pixels = jnp.asarray(spec.n_rect, dtype=jnp.int32)
 
@@ -2221,7 +2252,6 @@ def _resident_mstep_block(
         image_capacity=int(spec.image_capacity),
     )
 
-    block_mstep_rotations = tables.mstep_grid[block_fine_rot]
     Ft_y = _accumulate_adjoint_block_chunked(
         summed,
         block_mstep_rotations,
@@ -2271,6 +2301,7 @@ def _initial_mstep_carry(
     tables: _ChunkStageTables,
     *,
     spec: _ChunkProgramSpec,
+    projection_dtypes=None,
 ) -> _ChunkMstepCarry:
     """Zero-initialized block accumulators with the block stages' own dtypes.
 
@@ -2285,6 +2316,14 @@ def _initial_mstep_carry(
     image_capacity = int(spec.image_capacity)
     block_rows = int(spec.mstep_block_rows)
     n_pixels = int(spec.n_recon_pixels)
+    if projection_dtypes is None:
+        # The global pass reads the per-iteration caches; local search has no
+        # cache and hands the dtypes of the projections it just computed.
+        projection_dtypes = (
+            tables.projection_recon_cache.dtype,
+            tables.projection_recon_abs2_cache.dtype,
+        )
+    proj_dtype, proj_abs2_dtype = projection_dtypes
 
     def probe(row_posterior, row_image, shifted_recon, shifted_noise, ctf2, proj, proj_abs2, noise, shells):
         _summed, summed_masked, ctf_probs, _mass = _resident_block_weighted_sums(
@@ -2309,8 +2348,8 @@ def _initial_mstep_carry(
         operands.shifted_recon,
         operands.shifted_noise,
         operands.ctf2_over_nv_recon,
-        jax.ShapeDtypeStruct((block_rows, n_pixels), tables.projection_recon_cache.dtype),
-        jax.ShapeDtypeStruct((block_rows, n_pixels), tables.projection_recon_abs2_cache.dtype),
+        jax.ShapeDtypeStruct((block_rows, n_pixels), proj_dtype),
+        jax.ShapeDtypeStruct((block_rows, n_pixels), proj_abs2_dtype),
         tables.noise_variance_for_noise,
         tables.shell_indices_noise,
     )
@@ -2423,7 +2462,7 @@ def _run_resident_chunk_program(
             block_row_image=take(rows.row_image_local),
             block_kernel_ids=take(posterior.kernel_row_image_ids),
             block_posterior=take(posterior.row_posterior),
-            block_fine_rot=take(rows.row_fine_rot),
+            block_projections=_cached_block_projections(tables, take(rows.row_fine_rot)),
             operands=operands,
             tables=tables,
             carry=carry_in,
@@ -2504,7 +2543,7 @@ def _run_resident_chunk_stages(
             block_row_image=rows.row_image_local[block],
             block_kernel_ids=posterior.kernel_row_image_ids[block],
             block_posterior=posterior.row_posterior[block],
-            block_fine_rot=rows.row_fine_rot[block],
+            block_projections=_cached_block_projections(tables, rows.row_fine_rot[block]),
             operands=operands,
             tables=tables,
             carry=mstep,
@@ -2764,3 +2803,150 @@ def _run_resident_chunk(
             total,
         )
     return Ft_y_total, Ft_ctf_total, stats
+
+
+def run_resident_mstep_blocks(
+    block_projections,
+    *,
+    row_capacity: int,
+    n_valid_rows: int,
+    mstep_block_rows: int,
+    image_capacity: int,
+    row_image_local,
+    kernel_row_image_ids,
+    row_posterior,
+    recon,
+    n_rect: int,
+    n_shells: int,
+    n_recon_windowed: int,
+    noise_variance_for_noise,
+    shell_indices_noise,
+    exact_positions_device,
+    Ft_y_total,
+    Ft_ctf_total,
+    image_shape,
+    recon_volume_shape,
+    mstep_current_size,
+    relion_x_half_recon_indices,
+    max_adjoint_block_bytes,
+    cuda_backproject,
+):
+    """Walk one chunk's pixel axis in row blocks: Wavg, noise and both adjoints.
+
+    ``block_projections(start, stop)`` returns this block's reconstruction-window
+    projection, its ``|proj|^2`` and its M-step rotations. The global pass 2
+    gathers all three out of the per-iteration fine-rotation caches; local
+    search (T12) slices them out of the projections it computed for the chunk's
+    own rows, because its fine grid is not cacheable.
+
+    The body is ``_resident_mstep_block``, the same copy the global pass runs in
+    both its per-stage and its jitted form, so no accumulator has a second
+    implementation. Only the M-step fields of the stage containers are filled
+    here: this entry point runs the M-step alone, and the scoring, posterior and
+    statistics fields are unused by that body.
+    """
+
+    spec = _ChunkProgramSpec(
+        row_capacity=int(row_capacity),
+        image_capacity=int(image_capacity),
+        n_fine_trans=int(row_posterior.shape[1]),
+        n_score_pixels=0,
+        n_recon_pixels=int(n_recon_windowed),
+        n_rect=int(n_rect),
+        mstep_block_rows=int(mstep_block_rows),
+        adaptive_fraction=0.0,
+        current_size=0,
+        mstep_current_size=int(mstep_current_size),
+        image_shape=tuple(int(v) for v in image_shape),
+        recon_volume_shape=tuple(int(v) for v in recon_volume_shape),
+        max_adjoint_block_bytes=int(max_adjoint_block_bytes),
+        stats_config=_MstepOnlyStatsConfig(n_shells=int(n_shells)),
+        use_rfloat_ctf_wavg=recon["direct_ctf_rfloat_recon"] is not None,
+        block_unroll=1,
+        static_block_trip=False,
+    )
+    operands = _ChunkStageOperands(
+        score_input=None,
+        corr_img_score=None,
+        highres_xi2_half=None,
+        translation_prior=None,
+        shifted_recon=recon["shifted_recon"],
+        shifted_noise=recon["shifted_noise"],
+        ctf2_over_nv_recon=recon["ctf2_over_nv_recon"],
+        direct_ctf_rfloat_recon=recon["direct_ctf_rfloat_recon"],
+        processed_image_half=None,
+        relion_norm_high_shell=None,
+        raw_translated_wavg_rectangle=recon["raw_translated_wavg_rectangle"],
+        raw_translated_wavg_for_atomic=recon["raw_translated_wavg_for_atomic"],
+        scale=recon["scale"],
+        group_ids=None,
+        translation_sqdist_ang=None,
+    )
+    tables = _ChunkStageTables(
+        projection_score_cache=None,
+        projection_recon_cache=None,
+        projection_recon_abs2_cache=None,
+        mstep_grid=None,
+        coarse_parent_grid=None,
+        fine_translation_parent=None,
+        half_weights=None,
+        translation_angles=None,
+        full_to_compact=None,
+        noise_variance_for_noise=noise_variance_for_noise,
+        shell_indices_noise=shell_indices_noise,
+        exact_positions=exact_positions_device,
+        relion_x_half_recon_indices=relion_x_half_recon_indices,
+        shell_indices_half=None,
+        wavg_shell_indices=None,
+        wavg_scale_pixel_mask=None,
+    )
+
+    block_rows = int(mstep_block_rows)
+    carry = None
+
+    def start_carry(projections):
+        return _initial_mstep_carry(
+            Ft_y_total,
+            Ft_ctf_total,
+            operands,
+            tables,
+            spec=spec,
+            projection_dtypes=(projections[0].dtype, projections[1].dtype),
+        )
+
+    for start in range(0, int(row_capacity), block_rows):
+        if start >= int(n_valid_rows):
+            # Every row of this block is chunk padding: its posterior is zero,
+            # so the weighted sums, the Wavg terms, the noise partials and both
+            # adjoint scatters are all exactly zero and adding them changes no
+            # accumulator bit.
+            break
+        stop = start + block_rows
+        block = slice(start, stop)
+        projections = block_projections(start, stop)
+        if carry is None:
+            carry = start_carry(projections)
+        carry = _resident_mstep_block(
+            block_row_image=row_image_local[block],
+            block_kernel_ids=kernel_row_image_ids[block],
+            block_posterior=row_posterior[block],
+            block_projections=projections,
+            operands=operands,
+            tables=tables,
+            carry=carry,
+            spec=spec,
+            cuda_backproject=cuda_backproject,
+        )
+    if carry is None:
+        # A chunk with no live rows: the accumulators are the incoming ones and
+        # the partials are the zeros the statistics program expects.
+        carry = start_carry(block_projections(0, block_rows))
+
+    return (
+        carry.Ft_y,
+        carry.Ft_ctf,
+        carry.wavg_triplet_pixels,
+        carry.noise_shells,
+        carry.a2_per_image,
+        carry.xa_per_image,
+    )

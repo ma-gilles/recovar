@@ -20,6 +20,11 @@ from recovar.em.helpers.types import LocalEMResult, NoiseStats, RelionStats
 from recovar.em.local.local_em_engine import run_local_em_exact
 from recovar.em.local.local_layout import _local_search_engine_rotation_block_size, build_local_hypothesis_layout
 from recovar.em.sampling import build_local_search_grid_metadata
+from recovar.em.sparse_pass2.resident_local_pass2 import (
+    RESIDENT_LOCAL_SEARCH_ENV,
+    compute_local_search_resident,
+    resident_local_search_requested,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -280,6 +285,11 @@ def _run_local_search_iteration(
     rotation_block_size = local_batch_plan.rotation_block_size
 
     if class_log_priors is not None:
+        if resident_local_search_requested():
+            raise NotImplementedError(
+                f"{RESIDENT_LOCAL_SEARCH_ENV}=1 selects the device-resident local pass 2, "
+                "which is K=1 only; K-class local search keeps the exact local engine"
+            )
         if return_reconstruction_sample_indices:
             raise NotImplementedError("K-class local search does not return reconstruction sample indices")
         if return_significant_counts:
@@ -358,8 +368,95 @@ def _run_local_search_iteration(
             else None,
             noise_stats=k_class_result.aggregate_noise_stats if accumulate_noise else None,
         )
+    elif (
+        resident_local_search_requested()
+        and not score_only
+        and current_size is not None
+        and int(current_size) < int(experiment_dataset.image_shape[0])
+    ):
+        # The device-resident local pass 2 (T12). Only the fine pass is routed
+        # here: the pass-1 parent probe selects pass 2's candidate set with
+        # RELION's ``maximum_significants`` cap, which the segmented float32
+        # posterior does not implement, so routing it would change the support
+        # rather than only its layout. The boundary is logged, not silent.
+        class_details = None
+        logger.info(
+            "%s=1: running the device-resident local fine pass 2 "
+            "(image_batch_size=%d and rotation_block_size=%d are unused by this path; "
+            "its capacity plan is sized from the projection byte budget)",
+            RESIDENT_LOCAL_SEARCH_ENV,
+            image_batch_size,
+            rotation_block_size,
+        )
+        engine_outputs = compute_local_search_resident(
+            experiment_dataset,
+            mean,
+            noise_variance,
+            local_layout,
+            disc_type,
+            current_size=current_size,
+            reconstruction_current_size=reconstruction_current_size,
+            accumulate_noise=accumulate_noise,
+            projection_padding_factor=projection_padding_factor,
+            reconstruction_padding_factor=reconstruction_padding_factor,
+            score_with_masked_images=score_with_masked_images,
+            half_spectrum_scoring=half_spectrum_scoring,
+            relion_exact_score_translation=relion_exact_score_translation,
+            projection_relion_texture_interp=projection_relion_texture_interp,
+            projection_relion_acc_double_floorf_quirk=projection_relion_acc_double_floorf_quirk,
+            projection_force_jax=projection_force_jax,
+            projection_mask_current_image_disk=projection_mask_current_image_disk,
+            relion_projector_half=relion_projector_half,
+            relion_projector_r_max=relion_projector_r_max,
+            use_float64_scoring=use_float64_scoring,
+            use_float64_projections=use_float64_projections,
+            do_gridding_correction=do_gridding_correction,
+            square_window=square_window,
+            image_corrections=image_corrections,
+            scale_corrections=scale_corrections,
+            group_ids=group_ids,
+            scale_correction_group_count=scale_correction_group_count,
+            scale_correction_data_vs_prior=scale_correction_data_vs_prior,
+            image_pre_shifts=image_pre_shifts,
+            mstep_subtract_ctf_projection=mstep_subtract_ctf_projection,
+            mstep_relion_x_half=mstep_relion_x_half,
+            disable_adjoint_y=disable_adjoint_y,
+            disable_adjoint_ctf=disable_adjoint_ctf,
+            reconstruct_significant_only=reconstruct_significant_only,
+            adaptive_fraction=adaptive_fraction,
+            max_significants=max_significants if apply_max_significants_to_support else -1,
+            return_best_pose_details=return_best_pose_details,
+            return_significant_counts=return_significant_counts,
+            return_reconstruction_sample_indices=return_reconstruction_sample_indices,
+            return_profile=return_profile,
+            stats_use_reconstruction_probs=stats_use_reconstruction_probs,
+            translation_prior_centers=translation_prior_centers,
+            normalization_log_z=normalization_log_z,
+            normalization_log_evidence=normalization_log_evidence,
+            source_faithful_spectrum_norm=source_faithful_spectrum_norm,
+            class_log_priors=None,
+            score_only=score_only,
+        )
     else:
         class_details = None
+        if resident_local_search_requested():
+            if score_only:
+                logger.info(
+                    "%s=1: the pass-1 parent probe keeps the exact local engine "
+                    "(its RELION maximum_significants cap is outside the segmented "
+                    "posterior's contract, and changing it would change pass 2's support)",
+                    RESIDENT_LOCAL_SEARCH_ENV,
+                )
+            else:
+                logger.info(
+                    "%s=1: this pass scores at current_size=%s, the full image box "
+                    "(RELION's final all-data iteration), where the exact local engine "
+                    "scores the whole centred half and RELION's radial support does "
+                    "not; the choice between them is a scientific decision, so this "
+                    "iteration keeps the exact local engine",
+                    RESIDENT_LOCAL_SEARCH_ENV,
+                    current_size,
+                )
         engine_outputs = run_local_em_exact(
             experiment_dataset,
             mean,
