@@ -62,6 +62,7 @@
 
 namespace ffi = xla::ffi;
 
+#include "device_scratch.cuh"
 #include "noise_residual.cuh"
 
 constexpr char kRelionVdamExactNativePtxEnv[] =
@@ -3253,9 +3254,9 @@ cudaError_t launch_project_texture_float(
     cudaArray_t arrReal = nullptr, arrImag = nullptr;
     cudaTextureObject_t texReal = 0, texImag = 0;
 
-    cudaError_t err = cudaMalloc((void**)&real, n_voxels * sizeof(float));
+    cudaError_t err = recovar::scratch_alloc((void**)&real, n_voxels * sizeof(float), s);
     if (err != cudaSuccess) goto cleanup;
-    err = cudaMalloc((void**)&imag, n_voxels * sizeof(float));
+    err = recovar::scratch_alloc((void**)&imag, n_voxels * sizeof(float), s);
     if (err != cudaSuccess) goto cleanup;
 
     {
@@ -3336,8 +3337,8 @@ cleanup:
     if (texImag) cudaDestroyTextureObject(texImag);
     if (arrReal) cudaFreeArray(arrReal);
     if (arrImag) cudaFreeArray(arrImag);
-    if (real) cudaFree(real);
-    if (imag) cudaFree(imag);
+    if (real) recovar::scratch_free(real, s);
+    if (imag) recovar::scratch_free(imag, s);
     return err;
 }
 
@@ -3361,9 +3362,9 @@ cudaError_t launch_project_texture_double(
     cudaArray_t arrReal = nullptr, arrImag = nullptr;
     cudaTextureObject_t texReal = 0, texImag = 0;
 
-    cudaError_t err = cudaMalloc((void**)&real, n_voxels * sizeof(float));
+    cudaError_t err = recovar::scratch_alloc((void**)&real, n_voxels * sizeof(float), s);
     if (err != cudaSuccess) goto cleanup;
-    err = cudaMalloc((void**)&imag, n_voxels * sizeof(float));
+    err = recovar::scratch_alloc((void**)&imag, n_voxels * sizeof(float), s);
     if (err != cudaSuccess) goto cleanup;
 
     {
@@ -3438,8 +3439,8 @@ cleanup:
     if (texImag) cudaDestroyTextureObject(texImag);
     if (arrReal) cudaFreeArray(arrReal);
     if (arrImag) cudaFreeArray(arrImag);
-    if (real) cudaFree(real);
-    if (imag) cudaFree(imag);
+    if (real) recovar::scratch_free(real, s);
+    if (imag) recovar::scratch_free(imag, s);
     return err;
 }
 
@@ -4833,7 +4834,7 @@ ffi::Error RelionCubSortScanF32Impl(
 
     void* temporary = nullptr;
     const size_t temporary_bytes = std::max<size_t>(1, std::max(sort_bytes, scan_bytes));
-    err = cudaMalloc(&temporary, temporary_bytes);
+    err = recovar::scratch_alloc(&temporary, temporary_bytes, stream);
     if (err != cudaSuccess)
         return ffi::Error::Internal(
             std::string("RelionCubSortScanF32 cudaMalloc: ") + cudaGetErrorString(err));
@@ -4844,7 +4845,7 @@ ffi::Error RelionCubSortScanF32Impl(
     if (err == cudaSuccess)
         err = relion_ampere_inclusive_sum_f32(
             temporary, scan_bytes, sorted_ptr, cumulative_ptr, static_cast<int>(count), stream);
-    cudaError_t free_error = cudaFree(temporary);
+    cudaError_t free_error = recovar::scratch_free(temporary, stream);
     if (err != cudaSuccess)
         return ffi::Error::Internal(
             std::string("RelionCubSortScanF32 execute: ") + cudaGetErrorString(err));
@@ -5166,9 +5167,9 @@ cudaError_t relion_cub_positive_sort_scan_f32(
 
     do
     {
-        err = cudaMalloc(reinterpret_cast<void**>(&filtered), count * sizeof(float));
+        err = recovar::scratch_alloc(reinterpret_cast<void**>(&filtered), count * sizeof(float), stream);
         if (err != cudaSuccess) break;
-        err = cudaMalloc(reinterpret_cast<void**>(&selected_count_device), sizeof(int));
+        err = recovar::scratch_alloc(reinterpret_cast<void**>(&selected_count_device), sizeof(int), stream);
         if (err != cudaSuccess) break;
 
         size_t select_bytes = 0;
@@ -5188,7 +5189,7 @@ cudaError_t relion_cub_positive_sort_scan_f32(
 
         const size_t temporary_bytes = std::max<size_t>(
             1, std::max(select_bytes, std::max(sort_bytes, scan_bytes)));
-        err = cudaMalloc(&temporary, temporary_bytes);
+        err = recovar::scratch_alloc(&temporary, temporary_bytes, stream);
         if (err != cudaSuccess) break;
         err = cudaMemsetAsync(sorted, 0, count * sizeof(float), stream);
         if (err != cudaSuccess) break;
@@ -5224,11 +5225,11 @@ cudaError_t relion_cub_positive_sort_scan_f32(
     } while (false);
 
     const cudaError_t temporary_free_error =
-        temporary == nullptr ? cudaSuccess : cudaFree(temporary);
+        temporary == nullptr ? cudaSuccess : recovar::scratch_free(temporary, stream);
     const cudaError_t selected_count_free_error =
-        selected_count_device == nullptr ? cudaSuccess : cudaFree(selected_count_device);
+        selected_count_device == nullptr ? cudaSuccess : recovar::scratch_free(selected_count_device, stream);
     const cudaError_t filtered_free_error =
-        filtered == nullptr ? cudaSuccess : cudaFree(filtered);
+        filtered == nullptr ? cudaSuccess : recovar::scratch_free(filtered, stream);
     if (err != cudaSuccess) return err;
     if (temporary_free_error != cudaSuccess) return temporary_free_error;
     if (selected_count_free_error != cudaSuccess) return selected_count_free_error;

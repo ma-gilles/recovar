@@ -179,6 +179,19 @@ class ImageSource:
     def __getitem__(self, index):
         raise NotImplementedError
 
+    def host_images(self, image_indices):
+        """Return raw host images for many local image indices in one call.
+
+        `iter_batches` collates every item into a JAX array, so a caller that wants
+        host NumPy pays a device round trip plus a per-item concatenate. The exact
+        local EM engine rebuilds its raw-image cache that way once per iteration,
+        which costs about 270 s of a 6673 s K=1 100k/256 run. Sources that can
+        serve host memory directly override this; the default keeps the old
+        behaviour so no source is required to implement it.
+        """
+
+        raise NotImplementedError
+
     def process_images(self, images, apply_image_mask=False):
         raise NotImplementedError
 
@@ -275,6 +288,13 @@ class BackendImageSource(ImageSource):
 
     def __getitem__(self, index):
         return self.backend[index]
+
+    def host_images(self, image_indices):
+        """Serve raw host images straight from the backend, without JAX."""
+
+        image_indices = _normalize_indices(image_indices, self.n_images, name="image_indices")
+        images, _, _ = self.backend[image_indices]
+        return np.asarray(images)
 
     def process_images(self, images, apply_image_mask=False):
         return self.backend.process_images(images, apply_image_mask=apply_image_mask)
@@ -387,6 +407,12 @@ class SubsetImageSource(ImageSource):
         if self.tilt_series:
             return self.parent[self._parent_local_group_indices[int(index)]]
         return self.parent[self._parent_local_image_indices[int(index)]]
+
+    def host_images(self, image_indices):
+        """Map subset-local indices onto the parent and serve them in one call."""
+
+        image_indices = _normalize_indices(image_indices, self.n_images, name="image_indices")
+        return self.parent.host_images(self._parent_local_image_indices[image_indices])
 
     def process_images(self, images, apply_image_mask=False):
         return self.parent.process_images(images, apply_image_mask=apply_image_mask)

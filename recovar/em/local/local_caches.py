@@ -268,6 +268,31 @@ def _validate_native_half_batch(batch, image_shape):
 
 
 def _fetch_local_raw_rows_once(experiment_dataset, image_indices):
+    """Fetch raw images and CTF rows for the local cache, on the host.
+
+    Everything here ends up in host NumPy, so routing the images through
+    `iter_batches` costs a device round trip and a per-item concatenate for
+    nothing: the loader already holds them in host memory under
+    ``RECOVAR_PREREAD_IMAGES``. Measured on K=1 100k/256 at 200 mini-batches, the
+    cache rebuild is about 270 s of a 6673 s run.
+
+    The host path is used only when the source offers one; anything else keeps the
+    original route, which also remains the reference the equivalence test checks
+    the fast path against.
+    """
+
+    image_indices = np.asarray(image_indices, dtype=np.int32)
+    source = getattr(experiment_dataset, "image_source", None)
+    host_images = getattr(source, "host_images", None)
+    if host_images is not None and not getattr(source, "tilt_series", False):
+        try:
+            images = host_images(image_indices)
+        except NotImplementedError:
+            images = None
+        if images is not None:
+            _, _, ctf_params = experiment_dataset.metadata.get_batch(image_indices)
+            return np.asarray(images), np.asarray(ctf_params), image_indices
+
     batch_data, ctf_params, fetched_indices = fetch_indexed_batch(experiment_dataset, image_indices)
     return np.asarray(batch_data), np.asarray(ctf_params), np.asarray(fetched_indices)
 

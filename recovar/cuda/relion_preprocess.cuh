@@ -280,13 +280,13 @@ cudaError_t launch_relion_preprocess_real_f32(
     float* reduce_values = nullptr;
     void* reduce_temp = nullptr;
     size_t reduce_temp_bytes = 0;
-    err = cudaMalloc(
+    err = recovar::scratch_alloc(
         reinterpret_cast<void**>(&reduction_storage),
-        reduction_storage_count * sizeof(float));
+        reduction_storage_count * sizeof(float), stream);
     if (err != cudaSuccess) return err;
-    err = cudaMalloc(reinterpret_cast<void**>(&reduce_values), 2 * sizeof(float));
+    err = recovar::scratch_alloc(reinterpret_cast<void**>(&reduce_values), 2 * sizeof(float), stream);
     if (err != cudaSuccess) {
-        cudaFree(reduction_storage);
+        recovar::scratch_free(reduction_storage, stream);
         return err;
     }
     float* reduction_input = deterministic_lane_reduction
@@ -296,10 +296,10 @@ cudaError_t launch_relion_preprocess_real_f32(
         nullptr, reduce_temp_bytes, reduction_input, reduce_values,
         reduction_input_count, stream);
     if (err == cudaSuccess)
-        err = cudaMalloc(&reduce_temp, reduce_temp_bytes == 0 ? 1 : reduce_temp_bytes);
+        err = recovar::scratch_alloc(&reduce_temp, reduce_temp_bytes == 0 ? 1 : reduce_temp_bytes, stream);
     if (err != cudaSuccess) {
-        cudaFree(reduce_values);
-        cudaFree(reduction_storage);
+        recovar::scratch_free(reduce_values, stream);
+        recovar::scratch_free(reduction_storage, stream);
         return err;
     }
 
@@ -370,9 +370,9 @@ cudaError_t launch_relion_preprocess_real_f32(
         if (err != cudaSuccess) break;
     }
 
-    cudaError_t free_temp_err = cudaFree(reduce_temp);
-    cudaError_t free_values_err = cudaFree(reduce_values);
-    cudaError_t free_storage_err = cudaFree(reduction_storage);
+    cudaError_t free_temp_err = recovar::scratch_free(reduce_temp, stream);
+    cudaError_t free_values_err = recovar::scratch_free(reduce_values, stream);
+    cudaError_t free_storage_err = recovar::scratch_free(reduction_storage, stream);
     if (err != cudaSuccess) return err;
     if (free_temp_err != cudaSuccess) return free_temp_err;
     if (free_values_err != cudaSuccess) return free_values_err;
