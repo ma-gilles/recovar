@@ -125,20 +125,41 @@ def project_relion_projector_half_spectrum_centered_rows(
         row_order = jnp.fft.fftshift(jnp.arange(image_size, dtype=jnp.int32))
         return proj_fftw[:, row_order, :].reshape((rotations_block.shape[0], -1))
 
-    crop_rows = jnp.arange(projector_image_size, dtype=jnp.int32)
-    crop_ky = jnp.where(
-        crop_rows <= projector_image_size // 2,
-        crop_rows,
-        crop_rows - projector_image_size,
+    # Placing the crop into the full centred half image as
+    # ``zeros.at[:, full_indices].set(crop)`` is a scatter along the pixel axis,
+    # and XLA lowers that scatter as a while loop with one trip per scattered
+    # column: per trip a ``[rotations, 1]`` dynamic-slice and a
+    # ``[rotations, full_pixels]`` dynamic-update-slice, plus the induction and
+    # predicate kernels.  At the hp3 resident cache that is 4324 trips for every
+    # rotation block and about 1.6 M launches per half (P4-C,
+    # em_p4c_hp3_kernel_census_20260920), for work that moves each value once.
+    #
+    # The same placement read backwards is a gather: every full pixel takes at
+    # most one crop element, because ``full_indices`` is injective, so for each
+    # destination we can compute its source directly and fill the rest with
+    # zeros.  Validity is decided by the round trip rather than by re-deriving
+    # the row bounds, so the two paths agree by construction and the values
+    # moved are identical, not merely equal.
+    crop_x_half = projector_image_size // 2 + 1
+    full_x_half = image_size // 2 + 1
+    full_pixels = jnp.arange(image_size * full_x_half, dtype=jnp.int32)
+    full_rows_of = full_pixels // full_x_half
+    full_cols_of = full_pixels - full_rows_of * full_x_half
+    crop_ky_of = full_rows_of - image_size // 2
+    crop_rows_of = jnp.where(crop_ky_of >= 0, crop_ky_of, crop_ky_of + projector_image_size)
+    # Clip so the gather stays in bounds; the round-trip check below discards
+    # whatever the clip invented.
+    safe_rows = jnp.clip(crop_rows_of, 0, projector_image_size - 1)
+    safe_cols = jnp.clip(full_cols_of, 0, crop_x_half - 1)
+    source = safe_rows * crop_x_half + safe_cols
+    round_trip_ky = jnp.where(
+        safe_rows <= projector_image_size // 2,
+        safe_rows,
+        safe_rows - projector_image_size,
     )
-    full_rows = crop_ky + image_size // 2
-    crop_cols = jnp.arange(projector_image_size // 2 + 1, dtype=jnp.int32)
-    full_indices = (full_rows[:, None] * (image_size // 2 + 1) + crop_cols[None, :]).reshape(-1)
-    proj_full = jnp.zeros(
-        (rotations_block.shape[0], image_size * (image_size // 2 + 1)),
-        dtype=proj_fftw.dtype,
-    )
-    return proj_full.at[:, full_indices].set(proj_fftw.reshape((rotations_block.shape[0], -1)))
+    covered = (round_trip_ky + image_size // 2) * full_x_half + safe_cols == full_pixels
+    gathered = proj_fftw.reshape((rotations_block.shape[0], -1))[:, source]
+    return jnp.where(covered[None, :], gathered, jnp.zeros((), dtype=proj_fftw.dtype))
 
 
 @partial(jax.jit, static_argnums=(2, 3, 4, 5, 7))
