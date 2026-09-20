@@ -229,18 +229,31 @@ def test_glue_jit_is_on_by_default_and_reads_the_environment(monkeypatch):
 
 
 def test_the_block_program_is_keyed_on_the_capacity_class_not_the_offset():
-    """One program serves every block: the offset is an operand, not a key."""
+    """One program serves every block: the offset is an operand, not a key.
+
+    Counted by tracing, not by a private cache attribute: the body runs once
+    per retrace, so a second offset that traces again would show up here.
+    """
 
     spec = _spec()
-    sig = jax.jit(
-        lambda start, values: jax.lax.dynamic_slice_in_dim(
+    traces = []
+
+    @jax.jit
+    def slice_block(start, values):
+        traces.append(1)
+        return jax.lax.dynamic_slice_in_dim(
             values, start, spec.mstep_block_rows, axis=0
         )
-    )
+
     values = jnp.arange(spec.row_capacity, dtype=jnp.int32)
-    sig(rp._device_int32(0), values)
-    before = sig._cache_size() if hasattr(sig, "_cache_size") else None
-    sig(rp._device_int32(4096), values)
-    after = sig._cache_size() if hasattr(sig, "_cache_size") else None
-    if before is not None:
-        assert after == before
+    first = slice_block(rp._device_int32(0), values)
+    assert len(traces) == 1
+    second = slice_block(rp._device_int32(spec.mstep_block_rows), values)
+    assert len(traces) == 1, "a second block offset must not retrace the program"
+    np.testing.assert_array_equal(
+        np.asarray(first), np.asarray(values[: spec.mstep_block_rows])
+    )
+    np.testing.assert_array_equal(
+        np.asarray(second),
+        np.asarray(values[spec.mstep_block_rows : 2 * spec.mstep_block_rows]),
+    )
