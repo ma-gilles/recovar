@@ -175,6 +175,7 @@ from recovar.em.local.local_layout import (
     _resolve_exact_local_bucket_radix,
     bucket_class_local_hypothesis_layouts,
     plan_local_hypothesis_buckets,
+    resolve_local_image_capacity_ladder,
 )
 from recovar.em.local.local_physical_grid import (
     _accumulate_relion_physical_particle_grid,
@@ -411,6 +412,7 @@ def run_local_em_exact(
     normalization_max_posterior: np.ndarray | None = None,
     translation_prior_centers: np.ndarray | None = None,
     unify_local_bucket_sizes: bool | None = None,
+    local_image_capacity_ladder=None,
     exact_local_bucket_radix: int | None = None,
     consecutive_mixed_bucket_size: int | None = None,
     preserve_bpref_particle_order: bool = False,
@@ -1373,6 +1375,9 @@ def run_local_em_exact(
                 int(_exact_local_xhalf_projection_target_row_pixels()),
             )
     bucket_build_t0 = time.time()
+    resolved_image_capacity_ladder = resolve_local_image_capacity_ladder(
+        local_image_capacity_ladder,
+    )
     bucket_build_kwargs = dict(
         image_batch_size=image_batch_size,
         rotation_block_size=rotation_block_size,
@@ -1381,6 +1386,7 @@ def run_local_em_exact(
         preserve_image_order=source_faithful_bpref,
         exact_local_bucket_radix=resolved_exact_local_bucket_radix,
         consecutive_mixed_bucket_size=consecutive_mixed_bucket_size,
+        image_capacity_ladder=resolved_image_capacity_ladder,
     )
     if n_classes > 1:
         # The plan-then-materialize path is single-layout, so the class-segmented
@@ -1480,11 +1486,27 @@ def run_local_em_exact(
             key=lambda item: item[1],
             reverse=True,
         )[:6]
+        # The image axis of every per-bucket program is the PADDED capacity, so
+        # report the capacities that will be traced and the padding they cost.
+        bucket_image_capacities = np.asarray(
+            [
+                max(
+                    int(bucket.image_indices.shape[0]),
+                    int(getattr(bucket, "bucket_image_count", bucket.image_indices.shape[0])),
+                )
+                for bucket in bucket_metadata
+            ],
+            dtype=np.int64,
+        )
+        image_padding_ratio = float(
+            np.sum(bucket_image_capacities) / max(1, int(np.sum(bucket_image_counts)))
+        )
         logger.info(
             "Exact local bucketing: %d images -> %d buckets "
             "(bucket_size min/med/mean/max=%d/%d/%.1f/%d, images_per_bucket med/max=%d/%d, "
             "top_bucket_counts=%s; max_hypotheses_per_microbatch=%d, n_score_pixels=%d, "
-            "n_recon_pixels=%d, n_trans=%d, score_only=%s, relion_x_half_mstep=%s)",
+            "n_recon_pixels=%d, n_trans=%d, score_only=%s, relion_x_half_mstep=%s; "
+            "image_capacity_ladder=%s, image_capacities=%s, image_padding=%.4fx)",
             n_images,
             len(bucket_specs),
             int(np.min(bucket_rotation_counts)),
@@ -1500,6 +1522,9 @@ def run_local_em_exact(
             int(n_trans),
             bool(score_only),
             bool(mstep_relion_x_half),
+            ",".join(str(int(rung)) for rung in resolved_image_capacity_ladder) or "off",
+            sorted({int(value) for value in bucket_image_capacities}),
+            image_padding_ratio,
         )
     local_progress = LocalBucketProgress(
         bucket_metadata, total_local_rotations=total_local_rotations, n_trans=n_trans,
