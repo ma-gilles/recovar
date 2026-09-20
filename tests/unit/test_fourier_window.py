@@ -1266,3 +1266,60 @@ def test_radial_window_counts_at_the_final_all_data_size():
     assert scored == 25933          # RELION's Minvsigma2 support
     assert live == 25716            # of those, the ones the projector can fill
     assert scored - live == 217     # rounded-in, exact-out rim: reference is zero
+
+
+def test_the_rectangle_adds_only_pixels_the_projector_leaves_at_zero():
+    """Why scoring the whole FFTW rectangle at the full box changes nothing.
+
+    An unwindowed consumer at ``current_size == ori_size`` scores every packed
+    half pixel; RELION scores its radial support. The difference is the corner
+    pixels plus the DC and the redundant ``kx=0`` column. ``Projector::project``
+    fills only the exact disk (``projector.cpp:642-646, 665-681``, ported in
+    ``recovar/core/relion_project.py:83-84, 147``), so the corners carry an
+    identically zero reference for every orientation, and the DC of a
+    projection does not depend on the orientation at all. Their contribution to
+    a candidate's ``diff2`` is therefore one per-image constant.
+    """
+
+    from recovar.em.helpers import projection as projection_helpers
+
+    box = 32
+    r_max = box // 2
+    pad = 2 * (r_max + 1) + 1
+    rng = np.random.default_rng(0)
+    slab = (
+        rng.normal(size=(pad, pad, pad // 2 + 1))
+        + 1j * rng.normal(size=(pad, pad, pad // 2 + 1))
+    ).astype(np.complex128)
+
+    def _rotation(theta):
+        c, s = np.cos(theta), np.sin(theta)
+        return np.array([[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]])
+
+    rotations = jnp.asarray(
+        np.stack([_rotation(t) for t in (0.0, 0.3, 1.1, 2.0)]), dtype=jnp.float64
+    )
+    projections = np.asarray(
+        projection_helpers.project_relion_projector_half_spectrum_centered_rows(
+            jnp.asarray(slab), rotations, (box, box), r_max, 1, None, False
+        )
+    )
+
+    coords = make_frequency_coords_half_np((box, box))
+    kx = np.rint(coords[:, 0]).astype(int)
+    ky = np.rint(coords[:, 1]).astype(int)
+    rounded = np.rint(np.sqrt(kx.astype(float) ** 2 + ky.astype(float) ** 2)).astype(int)
+    window, _ = make_fourier_window_indices_np((box, box), box)
+    in_window = np.zeros(coords.shape[0], dtype=bool)
+    in_window[window] = True
+
+    corner = rounded > r_max
+    redundant = (kx == 0) & (ky < 0) & (ky != -r_max)
+    dc = (kx == 0) & (ky == 0)
+    # The rectangle adds exactly those three classes and nothing else.
+    assert not np.any(~in_window & ~corner & ~redundant & ~dc)
+
+    assert np.abs(projections[:, corner]).max() == 0.0
+    assert np.abs(projections[:, in_window]).max() > 0.0
+    dc_values = projections[:, dc].reshape(-1)
+    assert np.ptp(dc_values.real) == 0.0 and np.ptp(dc_values.imag) == 0.0

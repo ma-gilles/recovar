@@ -201,6 +201,12 @@ def _validate_centered_relion_projector_pixel_indices(
     rows = indices // full_x_half
     cols = indices - rows * full_x_half
     ky = rows - image_size // 2
+    if int(projector_output_size) == image_size:
+        # An uncropped projection addresses the packed Nyquist row as +N/2,
+        # exactly as the consumers do (``_texture_centered_crop_at_indices``
+        # and ``_texture_centered_crop_to_full_jit`` both remap row 0). Only a
+        # crop removes that row, and then the bounds below reject it.
+        ky = np.where(rows == 0, image_size // 2, ky)
     projector_x_half = int(projector_output_size) // 2 + 1
     min_ky = -(int(projector_output_size) // 2 - 1)
     max_ky = int(projector_output_size) // 2

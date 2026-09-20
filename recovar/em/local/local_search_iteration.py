@@ -450,10 +450,14 @@ def _run_local_search_iteration(
             else:
                 logger.info(
                     "%s=1: this pass scores at current_size=%s, the full image box "
-                    "(RELION's final all-data iteration), where the exact local engine "
-                    "scores the whole centred half and RELION's radial support does "
-                    "not; the choice between them is a scientific decision, so this "
-                    "iteration keeps the exact local engine",
+                    "(RELION's final all-data iteration). RELION's own support there "
+                    "is the radial one (ml_optimiser.cpp:6955-6967, :8046-8053) and "
+                    "the rectangle's extra pixels are inert (P4-B step 1: within the "
+                    "exact engine, rectangle versus radial support gives 0 winner "
+                    "flips, 3.9e-7 max dPmax and 4e-7 Ft_y). The resident driver "
+                    "cannot run there yet: at the packed Nyquist row (RELION's +N/2) "
+                    "it disagrees with the exact engine by 0.17 Pmax and 0.4 Ft_y on "
+                    "the 8x8 fixture, so this iteration keeps the exact local engine",
                     RESIDENT_LOCAL_SEARCH_ENV,
                     current_size,
                 )

@@ -259,8 +259,14 @@ def _pass2_window_setup(
     relion_firstiter_score_mode,
     use_exact_relion_gaussian: bool,
     use_float64_scoring: bool,
+    allow_full_box_window: bool = False,
 ) -> _Pass2WindowSetup:
-    """Resolve the M-step current size, the score/recon window and the precision policy of a pass 2."""
+    """Resolve the M-step current size, the score/recon window and the precision policy of a pass 2.
+
+    ``allow_full_box_window`` is RELION's radial support at
+    ``current_size == ori_size``; it belongs to the returned
+    ``window_spec_kwargs`` so the budget spec and the later index build agree.
+    """
 
     H, W = image_shape
     mstep_current_size = (
@@ -285,6 +291,8 @@ def _pass2_window_setup(
             "score_square": True,
             "score_include_dc": True,
         }
+    if allow_full_box_window:
+        window_spec_kwargs["allow_full_box_window"] = True
     budget_window_spec = make_fourier_window_spec(
         image_shape,
         current_size,

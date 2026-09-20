@@ -261,21 +261,23 @@ def require_resident_local_configuration(**kwargs) -> None:
         not bool(kwargs["relion_wavg_atomic_direct_norm"]),
         "the direct per-particle Wavg norm arm is a stopped diagnostic",
     )
-    # RELION's final all-data iteration scores at current_size == ori_size.
-    # There the exact local engine scores the whole centred half, corners of
-    # the FFTW rectangle included, while RELION's radial support (which every
-    # windowed size uses, and which the RELION Wavg rectangle requires) stops
-    # at |k| <= current_size/2. Running this pass on the radial support was
-    # measured on the 8x8 unit fixture to move the maps by 0.45 relative L2 and
-    # to flip a winner, so it is a change of scoring support, not of layout.
-    # Deciding which support the final iteration should use is a scientific
-    # question outside a speed ticket, so refuse it here.
+    # RELION scores every iteration, the final all-data one included, on the
+    # radial support of ml_optimiser.cpp:6955-6967 and :8046-8053; only an
+    # unwindowed consumer scores the whole FFTW rectangle. At
+    # current_size == ori_size this driver therefore asks for that same radial
+    # support (allow_full_box_window), which is why a window is always present
+    # here. The pixels the rectangle adds lie outside the projector disk
+    # (projector.cpp:642-646 and 665-681, mirrored by relion_project.py:83-84,
+    # 147 and projection.py:345-356), so their reference is identically zero
+    # and they contribute one per-image constant to every candidate: no
+    # posterior, significance or discrete effect, and none of the shell or
+    # norm statistics, which are bounded by shell validity. The earlier 8x8
+    # unit-fixture measurement that read 0.45 relative L2 used a synthetic
+    # slicer without the projector's radius cutoff, so it did not show this.
     _require(
         bool(kwargs["use_window"]),
-        "RELION's final all-data current_size equals the image box, where the "
-        "exact local engine scores the full rectangle and RELION's radial "
-        "support does not; choosing between them is a scientific decision, "
-        "not a layout change",
+        "the resident driver scores RELION's windowed support; at the full box "
+        "it must be requested with allow_full_box_window",
     )
     for name in rp._DIAGNOSTIC_DIR_ENVS:
         _require(
@@ -405,6 +407,12 @@ def compute_local_search_resident(
         relion_firstiter_score_mode="gaussian",
         use_exact_relion_gaussian=True,
         use_float64_scoring=use_float64_scoring,
+        # RELION's final all-data iteration scores at current_size == ori_size
+        # on the same radial support as every other iteration; ask for it
+        # instead of falling back to the whole FFTW rectangle.
+        allow_full_box_window=(
+            current_size is not None and int(current_size) == int(image_shape[0])
+        ),
     )
 
     # ``run_local_em_exact`` uses this flag as passed rather than resolving it

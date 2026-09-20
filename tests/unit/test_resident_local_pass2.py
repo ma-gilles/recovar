@@ -262,7 +262,9 @@ def test_dispatch_routes_only_the_fine_pass():
     source = inspect.getsource(local_search_iteration._run_local_search_iteration)
     assert "resident_local_search_requested()" in source
     assert "and not score_only" in source
-    # and only below the full image box (RELION's final all-data shape)
+    # and only below the full image box: RELION's final all-data shape is
+    # RELION's radial support (P4-B step 1), but the resident driver still
+    # disagrees with the exact engine at the packed Nyquist row there.
     assert "int(current_size) < int(experiment_dataset.image_shape[0])" in source
     assert "compute_local_search_resident" in source
     # K-class with the flag on refuses rather than running a K=1 driver.
@@ -283,7 +285,7 @@ def test_dispatch_routes_only_the_fine_pass():
         ({"group_ids": None}, "group scale terms"),
         ({"normalization_log_evidence": np.zeros(3)}, "externally supplied normalizer"),
         ({"return_reconstruction_sample_indices": True}, "significant-sample capture"),
-        ({"use_window": False}, "scientific decision"),
+        ({"use_window": False}, "allow_full_box_window"),
     ],
 )
 def test_gate_names_the_missing_piece(override, expected):
@@ -384,14 +386,20 @@ def test_row_capacity_ladder_is_capped_by_the_projection_budget():
 def test_final_all_data_shape_keeps_the_exact_local_engine(monkeypatch, _resident_local_env):
     """``current_size == image box`` is RELION's final all-data shape.
 
-    The dispatch leaves that iteration on the exact local engine and says so,
-    because the two engines disagree about the scoring support there, not about
-    its layout: the exact engine scores the whole centred half including the
-    FFTW rectangle's corners, while RELION's radial support (the one every
-    windowed size uses, and the one the RELION Wavg rectangle requires) stops at
-    ``|k| <= current_size/2``. Running the pass on the radial support was
-    measured on this fixture to move the maps by 0.45 relative L2 and to flip a
-    winner, so it is not a rounding-level difference.
+    P4-B step 1 settled the support question: RELION scores that iteration on
+    the same radial support as every other one
+    (``ml_optimiser.cpp:6955-6967`` for the labels, ``:8046-8053`` for the
+    ``Minvsigma2`` support), and the whole-rectangle support the unwindowed
+    exact engine uses adds only pixels outside the projector disk, whose
+    reference is identically zero (``projector.cpp:642-646``). Measured inside
+    the exact engine, rectangle versus radial support moves no winner, 3.9e-7
+    of Pmax and 4e-7 of ``Ft_y``.
+
+    The dispatch still keeps this iteration on the exact engine because the
+    resident driver does not yet agree there: on this fixture it differs by
+    0.17 Pmax with two winner flips, and removing the packed Nyquist row
+    (RELION's ``+N/2``, recovar's ``ky = -N/2``) from both windows collapses
+    that to 7e-7 with no flips. That row is the open item, not the support.
     """
 
     case = _case()
@@ -401,8 +409,6 @@ def test_final_all_data_shape_keeps_the_exact_local_engine(monkeypatch, _residen
     np.testing.assert_array_equal(
         np.asarray(with_flag.hard_assignment), np.asarray(without.hard_assignment)
     )
-    # Both arms ran the same engine, so they agree to that engine's own repeat
-    # band (float32 backprojection atomics), not bitwise.
     a = np.asarray(with_flag.Ft_y, dtype=np.complex128)
     b = np.asarray(without.Ft_y, dtype=np.complex128)
     assert float(np.linalg.norm(a - b) / np.linalg.norm(b)) < 1e-6

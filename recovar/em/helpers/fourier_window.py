@@ -455,6 +455,7 @@ def make_fourier_window_spec(
     recon_exact_radius=True,
     projection_max_r=_DEFAULT_PROJECTION_MAX_R,
     include_recon_window=True,
+    allow_full_box_window: bool = False,
     dtype=jnp.int32,
 ) -> FourierWindowSpec:
     """Return shared score/reconstruction window metadata for EM engines.
@@ -464,9 +465,28 @@ def make_fourier_window_spec(
     the Projector/BackProjector support.  ``reconstruction_current_size``
     represents that separate model-coordinate cutoff; omitting it preserves
     the historical shared-size behavior.
+
+    ``allow_full_box_window`` builds RELION's support at
+    ``current_size == image_shape[0]`` instead of returning the unwindowed
+    spec.  RELION scores that iteration on the same radial support as every
+    other one (``ml_optimiser.cpp:6955-6967``); an unwindowed consumer instead
+    scores the whole FFTW rectangle, whose extra pixels lie outside the
+    projector disk.  Default off, so no existing caller changes layout.
     """
 
-    use_window = current_size is not None and current_size < image_shape[0]
+    if (
+        allow_full_box_window
+        and current_size is not None
+        and int(current_size) > int(image_shape[0])
+    ):
+        raise ValueError(
+            "allow_full_box_window cannot extend current_size past the image box, "
+            f"got {int(current_size)} for box {int(image_shape[0])}",
+        )
+    use_window = current_size is not None and (
+        current_size < image_shape[0]
+        or (bool(allow_full_box_window) and int(current_size) == int(image_shape[0]))
+    )
     if not use_window:
         return FourierWindowSpec(
             use_window=False,
