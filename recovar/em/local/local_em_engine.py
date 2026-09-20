@@ -1820,6 +1820,21 @@ def run_local_em_exact(
     fixed_capacity_whole_initial_carry = None
     fixed_capacity_whole_static_options = None
     fixed_capacity_whole_preparation_s = 0.0
+    # These four operands are fixed for the whole iteration (assigned above, well
+    # before this loop) but were converted to device arrays inside it, once per
+    # bucket. At ~4400 bucket visits per 20 iterations that is tens of thousands of
+    # redundant host-to-device transfers, which showed up as `batched_device_put`
+    # in the host profile. Place them once.
+    relion_fine_full_to_compact_device = jnp.asarray(relion_fine_full_to_compact, dtype=jnp.int32)
+    big_jit_relion_wavg_rectangle_indices_device = jnp.asarray(
+        big_jit_relion_wavg_rectangle_indices_arg, dtype=jnp.int32,
+    )
+    big_jit_relion_wavg_exact_positions_device = jnp.asarray(
+        big_jit_relion_wavg_exact_positions_arg, dtype=jnp.int32,
+    )
+    big_jit_relion_wavg_rectangle_shell_indices_device = jnp.asarray(
+        big_jit_relion_wavg_rectangle_shell_indices_arg, dtype=jnp.int32,
+    )
     for bucket_index in range(len(bucket_specs)):
         bucket_build_t0 = time.time()
         bucket = bucket_specs[bucket_index]
@@ -2446,11 +2461,11 @@ def run_local_em_exact(
                 half_weights,
                 norm_half_weights,
                 big_jit_window_indices_arg,
-                jnp.asarray(relion_fine_full_to_compact, dtype=jnp.int32),
+                relion_fine_full_to_compact_device,
                 big_jit_recon_window_indices_arg,
-                jnp.asarray(big_jit_relion_wavg_rectangle_indices_arg, dtype=jnp.int32),
-                jnp.asarray(big_jit_relion_wavg_exact_positions_arg, dtype=jnp.int32),
-                jnp.asarray(big_jit_relion_wavg_rectangle_shell_indices_arg, dtype=jnp.int32),
+                big_jit_relion_wavg_rectangle_indices_device,
+                big_jit_relion_wavg_exact_positions_device,
+                big_jit_relion_wavg_rectangle_shell_indices_device,
                 big_jit_mstep_recon_window_indices_arg,
                 shell_indices_half_arg,
                 shell_indices_noise_arg,
