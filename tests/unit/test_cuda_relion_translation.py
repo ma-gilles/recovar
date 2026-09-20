@@ -362,12 +362,38 @@ def test_relion_vdam_exact_native_ptx_discriminator_is_opt_in_and_fail_closed():
     assert actual_arguments == expected_arguments
 
 
+
+def _relion_row_label(pixel_index, half_width, image_size):
+    """RELION's row label for a centered packed half-spectrum index.
+
+    ``fftw.h:99-109`` sets ``ip = (i < XSIZE) ? i : i - YSIZE`` with ``XSIZE``
+    the half width, so an uncropped half image labels its Nyquist row ``+N/2``.
+    RECOVAR's centered packed layout stores that same physical row at
+    ``ky = -N/2``; every other row has the same label in both.
+    """
+
+    centered = pixel_index // half_width - image_size // 2
+    return image_size // 2 if centered == -(image_size // 2) else centered
+
 @pytest.mark.gpu
 def test_relion_translate_score_f32_matches_float32_reference(
     monkeypatch,
     custom_cuda_lib,
     gpu_device,
 ):
+    """Match a float32 transcription of the translate kernel.
+
+    Convention repair, not an edited expectation: this test's own expected
+    values used to carry RECOVAR's centered row label, which is wrong for the
+    packed Nyquist row of an uncropped half image. RELION labels that row
+    ``+N/2`` (``fftw.h:99-109``: ``ip = (i < XSIZE) ? i : i - YSIZE`` with
+    ``XSIZE`` the half width), and every scoring kernel in
+    ``relion_scoring.cuh`` derives it that way at lines 641, 1313, 1370, 2316,
+    2487 and 2658. ``pixel_indices`` here includes index 0, which is that row,
+    so the expectation had to move with the kernels. Control rows are
+    unaffected: the two labels agree everywhere else.
+    """
+
     import recovar.cuda_backproject as cuda_backproject
 
     monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
@@ -410,7 +436,7 @@ def test_relion_translate_score_f32_matches_float32_reference(
             output_row = image_index * angles.shape[0] + translation_index
             for pixel_row, pixel_index in enumerate(pixel_indices):
                 x = int(pixel_index % half_width)
-                y = int(pixel_index // half_width - image_shape[0] // 2)
+                y = _relion_row_label(int(pixel_index), half_width, image_shape[0])
                 phase = np.float32(
                     np.float32(x) * tx + np.float32(y) * ty
                 )
@@ -529,6 +555,18 @@ def test_relion_translate_score_f64_matches_double_sincos_reference(
     custom_cuda_lib,
     gpu_device,
 ):
+    """Match a double-precision transcription of the translate kernel.
+
+    Convention repair, not an edited expectation: this test's own expected
+    values used to carry RECOVAR's centered row label, which is wrong for the
+    packed Nyquist row of an uncropped half image. RELION labels that row
+    ``+N/2`` (``fftw.h:99-109``: ``ip = (i < XSIZE) ? i : i - YSIZE`` with
+    ``XSIZE`` the half width), and every scoring kernel in
+    ``relion_scoring.cuh`` derives it that way at lines 641, 1313, 1370, 2316,
+    2487 and 2658. ``pixel_indices`` here includes index 0, which is that row,
+    so the expectation had to move with the kernels. Control rows are
+    unaffected: the two labels agree everywhere else.
+    """
     import recovar.cuda_backproject as cuda_backproject
 
     monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
@@ -551,7 +589,7 @@ def test_relion_translate_score_f64_matches_double_sincos_reference(
     for translation_index, (tx, ty) in enumerate(angles):
         for row, pixel_index in enumerate(pixel_indices):
             x = int(pixel_index % half_width)
-            y = int(pixel_index // half_width - image_shape[0] // 2)
+            y = _relion_row_label(int(pixel_index), half_width, image_shape[0])
             phase = x * tx + y * ty
             expected[0, translation_index, row] = images[0, row] * complex(np.cos(phase), np.sin(phase))
 
@@ -1623,3 +1661,225 @@ def test_relion_vdam_mstep_sums_f32_validates_reference_shape():
             jnp.zeros((2, 3, 3), dtype=jnp.complex64),
             (8, 8),
         )
+
+
+@pytest.mark.gpu
+def test_relion_translate_score_labels_the_nyquist_row_as_relion_does(
+    monkeypatch,
+    custom_cuda_lib,
+    gpu_device,
+):
+    """The packed Nyquist row must shift with RELION's ``+N/2`` label.
+
+    RELION indexes the uncropped half image with ``fftw.h:99-109``, so the row
+    RECOVAR stores at ``ky = -N/2`` is RELION's ``ip = +N/2``; its scoring
+    kernels derive that themselves (``relion_scoring.cuh`` lines 641, 1313,
+    2316, 2487, 2658). This translate kernel takes centered indices, so it has
+    to convert. The two labels differ only here and only for non-integer
+    shifts, where ``exp(-i*pi*dy)`` and ``exp(+i*pi*dy)`` are conjugates, which
+    is what this test pins: a half-pixel shift must give the conjugate of the
+    label RECOVAR's own lattice would imply.
+
+    Measured consequence of getting it wrong (P4-B, 2026-09-20): at
+    ``current_size == ori_size`` the exact local engine's peak posterior moved
+    by 0.17 and two winners of eight flipped on the resident-local fixture,
+    against a numpy transcription of RELION's arithmetic that the resident
+    driver matched to 1.9e-7.
+    """
+
+    import recovar.cuda_backproject as cuda_backproject
+
+    monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
+    monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
+    monkeypatch.setattr(cuda_backproject, "_cuda_ok", None)
+
+    image_size = 16
+    image_shape = (image_size, image_size)
+    half_width = image_size // 2 + 1
+    # Packed row 0 is the Nyquist row, in two of its columns; the controls come
+    # from other rows, where both labels agree.
+    pixel_indices = np.asarray(
+        [0, 1, 3 * half_width + 2, 5 * half_width + 3], dtype=np.int32
+    )
+    images = np.asarray(
+        [[1.0 + 0.5j, -2.0 + 0.25j, 0.75 - 1.5j, 3.0 + 2.0j]], dtype=np.complex64
+    )
+    # A half-pixel shift in y: the only regime where the two labels differ.
+    angles = np.asarray(
+        [[0.0, -2.0 * np.pi * 0.5 / image_size]], dtype=np.float32
+    )
+
+    with jax.default_device(gpu_device):
+        actual = np.asarray(
+            cuda_backproject.relion_translate_score_f32(
+                jnp.asarray(images),
+                jnp.asarray(angles),
+                jnp.asarray(pixel_indices),
+                image_shape,
+            )
+        )[0]
+
+    def shifted(label_fn):
+        out = np.empty(pixel_indices.size, dtype=np.complex64)
+        for row, pixel_index in enumerate(pixel_indices):
+            x = int(pixel_index % half_width)
+            y = label_fn(int(pixel_index))
+            phase = np.float32(x) * angles[0, 0] + np.float32(y) * angles[0, 1]
+            out[row] = images[0, row] * np.complex64(
+                np.cos(phase) + 1j * np.sin(phase)
+            )
+        return out
+
+    relion = shifted(lambda i: _relion_row_label(i, half_width, image_size))
+    packed = shifted(lambda i: i // half_width - image_size // 2)
+
+    np.testing.assert_allclose(actual, relion, rtol=2e-6, atol=2e-6)
+    # The control rows are label-independent; the two Nyquist entries are not,
+    # so the old label is excluded rather than merely less accurate.
+    np.testing.assert_allclose(actual[2:], packed[2:], rtol=2e-6, atol=2e-6)
+    # Swapping the label changes the phase by exp(-i * N * ty): here a half
+    # pixel, so the packed label returns the negated value.
+    ratio = np.exp(-1j * image_size * angles[0, 1])
+    for row in (0, 1):
+        assert abs(actual[row] - packed[row]) > 1e-2 * abs(images[0, row])
+        np.testing.assert_allclose(
+            packed[row], relion[row] * ratio, rtol=2e-6, atol=2e-6
+        )
+
+
+@pytest.mark.gpu
+def test_relion_translate_bpref_labels_the_nyquist_row_as_relion_does(
+    monkeypatch,
+    custom_cuda_lib,
+    gpu_device,
+):
+    """The M-step translate must carry the same RELION label as the scorer.
+
+    ``relion_translate_bpref_*`` shifts the raw image before applying the BPref
+    weights, so a wrong row label moves reconstruction operands rather than
+    scores. The label is RELION's ``+N/2`` for an uncropped half image
+    (``fftw.h:99-109``); see
+    ``test_relion_translate_score_labels_the_nyquist_row_as_relion_does``.
+    """
+
+    import recovar.cuda_backproject as cuda_backproject
+
+    monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
+    monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
+    monkeypatch.setattr(cuda_backproject, "_cuda_ok", None)
+
+    image_size = 16
+    image_shape = (image_size, image_size)
+    half_width = image_size // 2 + 1
+    pixel_indices = np.asarray(
+        [0, 2, 4 * half_width + 1, 9 * half_width + 5], dtype=np.int32
+    )
+    images = np.asarray(
+        [[1.0 + 0.5j, -2.0 + 0.25j, 0.75 - 1.5j, 3.0 + 2.0j]], dtype=np.complex64
+    )
+    weighted_ctf = np.asarray([[0.5, -1.25, 2.0, 0.75]], dtype=np.float32)
+    angles = np.asarray(
+        [[0.0, -2.0 * np.pi * 0.5 / image_size]], dtype=np.float32
+    )
+
+    with jax.default_device(gpu_device):
+        actual = np.asarray(
+            cuda_backproject.relion_translate_bpref_f32(
+                jnp.asarray(images),
+                jnp.asarray(weighted_ctf),
+                jnp.asarray(angles),
+                jnp.asarray(pixel_indices),
+                image_shape,
+            )
+        ).reshape(-1)
+
+    def weighted(label_fn):
+        out = np.empty(pixel_indices.size, dtype=np.complex64)
+        for row, pixel_index in enumerate(pixel_indices):
+            x = int(pixel_index % half_width)
+            y = label_fn(int(pixel_index))
+            phase = np.float32(x) * angles[0, 0] + np.float32(y) * angles[0, 1]
+            shifted = images[0, row] * np.complex64(np.cos(phase) + 1j * np.sin(phase))
+            out[row] = shifted * weighted_ctf[0, row]
+        return out
+
+    relion = weighted(lambda i: _relion_row_label(i, half_width, image_size))
+    packed = weighted(lambda i: i // half_width - image_size // 2)
+    np.testing.assert_allclose(actual, relion, rtol=2e-6, atol=2e-6)
+    np.testing.assert_allclose(actual[2:], packed[2:], rtol=2e-6, atol=2e-6)
+    for row in (0, 1):
+        assert abs(actual[row] - packed[row]) > 1e-2 * abs(
+            images[0, row] * weighted_ctf[0, row]
+        )
+
+
+@pytest.mark.gpu
+def test_relion_vdam_mstep_sums_labels_the_nyquist_row_as_relion_does(
+    monkeypatch,
+    custom_cuda_lib,
+    gpu_device,
+):
+    """The K-class VDAM M-step operand kernel carries the same label.
+
+    ``relion_vdam_mstep_sums_f32_kernel`` translates inside its own
+    translation loop, so it is the third consumer of the centered-to-RELION row
+    conversion and the one the K-class (VDAM) M-step uses.
+    """
+
+    import recovar.cuda_backproject as cuda_backproject
+
+    monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
+    monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
+    monkeypatch.setattr(cuda_backproject, "_cuda_ok", None)
+
+    image_size = 16
+    image_shape = (image_size, image_size)
+    half_width = image_size // 2 + 1
+    pixel_indices = np.asarray([0, 3, 6 * half_width + 2], dtype=np.int32)
+    images = np.asarray([[1.0 + 0.5j, -2.0 + 0.25j, 0.75 - 1.5j]], dtype=np.complex64)
+    ctf = np.asarray([[0.9, -0.4, 1.1]], dtype=np.float32)
+    minvsigma2 = np.asarray([[0.25, 0.5, 0.125]], dtype=np.float32)
+    posterior = np.asarray([[[0.6, 0.4]]], dtype=np.float32)      # 1 image, 1 rotation, 2 translations
+    angles = np.asarray(
+        [[0.0, 0.0], [0.0, -2.0 * np.pi * 0.5 / image_size]], dtype=np.float32
+    )
+    reference = np.asarray(
+        [[[0.2 + 0.1j, -0.3 + 0.05j, 0.4 - 0.2j]]], dtype=np.complex64
+    )
+
+    with jax.default_device(gpu_device):
+        summed, ctf_probs = cuda_backproject.relion_vdam_mstep_sums_f32(
+            jnp.asarray(images),
+            jnp.asarray(ctf),
+            jnp.asarray(minvsigma2),
+            jnp.asarray(posterior),
+            jnp.asarray(angles),
+            jnp.asarray(pixel_indices),
+            jnp.asarray(reference),
+            image_shape,
+        )
+    summed = np.asarray(summed).reshape(-1)
+    ctf_probs = np.asarray(ctf_probs).reshape(-1)
+
+    def sums(label_fn):
+        out = np.zeros(pixel_indices.size, dtype=np.complex128)
+        weights = np.zeros(pixel_indices.size, dtype=np.float64)
+        for row, pixel_index in enumerate(pixel_indices):
+            x = int(pixel_index % half_width)
+            y = label_fn(int(pixel_index))
+            reference_value = reference[0, 0, row] * ctf[0, row]
+            for translation in range(angles.shape[0]):
+                weight = posterior[0, 0, translation] * ctf[0, row] * minvsigma2[0, row]
+                weights[row] += weight * ctf[0, row]
+                phase = x * angles[translation, 0] + y * angles[translation, 1]
+                shifted = images[0, row] * (np.cos(phase) + 1j * np.sin(phase))
+                out[row] += (shifted - reference_value) * weight
+        return out, weights
+
+    relion, relion_weights = sums(lambda i: _relion_row_label(i, half_width, image_size))
+    packed, _ = sums(lambda i: i // half_width - image_size // 2)
+    np.testing.assert_allclose(summed, relion, rtol=3e-6, atol=3e-6)
+    np.testing.assert_allclose(ctf_probs, relion_weights, rtol=3e-6, atol=3e-6)
+    np.testing.assert_allclose(summed[2:], packed[2:], rtol=3e-6, atol=3e-6)
+    for row in (0, 1):
+        assert abs(summed[row] - packed[row]) > 1e-3 * abs(images[0, row])

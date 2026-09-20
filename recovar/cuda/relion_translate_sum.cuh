@@ -240,7 +240,11 @@ translate_sum_flat_rows_f32_kernel(
     {
         const int pixel_index = pixel_indices[pixel];
         const int x = pixel_index % image_half_width;
-        const int y = pixel_index / image_half_width - image_h / 2;
+        // RELION's label for an uncropped half image puts the Nyquist row at
+        // +N/2 (fftw.h:99-109); this kernel replaces a tile built by
+        // relion_translate_score_f32_kernel, so it converts the same way.
+        const int y = relion_centered_row_to_relion_label(
+            pixel_index / image_half_width - image_h / 2, image_h);
 
         float2 recon_value[ROWS_PER_BLOCK];
         float2 noise_value[ROWS_PER_BLOCK];

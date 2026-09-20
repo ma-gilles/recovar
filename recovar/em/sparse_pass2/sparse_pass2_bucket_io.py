@@ -23,6 +23,7 @@ from recovar.em.helpers.image_shifts import apply_relion_integer_pre_shifts, hal
 from recovar.em.helpers.preprocessing import (
     apply_half_translation_phases,
     half_translation_phase_table,
+    relion_half_translation_lattice,
     prepare_batch_preprocess_operands,
     process_half_image,
 )
@@ -45,12 +46,11 @@ def _scaled_half_lattice_cached(image_shape):
     sparse pass (~3% of a warm ordinary iteration on the 10k subset).
     """
 
-    lattice_half = fourier_transform_utils.get_k_coordinate_of_each_pixel_half(
-        tuple(int(size) for size in image_shape),
-        voxel_size=1,
-        scaled=True,
+    # RELION's label for the packed Nyquist row of an uncropped half image; see
+    # recovar/em/helpers/preprocessing.py::relion_half_translation_lattice.
+    return jnp.asarray(
+        relion_half_translation_lattice(tuple(int(size) for size in image_shape))
     )
-    return jnp.asarray(lattice_half)
 
 
 def _half_translation_phase_table_for_indices(translations, image_shape, pixel_indices):
