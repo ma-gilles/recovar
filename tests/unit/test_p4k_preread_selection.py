@@ -237,3 +237,40 @@ def test_star_loader_prereads_only_its_particles(tmp_path, monkeypatch, counting
     child = next(iter(loader._loaders.values()))
     assert child.images_read == len(rows)
     assert _same_bytes(loader.get(None), data[np.asarray(rows)])
+
+
+def test_a_wrapper_subset_prereads_only_that_subset(tmp_path, monkeypatch, counting):
+    """The production path: `ImageLoader.from_file(..., indices=ind)`.
+
+    `image_backends` passes the halfset indices down, so the file map is already
+    subset before the preread decides anything; the preread must follow that
+    subset, not the STAR's full row list.
+    """
+    path, data = _write_stack(tmp_path, n=60)
+    star_rows = list(range(0, 60, 2))  # the STAR lists 30 particles
+    subset = np.asarray([0, 1, 2, 20, 29], dtype=np.int64)  # the halfset picks 5
+    monkeypatch.setenv(image_loader.PREREAD_IMAGES_ENV, "1")
+    loader = MultiMRCLoader(_file_map(path, star_rows), indices=subset, lazy=True, skip_staging=True)
+    child = next(iter(loader._loaders.values()))
+    assert child.images_read == subset.size
+    expected_rows = np.asarray(star_rows)[subset]
+    assert _same_bytes(loader.get(None), data[expected_rows])
+    # NOTE: `loader.selection_indices` reports arange(n) rather than `subset` here.
+    # That is a pre-existing defect of MultiMRCLoader, unrelated to the preread and
+    # present identically at the base: __init__ stores the requested indices, then
+    # `super().__init__` overwrites the attribute with arange, and the line after it
+    # only re-casts the overwritten value. The served images are correct either way,
+    # so it is reported rather than fixed inside this performance change.
+
+
+def test_star_loader_through_load_images_with_indices(tmp_path, monkeypatch, counting):
+    path, data = _write_stack(tmp_path, n=50, name="particles.mrcs")
+    rows = [41, 2, 3, 4, 17, 30]
+    star = tmp_path / "particles.star"
+    star.write_text("data_particles\n\nloop_\n_rlnImageName #1\n" + "".join(f"{r + 1:06d}@{path}\n" for r in rows))
+    monkeypatch.setenv(image_loader.PREREAD_IMAGES_ENV, "1")
+    subset = np.asarray([1, 2, 3], dtype=np.int64)
+    loader = image_loader.load_images(str(star), indices=subset, lazy=True)
+    child = next(iter(loader._loaders.values()))
+    assert child.images_read == 3
+    assert _same_bytes(loader.get(None), data[np.asarray(rows)[subset]])
