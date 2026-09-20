@@ -1135,8 +1135,17 @@ def _run_resident_local_chunk(
         # The chunk's image slots in the half's own numbering, padded to the
         # capacity with -1; the gather writes zeros for a padded slot, which is
         # what the per-chunk preparation's capacity mask produces too.
+        if int(image_indices.size) != n_valid_images:
+            # A silent mis-slice here would gather the wrong images for the
+            # chunk and still produce finite maps, so say it instead.
+            raise ValueError(
+                "the chunk's image range and its valid-image count disagree: "
+                f"{int(image_indices.size)} indices for {n_valid_images} valid "
+                "images. The gather addresses the half's resident arrays by "
+                "these indices, so they must be the chunk's images exactly."
+            )
         image_slots = np.full(image_capacity, -1, dtype=np.int32)
-        image_slots[:n_valid_images] = image_indices[:n_valid_images].astype(np.int32)
+        image_slots[:n_valid_images] = image_indices.astype(np.int32)
         recon = gather_resident_chunk_operands(
             resident_operands,
             image_slots,
