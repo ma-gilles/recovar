@@ -166,6 +166,8 @@ from recovar.em.sparse_pass2.sparse_pass2_wavg import (
     _make_relion_wavg_rectangle,
     _relion_cuda_translate_wavg_norm_images,
     _relion_wavg_rectangle_image_power,
+    _relion_wavg_rectangle_power_contraction,
+    _relion_wavg_shifted_power,
     _replace_low_shell_noise_with_relion_wavg_direct_residual_jnp,
     _weighted_image_power_shells_and_per_image_core,
 )
@@ -221,6 +223,14 @@ _RESIDENT_OPERANDS_VERIFY_ENV = "RECOVAR_SPARSE_PASS2_RESIDENT_OPERANDS_VERIFY"
 # of the XLA statement. Measurement only: see
 # ``_resident_block_weighted_sums_kernel`` for why it is not the default.
 _KERNEL_CTF_PROBS_ENV = "RECOVAR_SPARSE_PASS2_RESIDENT_KERNEL_CTF_PROBS"
+# P4-G phase 2: square the chunk's Wavg rectangle once per image and gather the
+# float32 result, instead of gathering the complex rectangle to the block's rows
+# and squaring once per row. Squaring is elementwise, so squaring then gathering
+# and gathering then squaring are the same float32 values, and the contraction
+# that follows keeps its shapes and its reduction order; the two settings are
+# bitwise. Default off while the measurement arms are the ones in the ticket's
+# report; `_resident_block_wavg_rectangle_terms` holds both paths.
+_WAVG_POWER_PER_IMAGE_ENV = "RECOVAR_SPARSE_PASS2_RESIDENT_WAVG_POWER_PER_IMAGE"
 # P3-A: dispatch the per-stage chunk loop's three stages as jitted programs
 # keyed on the capacity class instead of as loose eager operations. Default on.
 # ``RECOVAR_SPARSE_PASS2_RESIDENT_GLUE_JIT=0`` restores the loose dispatch,
@@ -743,26 +753,46 @@ def _resident_block_wavg_algebraic_terms(
     return jnp.stack((xa, aa, diff2), axis=-1)
 
 
-@jax.jit
+@partial(jax.jit, static_argnames=("power_per_image",))
 def _resident_block_wavg_rectangle_terms(
     exact_terms,  # float32 [block, P_exact, 3]
     raw_shifted_rectangle,  # complex64 [C_B, T, P_rect]
     row_posterior,  # float32 [block, T]
     row_image_local,  # int32 [block]
     exact_positions,  # int32 [P_exact]
+    *,
+    power_per_image: bool = False,
 ):
     """Flat-row twin of ``_relion_wavg_rectangle_triplet_terms``.
 
     Same two statements as the rectangular helper: fill the whole rectangle's
     ``diff2`` slot with RELION's posterior-weighted image power, then overwrite
     the exact-radius positions with the projected triplet.
+
+    ``power_per_image`` moves the squaring to the other side of the gather.
+    ``|x|^2`` depends only on the image's rectangle, so with the flag on it is
+    computed once for the chunk's ``C_B`` images and the float32 result is
+    gathered to the block's rows; with it off the complex rectangle is gathered
+    first and squared once per row. Squaring is elementwise, so both orders give
+    the same float32 values, and the contraction that consumes them keeps the
+    same operand shapes and the same reduction over the translation axis: the
+    two settings are bitwise. The block is ``mstep_block_rows`` rows (2048 in
+    production) over an image capacity of 32 or 128, so the flag removes 16x to
+    64x of the squaring and halves the gathered bytes, float32 rather than
+    complex64. P4-G measured that squaring at 2.011 s of a 4.5 s hp3 replay
+    iteration.
     """
 
     row_image_local = jnp.asarray(row_image_local, dtype=jnp.int32)
-    tiles = jnp.asarray(raw_shifted_rectangle, dtype=jnp.complex64)[row_image_local]
-    image_power = _relion_wavg_rectangle_image_power(
-        tiles, jnp.asarray(row_posterior, dtype=jnp.float32)[:, None, :]
-    )[:, 0, :]
+    block_posterior = jnp.asarray(row_posterior, dtype=jnp.float32)[:, None, :]
+    if power_per_image:
+        image_power = _relion_wavg_rectangle_power_contraction(
+            _relion_wavg_shifted_power(raw_shifted_rectangle)[row_image_local],
+            block_posterior,
+        )[:, 0, :]
+    else:
+        tiles = jnp.asarray(raw_shifted_rectangle, dtype=jnp.complex64)[row_image_local]
+        image_power = _relion_wavg_rectangle_image_power(tiles, block_posterior)[:, 0, :]
     rectangle_terms = jnp.zeros(image_power.shape + (3,), dtype=jnp.float32)
     rectangle_terms = rectangle_terms.at[..., 2].set(image_power)
     return rectangle_terms.at[:, jnp.asarray(exact_positions, dtype=jnp.int32), :].set(
@@ -2206,6 +2236,12 @@ def _kernel_ctf_probs_enabled() -> bool:
     return parse_env_flag(_KERNEL_CTF_PROBS_ENV, default=False)
 
 
+def _wavg_power_per_image_enabled() -> bool:
+    """Whether the Wavg rectangle is squared per image rather than per row."""
+
+    return parse_env_flag(_WAVG_POWER_PER_IMAGE_ENV, default=False)
+
+
 def _resident_operands_verify_enabled() -> bool:
     """Whether to check the first chunk of a half against the per-chunk path."""
 
@@ -2457,6 +2493,10 @@ class _ChunkProgramSpec:
     # XLA statement the per-chunk path used. Off by default: the kernel's own
     # translation mass is bitwise against ``jnp.sum`` only at some shapes.
     kernel_ctf_probs: bool
+    # Whether the Wavg rectangle's image power is squared once per image and
+    # gathered, instead of gathered and squared once per row. Bitwise either
+    # way; see ``_WAVG_POWER_PER_IMAGE_ENV``.
+    wavg_power_per_image: bool
     # M-step blocks emitted per device-loop iteration.
     block_unroll: int
     # Trip mechanism of the M-step block loop. False (default) bounds the loop
@@ -2756,6 +2796,7 @@ def _resident_mstep_block(
         block_posterior,
         block_row_image,
         tables.exact_positions,
+        power_per_image=bool(spec.wavg_power_per_image),
     )
     wavg_triplet_pixels = (
         cuda_backproject.relion_wavg_rotation_atomic_runtime_flat_rows_triplet_add_f32(
@@ -3647,6 +3688,7 @@ def _run_resident_chunk(
             resident_operands is not None and resident_operands.recon_weight is not None
         ),
         kernel_ctf_probs=_kernel_ctf_probs_enabled(),
+        wavg_power_per_image=_wavg_power_per_image_enabled(),
         block_unroll=_chunk_block_unroll(),
         static_block_trip=_chunk_static_block_trip_enabled(),
     )
@@ -3812,6 +3854,7 @@ def run_resident_mstep_blocks(
         use_translate_sum_kernel=False,
         bpref_recon_operand=False,
         kernel_ctf_probs=False,
+        wavg_power_per_image=_wavg_power_per_image_enabled(),
         block_unroll=1,
         static_block_trip=False,
     )
