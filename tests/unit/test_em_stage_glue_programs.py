@@ -157,17 +157,129 @@ def _assert_significance_results_identical(candidate, control):
             assert actual.dtype == expected.dtype
 
 
-def test_coarse_pad_env_flag_preserves_every_significance_output(monkeypatch):
-    """The padded tail batch must reproduce the unpadded outputs exactly."""
+# P3-B measured this path's own floor on a GPU: repeating the identical
+# configuration moves 0 to 3 of 10080 entries, each by one float32 ulp, always
+# in a reporting field and never in a mask, a count, a sample-index array or an
+# assignment (its report, section 5a). The padding cannot be held to bitwise on
+# a GPU, where the batch extent changes the reduction shape, so the contract
+# below is that measured band.
+#
+# Two of its three parts transfer to this fixture and one does not. The
+# magnitude (one float32 ulp) and the scope (discrete outputs and the non-
+# reporting results bitwise) are asserted. The *count* is fixture-dependent and
+# is not asserted here: measured on a claimed A100 at this commit, this fixture
+# compares 77 float entries, its null control (the identical configuration
+# twice in one process) moves 0, and the padded path moves 6, all of them in
+# four ``full_stats`` reporting fields and none by more than one float32 ulp.
+# Six of 77 is not three of 10080; asserting either number on the other fixture
+# would be a tolerance, not a measurement.
+_NULL_BAND_MAX_FLOAT32_ULP = 1.0
+
+
+def _float32_ulp_distance(actual, expected):
+    """Distance in **float32** units in the last place.
+
+    The band is a float32 ulp whatever the container is: the coarse posterior
+    is float32 data, and the reporting fields that move are float64
+    accumulators over it, so float64 spacing would read a single float32 step
+    as hundreds of millions of ulp.
+    """
+
+    actual = np.asarray(actual, dtype=np.float64)
+    expected = np.asarray(expected, dtype=np.float64)
+    np.testing.assert_array_equal(np.isfinite(actual), np.isfinite(expected))
+    lo = np.minimum(np.abs(actual), np.abs(expected))
+    spacing = np.spacing(lo.astype(np.float32)).astype(np.float64)
+    spacing = np.where(spacing == 0, np.float64(np.finfo(np.float32).tiny), spacing)
+    steps = np.zeros(actual.shape, dtype=np.float64)
+    finite = np.isfinite(actual) & np.isfinite(expected)
+    steps[finite] = np.abs(actual[finite] - expected[finite]) / spacing[finite]
+    return steps
+
+
+def _assert_significance_results_within_null_band(candidate, control):
+    """Everything bitwise except reporting fields, which may move one ulp."""
+
+    moved_fields = []
+
+    def compare(actual, expected, label, *, reporting):
+        actual = np.asarray(actual)
+        expected = np.asarray(expected)
+        assert actual.shape == expected.shape, label
+        assert actual.dtype == expected.dtype, label
+        if actual.dtype.kind not in "fc" or not reporting:
+            # masks, counts, sample indices, assignments and every non-
+            # reporting result: bitwise, always.
+            np.testing.assert_array_equal(actual, expected, err_msg=label)
+            return
+        if actual.dtype.kind == "c":
+            steps = np.maximum(
+                _float32_ulp_distance(actual.real, expected.real),
+                _float32_ulp_distance(actual.imag, expected.imag),
+            )
+        else:
+            steps = _float32_ulp_distance(actual, expected)
+        worst = float(steps.max(initial=0.0))
+        assert worst <= _NULL_BAND_MAX_FLOAT32_ULP, (
+            f"{label}: {int((steps > 0).sum())} entries moved, max {worst} "
+            f"float32 ulp, band is {_NULL_BAND_MAX_FLOAT32_ULP}"
+        )
+        if worst > 0.0:
+            moved_fields.append((label, int((steps > 0).sum()), worst))
+
+    for i, (actual, expected) in enumerate(zip(candidate[:4], control[:4])):
+        compare(actual, expected, f"result[{i}]", reporting=False)
+    for c, (actual_class, expected_class) in enumerate(zip(candidate[4], control[4])):
+        for i, (actual, expected) in enumerate(zip(actual_class, expected_class)):
+            if actual is None or expected is None:
+                assert actual is expected, f"class[{c}][{i}]"
+                continue
+            compare(actual, expected, f"class[{c}][{i}]", reporting=False)
+    assert set(candidate[5]) == set(control[5])
+    for key, expected in control[5].items():
+        actual = candidate[5][key]
+        if isinstance(expected, np.ndarray):
+            compare(actual, expected, f"full_stats[{key!r}]", reporting=True)
+    return moved_fields
+
+
+def _run_padding_pair(monkeypatch, *, jit_glue=False):
+    """The unpadded control and the padded candidate, in this process."""
 
     from recovar.em.scoring import significance
 
     args, kwargs = _significance_call()
     monkeypatch.delenv("RECOVAR_COARSE_PAD_FINAL_IMAGE_BATCH", raising=False)
+    monkeypatch.delenv("RECOVAR_EM_JIT_STAGE_GLUE", raising=False)
     control = significance._compute_k_class_significance_batched(*args, **kwargs)
     monkeypatch.setenv("RECOVAR_COARSE_PAD_FINAL_IMAGE_BATCH", "1")
+    if jit_glue:
+        monkeypatch.setenv("RECOVAR_EM_JIT_STAGE_GLUE", "1")
     candidate = significance._compute_k_class_significance_batched(*args, **kwargs)
+    return candidate, control
+
+
+def test_coarse_pad_env_flag_preserves_every_significance_output(monkeypatch):
+    """The padded tail batch must reproduce the unpadded outputs exactly.
+
+    CPU-only: on a GPU the padding changes the coarse reduction's shape, and
+    the outputs move inside the null band the GPU sibling below asserts.
+    """
+
+    if jax.default_backend() == "gpu":
+        pytest.skip("CPU-only contract; the GPU band is the sibling test")
+    candidate, control = _run_padding_pair(monkeypatch)
     _assert_significance_results_identical(candidate, control)
+
+
+@pytest.mark.skipif(
+    jax.default_backend() != "gpu", reason="the null band is a GPU measurement"
+)
+def test_coarse_pad_env_flag_stays_inside_the_null_band_on_gpu(monkeypatch):
+    """On a GPU the padded path must stay inside P3-B's measured floor."""
+
+    candidate, control = _run_padding_pair(monkeypatch)
+    _assert_significance_results_within_null_band(candidate, control)
 
 
 def test_coarse_pad_env_flag_gives_every_batch_one_image_extent(monkeypatch):
@@ -215,18 +327,25 @@ def test_jit_stage_glue_preserves_every_significance_output(monkeypatch):
 
 
 def test_jit_stage_glue_and_padding_together_preserve_outputs(monkeypatch):
-    """Both opt-ins at once, which is how the candidate arm runs."""
+    """Both opt-ins at once, which is how the candidate arm runs.
 
-    from recovar.em.scoring import significance
+    CPU-only for the same reason as the padding test above.
+    """
 
-    args, kwargs = _significance_call()
-    monkeypatch.delenv("RECOVAR_COARSE_PAD_FINAL_IMAGE_BATCH", raising=False)
-    monkeypatch.delenv("RECOVAR_EM_JIT_STAGE_GLUE", raising=False)
-    control = significance._compute_k_class_significance_batched(*args, **kwargs)
-    monkeypatch.setenv("RECOVAR_COARSE_PAD_FINAL_IMAGE_BATCH", "1")
-    monkeypatch.setenv("RECOVAR_EM_JIT_STAGE_GLUE", "1")
-    candidate = significance._compute_k_class_significance_batched(*args, **kwargs)
+    if jax.default_backend() == "gpu":
+        pytest.skip("CPU-only contract; the GPU band is the sibling test")
+    candidate, control = _run_padding_pair(monkeypatch, jit_glue=True)
     _assert_significance_results_identical(candidate, control)
+
+
+@pytest.mark.skipif(
+    jax.default_backend() != "gpu", reason="the null band is a GPU measurement"
+)
+def test_both_opt_ins_stay_inside_the_null_band_on_gpu(monkeypatch):
+    """Both opt-ins on a GPU, against the same measured floor."""
+
+    candidate, control = _run_padding_pair(monkeypatch, jit_glue=True)
+    _assert_significance_results_within_null_band(candidate, control)
 
 
 def test_preprocess_batch_jitted_elementwise_matches_eager():
