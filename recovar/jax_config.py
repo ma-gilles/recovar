@@ -64,9 +64,11 @@ if "xla_gpu_enable_triton_gemm" not in _existing_flags:
 # point opts in by setting RECOVAR_EM_XLA_DEFAULTS before importing recovar;
 # nothing else does, and setting it to 0 turns it off again.
 #
-# Note also recovar/utils/error_hints.py, which recommends this flag for the
-# "No valid config found!" autotuner gap and describes it as "~5-15% slower".
-# On the EM path that is not what it costs; see the steady term above.
+# recovar/utils/error_hints.py recommends this same flag as the recovery for the
+# "No valid config found!" autotuner gap on the (P, P) packed-covariance matrix.
+# Its text used to call the flag "~5-15% slower"; it now states the measured EM
+# cost above and says plainly that the heterogeneity and PPCA paths it fires on
+# are unmeasured.
 _em_xla_defaults = os.environ.get("RECOVAR_EM_XLA_DEFAULTS", "")
 
 
