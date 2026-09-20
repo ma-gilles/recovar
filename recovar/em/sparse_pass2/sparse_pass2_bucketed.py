@@ -4683,6 +4683,23 @@ def compute_pass2_stats_sparse_bucketed(
                     max_block_bytes=max_adjoint_block_bytes,
                     log_label=f"single-ctf-{adjoint_layout}",
                 )
+                if finite_check.finite_check_enabled():
+                    # P4-D. The accumulators after this bucket's scatter. Both
+                    # the sums and the slabs are checked, so a report says
+                    # whether the bucket arrived non-finite or the scatter made
+                    # it so.
+                    finite_check.check_arrays(
+                        "bpref-accumulators",
+                        {"Ft_y_total": Ft_y_total, "Ft_ctf_total": Ft_ctf_total},
+                        context=finite_check.describe_context(
+                            iteration=bpref_diagnostics._bpref_contribution_context.get("iteration"),
+                            half=bpref_diagnostics._bpref_contribution_context.get("half"),
+                            bucket_images=int(np.asarray(image_indices).size),
+                            first_image=int(np.asarray(image_indices).reshape(-1)[0]),
+                            layout=adjoint_layout,
+                        ),
+                        operands={"flat_summed": flat_summed, "flat_ctf_probs": flat_ctf_probs},
+                    )
 
         # Noise accumulation
         _tail_locals = locals()
