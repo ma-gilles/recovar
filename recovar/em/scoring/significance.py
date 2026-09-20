@@ -62,6 +62,7 @@ from recovar.em.relion.relion_coarse_operands import (
     _resolve_k1_relion_exact_coarse_skip_generic_operands,
     _resolve_k1_relion_exact_compact_preprocess,
     _select_relion_coarse_rescore_winner_slots,
+    assemble_relion_cc_coarse_operands,
 )
 from recovar.em.scoring.coarse_gaussian_gemm import (
     _COARSE_GAUSSIAN_GEMM_COMPACT_POSTERIOR_ENV,
@@ -1624,8 +1625,6 @@ def _compute_k_class_significance_batched(
         from recovar.em.relion.relion_ctf import _relion_exact_ctf_half_from_source_star
         from recovar.em.sparse_pass2.sparse_pass2_bucket_io import _relion_translation_angles_f32
         from recovar.em.sparse_pass2.sparse_pass2_scoring import (
-            _relion_cuda_corr_img_from_rfloat_ctf,
-            _relion_cuda_pixel_correction_from_rfloat_ctf,
             _relion_cuda_powerclass_highres_xi2_half,
         )
 
@@ -1957,10 +1956,6 @@ def _compute_k_class_significance_batched(
         from recovar.em.helpers.projection import relion_projector_half_to_texture_full
         from recovar.em.relion.relion_ctf import _relion_exact_ctf_half_from_source_star
         from recovar.em.sparse_pass2.sparse_pass2_bucket_io import _relion_translation_angles_f32
-        from recovar.em.sparse_pass2.sparse_pass2_scoring import (
-            _relion_cuda_corr_img_from_rfloat_ctf,
-            _relion_cuda_pixel_correction_from_rfloat_ctf,
-        )
 
         if (
             jax.default_backend() != "gpu"
@@ -3074,32 +3069,22 @@ def _compute_k_class_significance_batched(
                     _repeat_pad_batch_axis(exact_cc_ctf_rfloat, batch_size),
                 )
             batch_scale_f32 = jnp.asarray(batch_scale_np, dtype=jnp.float32)
-            exact_cc_pixel_correction = _relion_cuda_pixel_correction_from_rfloat_ctf(
-                batch_scale_f32[:, None],
+            exact_cc_operands = assemble_relion_cc_coarse_operands(
+                exact_cc_processed,
                 exact_cc_ctf_rfloat,
-            )
-            exact_cc_unshifted_corrected = jnp.asarray(
-                exact_cc_processed * exact_cc_pixel_correction,
-                dtype=jnp.complex64,
-            )
-            if image_pre_shifts is not None and not real_space_pre_shift_applied:
-                exact_cc_unshifted_corrected = (
-                    exact_cc_unshifted_corrected
-                    * tiled_half_image_phase_factors(image_shape, batch_shifts, 1)
-                )
-            exact_cc_corr_img = _relion_cuda_corr_img_from_rfloat_ctf(
                 exact_cc_inv_xi2,
-                exact_cc_ctf_rfloat,
-                batch_scale_f32[:, None] if scale_corrections is not None else None,
+                batch_scale_f32,
+                phase_factors=(
+                    tiled_half_image_phase_factors(image_shape, batch_shifts, 1)
+                    if image_pre_shifts is not None
+                    and not real_space_pre_shift_applied
+                    else None
+                ),
+                window_indices=window_indices if use_window else None,
+                scale_corrections_enabled=scale_corrections is not None,
             )
-            if use_window:
-                tree_rescore_unshifted_data = exact_cc_unshifted_corrected[
-                    :, window_indices
-                ]
-                tree_rescore_corr_img_data = exact_cc_corr_img[:, window_indices]
-            else:
-                tree_rescore_unshifted_data = exact_cc_unshifted_corrected
-                tree_rescore_corr_img_data = exact_cc_corr_img
+            tree_rescore_unshifted_data = exact_cc_operands.windowed_unshifted
+            tree_rescore_corr_img_data = exact_cc_operands.windowed_corr_img
 
         if coarse_gaussian_ffi_enabled:
             coarse_preprocess_kwargs = relion_preprocess_kwargs

@@ -1094,9 +1094,22 @@ def test_k1_coarse_gaussian_exact_operand_flags_honor_default_and_opt_out(monkey
     assembler_start = operands_source.index("def _assemble_relion_exact_coarse_gaussian_operands(")
     assembler = operands_source[assembler_start : operands_source.index("\ndef ", assembler_start + 1)]
     assert "_relion_exact_ctf_half_from_source_star_host(" in assembler
-    assert "processed_score * pixel_correction" in assembler
     assert "pixel_indices=score_indices_np" in assembler
     assert "shifted_corrected = translate_fn(" in assembler
+    # P3-I: the elementwise operand chain that used to sit inline here now
+    # lives in _relion_exact_coarse_operands, which the assembler calls
+    # eagerly or, under RECOVAR_COARSE_OPERAND_PROGRAM, as jax.jit of the same
+    # function. The expression itself is unchanged and still owned by this
+    # module.
+    assert "_relion_exact_coarse_operand_program" in assembler
+    assert "else _relion_exact_coarse_operands" in assembler
+    operands_start = operands_source.index("def _relion_exact_coarse_operands(")
+    exact_operands = operands_source[
+        operands_start : operands_source.index("\ndef ", operands_start + 1)
+    ]
+    assert "processed_score * pixel_correction" in exact_operands
+    assert "_relion_cuda_pixel_correction_from_rfloat_ctf(" in exact_operands
+    assert "_relion_cuda_corr_img_from_native_noise_variance(" in exact_operands
     assert "else cuda_backproject.relion_coarse_diff2_projector_f32" in source
     assert "return coarse_projector(" in source
     assert "rotation_block_size = n_rot" in source
