@@ -364,6 +364,92 @@ def test_flat_row_wavg_rectangle_terms_match_the_rectangular_helper():
     assert int(_ulp32(flat[:, other, 2], rect[:, other, 2]).max()) <= 4
 
 
+@pytest.mark.parametrize(
+    "batch,n_rot,n_trans,n_rect,n_exact",
+    [(2, 3, 4, 10, 6), (5, 64, 84, 97, 61), (1, 17, 3, 8, 8), (7, 1, 9, 33, 2)],
+)
+def test_wavg_power_per_image_is_bitwise_against_the_per_row_path(
+    batch, n_rot, n_trans, n_rect, n_exact
+):
+    """P4-G phase 2: squaring before the gather must change no bit.
+
+    ``|x|^2`` is elementwise, so squaring the chunk rectangle once per image and
+    gathering the float32 result is the same value as gathering the complex
+    rectangle and squaring once per row. The contraction that follows sees the
+    same shapes and the same translation axis, so the whole triplet is bitwise.
+    Shapes cover the production ratio (many rows over few images), one row per
+    image, a single rotation, and an all-exact rectangle.
+    """
+
+    rng = np.random.default_rng(4207 + n_rect)
+    exact_positions = np.sort(
+        rng.choice(n_rect, size=n_exact, replace=False).astype(np.int32)
+    )
+    rows = batch * n_rot
+    exact_terms = rng.normal(size=(rows, n_exact, 3)).astype(np.float32)
+    raw_rect = (
+        rng.normal(size=(batch, n_trans, n_rect))
+        + 1j * rng.normal(size=(batch, n_trans, n_rect))
+    ).astype(np.complex64)
+    posterior = np.abs(rng.normal(size=(rows, n_trans))).astype(np.float32)
+    row_image = np.repeat(np.arange(batch, dtype=np.int32), n_rot)
+
+    def run(power_per_image):
+        return np.asarray(
+            rp._resident_block_wavg_rectangle_terms(
+                jnp.asarray(exact_terms),
+                jnp.asarray(raw_rect),
+                jnp.asarray(posterior),
+                jnp.asarray(row_image),
+                jnp.asarray(exact_positions),
+                power_per_image=power_per_image,
+            )
+        )
+
+    per_row, per_image = run(False), run(True)
+    np.testing.assert_array_equal(
+        per_image.view(np.uint32), per_row.view(np.uint32)
+    )
+
+
+def test_wavg_power_per_image_flag_defaults_off_and_reaches_the_spec(monkeypatch):
+    """The flag is opt-in and the block body reads it from the program spec."""
+
+    monkeypatch.delenv(rp._WAVG_POWER_PER_IMAGE_ENV, raising=False)
+    assert rp._wavg_power_per_image_enabled() is False
+    monkeypatch.setenv(rp._WAVG_POWER_PER_IMAGE_ENV, "1")
+    assert rp._wavg_power_per_image_enabled() is True
+    import dataclasses
+
+    fields = {f.name for f in dataclasses.fields(rp._ChunkProgramSpec)}
+    assert "wavg_power_per_image" in fields
+
+
+def test_wavg_shifted_power_commutes_with_a_row_gather():
+    """The identity the hoist rests on, stated on its own.
+
+    ``square(gather(x)) == gather(square(x))`` in float32, including the
+    optimization barrier that keeps the two products from contracting.
+    """
+
+    from recovar.em.sparse_pass2.sparse_pass2_wavg import _relion_wavg_shifted_power
+
+    rng = np.random.default_rng(5150)
+    rect = (
+        rng.normal(size=(6, 11, 29)) + 1j * rng.normal(size=(6, 11, 29))
+    ).astype(np.complex64)
+    take = rng.integers(0, 6, size=97).astype(np.int32)
+    gather_then_square = np.asarray(
+        _relion_wavg_shifted_power(jnp.asarray(rect)[jnp.asarray(take)])
+    )
+    square_then_gather = np.asarray(
+        _relion_wavg_shifted_power(jnp.asarray(rect))[jnp.asarray(take)]
+    )
+    np.testing.assert_array_equal(
+        square_then_gather.view(np.uint32), gather_then_square.view(np.uint32)
+    )
+
+
 def test_default_row_ladder_is_dense_enough_to_bound_padding():
     """Consecutive classes must not more than double, so occupancy floors at 50%.
 

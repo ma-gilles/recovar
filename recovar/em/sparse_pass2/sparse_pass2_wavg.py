@@ -365,20 +365,35 @@ def _select_optional_wavg_exact_pixels(values, rectangle):
     return values[:, rectangle.exact_positions]
 
 
-def _relion_wavg_rectangle_image_power(raw_shifted, posterior):
-    """Shared rectangle power contraction; keep the original F32/barrier order."""
+def _relion_wavg_shifted_power(raw_shifted):
+    """RELION's float32 ``|x|^2``, with the barrier between its two terms.
+
+    The barrier keeps ``real*real`` and ``+ imag*imag`` from contracting into a
+    single FMA, which is what makes this expression bitwise reproducible. The
+    result depends only on ``raw_shifted``, elementwise, so a caller that needs
+    the power of a gathered view may square first and gather afterwards.
+    """
     raw_shifted = jnp.asarray(raw_shifted, dtype=jnp.complex64)
-    posterior = jnp.asarray(posterior, dtype=jnp.float32)
     shifted_power = (raw_shifted.real * raw_shifted.real).astype(jnp.float32)
     shifted_power = jax.lax.optimization_barrier(shifted_power)
-    shifted_power = (shifted_power + raw_shifted.imag * raw_shifted.imag).astype(jnp.float32)
-    image_power = jnp.einsum(
+    return (shifted_power + raw_shifted.imag * raw_shifted.imag).astype(jnp.float32)
+
+
+def _relion_wavg_rectangle_power_contraction(shifted_power, posterior):
+    """Contract an already-squared rectangle against the posterior over T."""
+    return jnp.einsum(
         "brt,btp->brp",
-        posterior,
-        shifted_power,
+        jnp.asarray(posterior, dtype=jnp.float32),
+        jnp.asarray(shifted_power, dtype=jnp.float32),
         preferred_element_type=jnp.float32,
     ).astype(jnp.float32)
-    return image_power
+
+
+def _relion_wavg_rectangle_image_power(raw_shifted, posterior):
+    """Shared rectangle power contraction; keep the original F32/barrier order."""
+    return _relion_wavg_rectangle_power_contraction(
+        _relion_wavg_shifted_power(raw_shifted), posterior
+    )
 
 
 @jax.jit
