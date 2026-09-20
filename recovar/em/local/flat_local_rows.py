@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 
 import jax.numpy as jnp
@@ -12,6 +13,37 @@ from recovar.em.local.local_layout import (
     _exact_bucket_rotation_size,
     _exact_local_large_bucket_quantum,
 )
+
+
+# Consecutive images are packed in pools that share one rotation width, so a pool
+# costs ``pool_size`` times its largest member's padded neighborhood. Pooling exists
+# to keep the number of distinct packed shapes down, not for any scientific reason:
+# ``valid_mask`` already marks which rows carry a real hypothesis, so the pool size
+# changes the padded shape and nothing about the result. Larger pools mean fewer
+# shapes and more padded rows; 3 is the historical default.
+EXACT_LOCAL_FLAT_POOL_SIZE = 3
+EXACT_LOCAL_FLAT_POOL_SIZE_ENV = "RECOVAR_EXACT_LOCAL_FLAT_POOL_SIZE"
+
+
+def resolve_flat_local_pool_size(explicit: int | None = None) -> int:
+    """Resolve the packed-row pool size from an explicit value or the environment."""
+
+    source = "flat_local_pool_size"
+    raw_value = explicit
+    if raw_value is None:
+        source = EXACT_LOCAL_FLAT_POOL_SIZE_ENV
+        raw_value = os.environ.get(
+            EXACT_LOCAL_FLAT_POOL_SIZE_ENV, str(EXACT_LOCAL_FLAT_POOL_SIZE)
+        ).strip()
+        if not raw_value:
+            raw_value = EXACT_LOCAL_FLAT_POOL_SIZE
+    try:
+        pool_size = int(raw_value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{source} must be a positive integer") from exc
+    if pool_size < 1:
+        raise ValueError(f"{source} must be a positive integer")
+    return pool_size
 
 
 @dataclass(frozen=True)

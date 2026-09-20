@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import dataclasses
 import gc
 import logging
-import dataclasses
 import os
 import time
 
@@ -126,6 +126,7 @@ from recovar.em.local.local_big_jit import (
     run_fixed_capacity_segmented_local_scan,
 )
 from recovar.em.local.local_bucket_stages import (
+    FlatLocalRowCapacities,
     _accumulate_packed_noise_chunk,
     _adjoint_slice_volume_maybe_windowed_row_chunks,
     _build_flat_local_row_argument,
@@ -1472,7 +1473,7 @@ def run_local_em_exact(
             stable_rectangular_capacity=stable_flat_row_capacity_enabled,
         )
         if flat_local_rows_enabled
-        else {}
+        else FlatLocalRowCapacities(capacities={}, required_rows=0, pool_size=1)
     )
     fine_job_capacities = (
         _plan_local_fine_job_capacities(bucket_specs)
@@ -2074,7 +2075,7 @@ def run_local_em_exact(
             total_padded_rotations += executed_padded_rotations
             flat_score_rows = (
                 int(
-                    flat_local_row_capacities[
+                    flat_local_row_capacities.capacities[
                         (
                             int(executed_padded_image_count),
                             int(bucket.bucket_rotation_count),
@@ -6021,6 +6022,10 @@ def run_local_em_exact(
             "sum_union_rows": np.int64(total_local_rotations),
             "sum_padded_rows": np.int64(total_padded_rotations),
             "sum_flat_score_rows": np.int64(total_flat_score_rows),
+            "sum_flat_required_rows": np.int64(
+                flat_local_row_capacities.required_rows
+            ),
+            "flat_local_pool_size": np.int64(flat_local_row_capacities.pool_size),
             "sum_fused_pair_candidates": np.int64(total_fused_pair_candidates),
             "sum_fused_pair_capacity": np.int64(total_fused_pair_capacity),
             "sum_fused_pair_dense_capacity": np.int64(

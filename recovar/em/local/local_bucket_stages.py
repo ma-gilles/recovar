@@ -39,6 +39,7 @@ from recovar.em.local.flat_local_rows import (
     build_pool_flat_local_row_plan_for_classes,
     encode_flat_local_row_plan,
     map_dense_local_rows_to_flat_rows,
+    resolve_flat_local_pool_size,
 )
 from recovar.em.local.local_backprojection import (
     compute_local_ctf_sums,
@@ -932,6 +933,7 @@ def _build_pool_flat_plan_for_bucket(
     rotation_block_size: int,
     exact_local_bucket_radix: int,
     dense_batch_size: int,
+    pool_size: int,
     packed_row_count: int | None = None,
 ):
     """Build one bucket's packed plan, class-segmented or single-class.
@@ -952,7 +954,7 @@ def _build_pool_flat_plan_for_bucket(
         return build_pool_flat_local_row_plan_for_classes(
             np.asarray(class_counts, dtype=np.int32),
             int(segment),
-            pool_size=3,
+            pool_size=pool_size,
             rotation_block_size=rotation_block_size,
             exact_local_bucket_radix=exact_local_bucket_radix,
             packed_row_count=packed_row_count,
@@ -961,12 +963,27 @@ def _build_pool_flat_plan_for_bucket(
     return build_pool_flat_local_row_plan(
         np.asarray(bucket.actual_rotation_counts, dtype=np.int32),
         dense_rotation_count,
-        pool_size=3,
+        pool_size=pool_size,
         rotation_block_size=rotation_block_size,
         exact_local_bucket_radix=exact_local_bucket_radix,
         packed_row_count=packed_row_count,
         dense_batch_size=dense_batch_size,
     )
+
+
+@dataclass(frozen=True)
+class FlatLocalRowCapacities:
+    """Packed-row shapes shared across buckets, plus what they cost.
+
+    ``capacities`` is the shape each dense bucket ABI executes at. ``required_rows``
+    is what the same buckets would have needed at their own sizes, so the difference
+    is exactly the padding the shared shape buys compile reuse with. The engine
+    reports both, because rows and not bucket count drive the local kernel's time.
+    """
+
+    capacities: dict[tuple[int, int], int]
+    required_rows: int
+    pool_size: int
 
 
 def _plan_flat_local_row_capacities(
@@ -975,7 +992,8 @@ def _plan_flat_local_row_capacities(
     rotation_block_size: int,
     exact_local_bucket_radix: int,
     stable_rectangular_capacity: bool = False,
-) -> dict[tuple[int, int], int]:
+    pool_size: int | None = None,
+) -> FlatLocalRowCapacities:
     """Choose one packed-row shape for every existing dense bucket ABI.
 
     The stable policy deliberately reuses the mature rectangular ``B x R``
@@ -985,7 +1003,9 @@ def _plan_flat_local_row_capacities(
     pixel work while repeated iterations can reuse the same compiled shape.
     """
 
+    resolved_pool_size = resolve_flat_local_pool_size(pool_size)
     capacities: dict[tuple[int, int], int] = {}
+    required_rows = 0
     for bucket in bucket_specs:
         physical_image_count = int(np.asarray(bucket.image_indices).shape[0])
         dense_batch_size = max(
@@ -999,18 +1019,24 @@ def _plan_flat_local_row_capacities(
             rotation_block_size=rotation_block_size,
             exact_local_bucket_radix=exact_local_bucket_radix,
             dense_batch_size=dense_batch_size,
+            pool_size=resolved_pool_size,
         )
         key = (dense_batch_size, dense_rotation_count)
         required_capacity = int(plan.packed_row_count)
+        required_rows += required_capacity
         if stable_rectangular_capacity:
             required_capacity = dense_batch_size * dense_rotation_count
         capacities[key] = max(capacities.get(key, 0), required_capacity)
-    return capacities
+    return FlatLocalRowCapacities(
+        capacities=capacities,
+        required_rows=int(required_rows),
+        pool_size=resolved_pool_size,
+    )
 
 
 def _build_flat_local_row_argument(
     bucket: LocalBucketSpec,
-    capacities: dict[tuple[int, int], int],
+    capacities: FlatLocalRowCapacities,
     *,
     dense_batch_size: int,
     rotation_block_size: int,
@@ -1020,22 +1046,23 @@ def _build_flat_local_row_argument(
 
     dense_rotation_count = int(bucket.bucket_rotation_count)
     key = (int(dense_batch_size), dense_rotation_count)
-    if key not in capacities:
+    if key not in capacities.capacities:
         raise ValueError(f"flat local row capacity is missing dense bucket ABI {key}")
     plan = _build_pool_flat_plan_for_bucket(
         bucket,
         dense_rotation_count=dense_rotation_count,
         rotation_block_size=rotation_block_size,
         exact_local_bucket_radix=exact_local_bucket_radix,
-        packed_row_count=int(capacities[key]),
+        packed_row_count=int(capacities.capacities[key]),
         dense_batch_size=int(dense_batch_size),
+        pool_size=capacities.pool_size,
     )
     return encode_flat_local_row_plan(plan)
 
 
 def _flat_local_row_class_blocks(
     bucket,
-    capacities: dict[tuple[int, int], int],
+    capacities: FlatLocalRowCapacities,
     *,
     dense_batch_size: int,
     rotation_block_size: int,
@@ -1051,15 +1078,16 @@ def _flat_local_row_class_blocks(
         return None
     dense_rotation_count = int(bucket.bucket_rotation_count)
     key = (int(dense_batch_size), dense_rotation_count)
-    if key not in capacities:
+    if key not in capacities.capacities:
         raise ValueError(f"flat local row capacity is missing dense bucket ABI {key}")
     plan = _build_pool_flat_plan_for_bucket(
         bucket,
         dense_rotation_count=dense_rotation_count,
         rotation_block_size=rotation_block_size,
         exact_local_bucket_radix=exact_local_bucket_radix,
-        packed_row_count=int(capacities[key]),
+        packed_row_count=int(capacities.capacities[key]),
         dense_batch_size=int(dense_batch_size),
+        pool_size=capacities.pool_size,
     )
     return plan.class_row_counts
 

@@ -425,7 +425,10 @@ def test_flat_row_capacity_reuses_one_shape_per_dense_bucket_abi():
         exact_local_bucket_radix=4,
     )
 
-    assert capacities == {(4, 256): 256}
+    assert capacities.capacities == {(4, 256): 256}
+    assert capacities.pool_size == 3
+    # 3 images pooled at 64 rows, then 2 pooled at 128: the shared shape is the larger
+    assert capacities.required_rows == 192 + 256
     assert encoded.shape == (256, 3)
     assert np.count_nonzero(encoded[:, 2]) == int(
         np.sum(first.actual_rotation_counts),
@@ -488,7 +491,7 @@ def test_stable_flat_row_capacity_reuses_mature_rectangular_bucket_abi():
         dense_batch_size=4,
     ).packed_row_count
 
-    assert capacities == {(4, 256): 4 * 256}
+    assert capacities.capacities == {(4, 256): 4 * 256}
     assert first_encoded.shape == second_encoded.shape == (4 * 256, 3)
     np.testing.assert_array_equal(
         first_encoded[: ordinary_first.shape[0]],
@@ -643,7 +646,7 @@ def test_bucket_stage_flat_plan_dispatches_on_class_segmented_buckets():
     capacities = _plan_flat_local_row_capacities(
         buckets, rotation_block_size=rotation_block_size, exact_local_bucket_radix=2,
     )
-    assert capacities
+    assert capacities.capacities
 
     for bucket in buckets:
         physical = int(np.asarray(bucket.image_indices).shape[0])
@@ -666,7 +669,7 @@ def test_bucket_stage_flat_plan_dispatches_on_class_segmented_buckets():
         * int(b.bucket_rotation_count)
         for b in buckets
     )
-    packed = sum(capacities.values())
+    packed = sum(capacities.capacities.values())
     assert packed < rectangular
 
     # Prove the class-aware builder actually ran rather than silently falling back.
@@ -694,6 +697,7 @@ def test_bucket_stage_flat_plan_dispatches_on_class_segmented_buckets():
         rotation_block_size=rotation_block_size,
         exact_local_bucket_radix=2,
         dense_batch_size=dense_batch,
+        pool_size=3,
     )
     assert klass.packed_row_count <= dense_batch * int(bucket.bucket_rotation_count)
 
@@ -799,3 +803,54 @@ def test_relion_ctf_row_shift_matches_negated_fftshift(rows):
     np.negative(native[:split], out=shifted[shift:])
 
     np.testing.assert_array_equal(shifted.reshape(-1), expected)
+
+
+@pytest.mark.unit
+def test_flat_local_pool_size_changes_padding_only(monkeypatch):
+    """The pool size is a shape knob: it must not change which rows are valid.
+
+    Pooling consecutive images onto one rotation width is what makes a packed
+    bucket rectangular enough to reuse a compiled shape. It costs padded rows and
+    buys nothing scientific, so the valid (image, rotation) pairs must be identical
+    at every pool size while the row count falls as the pool shrinks.
+    """
+
+    from recovar.em.local.flat_local_rows import (
+        build_pool_flat_local_row_plan,
+        resolve_flat_local_pool_size,
+    )
+
+    counts = np.asarray([5, 300, 7, 9, 600, 11, 13, 17], dtype=np.int32)
+
+    def valid_pairs(pool_size):
+        plan = build_pool_flat_local_row_plan(
+            counts,
+            1024,
+            pool_size=pool_size,
+            rotation_block_size=1024,
+        )
+        valid = plan.valid_mask
+        return (
+            set(zip(plan.image_indices[valid].tolist(), plan.rotation_rows[valid].tolist())),
+            plan.packed_row_count,
+        )
+
+    expected = {
+        (image, rotation)
+        for image, count in enumerate(counts.tolist())
+        for rotation in range(count)
+    }
+    pairs_one, rows_one = valid_pairs(1)
+    pairs_three, rows_three = valid_pairs(3)
+    assert pairs_one == expected
+    assert pairs_three == expected
+    assert rows_one < rows_three
+
+    monkeypatch.setenv("RECOVAR_EXACT_LOCAL_FLAT_POOL_SIZE", "1")
+    assert resolve_flat_local_pool_size() == 1
+    monkeypatch.delenv("RECOVAR_EXACT_LOCAL_FLAT_POOL_SIZE")
+    assert resolve_flat_local_pool_size() == 3
+    assert resolve_flat_local_pool_size(2) == 2
+    monkeypatch.setenv("RECOVAR_EXACT_LOCAL_FLAT_POOL_SIZE", "0")
+    with pytest.raises(ValueError, match="positive integer"):
+        resolve_flat_local_pool_size()
