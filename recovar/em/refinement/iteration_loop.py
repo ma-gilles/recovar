@@ -305,6 +305,87 @@ def _initial_coarse_grids(
     return _CoarseGrids(rotations, rotation_eulers, base_translations, current_translations, int(healpix_order))
 
 
+class DenseHalfScoringPlan(NamedTuple):
+    """One half's dense E-step call, gathered as a value before it runs.
+
+    The two halves are independent inside the E-step, so holding each call's
+    arguments in one value lets both plans be built before either call runs.
+    That is the seam an overlapped driver needs; on its own it changes nothing.
+    ``kwargs`` is the same mapping the driver used to build inline and
+    ``adaptive_kwargs`` the same adaptive-only additions, so the arguments and
+    their values are unchanged.
+    """
+
+    half_index: int
+    use_adaptive: bool
+    effective_rotations: object
+    adaptive_kwargs: dict
+    kwargs: dict
+
+
+def _run_dense_half_scoring(plan: DenseHalfScoringPlan):
+    """Execute one half's dense E-step from its plan.
+
+    Keyword arguments bind by name, so folding the adaptive additions and the
+    shared mapping into one call is the same call the driver made through two
+    branches. The plan's key sets are disjoint by construction.
+    """
+
+    return _score_half_dense_in_bpref_scope(
+        effective_rotations=plan.effective_rotations,
+        **plan.adaptive_kwargs,
+        **plan.kwargs,
+    )
+
+
+class DenseHalfScoringOutputs(NamedTuple):
+    """The per-half values the driver reads out of one dense E-step result."""
+
+    ha: object
+    Ft_y: object
+    Ft_ctf: object
+    em_stats: object
+    noise_stats: object
+    pose_rotations: object
+    pose_rotation_eulers: object
+    coarse_ha: object
+
+
+def _dense_half_scoring_outputs(
+    dense_result,
+    *,
+    use_adaptive: bool,
+    effective_rotations,
+    effective_rotation_eulers,
+) -> DenseHalfScoringOutputs:
+    """Read one half's dense result into the values the driver stores.
+
+    Single-pass scoring keeps the scoring grid as the pose grid and reuses the
+    fine assignment as the coarse one, which is what the driver did inline.
+    """
+
+    if use_adaptive and dense_result.pose_rotations is not None:
+        pose_rotations = dense_result.pose_rotations
+        pose_rotation_eulers = dense_result.pose_rotation_eulers
+    else:
+        pose_rotations = effective_rotations
+        pose_rotation_eulers = effective_rotation_eulers
+    return DenseHalfScoringOutputs(
+        ha=dense_result.ha,
+        Ft_y=dense_result.Ft_y,
+        Ft_ctf=dense_result.Ft_ctf,
+        em_stats=dense_result.em_stats,
+        noise_stats=dense_result.noise_stats,
+        pose_rotations=pose_rotations,
+        pose_rotation_eulers=pose_rotation_eulers,
+        coarse_ha=(
+            dense_result.coarse_ha
+            if use_adaptive and dense_result.coarse_ha is not None
+            else dense_result.ha  # single pass: same grid, no oversampling
+        ),
+    )
+
+
 def _sigma_offset_for_half(current_sigma_offset_angstrom, current_sigma_offset_angstrom_per_half, half_index):
     if current_sigma_offset_angstrom_per_half is None:
         return float(current_sigma_offset_angstrom)
@@ -1729,6 +1810,9 @@ def refine_single_volume(
         # into effective_rotations, even when adaptive oversampling is used).
         coarse_ha = per_half.coarse_ha
         class_posterior_per_half = per_half.class_posterior
+        # One dense E-step plan per half, kept after the call so a later
+        # driver can build both before running either. Nothing reads it today.
+        dense_half_plans: list[DenseHalfScoringPlan | None] = [None, None]
 
         if use_adaptive:
             # --- TWO-PASS ADAPTIVE OVERSAMPLING (RELION parity) ---
@@ -2192,46 +2276,54 @@ def refine_single_volume(
                         adaptive_pass1_rotations if int(state.adaptive_oversampling) == 0 else None
                     ),
                 )
-                if use_adaptive:
-                    dense_result = _score_half_dense_in_bpref_scope(
-                        effective_rotations=(
+                # The call's arguments become one value so both halves' plans
+                # can be built before either call runs. Same arguments, same
+                # values, same order of construction as the two branches this
+                # replaces.
+                dense_half_plans[k] = DenseHalfScoringPlan(
+                    half_index=k,
+                    use_adaptive=bool(use_adaptive),
+                    effective_rotations=(
+                        (
                             adaptive_pass1_rotations
                             if adaptive_pass1_rotations is not None
                             else effective_rotations
-                        ),
-                        k_class_image_batch_size_override=k_class_image_batch_size,
-                        k_class_rotation_block_size_override=dense_k_class_rotation_block_size,
-                        significance_image_batch_size_override=significance_image_batch_size,
-                        significance_rotation_block_size_override=significance_rotation_block_size,
-                        firstiter_coarse_current_size=coarse_cs,
-                        firstiter_fine_current_size=cs_for_engine,
-                        firstiter_log_label="",
-                        firstiter_updates_em_kwargs_ibs=True,
-                        **dense_half_kwargs,
-                    )
-                else:
-                    # --- SINGLE-PASS E+M (no adaptive oversampling) ---
-                    dense_result = _score_half_dense_in_bpref_scope(
-                        effective_rotations=effective_rotations,
-                        **dense_half_kwargs,
-                    )
-                ha_k = dense_result.ha
-                Ft_y_k = dense_result.Ft_y
-                Ft_ctf_k = dense_result.Ft_ctf
-                em_stats_k = dense_result.em_stats
-                noise_stats_k = dense_result.noise_stats
-                noise_stats_per_half[k] = noise_stats_k
-                if use_adaptive and dense_result.pose_rotations is not None:
-                    pose_rotations[k] = dense_result.pose_rotations
-                    pose_rotation_eulers[k] = dense_result.pose_rotation_eulers
-                else:
-                    pose_rotations[k] = effective_rotations
-                    pose_rotation_eulers[k] = effective_rotation_eulers
-                coarse_ha[k] = (
-                    dense_result.coarse_ha
-                    if use_adaptive and dense_result.coarse_ha is not None
-                    else ha_k  # single pass: same grid, no oversampling
+                        )
+                        if use_adaptive
+                        else effective_rotations
+                    ),
+                    adaptive_kwargs=(
+                        dict(
+                            k_class_image_batch_size_override=k_class_image_batch_size,
+                            k_class_rotation_block_size_override=dense_k_class_rotation_block_size,
+                            significance_image_batch_size_override=significance_image_batch_size,
+                            significance_rotation_block_size_override=significance_rotation_block_size,
+                            firstiter_coarse_current_size=coarse_cs,
+                            firstiter_fine_current_size=cs_for_engine,
+                            firstiter_log_label="",
+                            firstiter_updates_em_kwargs_ibs=True,
+                        )
+                        if use_adaptive
+                        else {}
+                    ),
+                    kwargs=dense_half_kwargs,
                 )
+                dense_result = _run_dense_half_scoring(dense_half_plans[k])
+                dense_outputs = _dense_half_scoring_outputs(
+                    dense_result,
+                    use_adaptive=use_adaptive,
+                    effective_rotations=effective_rotations,
+                    effective_rotation_eulers=effective_rotation_eulers,
+                )
+                ha_k = dense_outputs.ha
+                Ft_y_k = dense_outputs.Ft_y
+                Ft_ctf_k = dense_outputs.Ft_ctf
+                em_stats_k = dense_outputs.em_stats
+                noise_stats_k = dense_outputs.noise_stats
+                noise_stats_per_half[k] = noise_stats_k
+                pose_rotations[k] = dense_outputs.pose_rotations
+                pose_rotation_eulers[k] = dense_outputs.pose_rotation_eulers
+                coarse_ha[k] = dense_outputs.coarse_ha
                 score_result = dense_result
 
                 # --- Manifest dump for deterministic replay (Phase 0.1) ---
