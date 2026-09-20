@@ -32,14 +32,19 @@ _EXACT_CTF_CACHE_GB_ENV = "RECOVAR_RELION_EXACT_CTF_CACHE_GB"
 
 
 def _exact_ctf_result_cache_budget_bytes() -> int:
-    """Host bytes the assembled-operand memo may hold; 0 (the default) disables it.
+    """Host bytes the assembled-operand memo may hold; 0 disables it.
+
+    The default is 4 GB since the P4-I merge, which holds the two 1.31 GB
+    whole-half operands of the 256x256 fixture and costs about 2.5 GB of host
+    memory for 2.0 s of a steady hp3 iteration. Set the variable to 0 to
+    restore the unmemoized assembly, which stays the oracle.
 
     The memo trades host memory for the repeated stack: a whole-half operand is
     1.31 GB at 256x256, so a budget below that disables the pass-2 entry while
     still holding the much smaller per-batch coarse entries.
     """
 
-    token = os.environ.get(_EXACT_CTF_CACHE_GB_ENV, "0").strip()
+    token = os.environ.get(_EXACT_CTF_CACHE_GB_ENV, "4").strip()
     try:
         budget = float(token)
     except ValueError as exc:

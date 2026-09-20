@@ -68,13 +68,30 @@ def _call(indices, pixel_indices=None):
     )
 
 
-def test_memo_disabled_by_default(prepared_cache, monkeypatch):
-    monkeypatch.delenv("RECOVAR_RELION_EXACT_CTF_CACHE_GB", raising=False)
+def test_memo_can_be_disabled_and_then_hands_back_fresh_arrays(prepared_cache, monkeypatch):
+    """With the memo off, two calls agree and neither is the other's array.
+
+    The budget defaults to 4 GB since the P4-I merge; ``0`` restores the
+    unmemoized assembly, which is the oracle the memo is measured against.
+    """
+
+    monkeypatch.setenv("RECOVAR_RELION_EXACT_CTF_CACHE_GB", "0")
     first = _call(range(N_IMAGES))
     second = _call(range(N_IMAGES))
     np.testing.assert_array_equal(first, second)
     assert first is not second
     assert first.flags.writeable
+
+
+def test_memo_budget_defaults_to_four_gigabytes(monkeypatch):
+    """The default is the candidate configuration, not off."""
+
+    from recovar.em.relion import relion_ctf
+
+    monkeypatch.delenv("RECOVAR_RELION_EXACT_CTF_CACHE_GB", raising=False)
+    assert relion_ctf._exact_ctf_result_cache_budget_bytes() == 4 * (1024 ** 3)
+    monkeypatch.setenv("RECOVAR_RELION_EXACT_CTF_CACHE_GB", "0")
+    assert relion_ctf._exact_ctf_result_cache_budget_bytes() == 0
 
 
 def test_memo_returns_the_identical_bytes(prepared_cache, monkeypatch):
@@ -153,13 +170,18 @@ def test_memo_rejects_an_unparsable_budget(prepared_cache, monkeypatch):
         _call(range(N_IMAGES))
 
 
-def test_prefetch_depth_defaults_to_two_and_validates(monkeypatch):
-    """The loader's queue depth is opt-in and fails closed on a bad token."""
+def test_prefetch_depth_defaults_to_four_and_validates(monkeypatch):
+    """The loader's queue depth is selectable and fails closed on a bad token.
+
+    The default is 4 since the P4-I merge; 2 restores the previous behaviour.
+    """
 
     from recovar.data_io import image_backends
 
     monkeypatch.delenv(image_backends.PREFETCH_DEPTH_ENV, raising=False)
-    assert image_backends.prefetch_depth() == image_backends.DEFAULT_PREFETCH_DEPTH == 2
+    assert image_backends.prefetch_depth() == image_backends.DEFAULT_PREFETCH_DEPTH == 4
+    monkeypatch.setenv(image_backends.PREFETCH_DEPTH_ENV, "2")
+    assert image_backends.prefetch_depth() == 2
     monkeypatch.setenv(image_backends.PREFETCH_DEPTH_ENV, "6")
     assert image_backends.prefetch_depth() == 6
     assert image_backends._PrefetchIterator(iter(()))._buffer_size == 6
