@@ -431,3 +431,123 @@ def test_eval_shape_through_the_real_gather_predicts_the_chunk_operands(
         "eval_shape through the real gather does not predict the chunk operands:\n  "
         + "\n  ".join(mismatches)
     )
+
+
+@pytest.mark.gpu
+def test_the_optional_operands_against_a_star_backed_preparation(
+    monkeypatch, custom_cuda_lib, gpu_device
+):
+    """The exact-BPref operands, built for real, against the prediction.
+
+    The mock dataset cannot reach this path on its own: the exact RELION CTF is
+    read from a source STAR and the mock has none, so the test above skips.
+    `RECOVAR_K1_RELION_EXACT_CTF_STAR` is the supported way in, and pointing it
+    at a real RELION particles STAR makes the preparation build all four
+    optional operands with real CTF evaluation.
+
+    This is what settles their dtypes against a run rather than against a
+    reading of the source. It covers both settings of source-faithful
+    normalization, because that is the flag on which the two `powerClass` terms
+    stop sharing a dtype, and production has it on.
+
+    Set `RECOVAR_P4J_STAR_FIXTURE` to the STAR to use. The Slurm job that runs
+    this tier sets it; without it the test says so rather than passing quietly.
+    """
+
+    import os
+
+    from test_resident_operands import N_FINE_TRANS, N_IMAGES, _case, _gpu_case
+
+    from recovar.em.sparse_pass2.resident_operands import (
+        ResidentOperandsUnsupported,
+        describe_resident_operand_mismatch,
+        prepare_resident_half_operands,
+        resident_half_operand_presence,
+    )
+    from recovar.em.sparse_pass2.sparse_pass2_scoring import (
+        relion_powerclass_noise_dtypes,
+    )
+
+    star = os.environ.get("RECOVAR_P4J_STAR_FIXTURE", "").strip()
+    if not star:
+        pytest.skip(
+            "set RECOVAR_P4J_STAR_FIXTURE to a RELION particles STAR with an "
+            "optics table to run the STAR-backed operand check"
+        )
+    monkeypatch.setenv("RECOVAR_K1_RELION_EXACT_CTF_STAR", star)
+    _gpu_case(monkeypatch, custom_cuda_lib)
+
+    case = _case(relion_angles=True)
+    kwargs = dict(case["bucket_io_kwargs"])
+    kwargs["relion_exact_bpref_operands"] = True
+
+    for source_faithful in (False, True):
+        try:
+            real = prepare_resident_half_operands(
+                case["dataset"],
+                np.arange(N_IMAGES),
+                bucket_io_kwargs=kwargs,
+                window_indices=case["window_indices"],
+                recon_window_indices=case["window_indices"],
+                image_shape=case["image_shape"],
+                current_size=case["current_size"],
+                n_fine_trans=N_FINE_TRANS,
+                use_exact_relion_gaussian=True,
+                accumulate_noise=True,
+                source_faithful_spectrum_norm=source_faithful,
+                image_batch_size=4,
+            )
+        except ResidentOperandsUnsupported as exc:
+            pytest.fail(f"the STAR fixture did not reach the exact-BPref path: {exc}")
+
+        presence = resident_half_operand_presence(
+            relion_exact_bpref_operands=True,
+            use_exact_relion_gaussian=True,
+            accumulate_noise=True,
+            current_size=case["current_size"],
+        )
+        built = {
+            name: getattr(real, name) is not None
+            for name in ("recon_weight", "direct_ctf_rfloat_recon",
+                         "highres_xi2_half", "relion_norm_high_shell")
+        }
+        assert built == {
+            "recon_weight": presence.has_recon_weight,
+            "direct_ctf_rfloat_recon": presence.has_direct_ctf_rfloat,
+            "highres_xi2_half": presence.has_highres_xi2,
+            "relion_norm_high_shell": presence.has_relion_norm_high_shell,
+        }, f"source_faithful={source_faithful}: the presence predicate is wrong"
+        assert all(built.values()), (
+            f"source_faithful={source_faithful}: this fixture built only {built}, "
+            "so it does not cover the optional operands"
+        )
+
+        _, norm_dtype = relion_powerclass_noise_dtypes(
+            real_dtype=jnp.float32, source_faithful_spectrum_norm=source_faithful
+        )
+        predicted = resident_half_operand_avals(
+            n_images=real.n_images,
+            n_score_pixels=real.n_score_pixels,
+            n_recon_pixels=real.n_recon_pixels,
+            n_half_pixels=real.n_half_pixels,
+            n_fine_trans=real.n_fine_trans,
+            score_complex_dtype=jnp.complex64,
+            score_real_dtype=jnp.float32,
+            acc_real_dtype=jnp.float32,
+            rfloat_ctf_dtype=jnp.float64,
+            norm_high_shell_dtype=norm_dtype,
+            has_recon_weight=presence.has_recon_weight,
+            has_direct_ctf_rfloat=presence.has_direct_ctf_rfloat,
+            has_highres_xi2=presence.has_highres_xi2,
+            has_relion_norm_high_shell=presence.has_relion_norm_high_shell,
+        )
+        difference = describe_resident_operand_mismatch(predicted, real)
+        assert difference == "", (
+            f"source_faithful={source_faithful}: {difference}"
+        )
+
+        # the two facts the source reading claimed, now against a real run
+        assert jnp.dtype(real.direct_ctf_rfloat_recon.dtype) == jnp.dtype(jnp.float64)
+        assert jnp.dtype(real.relion_norm_high_shell.dtype) == jnp.dtype(
+            jnp.float64 if source_faithful else jnp.float32
+        )
