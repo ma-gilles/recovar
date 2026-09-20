@@ -17,6 +17,7 @@ import jax.numpy as jnp
 import numpy as np
 
 import recovar.core.fourier_transform_utils as fourier_transform_utils
+from recovar.em.diagnostics import finite_check
 from recovar.em.helpers.dtype_policy import DensePrecisionPolicy
 from recovar.em.helpers.half_spectrum import make_half_image_weights, make_shell_indices_half
 from recovar.em.helpers.image_shifts import apply_relion_integer_pre_shifts, half_image_phase_factors
@@ -476,6 +477,31 @@ def prepare_unshifted_bucket_operands(
         if return_direct_scoring_io:
             sparse_score_input_half = sparse_score_input_half * phase_factors
 
+    if finite_check.finite_check_enabled():
+        # P4-D. The per-image per-pixel operands, before any translation or
+        # posterior weighting. The accumulator geometry of job 14178118 points
+        # at exactly these: a scattered corruption here ruins the weighted
+        # image sum and the CTF sum at the same pixel of the same image, which
+        # is the only operand-level fault consistent with the nested bad voxel
+        # sets and their flat radial profile.
+        finite_check.check_bundle(
+            "bucket-io-operands",
+            {
+                "ctf_half": ctf_half,
+                "inverse_noise_half": inverse_noise_half,
+                "weighted_ctf_half": weighted_ctf_half,
+                "ctf2_over_nv_half": ctf2_over_nv_half,
+                "ctf2_over_nv_recon_half": ctf2_over_nv_recon_half,
+                "recon_weighted_half": recon_weighted_half,
+                "recon_bpref_input_half": recon_bpref_input_half,
+                "batch_scale": batch_scale,
+            },
+            context=finite_check.describe_context(
+                images=int(np.asarray(image_indices).size),
+                first_image=int(np.asarray(image_indices).reshape(-1)[0]),
+            ),
+            image_ids=image_indices,
+        )
     return UnshiftedBucketOperands(
         image_shape=image_shape,
         use_normalized_cc=use_normalized_cc,
