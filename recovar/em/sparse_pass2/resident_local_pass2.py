@@ -796,6 +796,25 @@ def compute_local_search_resident(
         if estimated > budget:
             # Admission, not a failure: an over-budget pass keeps the per-chunk
             # preparation rather than allocating and dying mid-loop.
+            #
+            # The decision is per pass, and the driver is called once per half,
+            # so a budget that lands between the two halves of one iteration
+            # would give them different M-step arithmetic. At 10k/256 the final
+            # all-data halves are 4966 and 5034 images, 7.94 and 8.05 GiB, and
+            # the default budget is 8.00: it admits one and declines the other.
+            # This is survivable while the path is opt-in, because the caller
+            # sets the budget to admit both, and it is the thing to fix before
+            # the path can be a default -- the admission has to be decided once
+            # for the iteration, above this driver, not once per half.
+            logger.warning(
+                "Resident local pass-2 declined the once-per-half operands for a "
+                "pass of %d images. If the other half of this iteration was "
+                "admitted, the two halves ran different M-step arithmetic; set "
+                "RECOVAR_SPARSE_PASS2_RESIDENT_OPERAND_MAX_BYTES above %.2f GiB "
+                "so the decision is the same for both.",
+                n_images,
+                estimated / 1024**3,
+            )
             logger.info(
                 "Resident local pass-2 keeps the per-chunk operand preparation: the "
                 "once-per-half operands need %.1f GiB and the budget is %.1f GiB",
