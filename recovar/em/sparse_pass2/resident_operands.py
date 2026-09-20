@@ -60,7 +60,10 @@ from recovar.em.helpers.batch_fetch import fetch_indexed_batch
 from recovar.em.helpers.dtype_policy import DensePrecisionPolicy
 from recovar.em.helpers.half_spectrum import make_shell_indices_half
 from recovar.em.sparse_pass2.sparse_pass2_bucket_io import prepare_unshifted_bucket_operands
-from recovar.em.sparse_pass2.sparse_pass2_scoring import _relion_powerclass_noise_terms
+from recovar.em.sparse_pass2.sparse_pass2_scoring import (
+    _relion_powerclass_noise_terms,
+    relion_powerclass_noise_presence,
+)
 from recovar.em.sparse_pass2.sparse_pass2_wavg import _relion_cuda_translate_wavg_norm_images
 
 logger = logging.getLogger(__name__)
@@ -225,6 +228,86 @@ def resident_half_operand_bytes(
             + 4 * int(real_bytes)
         )
     )
+
+
+class ResidentOperandPresence(NamedTuple):
+    """Which optional half operands a configuration produces.
+
+    The real preparation learns this from the first image batch's keys. A
+    caller that must know before any image exists -- the compile-ahead warm-up
+    -- asks here. Each field cites the line that decides it, and the driver
+    verifies the answer against the real operands as soon as they exist, so a
+    drift shows up by name in the run's own log rather than as an unexplained
+    compile that the warm-up failed to cover.
+    """
+
+    has_recon_weight: bool
+    has_direct_ctf_rfloat: bool
+    has_highres_xi2: bool
+    has_relion_norm_high_shell: bool
+
+
+def resident_half_operand_presence(
+    *,
+    relion_exact_bpref_operands,
+    use_exact_relion_gaussian,
+    accumulate_noise,
+    current_size,
+) -> ResidentOperandPresence:
+    """Predict the optional operand set from the configuration flags.
+
+    ``recon_weight`` exists when ``_batch_window_operands`` is handed a
+    ``weighted_ctf_half``, and ``direct_ctf_rfloat_recon`` when it is handed a
+    ``ctf_half_rfloat``; both are supplied only in the exact-BPref
+    configuration (``sparse_pass2_bucket_io._prepare_bucket_io``). The two
+    ``powerClass`` terms follow
+    :func:`~recovar.em.sparse_pass2.sparse_pass2_scoring.relion_powerclass_noise_presence`.
+    """
+
+    has_xi2, has_norm = relion_powerclass_noise_presence(
+        use_exact_relion_gaussian=use_exact_relion_gaussian,
+        accumulate_noise=accumulate_noise,
+        current_size=current_size,
+    )
+    exact_bpref = bool(relion_exact_bpref_operands)
+    return ResidentOperandPresence(
+        has_recon_weight=exact_bpref,
+        has_direct_ctf_rfloat=exact_bpref,
+        has_highres_xi2=has_xi2,
+        has_relion_norm_high_shell=has_norm,
+    )
+
+
+def describe_resident_operand_mismatch(predicted, real) -> str:
+    """Name every field where a predicted operand tree differs from the real one.
+
+    Returns an empty string when they agree. This is the warm-up's own check:
+    the prediction is made before the preparation runs and compared after, so
+    it cannot be satisfied by construction.
+    """
+
+    import dataclasses
+
+    problems = []
+    for field in dataclasses.fields(ResidentHalfOperands):
+        got, want = getattr(predicted, field.name), getattr(real, field.name)
+        if field.name.startswith("n_"):
+            if int(got) != int(want):
+                problems.append(f"{field.name}: {int(got)} vs {int(want)}")
+            continue
+        if (got is None) != (want is None):
+            problems.append(
+                f"{field.name}: predicted {'absent' if got is None else 'present'}, "
+                f"really {'absent' if want is None else 'present'}"
+            )
+            continue
+        if got is None:
+            continue
+        if tuple(int(d) for d in got.shape) != tuple(int(d) for d in want.shape):
+            problems.append(f"{field.name}: shape {tuple(got.shape)} vs {tuple(want.shape)}")
+        elif jnp.dtype(got.dtype) != jnp.dtype(want.dtype):
+            problems.append(f"{field.name}: dtype {got.dtype} vs {want.dtype}")
+    return "; ".join(problems)
 
 
 def resident_half_operand_avals(

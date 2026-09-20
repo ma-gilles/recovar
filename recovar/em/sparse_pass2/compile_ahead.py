@@ -179,7 +179,36 @@ class CompileAheadPool:
                 return False
             self._seen.add(key)
             self._summary.submitted += 1
-        self._queue.put((label, program, tuple(avals), dict(static_kwargs or {})))
+        self._queue.put((label, _direct(program, tuple(avals), dict(static_kwargs or {}))))
+        return True
+
+    def submit_thunk(self, label, thunk) -> bool:
+        """Queue work whose avals are themselves derived on the helper thread.
+
+        Some signatures are only reachable by tracing a real function, which
+        costs host time the submitting thread is trying to spend elsewhere.
+        ``thunk()`` runs on the helper and returns
+        ``(program, avals, static_kwargs)``; it must close over shape/dtype
+        stand-ins only, never a device buffer, and a raise inside it is
+        recorded and dropped exactly like a failed compile.
+
+        Deduplication is by ``label`` alone here, because the avals do not
+        exist yet when the job is queued: give each distinct signature a label
+        that names it.
+        """
+
+        if not self._config.enabled:
+            return False
+        key = ("thunk", label)
+        with self._lock:
+            if key in self._seen:
+                return False
+            if self._summary.submitted >= self._config.max_programs:
+                self._summary.refused += 1
+                return False
+            self._seen.add(key)
+            self._summary.submitted += 1
+        self._queue.put((label, thunk))
         return True
 
     # -- worker ------------------------------------------------------------
@@ -189,9 +218,10 @@ class CompileAheadPool:
             job = self._queue.get()
             if job is None:
                 return
-            label, program, avals, static_kwargs = job
+            label, thunk = job
             start = time.perf_counter()
             try:
+                program, avals, static_kwargs = thunk()
                 program.lower(*avals, **static_kwargs).compile()
             except Exception as exc:  # noqa: BLE001 - a warm-up must never fail a run
                 with self._lock:
@@ -219,3 +249,12 @@ def _static_key(static_kwargs) -> tuple:
     if not static_kwargs:
         return ()
     return tuple(sorted((str(k), repr(v)) for k, v in static_kwargs.items()))
+
+
+def _direct(program, avals, static_kwargs):
+    """Wrap an already-derived signature as the thunk the worker runs."""
+
+    def thunk():
+        return program, avals, static_kwargs
+
+    return thunk

@@ -935,6 +935,28 @@ def _relion_cuda_powerclass_spectrum_norm_units(
     )
 
 
+def relion_powerclass_noise_presence(
+    *,
+    use_exact_relion_gaussian,
+    accumulate_noise,
+    current_size,
+):
+    """Which ``powerClass`` terms a pass-2 batch will produce, from the flags alone.
+
+    :func:`_relion_powerclass_noise_terms` decides this while it has the image
+    array in hand. A caller that has to know before any image exists -- the
+    compile-ahead warm-up, which describes the operand set to lower a program
+    against -- asks here instead, so there is one statement of the rule rather
+    than a copy that can fall out of step with it.
+
+    Returns ``(has_highres_xi2, has_norm_high_shell)``.
+    """
+
+    has_xi2 = bool(use_exact_relion_gaussian or (accumulate_noise and current_size is not None))
+    has_norm = bool(accumulate_noise and current_size is not None and has_xi2)
+    return has_xi2, has_norm
+
+
 def _relion_powerclass_noise_terms(
     processed_score_half_for_noise,
     *,
@@ -955,8 +977,13 @@ def _relion_powerclass_noise_terms(
     does not need.
     """
 
+    wants_xi2, _ = relion_powerclass_noise_presence(
+        use_exact_relion_gaussian=use_exact_relion_gaussian,
+        accumulate_noise=accumulate_noise,
+        current_size=current_size,
+    )
     relion_highres_xi2_half = None
-    if use_exact_relion_gaussian or (accumulate_noise and current_size is not None):
+    if wants_xi2:
         relion_highres_xi2_half = _relion_cuda_powerclass_highres_xi2_half(
             processed_score_half_for_noise,
             image_shape=image_shape,

@@ -109,11 +109,18 @@ from recovar.em.sparse_pass2.resident_candidates import (
     materialize_chunk,
     plan_capacity_chunks,
 )
+from recovar.em.sparse_pass2.compile_ahead import (
+    CompileAheadPool,
+    resolve_compile_ahead_config,
+)
 from recovar.em.sparse_pass2.resident_operands import (
     ResidentOperandsUnsupported,
+    describe_resident_operand_mismatch,
     gather_resident_chunk_operands,
     prepare_resident_half_operands,
+    resident_half_operand_avals,
     resident_half_operand_bytes,
+    resident_half_operand_presence,
     resident_operands_max_bytes,
 )
 from recovar.em.sparse_pass2.resident_scoring import score_resident_chunk
@@ -1752,46 +1759,167 @@ def compute_pass2_stats_resident(
                 budget_bytes / float(1024**3),
             )
         else:
-            operands_t0 = time.time()
-            try:
-                resident_operands = prepare_resident_half_operands(
-                    experiment_dataset,
-                    np.arange(n_images, dtype=np.int64),
-                    bucket_io_kwargs=bucket_io_kwargs,
-                    window_indices=window_indices,
-                    recon_window_indices=recon_window_indices,
-                    image_shape=image_shape,
-                    current_size=current_size,
-                    n_fine_trans=int(n_fine_trans),
-                    use_exact_relion_gaussian=use_exact_relion_gaussian,
-                    accumulate_noise=accumulate_noise,
-                    source_faithful_spectrum_norm=resolved_spectrum_norm,
-                    fine_translation_prior_2d=fine_translation_prior_2d,
-                    scale_corrections_np=scale_corrections_np,
-                    group_ids_np=group_ids_np,
-                    precision_policy=precision_policy,
-                )
-            except ResidentOperandsUnsupported as reason:
-                logger.info(
-                    "Resident pass-2 keeps the per-chunk operand preparation: %s", reason
-                )
-                resident_operands = None
-            else:
-                if int(resident_operands.n_score_pixels) != int(n_windowed):
-                    raise ValueError(
-                        "resident score operand pixel count does not match the score window: "
-                        f"{resident_operands.n_score_pixels} vs {int(n_windowed)}"
+            # ---- P4-J: compile the chunk programs while the operands prepare -
+            # Everything the chunk programs are keyed on is decided by now, and
+            # the preparation below is 2.4-5.8s of host-bound device dispatch
+            # that leaves the compiler idle. Off unless asked for; a warm-up
+            # that describes the wrong program costs its own compile time and
+            # changes nothing else, so the two log lines after the block, not an
+            # assertion, are what report it.
+            warm_config = resolve_compile_ahead_config()
+            warm_pool = CompileAheadPool(warm_config)
+            warm_predicted = None
+            warmed_classes = ()
+            with warm_pool:
+                if warm_config.enabled:
+                    warm_t0 = time.time()
+                    presence = resident_half_operand_presence(
+                        relion_exact_bpref_operands=bool(
+                            bucket_io_kwargs.get("relion_exact_bpref_operands")
+                        ),
+                        use_exact_relion_gaussian=use_exact_relion_gaussian,
+                        accumulate_noise=accumulate_noise,
+                        current_size=current_size,
                     )
-                if int(resident_operands.n_recon_pixels) != int(n_recon_windowed):
-                    raise ValueError(
-                        "resident reconstruction operand pixel count does not match the "
-                        f"reconstruction window: {resident_operands.n_recon_pixels} vs "
-                        f"{int(n_recon_windowed)}"
+                    warm_predicted = resident_half_operand_avals(
+                        n_images=int(n_images),
+                        n_score_pixels=int(n_windowed),
+                        n_recon_pixels=int(n_recon_windowed),
+                        n_half_pixels=int(np.asarray(noise_variance_half).size),
+                        n_fine_trans=int(n_fine_trans),
+                        score_complex_dtype=precision_policy.score_complex_dtype,
+                        score_real_dtype=precision_policy.score_real_dtype,
+                        acc_real_dtype=jnp.float64 if use_float64_scoring else jnp.float32,
+                        has_recon_weight=presence.has_recon_weight,
+                        has_direct_ctf_rfloat=presence.has_direct_ctf_rfloat,
+                        has_highres_xi2=presence.has_highres_xi2,
+                        has_relion_norm_high_shell=presence.has_relion_norm_high_shell,
                     )
-                logger.info(
-                    "Resident pass-2 per-half operand preparation: %.2fs",
-                    time.time() - operands_t0,
-                )
+                    warmed_classes = _submit_resident_chunk_warmup(
+                        warm_pool,
+                        chunks=chunks,
+                        tables=tables,
+                        n_fine_trans=int(n_fine_trans),
+                        half_operand_avals=warm_predicted,
+                        stage_tables=_make_chunk_stage_tables(
+                            projection_score_cache=projection_score_cache,
+                            projection_recon_cache=projection_recon_cache,
+                            projection_recon_abs2_cache=projection_recon_abs2_cache,
+                            mstep_grid=mstep_grid,
+                            coarse_parent_grid=coarse_parent_grid,
+                            fine_translation_parent_device=fine_translation_parent_device,
+                            half_weights=jnp.asarray(half_weights_windowed),
+                            translation_angles=jnp.asarray(
+                                relion_score_translation_angles, dtype=jnp.float32
+                            ),
+                            full_to_compact=relion_score_full_to_compact,
+                            noise_variance_for_noise=noise_variance_for_noise_device,
+                            shell_indices_noise=shell_indices_noise_device,
+                            exact_positions_device=exact_positions_device,
+                            recon_pixel_indices=recon_pixel_indices_device,
+                            relion_x_half_recon_indices=relion_x_half_recon_indices,
+                            image_tables=image_tables,
+                        ),
+                        carry=(Ft_y_total, Ft_ctf_total, stats),
+                        translation_angles=jnp.asarray(
+                            relion_score_translation_angles, dtype=jnp.float32
+                        ),
+                        rect_indices=rect_indices_device,
+                        exact_positions=exact_positions_device,
+                        image_shape=image_shape,
+                        spec_kwargs=dict(
+                            n_fine_trans=n_fine_trans,
+                            n_score_pixels=n_windowed,
+                            n_recon_pixels=n_recon_windowed,
+                            n_rect=n_rect,
+                            mstep_block_rows=mstep_block_rows,
+                            adaptive_fraction=adaptive_fraction,
+                            current_size=current_size,
+                            mstep_current_size=mstep_current_size,
+                            image_shape=image_shape,
+                            recon_volume_shape=recon_volume_shape,
+                            max_adjoint_block_bytes=max_adjoint_block_bytes,
+                            stats_config=stats_config,
+                            use_rfloat_ctf_wavg=presence.has_direct_ctf_rfloat,
+                            use_translate_sum_kernel=True,
+                            bpref_recon_operand=presence.has_recon_weight,
+                        ),
+                        translation_prior_centers_np=translation_prior_centers_np,
+                        fine_translations=fine_translations,
+                        voxel_size=experiment_dataset.voxel_size,
+                        default_translation_sqdist=image_tables.translation_sqdist_ang,
+                    )
+                    logger.info(
+                        "Resident pass-2 compile-ahead: queued %d capacity classes %s, "
+                        "host cost %.2fs",
+                        len(warmed_classes),
+                        ",".join(f"{r}x{b}" for r, b in warmed_classes),
+                        time.time() - warm_t0,
+                    )
+                operands_t0 = time.time()
+                try:
+                    resident_operands = prepare_resident_half_operands(
+                        experiment_dataset,
+                        np.arange(n_images, dtype=np.int64),
+                        bucket_io_kwargs=bucket_io_kwargs,
+                        window_indices=window_indices,
+                        recon_window_indices=recon_window_indices,
+                        image_shape=image_shape,
+                        current_size=current_size,
+                        n_fine_trans=int(n_fine_trans),
+                        use_exact_relion_gaussian=use_exact_relion_gaussian,
+                        accumulate_noise=accumulate_noise,
+                        source_faithful_spectrum_norm=resolved_spectrum_norm,
+                        fine_translation_prior_2d=fine_translation_prior_2d,
+                        scale_corrections_np=scale_corrections_np,
+                        group_ids_np=group_ids_np,
+                        precision_policy=precision_policy,
+                    )
+                except ResidentOperandsUnsupported as reason:
+                    logger.info(
+                        "Resident pass-2 keeps the per-chunk operand preparation: %s", reason
+                    )
+                    resident_operands = None
+                else:
+                    if int(resident_operands.n_score_pixels) != int(n_windowed):
+                        raise ValueError(
+                            "resident score operand pixel count does not match the score window: "
+                            f"{resident_operands.n_score_pixels} vs {int(n_windowed)}"
+                        )
+                    if int(resident_operands.n_recon_pixels) != int(n_recon_windowed):
+                        raise ValueError(
+                            "resident reconstruction operand pixel count does not match the "
+                            f"reconstruction window: {resident_operands.n_recon_pixels} vs "
+                            f"{int(n_recon_windowed)}"
+                        )
+                    logger.info(
+                        "Resident pass-2 per-half operand preparation: %.2fs",
+                        time.time() - operands_t0,
+                    )
+            # Leaving the block joined the helper: any compile still running
+            # when the preparation finished was one the chunk loop was about to
+            # wait for anyway.
+            if warm_config.enabled:
+                logger.info("Resident pass-2 %s", warm_pool.summary)
+                for message in warm_pool.summary.errors:
+                    logger.info("Resident pass-2 compile-ahead error: %s", message)
+                # The prediction was made before the preparation and is compared
+                # after it, so this cannot be satisfied by construction. A
+                # mismatch means the warm-up described operands the loop will not
+                # pass and its compiles were wasted; the run is unaffected.
+                if resident_operands is None:
+                    logger.info(
+                        "Resident pass-2 compile-ahead predicted operands the half did not "
+                        "prepare; its programs go unused"
+                    )
+                else:
+                    difference = describe_resident_operand_mismatch(
+                        warm_predicted, resident_operands
+                    )
+                    logger.info(
+                        "Resident pass-2 compile-ahead operand prediction: %s",
+                        difference if difference else "matches the prepared operands",
+                    )
 
     verify_operands = resident_operands is not None and _resident_operands_verify_enabled()
 
@@ -1943,6 +2071,354 @@ def _chunk_segment_offsets(tables, chunk, n_fine_trans: int) -> np.ndarray:
     if int(offsets[-1]) > int(chunk.row_capacity) * int(n_fine_trans):
         raise ValueError("chunk segment offsets exceed the chunk's cell capacity")
     return offsets.astype(np.int32)
+
+
+class _Placement(NamedTuple):
+    """How a chunk constructor turns host values into program inputs.
+
+    The chunk loop places them on the device; the compile-ahead warm-up places
+    their shape and dtype only. Having one constructor with two placements
+    rather than two constructors means a warm-up cannot describe a program the
+    loop does not run, which is the failure a hit rate would only report after
+    the compile time had already been spent.
+    """
+
+    array: object
+    scalar: object
+
+
+_PLACE_ON_DEVICE = _Placement(
+    array=lambda value, dtype: jnp.asarray(value, dtype=dtype),
+    # ``np.asarray`` first: a NumPy *scalar* reaches the device through one
+    # eager ``convert_element_type`` per chunk, a 0-d NumPy *array* of the same
+    # dtype through a plain transfer. Same dtype, shape, weak type and value
+    # either way.
+    scalar=lambda value, dtype: _scalar_operand(value, dtype),
+)
+
+_PLACE_AS_AVAL = _Placement(
+    array=lambda value, dtype: jax.ShapeDtypeStruct(np.shape(value), jnp.dtype(dtype)),
+    scalar=lambda value, dtype: jax.ShapeDtypeStruct((), jnp.dtype(dtype)),
+)
+
+
+def _make_chunk_row_arrays(tables, chunk, n_fine_trans, *, place) -> _ChunkRowArrays:
+    """One chunk's row-aligned inputs, on the device or as avals.
+
+    Everything here is host NumPy over the plan, so the aval placement costs
+    only the materialize and does no device work at all. The shapes are the
+    chunk's capacity class and nothing else, which
+    ``tests/unit/test_chunk_row_avals.py`` pins: that is why warming one chunk
+    per class covers every chunk of that class.
+    """
+
+    image_capacity = int(chunk.image_capacity)
+    host_chunk = materialize_chunk(tables, chunk)
+    segment_offsets_np = _chunk_segment_offsets(tables, chunk, n_fine_trans)
+    image_row_start_np = segment_offsets_np.astype(np.int64)[:image_capacity] // int(n_fine_trans)
+    image_row_count_np = (
+        segment_offsets_np.astype(np.int64)[1:] - segment_offsets_np.astype(np.int64)[:-1]
+    ) // int(n_fine_trans)
+    return _ChunkRowArrays(
+        row_image_local=place.array(host_chunk["row_image_local"], jnp.int32),
+        row_fine_rot=place.array(host_chunk["row_fine_rot"], jnp.int32),
+        row_log_prior=place.array(host_chunk["row_log_prior"], jnp.float32),
+        row_mask_bits=place.array(host_chunk["row_mask_bits"], jnp.uint32),
+        row_mask_mode=place.array(host_chunk["row_mask_mode"], jnp.int8),
+        image_ids=place.array(host_chunk["image_ids"], jnp.int32),
+        n_valid_rows=place.scalar(host_chunk["n_valid_rows"], jnp.int32),
+        n_valid_images=place.scalar(host_chunk["n_valid_images"], jnp.int32),
+        segment_offsets=place.array(segment_offsets_np, jnp.int32),
+        image_row_start=place.array(image_row_start_np, jnp.int64),
+        image_row_count=place.array(image_row_count_np, jnp.int64),
+    )
+
+
+def _make_chunk_translation_sqdist(
+    default,
+    *,
+    translation_prior_centers_np,
+    image_indices,
+    image_capacity,
+    n_valid_images,
+    fine_translations,
+    voxel_size,
+):
+    """The chunk's per-image prior squared distances, at image capacity.
+
+    A per-image host table built at capacity keeps the program keyed on the
+    capacity class and takes the eager device ops out of the chunk loop. Padded
+    slots multiply a zero posterior, so their value is never observable; they
+    are zeroed anyway.
+    """
+
+    if translation_prior_centers_np is None:
+        return default
+    image_capacity = int(image_capacity)
+    padded_image_indices = _pad_batch_to_capacity(
+        np.asarray(image_indices).reshape(-1, 1), image_capacity
+    ).reshape(-1)
+    centers = translation_prior_centers_for_images(
+        translation_prior_centers_np,
+        padded_image_indices,
+        batch_size=image_capacity,
+    )
+    sqdist_np = np.asarray(translation_sqdist_angstrom(fine_translations, centers, voxel_size))
+    sqdist_np = np.where(
+        (np.arange(image_capacity) < int(n_valid_images))[:, None], sqdist_np, 0.0
+    )
+    return jnp.asarray(sqdist_np)
+
+
+def _make_chunk_stage_operands(recon, translation_sqdist_ang) -> _ChunkStageOperands:
+    """Name one chunk's operands out of whatever produced them.
+
+    ``recon`` is the per-chunk preparation's dict, the once-per-half gather's
+    dict, or -- for the compile-ahead warm-up -- the same gather's output under
+    ``jax.eval_shape``, which is a dict of the same keys holding avals.
+    """
+
+    return _ChunkStageOperands(
+        score_input=recon["score_input"],
+        corr_img_score=recon["corr_img_score"],
+        highres_xi2_half=recon["highres_xi2_half"],
+        translation_prior=recon["translation_prior"],
+        shifted_recon=recon.get("shifted_recon"),
+        shifted_noise=recon.get("shifted_noise"),
+        recon_image=recon.get("recon_image"),
+        recon_weight=recon.get("recon_weight"),
+        noise_image=recon.get("noise_image"),
+        ctf2_over_nv_recon=recon["ctf2_over_nv_recon"],
+        direct_ctf_rfloat_recon=recon["direct_ctf_rfloat_recon"],
+        processed_image_half=recon["processed_image_half"],
+        relion_norm_high_shell=recon["relion_norm_high_shell"],
+        raw_translated_wavg_rectangle=recon["raw_translated_wavg_rectangle"],
+        raw_translated_wavg_for_atomic=recon["raw_translated_wavg_for_atomic"],
+        scale=recon["scale"],
+        group_ids=recon["group_ids"],
+        translation_sqdist_ang=translation_sqdist_ang,
+    )
+
+
+def _make_chunk_program_spec(
+    *,
+    row_capacity,
+    image_capacity,
+    n_fine_trans,
+    n_score_pixels,
+    n_recon_pixels,
+    n_rect,
+    mstep_block_rows,
+    adaptive_fraction,
+    current_size,
+    mstep_current_size,
+    image_shape,
+    recon_volume_shape,
+    max_adjoint_block_bytes,
+    stats_config,
+    use_rfloat_ctf_wavg,
+    use_translate_sum_kernel,
+    bpref_recon_operand,
+) -> _ChunkProgramSpec:
+    """The static key of one chunk program.
+
+    The last three environment-read fields are the reason this is a function
+    and not a literal at each call site: a warm-up that read them at a
+    different moment, or not at all, would key its program differently from the
+    loop's and warm nothing.
+    """
+
+    return _ChunkProgramSpec(
+        row_capacity=int(row_capacity),
+        image_capacity=int(image_capacity),
+        n_fine_trans=int(n_fine_trans),
+        n_score_pixels=int(n_score_pixels),
+        n_recon_pixels=int(n_recon_pixels),
+        n_rect=int(n_rect),
+        mstep_block_rows=int(mstep_block_rows),
+        adaptive_fraction=float(adaptive_fraction),
+        current_size=int(current_size),
+        mstep_current_size=int(mstep_current_size),
+        image_shape=tuple(int(v) for v in image_shape),
+        recon_volume_shape=tuple(int(v) for v in recon_volume_shape),
+        max_adjoint_block_bytes=int(max_adjoint_block_bytes),
+        stats_config=stats_config,
+        use_rfloat_ctf_wavg=bool(use_rfloat_ctf_wavg),
+        use_translate_sum_kernel=bool(use_translate_sum_kernel),
+        bpref_recon_operand=bool(bpref_recon_operand),
+        kernel_ctf_probs=_kernel_ctf_probs_enabled(),
+        block_unroll=_chunk_block_unroll(),
+        static_block_trip=_chunk_static_block_trip_enabled(),
+    )
+
+
+def _submit_resident_chunk_warmup(
+    pool,
+    *,
+    chunks,
+    tables,
+    n_fine_trans,
+    half_operand_avals,
+    stage_tables,
+    carry,
+    translation_angles,
+    rect_indices,
+    exact_positions,
+    image_shape,
+    spec_kwargs,
+    translation_prior_centers_np,
+    fine_translations,
+    voxel_size,
+    default_translation_sqdist,
+):
+    """Queue one chunk program per capacity class the plan will run.
+
+    Called in the window between the admission check and the per-half operand
+    preparation. The preparation is 2.4-5.8 s of host-bound device dispatch on
+    the main thread, and the chunk programs the loop will need after it are
+    fully determined by then: the capacity classes are in ``chunks``, the
+    iteration-global tables exist, and the operands the programs consume are
+    described by ``half_operand_avals`` without being prepared.
+
+    Nothing here can change a result. The warm-up hands the helper thread
+    shape/dtype stand-ins only, and if it describes a program the loop does not
+    run, the loop compiles its own as before; the cost is the wasted warm-up and
+    the log line below is how that is noticed.
+
+    Returns the capacity classes submitted, for the hit-rate line.
+    """
+
+    import dataclasses
+
+    from recovar.em.sparse_pass2.resident_operands import ResidentHalfOperands
+
+    def as_aval(value):
+        if value is None:
+            return None
+        return jax.ShapeDtypeStruct(
+            tuple(int(d) for d in np.shape(value)), jnp.dtype(value.dtype)
+        )
+
+    table_avals = _ChunkStageTables(*(as_aval(v) for v in stage_tables))
+    carry_avals = jax.tree_util.tree_map(as_aval, carry)
+    angle_aval = as_aval(translation_angles)
+    rect_aval = as_aval(rect_indices)
+    exact_aval = as_aval(exact_positions)
+
+    names = [
+        f.name for f in dataclasses.fields(ResidentHalfOperands) if not f.name.startswith("n_")
+    ]
+    present = [n for n in names if getattr(half_operand_avals, n) is not None]
+    scalars = {
+        f.name: getattr(half_operand_avals, f.name)
+        for f in dataclasses.fields(ResidentHalfOperands)
+        if f.name.startswith("n_")
+    }
+    present_avals = [getattr(half_operand_avals, n) for n in present]
+
+    submitted = []
+    for chunk in chunks:
+        capacity_class = (int(chunk.row_capacity), int(chunk.image_capacity))
+        if capacity_class in submitted:
+            continue
+        row_capacity, image_capacity = capacity_class
+        row_avals = _make_chunk_row_arrays(tables, chunk, n_fine_trans, place=_PLACE_AS_AVAL)
+        sqdist = _make_chunk_translation_sqdist(
+            default_translation_sqdist,
+            translation_prior_centers_np=translation_prior_centers_np,
+            image_indices=np.arange(chunk.image_start, chunk.image_stop, dtype=np.int64),
+            image_capacity=image_capacity,
+            n_valid_images=chunk.n_valid_images,
+            fine_translations=fine_translations,
+            voxel_size=voxel_size,
+        )
+        spec = _make_chunk_program_spec(
+            row_capacity=row_capacity, image_capacity=image_capacity, **spec_kwargs
+        )
+
+        def thunk(_row=row_avals, _spec=spec, _images=image_capacity, _sq=as_aval(sqdist)):
+            # The chunk operands are predicted by tracing the real gather, not
+            # by a second constructor: the gather's own shape validation runs on
+            # the way through, and there is no place for the two to disagree.
+            def gather(slots, angles, rect, exact, *arrays):
+                fields = dict(scalars)
+                fields.update({name: None for name in names})
+                fields.update(dict(zip(present, arrays)))
+                return gather_resident_chunk_operands(
+                    ResidentHalfOperands(**fields),
+                    slots,
+                    translation_angles=angles,
+                    rect_indices=rect,
+                    exact_positions=exact,
+                    image_shape=image_shape,
+                )
+
+            recon = jax.eval_shape(
+                gather,
+                jax.ShapeDtypeStruct((_images,), jnp.int32),
+                angle_aval,
+                rect_aval,
+                exact_aval,
+                *present_avals,
+            )
+            operand_avals = _make_chunk_stage_operands(recon, _sq)
+            return (
+                _run_resident_chunk_program,
+                (_row, operand_avals, table_avals, carry_avals),
+                {"spec": _spec},
+            )
+
+        if pool.submit_thunk(f"resident chunk rows={row_capacity} images={image_capacity}", thunk):
+            submitted.append(capacity_class)
+    return tuple(submitted)
+
+
+def _make_chunk_stage_tables(
+    *,
+    projection_score_cache,
+    projection_recon_cache,
+    projection_recon_abs2_cache,
+    mstep_grid,
+    coarse_parent_grid,
+    fine_translation_parent_device,
+    half_weights,
+    translation_angles,
+    full_to_compact,
+    noise_variance_for_noise,
+    shell_indices_noise,
+    exact_positions_device,
+    recon_pixel_indices,
+    relion_x_half_recon_indices,
+    image_tables,
+) -> _ChunkStageTables:
+    """Assemble the iteration-global tables every chunk of a half reads.
+
+    One builder, called by the chunk loop with the real arrays and by the
+    compile-ahead warm-up with their shape/dtype stand-ins. Assembling the
+    tuple twice would be a place for the warm-up to drift from the loop: a
+    warmed program with one field's dtype wrong is never used, which costs
+    compile time and is invisible unless someone reads the hit rate.
+    """
+
+    return _ChunkStageTables(
+        projection_score_cache=projection_score_cache,
+        projection_recon_cache=projection_recon_cache,
+        projection_recon_abs2_cache=projection_recon_abs2_cache,
+        mstep_grid=mstep_grid,
+        coarse_parent_grid=coarse_parent_grid,
+        fine_translation_parent=fine_translation_parent_device,
+        half_weights=half_weights,
+        translation_angles=translation_angles,
+        full_to_compact=full_to_compact,
+        noise_variance_for_noise=noise_variance_for_noise,
+        shell_indices_noise=shell_indices_noise,
+        exact_positions=exact_positions_device,
+        recon_pixel_indices=recon_pixel_indices,
+        relion_x_half_recon_indices=relion_x_half_recon_indices,
+        shell_indices_half=image_tables.shell_indices_half,
+        wavg_shell_indices=image_tables.wavg_shell_indices,
+        wavg_scale_pixel_mask=image_tables.wavg_scale_pixel_mask,
+    )
 
 
 def _prepare_chunk_reconstruction_operands(
@@ -3461,29 +3937,7 @@ def _run_resident_chunk(
         jax.block_until_ready(Ft_y_total)
         chunk_t0 = time.time()
 
-    host_chunk = materialize_chunk(tables, chunk)
-    segment_offsets_np = _chunk_segment_offsets(tables, chunk, n_fine_trans)
-    image_row_start_np = segment_offsets_np.astype(np.int64)[:image_capacity] // int(n_fine_trans)
-    image_row_count_np = (
-        segment_offsets_np.astype(np.int64)[1:] - segment_offsets_np.astype(np.int64)[:-1]
-    ) // int(n_fine_trans)
-    rows = _ChunkRowArrays(
-        row_image_local=jnp.asarray(host_chunk["row_image_local"], dtype=jnp.int32),
-        row_fine_rot=jnp.asarray(host_chunk["row_fine_rot"], dtype=jnp.int32),
-        row_log_prior=jnp.asarray(host_chunk["row_log_prior"], dtype=jnp.float32),
-        row_mask_bits=jnp.asarray(host_chunk["row_mask_bits"], dtype=jnp.uint32),
-        row_mask_mode=jnp.asarray(host_chunk["row_mask_mode"], dtype=jnp.int8),
-        image_ids=jnp.asarray(host_chunk["image_ids"], dtype=jnp.int32),
-        # ``np.asarray`` first: a NumPy *scalar* reaches the device through one
-        # eager ``convert_element_type`` per chunk, a 0-d NumPy *array* of the
-        # same dtype through a plain transfer. Same dtype, shape, weak type and
-        # value either way.
-        n_valid_rows=_scalar_operand(host_chunk["n_valid_rows"], jnp.int32),
-        n_valid_images=_scalar_operand(host_chunk["n_valid_images"], jnp.int32),
-        segment_offsets=jnp.asarray(segment_offsets_np, dtype=jnp.int32),
-        image_row_start=jnp.asarray(image_row_start_np, dtype=jnp.int64),
-        image_row_count=jnp.asarray(image_row_count_np, dtype=jnp.int64),
-    )
+    rows = _make_chunk_row_arrays(tables, chunk, n_fine_trans, place=_PLACE_ON_DEVICE)
 
     if resident_operands is None:
         recon = _prepare_chunk_reconstruction_operands(
@@ -3569,86 +4023,54 @@ def _run_resident_chunk(
     # capacity here keeps the program keyed on the capacity class and takes the
     # eager device ops out of the chunk loop. Padded slots multiply a zero
     # posterior, so their value is never observable; they are zeroed anyway.
-    translation_sqdist_ang = image_tables.translation_sqdist_ang
-    if translation_prior_centers_np is not None:
-        padded_image_indices = _pad_batch_to_capacity(
-            np.asarray(image_indices).reshape(-1, 1), image_capacity
-        ).reshape(-1)
-        centers = translation_prior_centers_for_images(
-            translation_prior_centers_np,
-            padded_image_indices,
-            batch_size=image_capacity,
-        )
-        sqdist_np = np.asarray(
-            translation_sqdist_angstrom(fine_translations, centers, voxel_size)
-        )
-        sqdist_np = np.where(
-            (np.arange(image_capacity) < n_valid_images)[:, None], sqdist_np, 0.0
-        )
-        translation_sqdist_ang = jnp.asarray(sqdist_np)
-
-    operands = _ChunkStageOperands(
-        score_input=recon["score_input"],
-        corr_img_score=recon["corr_img_score"],
-        highres_xi2_half=recon["highres_xi2_half"],
-        translation_prior=recon["translation_prior"],
-        shifted_recon=recon.get("shifted_recon"),
-        shifted_noise=recon.get("shifted_noise"),
-        recon_image=recon.get("recon_image"),
-        recon_weight=recon.get("recon_weight"),
-        noise_image=recon.get("noise_image"),
-        ctf2_over_nv_recon=recon["ctf2_over_nv_recon"],
-        direct_ctf_rfloat_recon=recon["direct_ctf_rfloat_recon"],
-        processed_image_half=recon["processed_image_half"],
-        relion_norm_high_shell=recon["relion_norm_high_shell"],
-        raw_translated_wavg_rectangle=recon["raw_translated_wavg_rectangle"],
-        raw_translated_wavg_for_atomic=recon["raw_translated_wavg_for_atomic"],
-        scale=recon["scale"],
-        group_ids=recon["group_ids"],
-        translation_sqdist_ang=translation_sqdist_ang,
+    translation_sqdist_ang = _make_chunk_translation_sqdist(
+        image_tables.translation_sqdist_ang,
+        translation_prior_centers_np=translation_prior_centers_np,
+        image_indices=image_indices,
+        image_capacity=image_capacity,
+        n_valid_images=n_valid_images,
+        fine_translations=fine_translations,
+        voxel_size=voxel_size,
     )
-    stage_tables = _ChunkStageTables(
+
+    operands = _make_chunk_stage_operands(recon, translation_sqdist_ang)
+    stage_tables = _make_chunk_stage_tables(
         projection_score_cache=projection_score_cache,
         projection_recon_cache=projection_recon_cache,
         projection_recon_abs2_cache=projection_recon_abs2_cache,
         mstep_grid=mstep_grid,
         coarse_parent_grid=coarse_parent_grid,
-        fine_translation_parent=fine_translation_parent_device,
+        fine_translation_parent_device=fine_translation_parent_device,
         half_weights=half_weights,
         translation_angles=translation_angles,
         full_to_compact=full_to_compact,
         noise_variance_for_noise=noise_variance_for_noise,
         shell_indices_noise=shell_indices_noise,
-        exact_positions=exact_positions_device,
+        exact_positions_device=exact_positions_device,
         recon_pixel_indices=recon_pixel_indices,
         relion_x_half_recon_indices=relion_x_half_recon_indices,
-        shell_indices_half=image_tables.shell_indices_half,
-        wavg_shell_indices=image_tables.wavg_shell_indices,
-        wavg_scale_pixel_mask=image_tables.wavg_scale_pixel_mask,
+        image_tables=image_tables,
     )
-    spec = _ChunkProgramSpec(
+    spec = _make_chunk_program_spec(
         row_capacity=row_capacity,
         image_capacity=image_capacity,
-        n_fine_trans=int(n_fine_trans),
-        n_score_pixels=int(n_score_pixels),
-        n_recon_pixels=int(n_recon_windowed),
-        n_rect=int(n_rect),
-        mstep_block_rows=int(mstep_block_rows),
-        adaptive_fraction=float(adaptive_fraction),
-        current_size=int(current_size),
-        mstep_current_size=int(mstep_current_size),
-        image_shape=tuple(int(v) for v in image_shape),
-        recon_volume_shape=tuple(int(v) for v in recon_volume_shape),
-        max_adjoint_block_bytes=int(max_adjoint_block_bytes),
+        n_fine_trans=n_fine_trans,
+        n_score_pixels=n_score_pixels,
+        n_recon_pixels=n_recon_windowed,
+        n_rect=n_rect,
+        mstep_block_rows=mstep_block_rows,
+        adaptive_fraction=adaptive_fraction,
+        current_size=current_size,
+        mstep_current_size=mstep_current_size,
+        image_shape=image_shape,
+        recon_volume_shape=recon_volume_shape,
+        max_adjoint_block_bytes=max_adjoint_block_bytes,
         stats_config=stats_config,
         use_rfloat_ctf_wavg=recon["direct_ctf_rfloat_recon"] is not None,
         use_translate_sum_kernel=resident_operands is not None,
         bpref_recon_operand=(
             resident_operands is not None and resident_operands.recon_weight is not None
         ),
-        kernel_ctf_probs=_kernel_ctf_probs_enabled(),
-        block_unroll=_chunk_block_unroll(),
-        static_block_trip=_chunk_static_block_trip_enabled(),
     )
 
     use_jit = _chunk_jit_enabled()
