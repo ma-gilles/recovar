@@ -12,7 +12,9 @@ import logging
 import os
 import time
 from dataclasses import dataclass
+from functools import partial
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 
@@ -609,6 +611,58 @@ def _unpadded_bucket_rows(bucket, unpadded_batch_size: int) -> dict:
             else bucket.local_rotation_posterior_ids[:unpadded_batch_size]
         ),
     )
+
+
+# P3-G/H, opt-in and off by default. ``run_local_em_exact`` trims a bucket's
+# per-image rows to the unpadded image count one array at a time, and each
+# ``value[:n]`` is its own single-primitive ``dynamic_slice`` program. P3-E's
+# census measured 28 of them at the local state D, 1.11 s of trace/lower/compile
+# **per local iteration**, because the bucket loop calls ``jax.clear_caches()``
+# at the end of every bucket and every program is traced again. Folding them
+# into one program leaves one program per bucket shape class.
+LOCAL_POSTPROCESS_ROW_PROGRAM_ENV = "RECOVAR_LOCAL_POSTPROCESS_ROW_PROGRAM"
+
+
+@partial(jax.jit, static_argnames=("unpadded_batch_size",))
+def _local_postprocess_row_trim_program(values, *, unpadded_batch_size: int):
+    """A bucket's device row arrays trimmed to its unpadded image count.
+
+    The same ``value[:unpadded_batch_size]`` each call site wrote, in one
+    program: a slice is pure data movement, so the bytes are the ones the loose
+    dispatch produced. Tuple order is the caller's, and the trim size is static
+    because it keys the program.
+    """
+
+    return tuple(value[:unpadded_batch_size] for value in values)
+
+
+def trim_local_postprocess_rows(values: dict, *, unpadded_batch_size: int) -> dict:
+    """Trim a bucket's named per-image rows, device arrays in one program.
+
+    ``None`` entries stay ``None`` and host arrays keep the plain NumPy slice:
+    handing a NumPy array to the program would move it to the device, which is
+    a behaviour change and not a fold. Only the device arrays are folded.
+    """
+
+    device_names = tuple(
+        sorted(name for name, value in values.items() if isinstance(value, jax.Array))
+    )
+    trimmed = {
+        name: (
+            None
+            if value is None
+            else value[:unpadded_batch_size]
+        )
+        for name, value in values.items()
+        if name not in device_names
+    }
+    if device_names:
+        rows = _local_postprocess_row_trim_program(
+            tuple(values[name] for name in device_names),
+            unpadded_batch_size=int(unpadded_batch_size),
+        )
+        trimmed.update(dict(zip(device_names, rows)))
+    return trimmed
 
 
 def _postprocess_local_bucket(
