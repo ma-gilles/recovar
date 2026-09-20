@@ -45,7 +45,14 @@ DEFAULT_MAX_PROGRAMS = 64
 
 @dataclass(frozen=True)
 class CompileAheadConfig:
-    """Typed configuration for the helper-thread warm-up. Off by default."""
+    """Typed configuration for the helper-thread warm-up. Off by default.
+
+    ``max_programs`` caps submitted *jobs*, not compiled programs: one job may
+    yield several programs from a single derivation, as the per-stage chunk path
+    does with three. The cap exists so a mis-specified caller cannot queue
+    unbounded work, and a chunk half submits one job per capacity class, two or
+    three in practice, so it is nowhere near binding.
+    """
 
     enabled: bool = False
     max_programs: int = DEFAULT_MAX_PROGRAMS
