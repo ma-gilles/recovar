@@ -397,3 +397,205 @@ def test_every_name_the_engine_trims_is_built_by_the_engine():
     built |= set(re.findall(r'postprocess_row_inputs\["([a-z_A-Z]+)"\]', source))
     assert used, "the call sites must name what they trim"
     assert used <= built, sorted(used - built)
+
+
+# --------------------------------------------------------------------------
+# J: a bucket's constant operands in one program
+# --------------------------------------------------------------------------
+
+
+_SCORE_REAL = np.float32
+_NORMALIZATION_REAL = np.float64
+
+
+def _engine_constant_expressions(*, batch_size, n_half, n_trans):
+    """The statements ``run_local_em_exact`` falls back to, copied verbatim.
+
+    Kept here rather than imported so the test is an independent statement of
+    what each name has to equal, which is what makes the comparison meaningful.
+    """
+
+    return {
+        "ctf_rfloat_half": lambda: jnp.zeros((batch_size, n_half), dtype=jnp.float64),
+        "inverse_noise_rfloat_cast": lambda: jnp.zeros((n_half,), dtype=jnp.float32),
+        "corr_img_rfloat_square": lambda: jnp.zeros(
+            (batch_size, n_half), dtype=jnp.float32
+        ),
+        "integer_pre_shifts_zero": lambda: jnp.zeros((batch_size, 2), dtype=jnp.int32),
+        "fourier_pre_shifts_zero": lambda: jnp.zeros((batch_size, 2), dtype=_SCORE_REAL),
+        "image_corrections_one": lambda: jnp.ones(batch_size, dtype=_SCORE_REAL),
+        "image_only_corrections_one": lambda: jnp.ones(batch_size, dtype=_SCORE_REAL),
+        "scale_corrections_one": lambda: jnp.ones(batch_size, dtype=_SCORE_REAL),
+        "translation_sqdist_zero": lambda: jnp.zeros(
+            (batch_size, n_trans), dtype=_SCORE_REAL
+        ),
+        "normalization_log_z_zero": lambda: jnp.zeros(
+            batch_size, dtype=_NORMALIZATION_REAL
+        ),
+        "normalization_log_evidence_zero": lambda: jnp.zeros(
+            batch_size, dtype=_NORMALIZATION_REAL
+        ),
+        "normalization_max_posterior_zero": lambda: jnp.zeros(
+            batch_size, dtype=jnp.float32
+        ),
+        "group_ids_zero": lambda: jnp.zeros(batch_size, dtype=jnp.int32),
+        "scale_correction_pixel_mask_zero": lambda: jnp.zeros(n_half, dtype=bool),
+        "reconstruction_probability_threshold_zero": lambda: jnp.zeros(
+            (batch_size,), dtype=jnp.float64
+        ),
+        "fused_fine_job_plan_empty": lambda: jnp.full((1, 4), -1, dtype=jnp.int32),
+    }
+
+
+def _all_branch_combinations():
+    """Every branch arm of the constant sites, in four covering configurations."""
+
+    base = dict(
+        batch_size=6,
+        n_half=7,
+        n_trans=3,
+        score_real_dtype=_SCORE_REAL,
+        normalization_real_dtype=_NORMALIZATION_REAL,
+    )
+    return [
+        dict(
+            base,
+            relion_exact_bpref_operands=False,
+            apply_integer_pre_shift=True,
+            has_image_pre_shifts=True,
+            has_image_corrections=True,
+            has_scale_corrections=True,
+            has_translation_sqdist=True,
+            has_normalization_log_z=False,
+            has_normalization_log_evidence=False,
+            has_normalization_max_posterior=False,
+            accumulate_noise=True,
+            has_group_ids=True,
+            has_reconstruction_probability_threshold=False,
+            fused_pair_fine_score_enabled=False,
+        ),
+        dict(
+            base,
+            relion_exact_bpref_operands=True,
+            apply_integer_pre_shift=False,
+            has_image_pre_shifts=True,
+            has_image_corrections=False,
+            has_scale_corrections=False,
+            has_translation_sqdist=False,
+            has_normalization_log_z=True,
+            has_normalization_log_evidence=True,
+            has_normalization_max_posterior=True,
+            accumulate_noise=True,
+            has_group_ids=False,
+            has_reconstruction_probability_threshold=True,
+            fused_pair_fine_score_enabled=True,
+        ),
+        dict(
+            base,
+            relion_exact_bpref_operands=True,
+            apply_integer_pre_shift=False,
+            has_image_pre_shifts=False,
+            has_image_corrections=False,
+            has_scale_corrections=True,
+            has_translation_sqdist=True,
+            has_normalization_log_z=False,
+            has_normalization_log_evidence=True,
+            has_normalization_max_posterior=False,
+            accumulate_noise=False,
+            has_group_ids=False,
+            has_reconstruction_probability_threshold=False,
+            fused_pair_fine_score_enabled=False,
+        ),
+        dict(
+            base,
+            relion_exact_bpref_operands=False,
+            apply_integer_pre_shift=True,
+            has_image_pre_shifts=False,
+            has_image_corrections=True,
+            has_scale_corrections=False,
+            has_translation_sqdist=False,
+            has_normalization_log_z=True,
+            has_normalization_log_evidence=False,
+            has_normalization_max_posterior=True,
+            accumulate_noise=False,
+            has_group_ids=True,
+            has_reconstruction_probability_threshold=True,
+            fused_pair_fine_score_enabled=True,
+        ),
+    ]
+
+
+@pytest.mark.parametrize("case_index", range(4))
+def test_the_bucket_constant_program_writes_the_engine_statements(case_index):
+    """Every constant, bitwise against the ``jnp.zeros``/``ones``/``full`` it replaces."""
+
+    config = _all_branch_combinations()[case_index]
+    specs = lbs.local_bucket_constant_specs(**config)
+    built = lbs.local_bucket_constant_operands(specs)
+    expressions = _engine_constant_expressions(
+        batch_size=config["batch_size"],
+        n_half=config["n_half"],
+        n_trans=config["n_trans"],
+    )
+
+    assert set(built) == set(specs)
+    for name, value in built.items():
+        expected = expressions[name]()
+        assert expected.dtype == value.dtype, name
+        assert expected.shape == value.shape, name
+        np.testing.assert_array_equal(np.asarray(expected), np.asarray(value), err_msg=name)
+
+
+def test_the_bucket_constant_specs_cover_every_name_the_engine_asks_for():
+    """No ``bucket_constant("X", ...)`` call site without a spec that makes X.
+
+    A missing name would be a ``KeyError`` on a branch combination no test
+    drives, which is exactly the failure mode that cost this programme two
+    end-to-end runs this week.
+    """
+
+    import inspect
+    import re
+
+    from recovar.em.local import local_em_engine
+
+    source = inspect.getsource(local_em_engine.run_local_em_exact)
+    used = set(re.findall(r'bucket_constant\(\s*"([a-z_A-Z]+)"', source))
+    produced = set()
+    for config in _all_branch_combinations():
+        produced |= set(lbs.local_bucket_constant_specs(**config))
+    assert used, "the constant sites must name what they build"
+    assert used <= produced, sorted(used - produced)
+    assert produced <= set(
+        _engine_constant_expressions(batch_size=1, n_half=1, n_trans=1)
+    )
+
+
+def test_the_bucket_constants_are_one_program_and_fresh_buffers():
+    """One program for the set, and a new buffer every call.
+
+    The big JIT takes these operands as arguments; a memoized constant would be
+    a buffer the previous call may have donated, so the fold builds them rather
+    than caching them.
+    """
+
+    config = _all_branch_combinations()[0]
+    specs = lbs.local_bucket_constant_specs(**config)
+    first = lbs.local_bucket_constant_operands(specs)
+    second = lbs.local_bucket_constant_operands(specs)
+    for name, value in first.items():
+        assert value is not second[name], name
+        np.testing.assert_array_equal(np.asarray(value), np.asarray(second[name]))
+
+    key = tuple(
+        (
+            tuple(int(dim) for dim in specs[name][0]),
+            specs[name][1],
+            np.dtype(specs[name][2]).name,
+        )
+        for name in sorted(specs)
+    )
+    closed = jax.make_jaxpr(
+        lambda: lbs._local_bucket_constant_program(key=key)
+    )()
+    assert len(closed.out_avals) == len(specs)

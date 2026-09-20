@@ -126,6 +126,7 @@ from recovar.em.local.local_big_jit import (
     run_fixed_capacity_segmented_local_scan,
 )
 from recovar.em.local.local_bucket_stages import (
+    LOCAL_BUCKET_CONSTANT_PROGRAM_ENV,
     LOCAL_POSTPROCESS_ROW_PROGRAM_ENV,
     _accumulate_packed_noise_chunk,
     _adjoint_slice_volume_maybe_windowed_row_chunks,
@@ -156,6 +157,8 @@ from recovar.em.local.local_bucket_stages import (
     _unpadded_bucket_rows,
     build_class_segment_reconstruction_packs,
     encode_hard_assignment,
+    local_bucket_constant_operands,
+    local_bucket_constant_specs,
     trim_local_postprocess_rows,
     validate_local_relion_projector_window,
 )
@@ -504,6 +507,11 @@ def run_local_em_exact(
     # default; the per-value slice below stays the oracle.
     postprocess_row_program_enabled = parse_env_binary_flag(
         LOCAL_POSTPROCESS_ROW_PROGRAM_ENV
+    )
+    # P3-J: build a bucket's constant big-JIT operands in one program. Off by
+    # default; each site's own ``jnp.zeros``/``jnp.ones`` stays the oracle.
+    bucket_constant_program_enabled = parse_env_binary_flag(
+        LOCAL_BUCKET_CONSTANT_PROGRAM_ENV
     )
     if type(host_stats_publication) is not bool:
         raise TypeError("host_stats_publication must be a bool")
@@ -2107,6 +2115,46 @@ def run_local_em_exact(
                     batch_size,
                 )
             bucket_image_indices = np.asarray(unpadded_bucket.image_indices, dtype=np.int32)
+            # P3-J: with the flag on, every constant operand this bucket needs
+            # comes out of one program; ``bucket_constant`` then reads it by
+            # name. With the flag off each site builds its own, which is the
+            # path the folded form is measured against.
+            bucket_constants = None
+            if bucket_constant_program_enabled:
+                bucket_constants = local_bucket_constant_operands(
+                    local_bucket_constant_specs(
+                        batch_size=int(batch_size),
+                        n_half=int(n_half),
+                        n_trans=int(n_trans),
+                        score_real_dtype=precision_policy.score_real_dtype,
+                        normalization_real_dtype=precision_policy.normalization_real_dtype,
+                        relion_exact_bpref_operands=bool(relion_exact_bpref_operands),
+                        apply_integer_pre_shift=integer_pre_shifts is not None,
+                        has_image_pre_shifts=image_pre_shifts is not None,
+                        has_image_corrections=image_corrections is not None,
+                        has_scale_corrections=scale_corrections is not None,
+                        has_translation_sqdist=translation_sqdist_ang is not None,
+                        has_normalization_log_z=normalization_log_z_np is not None,
+                        has_normalization_log_evidence=(
+                            normalization_log_evidence_np is not None
+                        ),
+                        has_normalization_max_posterior=(
+                            normalization_max_posterior_np is not None
+                        ),
+                        accumulate_noise=bool(accumulate_noise),
+                        has_group_ids=group_ids_np is not None,
+                        has_reconstruction_probability_threshold=(
+                            reconstruction_probability_threshold_np is not None
+                        ),
+                        fused_pair_fine_score_enabled=bool(fused_pair_fine_score_enabled),
+                    )
+                )
+
+            def bucket_constant(name, build):
+                """``build()`` with the flag off, the program's value with it on."""
+
+                return build() if bucket_constants is None else bucket_constants[name]
+
             if relion_exact_bpref_operands:
                 ctf_rfloat_unpadded = np.asarray(
                     relion_ctf._relion_exact_ctf_half_from_source_star_host(
@@ -2147,17 +2195,26 @@ def run_local_em_exact(
                     dtype=jnp.float32,
                 )
             else:
-                ctf_rfloat_half_arg = jnp.zeros(
-                    (batch_size, n_half),
-                    dtype=jnp.float64,
+                ctf_rfloat_half_arg = bucket_constant(
+                    "ctf_rfloat_half",
+                    lambda: jnp.zeros(
+                        (batch_size, n_half),
+                        dtype=jnp.float64,
+                    ),
                 )
-                inverse_noise_rfloat_cast_arg = jnp.zeros(
-                    (n_half,),
-                    dtype=jnp.float32,
+                inverse_noise_rfloat_cast_arg = bucket_constant(
+                    "inverse_noise_rfloat_cast",
+                    lambda: jnp.zeros(
+                        (n_half,),
+                        dtype=jnp.float32,
+                    ),
                 )
-                corr_img_rfloat_square_arg = jnp.zeros(
-                    (batch_size, n_half),
-                    dtype=jnp.float32,
+                corr_img_rfloat_square_arg = bucket_constant(
+                    "corr_img_rfloat_square",
+                    lambda: jnp.zeros(
+                        (batch_size, n_half),
+                        dtype=jnp.float32,
+                    ),
                 )
             apply_integer_pre_shift = integer_pre_shifts is not None
             if apply_integer_pre_shift:
@@ -2165,10 +2222,16 @@ def run_local_em_exact(
                     pad_axis(integer_pre_shifts, 0, batch_size, value=0),
                     dtype=jnp.int32,
                 )
-                fourier_pre_shifts_arg = jnp.zeros((batch_size, 2), dtype=precision_policy.score_real_dtype)
+                fourier_pre_shifts_arg = bucket_constant(
+                    "fourier_pre_shifts_zero",
+                    lambda: jnp.zeros((batch_size, 2), dtype=precision_policy.score_real_dtype),
+                )
                 apply_fourier_pre_shift = False
             elif image_pre_shifts is not None:
-                integer_pre_shifts_arg = jnp.zeros((batch_size, 2), dtype=jnp.int32)
+                integer_pre_shifts_arg = bucket_constant(
+                    "integer_pre_shifts_zero",
+                    lambda: jnp.zeros((batch_size, 2), dtype=jnp.int32),
+                )
                 fourier_pre_shifts_arg = jnp.asarray(
                     pad_axis(
                         np.asarray(image_pre_shifts)[bucket_image_indices],
@@ -2180,8 +2243,14 @@ def run_local_em_exact(
                 )
                 apply_fourier_pre_shift = True
             else:
-                integer_pre_shifts_arg = jnp.zeros((batch_size, 2), dtype=jnp.int32)
-                fourier_pre_shifts_arg = jnp.zeros((batch_size, 2), dtype=precision_policy.score_real_dtype)
+                integer_pre_shifts_arg = bucket_constant(
+                    "integer_pre_shifts_zero",
+                    lambda: jnp.zeros((batch_size, 2), dtype=jnp.int32),
+                )
+                fourier_pre_shifts_arg = bucket_constant(
+                    "fourier_pre_shifts_zero",
+                    lambda: jnp.zeros((batch_size, 2), dtype=precision_policy.score_real_dtype),
+                )
                 apply_fourier_pre_shift = False
 
             image_corrections_arg = (
@@ -2195,7 +2264,10 @@ def run_local_em_exact(
                     dtype=precision_policy.score_real_dtype,
                 )
                 if image_corrections is not None
-                else jnp.ones(batch_size, dtype=precision_policy.score_real_dtype)
+                else bucket_constant(
+                    "image_corrections_one",
+                    lambda: jnp.ones(batch_size, dtype=precision_policy.score_real_dtype),
+                )
             )
             scale_corrections_arg = (
                 jnp.asarray(
@@ -2208,12 +2280,18 @@ def run_local_em_exact(
                     dtype=precision_policy.score_real_dtype,
                 )
                 if scale_corrections is not None
-                else jnp.ones(batch_size, dtype=precision_policy.score_real_dtype)
+                else bucket_constant(
+                    "scale_corrections_one",
+                    lambda: jnp.ones(batch_size, dtype=precision_policy.score_real_dtype),
+                )
             )
             image_only_corrections_arg = (
                 image_corrections_arg / scale_corrections_arg
                 if image_corrections is not None
-                else jnp.ones(batch_size, dtype=precision_policy.score_real_dtype)
+                else bucket_constant(
+                    "image_only_corrections_one",
+                    lambda: jnp.ones(batch_size, dtype=precision_policy.score_real_dtype),
+                )
             )
             translation_sqdist_arg = (
                 jnp.asarray(
@@ -2221,7 +2299,12 @@ def run_local_em_exact(
                     dtype=precision_policy.score_real_dtype,
                 )
                 if translation_sqdist_ang is not None
-                else jnp.zeros((batch_size, n_trans), dtype=precision_policy.score_real_dtype)
+                else bucket_constant(
+                    "translation_sqdist_zero",
+                    lambda: jnp.zeros(
+                        (batch_size, n_trans), dtype=precision_policy.score_real_dtype
+                    ),
+                )
             )
             sample_mask_arg = (
                 None
@@ -2234,7 +2317,12 @@ def run_local_em_exact(
                     dtype=(precision_policy.normalization_real_dtype),
                 )
                 if normalization_log_z_np is not None
-                else jnp.zeros(batch_size, dtype=(precision_policy.normalization_real_dtype))
+                else bucket_constant(
+                    "normalization_log_z_zero",
+                    lambda: jnp.zeros(
+                        batch_size, dtype=(precision_policy.normalization_real_dtype)
+                    ),
+                )
             )
             normalization_log_evidence_arg = (
                 jnp.asarray(
@@ -2242,7 +2330,12 @@ def run_local_em_exact(
                     dtype=(precision_policy.normalization_real_dtype),
                 )
                 if normalization_log_evidence_np is not None
-                else jnp.zeros(batch_size, dtype=(precision_policy.normalization_real_dtype))
+                else bucket_constant(
+                    "normalization_log_evidence_zero",
+                    lambda: jnp.zeros(
+                        batch_size, dtype=(precision_policy.normalization_real_dtype)
+                    ),
+                )
             )
             normalization_max_posterior_arg = (
                 jnp.asarray(
@@ -2255,7 +2348,10 @@ def run_local_em_exact(
                     dtype=(precision_policy.normalization_real_dtype),
                 )
                 if normalization_max_posterior_np is not None
-                else jnp.zeros(batch_size, dtype=jnp.float32)
+                else bucket_constant(
+                    "normalization_max_posterior_zero",
+                    lambda: jnp.zeros(batch_size, dtype=jnp.float32),
+                )
             )
             local_rotation_log_prior_arg = jnp.asarray(bucket.local_rotation_log_prior)
             if class_log_prior != 0.0:
@@ -2276,7 +2372,10 @@ def run_local_em_exact(
                         dtype=jnp.int32,
                     )
                     if group_ids_np is not None
-                    else jnp.zeros(batch_size, dtype=jnp.int32)
+                    else bucket_constant(
+                        "group_ids_zero",
+                        lambda: jnp.zeros(batch_size, dtype=jnp.int32),
+                    )
                 )
                 shell_indices_half_arg = shell_indices_half
                 shell_indices_noise_arg = shell_indices_noise
@@ -2294,10 +2393,16 @@ def run_local_em_exact(
                 shell_indices_half_arg = disabled_noise_shell_indices
                 shell_indices_noise_arg = disabled_noise_shell_indices
                 noise_variance_for_noise_arg = noise_variance_half
-                scale_correction_pixel_mask_arg = jnp.zeros(n_half, dtype=bool)
+                scale_correction_pixel_mask_arg = bucket_constant(
+                    "scale_correction_pixel_mask_zero",
+                    lambda: jnp.zeros(n_half, dtype=bool),
+                )
                 n_shells_arg = 1
             if reconstruction_probability_threshold_np is None:
-                reconstruction_probability_threshold_arg = jnp.zeros((batch_size,), dtype=jnp.float64)
+                reconstruction_probability_threshold_arg = bucket_constant(
+                    "reconstruction_probability_threshold_zero",
+                    lambda: jnp.zeros((batch_size,), dtype=jnp.float64),
+                )
                 has_reconstruction_probability_threshold = False
             else:
                 threshold_values = reconstruction_probability_threshold_np[bucket_image_indices]
@@ -2414,10 +2519,13 @@ def run_local_em_exact(
                 total_fused_pair_candidates += valid_pair_count
                 total_fused_pair_dense_capacity += dense_pair_capacity
             else:
-                fused_fine_job_plan_arg = jnp.full(
-                    (1, 4),
-                    -1,
-                    dtype=jnp.int32,
+                fused_fine_job_plan_arg = bucket_constant(
+                    "fused_fine_job_plan_empty",
+                    lambda: jnp.full(
+                        (1, 4),
+                        -1,
+                        dtype=jnp.int32,
+                    ),
                 )
             big_jit_arguments = (
                 jnp.asarray(batch_data),

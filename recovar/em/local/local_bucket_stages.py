@@ -665,6 +665,135 @@ def trim_local_postprocess_rows(values: dict, *, unpadded_batch_size: int) -> di
     return trimmed
 
 
+# P3-G/J, opt-in and off by default. Ten of the exact local engine's
+# per-bucket big-JIT operands are constants: the ``jnp.zeros``/``jnp.ones``
+# arms its optional inputs fall back to, plus the empty fused-pair job plan.
+# Each one is two eager dispatches (JAX materialises the fill scalar with a
+# ``convert_element_type`` and then a ``broadcast_in_dim``), and P3-E's census
+# measured 1620 of them per local iteration at state D. Building them in one
+# program per bucket shape leaves one dispatch for the set.
+LOCAL_BUCKET_CONSTANT_PROGRAM_ENV = "RECOVAR_LOCAL_BUCKET_CONSTANT_PROGRAM"
+
+
+def local_bucket_constant_specs(
+    *,
+    batch_size: int,
+    n_half: int,
+    n_trans: int,
+    score_real_dtype,
+    normalization_real_dtype,
+    relion_exact_bpref_operands: bool,
+    apply_integer_pre_shift: bool,
+    has_image_pre_shifts: bool,
+    has_image_corrections: bool,
+    has_scale_corrections: bool,
+    has_translation_sqdist: bool,
+    has_normalization_log_z: bool,
+    has_normalization_log_evidence: bool,
+    has_normalization_max_posterior: bool,
+    accumulate_noise: bool,
+    has_group_ids: bool,
+    has_reconstruction_probability_threshold: bool,
+    fused_pair_fine_score_enabled: bool,
+) -> dict:
+    """``name -> (shape, fill, dtype)`` for the constants this bucket needs.
+
+    Only the arms this bucket's branches actually take are listed: the
+    reconstruction-CTF operands alone are ``batch_size x n_half`` float64, so
+    materialising an unused one would be device work the loose path never did.
+    The engine's fallback expression for each name is the statement this entry
+    replaces, and ``tests/unit/test_p3g_local_glue_programs.py`` compares the
+    two statement for statement.
+    """
+
+    specs: dict = {}
+    if not relion_exact_bpref_operands:
+        specs["ctf_rfloat_half"] = ((batch_size, n_half), 0, np.float64)
+        specs["inverse_noise_rfloat_cast"] = ((n_half,), 0, np.float32)
+        specs["corr_img_rfloat_square"] = ((batch_size, n_half), 0, np.float32)
+    if apply_integer_pre_shift:
+        specs["fourier_pre_shifts_zero"] = ((batch_size, 2), 0, score_real_dtype)
+    elif has_image_pre_shifts:
+        specs["integer_pre_shifts_zero"] = ((batch_size, 2), 0, np.int32)
+    else:
+        specs["integer_pre_shifts_zero"] = ((batch_size, 2), 0, np.int32)
+        specs["fourier_pre_shifts_zero"] = ((batch_size, 2), 0, score_real_dtype)
+    if not has_image_corrections:
+        specs["image_corrections_one"] = ((batch_size,), 1, score_real_dtype)
+        specs["image_only_corrections_one"] = ((batch_size,), 1, score_real_dtype)
+    if not has_scale_corrections:
+        specs["scale_corrections_one"] = ((batch_size,), 1, score_real_dtype)
+    if not has_translation_sqdist:
+        specs["translation_sqdist_zero"] = (
+            (batch_size, n_trans),
+            0,
+            score_real_dtype,
+        )
+    if not has_normalization_log_z:
+        specs["normalization_log_z_zero"] = (
+            (batch_size,),
+            0,
+            normalization_real_dtype,
+        )
+    if not has_normalization_log_evidence:
+        specs["normalization_log_evidence_zero"] = (
+            (batch_size,),
+            0,
+            normalization_real_dtype,
+        )
+    if not has_normalization_max_posterior:
+        # float32 and not the normalization dtype: that is what the engine's
+        # fallback arm writes, and this entry reproduces it rather than tidying
+        # it, because the operand's dtype reaches the big JIT's signature.
+        specs["normalization_max_posterior_zero"] = ((batch_size,), 0, np.float32)
+    if accumulate_noise:
+        if not has_group_ids:
+            specs["group_ids_zero"] = ((batch_size,), 0, np.int32)
+    else:
+        specs["scale_correction_pixel_mask_zero"] = ((n_half,), False, np.bool_)
+    if not has_reconstruction_probability_threshold:
+        specs["reconstruction_probability_threshold_zero"] = (
+            (batch_size,),
+            0,
+            np.float64,
+        )
+    if not fused_pair_fine_score_enabled:
+        specs["fused_fine_job_plan_empty"] = ((1, 4), -1, np.int32)
+    return specs
+
+
+@partial(jax.jit, static_argnames=("key",))
+def _local_bucket_constant_program(*, key):
+    """Every constant operand of one bucket shape class, in one program."""
+
+    return tuple(
+        jnp.full(shape, fill, dtype=np.dtype(dtype_name)) for shape, fill, dtype_name in key
+    )
+
+
+def local_bucket_constant_operands(specs: dict) -> dict:
+    """Materialize :func:`local_bucket_constant_specs` in one program.
+
+    A constant is a constant: ``jnp.zeros(s, d)``, ``jnp.ones(s, d)`` and
+    ``jnp.full(s, v, d)`` write the same bytes, so the fold moves where the
+    fill happens and nothing else. The names are sorted so the program key, and
+    therefore the program, does not depend on the caller's dict order.
+    """
+
+    if not specs:
+        return {}
+    names = tuple(sorted(specs))
+    key = tuple(
+        (
+            tuple(int(dim) for dim in specs[name][0]),
+            specs[name][1],
+            np.dtype(specs[name][2]).name,
+        )
+        for name in names
+    )
+    return dict(zip(names, _local_bucket_constant_program(key=key)))
+
+
 def _postprocess_local_bucket(
     *,
     image_indices,
