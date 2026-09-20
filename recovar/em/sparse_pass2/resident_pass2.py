@@ -1862,10 +1862,11 @@ def compute_pass2_stats_resident(
                             default_translation_sqdist=image_tables.translation_sqdist_ang,
                         )
                         logger.info(
-                            "Resident pass-2 compile-ahead: queued %d capacity classes %s, "
-                            "host cost %.2fs",
+                            "Resident pass-2 compile-ahead: queued %d capacity classes %s "
+                            "for the %s chunk path, host cost %.2fs",
                             len(warmed_classes),
-                            ",".join(f"{r}x{b}" for r, b in warmed_classes),
+                            ",".join(f"{r}x{b}" for r, b in warmed_classes) or "-",
+                            chunk_program_path(),
                             time.time() - warm_t0,
                         )
                     except Exception as exc:  # noqa: BLE001
@@ -2222,6 +2223,41 @@ def _make_chunk_stage_operands(recon, translation_sqdist_ang) -> _ChunkStageOper
     )
 
 
+def chunk_program_path() -> str:
+    """Which programs a chunk of this half will actually submit.
+
+    ``"fused"`` is the opt-in single chunk program, ``"per-stage"`` the default
+    path's three glue programs, ``"eager"`` the loose dispatch with no program
+    to warm. The compile-ahead warm-up reads this so it cannot warm a path the
+    loop does not take: warming the fused program while the loop runs the
+    per-stage one is not an error, it simply buys nothing, and it did exactly
+    that until 2026-09-20.
+    """
+
+    if _chunk_jit_enabled():
+        return "fused"
+    if _resident_glue_jit_enabled():
+        return "per-stage"
+    return "eager"
+
+
+def _make_mstep_block_inputs(rows, posterior) -> "_MstepBlockInputs":
+    """The M-step block program's row inputs, from the chunk and its posterior.
+
+    Shared with the compile-ahead warm-up so the warmed signature is the one
+    the per-stage loop submits. ``projections`` is None here: the block program
+    gathers them from the tables itself.
+    """
+
+    return _MstepBlockInputs(
+        row_image_local=rows.row_image_local,
+        kernel_row_image_ids=posterior.kernel_row_image_ids,
+        row_posterior=posterior.row_posterior,
+        row_fine_rot=rows.row_fine_rot,
+        projections=None,
+    )
+
+
 def _make_chunk_program_spec(
     *,
     row_capacity,
@@ -2314,6 +2350,16 @@ def _submit_resident_chunk_warmup(
 
     from recovar.em.sparse_pass2.resident_operands import ResidentHalfOperands
 
+    # Warm the programs the configured path will actually submit. The fused
+    # chunk program is opt-in and off by default; the per-stage path with the
+    # glue JIT on is what production runs, and it is three programs. Warming the
+    # wrong one is not an error, it is simply useless, so the path is decided
+    # here, before any work, and named in the log line.
+    path = chunk_program_path()
+    use_chunk_jit = path == "fused"
+    if path == "eager":
+        return ()
+
     def as_aval(value):
         if value is None:
             return None
@@ -2384,11 +2430,59 @@ def _submit_resident_chunk_warmup(
                 *present_avals,
             )
             operand_avals = _make_chunk_stage_operands(recon, _sq)
-            return (
-                _run_resident_chunk_program,
-                (_row, operand_avals, table_avals, carry_avals),
-                {"spec": _spec},
+            if use_chunk_jit:
+                return (
+                    _run_resident_chunk_program,
+                    (_row, operand_avals, table_avals, carry_avals),
+                    {"spec": _spec},
+                )
+            # The per-stage path is the default, and it runs three programs.
+            # Their later inputs are earlier stages' outputs, so they are taken
+            # by tracing those stages rather than described a second time.
+            posterior_avals = jax.eval_shape(
+                partial(_resident_chunk_posterior_program, spec=_spec),
+                _row,
+                operand_avals,
+                table_avals,
             )
+            mstep_avals = jax.eval_shape(
+                partial(_initial_mstep_carry, spec=_spec),
+                carry_avals[0],
+                carry_avals[1],
+                operand_avals,
+                table_avals,
+            )
+            block_avals = _make_mstep_block_inputs(_row, posterior_avals)
+            return [
+                (
+                    _resident_chunk_posterior_program,
+                    (_row, operand_avals, table_avals),
+                    {"spec": _spec},
+                ),
+                (
+                    _resident_mstep_block_program,
+                    (
+                        jax.ShapeDtypeStruct((), jnp.int32),
+                        block_avals,
+                        operand_avals,
+                        table_avals,
+                        mstep_avals,
+                    ),
+                    {"spec": _spec},
+                ),
+                (
+                    _resident_chunk_statistics_program,
+                    (
+                        carry_avals[2],
+                        _row,
+                        operand_avals,
+                        table_avals,
+                        posterior_avals,
+                        mstep_avals,
+                    ),
+                    {"spec": _spec},
+                ),
+            ]
 
         if pool.submit_thunk(f"resident chunk rows={row_capacity} images={image_capacity}", thunk):
             submitted.append(capacity_class)
@@ -3839,13 +3933,7 @@ def _run_resident_chunk_stages(
 
     block_rows = int(spec.mstep_block_rows)
     mstep = _initial_mstep_carry(Ft_y_total, Ft_ctf_total, operands, tables, spec=spec)
-    blocks = _MstepBlockInputs(
-        row_image_local=rows.row_image_local,
-        kernel_row_image_ids=posterior.kernel_row_image_ids,
-        row_posterior=posterior.row_posterior,
-        row_fine_rot=rows.row_fine_rot,
-        projections=None,
-    )
+    blocks = _make_mstep_block_inputs(rows, posterior)
     for start in range(0, int(spec.row_capacity), block_rows):
         if start >= int(n_valid_rows):
             # Every row of this block is chunk padding: its posterior is zero,

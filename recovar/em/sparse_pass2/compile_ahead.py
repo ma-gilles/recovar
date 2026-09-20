@@ -107,7 +107,7 @@ class CompileAheadSummary:
 
     def __str__(self) -> str:
         return (
-            f"compile-ahead: {self.compiled} of {self.submitted} programs in "
+            f"compile-ahead: {self.compiled} programs from {self.submitted} jobs in "
             f"{self.seconds:.2f}s ({self.refused} over the cap, {self.failed} failed)"
         )
 
@@ -187,10 +187,12 @@ class CompileAheadPool:
 
         Some signatures are only reachable by tracing a real function, which
         costs host time the submitting thread is trying to spend elsewhere.
-        ``thunk()`` runs on the helper and returns
-        ``(program, avals, static_kwargs)``; it must close over shape/dtype
-        stand-ins only, never a device buffer, and a raise inside it is
-        recorded and dropped exactly like a failed compile.
+        ``thunk()`` runs on the helper and returns ``(program, avals,
+        static_kwargs)``, or a list of such triples when one derivation feeds
+        several programs -- the per-stage chunk path is three programs over one
+        set of operand avals. It must close over shape/dtype stand-ins only,
+        never a device buffer, and a raise inside it is recorded and dropped
+        exactly like a failed compile.
 
         Deduplication is by ``label`` alone here, because the avals do not
         exist yet when the job is queued: give each distinct signature a label
@@ -220,20 +222,23 @@ class CompileAheadPool:
                 return
             label, thunk = job
             start = time.perf_counter()
+            done = 0
             try:
-                program, avals, static_kwargs = thunk()
-                program.lower(*avals, **static_kwargs).compile()
+                work = thunk()
+                if not isinstance(work, list):
+                    work = [work]
+                for program, avals, static_kwargs in work:
+                    program.lower(*avals, **static_kwargs).compile()
+                    done += 1
             except Exception as exc:  # noqa: BLE001 - a warm-up must never fail a run
                 with self._lock:
                     self._summary.failed += 1
                     self._summary.errors.append(f"{label}: {type(exc).__name__}: {exc}")
                 logger.debug("compile-ahead skipped %s: %r", label, exc)
-                continue
             finally:
                 with self._lock:
                     self._summary.seconds += time.perf_counter() - start
-            with self._lock:
-                self._summary.compiled += 1
+                    self._summary.compiled += done
 
 
 def _aval_key(avals) -> tuple:

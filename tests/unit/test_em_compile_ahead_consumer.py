@@ -321,3 +321,64 @@ class _Noop:
 
     def compile(self):
         return self
+
+
+# ------------------------------------------------------- warming which path ---
+
+
+def test_the_warm_up_reads_the_same_path_decision_as_the_chunk_loop(monkeypatch):
+    """The fused chunk program is opt-in; production runs the per-stage path.
+
+    The warm-up warmed the fused program regardless until 2026-09-20, so under
+    the production flag set it compiled three programs per capacity class that
+    the loop never called and bought nothing. `chunk_program_path` is the single
+    statement both sides now read.
+    """
+
+    monkeypatch.setenv("RECOVAR_SPARSE_PASS2_RESIDENT_CHUNK_JIT", "1")
+    monkeypatch.setenv("RECOVAR_SPARSE_PASS2_RESIDENT_GLUE_JIT", "1")
+    assert rp.chunk_program_path() == "fused"
+
+    monkeypatch.setenv("RECOVAR_SPARSE_PASS2_RESIDENT_CHUNK_JIT", "0")
+    assert rp.chunk_program_path() == "per-stage"
+
+    monkeypatch.setenv("RECOVAR_SPARSE_PASS2_RESIDENT_GLUE_JIT", "0")
+    assert rp.chunk_program_path() == "eager"
+
+
+def test_the_default_path_is_the_one_production_runs(monkeypatch):
+    """No flags set: the fused program is off, so the per-stage path is it."""
+
+    monkeypatch.delenv("RECOVAR_SPARSE_PASS2_RESIDENT_CHUNK_JIT", raising=False)
+    assert rp._chunk_jit_enabled() is False
+
+
+def test_nothing_is_queued_when_there_is_no_program_to_warm(monkeypatch):
+    """The eager path submits no program, so the warm-up must submit no job."""
+
+    monkeypatch.setenv("RECOVAR_SPARSE_PASS2_RESIDENT_CHUNK_JIT", "0")
+    monkeypatch.setenv("RECOVAR_SPARSE_PASS2_RESIDENT_GLUE_JIT", "0")
+
+    class Refuse:
+        def submit_thunk(self, *a, **k):
+            raise AssertionError("the eager path has no program to warm")
+
+    tables, chunks = _chunks()
+    assert rp._submit_resident_chunk_warmup(
+        Refuse(),
+        chunks=chunks,
+        tables=tables,
+        n_fine_trans=N_FINE_TRANS,
+        half_operand_avals=None,
+        stage_tables=None,
+        carry=None,
+        translation_angles=None,
+        rect_indices=None,
+        exact_positions=None,
+        image_shape=(8, 8),
+        spec_kwargs={},
+        translation_prior_centers_np=None,
+        fine_translations=None,
+        voxel_size=1.0,
+        default_translation_sqdist=None,
+    ) == ()
