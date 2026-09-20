@@ -67,8 +67,8 @@ import logging
 import os
 import time
 from dataclasses import dataclass
-from functools import partial
-from typing import NamedTuple
+from functools import lru_cache, partial
+from typing import Callable, NamedTuple
 
 import jax
 import jax.numpy as jnp
@@ -1024,6 +1024,68 @@ def _reorder_permutation(fetched_indices, requested_indices, capacity: int) -> n
     if not bool(seen.all()):
         raise ValueError("the dataset did not return every requested image")
     return order
+
+
+class _ChunkOperandRowInputs(NamedTuple):
+    """The per-chunk operands that are permuted into row order and zero-padded.
+
+    Each optional field is ``None`` on the paths that do not produce it;
+    ``None`` is a pytree structure, so those paths key their own program
+    rather than carry a dead operand.
+    """
+
+    score_input: jax.Array
+    corr_img_score: jax.Array
+    highres_xi2_half: jax.Array | None
+    shifted_recon: jax.Array
+    shifted_noise: jax.Array
+    ctf2_over_nv_recon: jax.Array
+    direct_ctf_rfloat_recon: jax.Array | None
+    processed_score_half_for_noise: jax.Array
+    relion_norm_high_shell: jax.Array | None
+    raw_translated_wavg_rectangle: jax.Array
+
+
+@partial(jax.jit, static_argnames=("image_capacity", "n_fine_trans"))
+def _chunk_operand_rows(
+    arrays: _ChunkOperandRowInputs,
+    permutation: jax.Array,
+    valid_images: jax.Array,
+    exact_positions: jax.Array,
+    *,
+    image_capacity: int,
+    n_fine_trans: int,
+) -> tuple:
+    """Permute a chunk's operands into row order and zero the padded slots.
+
+    Same statements, same order, same dtypes as the loose dispatch: two
+    reshapes, ten permutation gathers, ten ``where`` masks and one rectangle
+    gather. None of it is arithmetic, so no value can move; what leaves the
+    host is the dispatch count. Eagerly, ``values[permutation]`` is five
+    primitives rather than one, because JAX normalizes a fancy index
+    (``add``, ``broadcast_in_dim``, ``select_n``) before every gather, and the
+    resident local pass runs this once per chunk.
+    """
+
+    def take(values):
+        return None if values is None else _zero_padded_images(
+            values[permutation], valid_images
+        )
+
+    raw_translated_wavg_rectangle = take(arrays.raw_translated_wavg_rectangle)
+    return (
+        take(arrays.score_input),
+        take(arrays.corr_img_score),
+        take(arrays.highres_xi2_half),
+        take(arrays.shifted_recon.reshape(image_capacity, n_fine_trans, -1)),
+        take(arrays.shifted_noise.reshape(image_capacity, n_fine_trans, -1)),
+        take(arrays.ctf2_over_nv_recon),
+        take(arrays.direct_ctf_rfloat_recon),
+        take(arrays.processed_score_half_for_noise),
+        take(arrays.relion_norm_high_shell),
+        raw_translated_wavg_rectangle,
+        raw_translated_wavg_rectangle[:, :, exact_positions],
+    )
 
 
 def _zero_padded_images(values, valid_images):
@@ -2011,22 +2073,37 @@ def _prepare_chunk_reconstruction_operands(
         np.arange(image_capacity) < n_valid_images, dtype=bool
     )
 
-    def take(values):
-        return None if values is None else _zero_padded_images(
-            jnp.asarray(values)[permutation], valid_images
-        )
-
-    score_input = take(score_input)
-    corr_img_score = take(corr_img_score)
-    highres_xi2_half = None if highres_xi2_half is None else take(highres_xi2_half)
-    shifted_recon = take(shifted_recon.reshape(image_capacity, n_fine_trans, -1))
-    shifted_noise = take(shifted_noise.reshape(image_capacity, n_fine_trans, -1))
-    ctf2_over_nv_recon = take(ctf2_over_nv_recon)
-    direct_ctf_rfloat_recon = take(direct_ctf_rfloat_recon)
-    processed_image_half = take(processed_score_half_for_noise)
-    relion_norm_high_shell = take(relion_norm_high_shell)
-    raw_translated_wavg_rectangle = take(raw_translated_wavg_rectangle)
-    raw_translated_wavg_for_atomic = raw_translated_wavg_rectangle[:, :, exact_positions_device]
+    (
+        score_input,
+        corr_img_score,
+        highres_xi2_half,
+        shifted_recon,
+        shifted_noise,
+        ctf2_over_nv_recon,
+        direct_ctf_rfloat_recon,
+        processed_image_half,
+        relion_norm_high_shell,
+        raw_translated_wavg_rectangle,
+        raw_translated_wavg_for_atomic,
+    ) = _chunk_operand_rows(
+        _ChunkOperandRowInputs(
+            score_input=score_input,
+            corr_img_score=corr_img_score,
+            highres_xi2_half=highres_xi2_half,
+            shifted_recon=shifted_recon,
+            shifted_noise=shifted_noise,
+            ctf2_over_nv_recon=ctf2_over_nv_recon,
+            direct_ctf_rfloat_recon=direct_ctf_rfloat_recon,
+            processed_score_half_for_noise=processed_score_half_for_noise,
+            relion_norm_high_shell=relion_norm_high_shell,
+            raw_translated_wavg_rectangle=raw_translated_wavg_rectangle,
+        ),
+        permutation,
+        valid_images,
+        exact_positions_device,
+        image_capacity=int(image_capacity),
+        n_fine_trans=int(n_fine_trans),
+    )
     if int(shifted_recon.shape[-1]) != int(n_recon_windowed):
         raise ValueError(
             "reconstruction tile pixel count does not match the reconstruction window: "
@@ -2291,6 +2368,20 @@ def _carry_aval_probe_enabled() -> bool:
 
 
 _DEVICE_INT32_CACHE: dict[int, jax.Array] = {}
+
+
+def _scalar_operand(value, dtype) -> jax.Array:
+    """Put a host scalar on the device without an eager conversion.
+
+    ``jnp.asarray(np.int32(7), dtype=jnp.int32)`` dispatches a
+    ``convert_element_type`` because a NumPy scalar is not an array; the same
+    value wrapped in a 0-d NumPy array of the target dtype is transferred with
+    no primitive at all. The chunk driver builds two of these per chunk, so on
+    the early state that was 834 eager dispatches over two iterations for two
+    integers whose value never leaves the host.
+    """
+
+    return jnp.asarray(np.asarray(value, dtype=jnp.dtype(dtype)))
 
 
 def _device_int32(value: int) -> jax.Array:
@@ -2782,8 +2873,13 @@ def _mstep_block_operand_dtypes(
 
     a2_dtype = jnp.dtype(jnp.result_type(proj_abs2_dtype, ctf_probs_dtype, noise_dtype))
     cross_dtype = jnp.dtype(jnp.result_type(proj_dtype, summed_masked_dtype))
+    # ``np.zeros`` rather than ``jnp.zeros``: this asks for the real part's
+    # dtype, not for a value, and the device version dispatched one
+    # ``convert_element_type`` per chunk to allocate a 0-d array that is read
+    # for its dtype and thrown away. NumPy's promotion of a real part is the
+    # same table JAX consults.
     xa_dtype = jnp.dtype(
-        jnp.result_type(noise_dtype, jnp.zeros((), dtype=cross_dtype).real.dtype)
+        jnp.result_type(noise_dtype, np.zeros((), dtype=cross_dtype).real.dtype)
     )
     return {
         "proj": proj_dtype,
@@ -2870,6 +2966,29 @@ def _check_mstep_carry_avals(
         )
 
 
+@lru_cache(maxsize=None)
+def _zero_block_partials(shapes_and_dtypes: tuple) -> Callable[[], tuple]:
+    """One program per capacity class that allocates the zero accumulators.
+
+    ``jnp.zeros`` outside a jit is two eager dispatches, a
+    ``convert_element_type`` of the scalar zero and a ``broadcast_in_dim`` to
+    the shape; the M-step carry has four of them and the driver builds one
+    carry per chunk, which on the early state was 3336 eager dispatches over
+    two iterations. Inside a program with static shapes and dtypes the same
+    four buffers cost none, and each call still returns fresh buffers, which
+    the donated M-step block program requires.
+
+    Keyed on the shapes and dtypes, so a class compiles once and every chunk
+    of that class reuses it.
+    """
+
+    @jax.jit
+    def build():
+        return tuple(jnp.zeros(shape, dtype=dtype) for shape, dtype in shapes_and_dtypes)
+
+    return build
+
+
 def _initial_mstep_carry(
     Ft_y,
     Ft_ctf,
@@ -2898,17 +3017,21 @@ def _initial_mstep_carry(
     )
     if _carry_aval_probe_enabled():
         _check_mstep_carry_avals(tables, spec=spec, dtypes=dtypes)
+    wavg_triplet_pixels, noise_shells, a2_per_image, xa_per_image = _zero_block_partials(
+        (
+            ((image_capacity, int(spec.n_rect), 3), jnp.dtype(jnp.float32)),
+            ((int(spec.stats_config.n_shells),), jnp.dtype(dtypes["noise_shells"])),
+            ((image_capacity,), jnp.dtype(dtypes["a2"])),
+            ((image_capacity,), jnp.dtype(dtypes["xa"])),
+        )
+    )()
     return _ChunkMstepCarry(
         Ft_y=Ft_y,
         Ft_ctf=Ft_ctf,
-        wavg_triplet_pixels=jnp.zeros(
-            (image_capacity, int(spec.n_rect), 3), dtype=jnp.float32
-        ),
-        noise_shells=jnp.zeros(
-            (int(spec.stats_config.n_shells),), dtype=dtypes["noise_shells"]
-        ),
-        a2_per_image=jnp.zeros((image_capacity,), dtype=dtypes["a2"]),
-        xa_per_image=jnp.zeros((image_capacity,), dtype=dtypes["xa"]),
+        wavg_triplet_pixels=wavg_triplet_pixels,
+        noise_shells=noise_shells,
+        a2_per_image=a2_per_image,
+        xa_per_image=xa_per_image,
     )
 
 
@@ -3351,8 +3474,12 @@ def _run_resident_chunk(
         row_mask_bits=jnp.asarray(host_chunk["row_mask_bits"], dtype=jnp.uint32),
         row_mask_mode=jnp.asarray(host_chunk["row_mask_mode"], dtype=jnp.int8),
         image_ids=jnp.asarray(host_chunk["image_ids"], dtype=jnp.int32),
-        n_valid_rows=jnp.asarray(host_chunk["n_valid_rows"], dtype=jnp.int32),
-        n_valid_images=jnp.asarray(host_chunk["n_valid_images"], dtype=jnp.int32),
+        # ``np.asarray`` first: a NumPy *scalar* reaches the device through one
+        # eager ``convert_element_type`` per chunk, a 0-d NumPy *array* of the
+        # same dtype through a plain transfer. Same dtype, shape, weak type and
+        # value either way.
+        n_valid_rows=_scalar_operand(host_chunk["n_valid_rows"], jnp.int32),
+        n_valid_images=_scalar_operand(host_chunk["n_valid_images"], jnp.int32),
         segment_offsets=jnp.asarray(segment_offsets_np, dtype=jnp.int32),
         image_row_start=jnp.asarray(image_row_start_np, dtype=jnp.int64),
         image_row_count=jnp.asarray(image_row_count_np, dtype=jnp.int64),
