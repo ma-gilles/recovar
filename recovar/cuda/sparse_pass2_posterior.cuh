@@ -534,31 +534,41 @@ ffi::Error posterior_impl(
 // segment's slice, so flattening a rectangular row into a segment reproduces
 // the rectangular outputs bitwise.  Two consequences of that choice:
 //
-//   * The significance boundary keeps the per-segment cub::DeviceRadixSort::
-//     SortKeys plus relion_ampere_inclusive_sum_f32 of the rectangular path.
-//     cub::DeviceSegmentedRadixSort could replace the sort, but CUB has no
-//     segmented inclusive scan whose float32 summation reproduces the
-//     single-segment decoupled-lookback order, and a differing cumulative
-//     array moves the searchsorted boundary.  Since the scan must run once per
-//     segment with a host-side length, the sort uses the same loop, which makes
-//     the sorted key order identical by construction instead of by argument.
-//   * The host therefore needs the segment lengths: the posterior handler
-//     copies segment_offsets back and synchronizes the stream once per call.
-//     This is the one host round trip left in the device-resident chunk body,
-//     and it cannot be removed while the significance boundary is CUB's
-//     decoupled-lookback float32 scan: that scan's summation order depends on
-//     the segment length, sum_weight is cumulative[n - 1] and the threshold is
-//     a searchsorted over the same array, so a device-side segmented scan (a
-//     ScanByKey, or one scan over the whole chunk) moves both and breaks the
-//     bitwise contract with the rectangular handler and with RELION.  The
-//     launch geometry is capacity-only: every kernel is launched at the static
-//     segment count, the scratch is sized at the static cell count, and
-//     n_valid_images is read only on the device, so nothing on the host
-//     depends on the chunk's occupancy.  To keep the stall off the device, the
-//     handler enqueues the max and exponentiate kernels, and the CUB scratch
-//     allocation, before it synchronizes, so the device is working on this
-//     call's own kernels while the host waits.  The log-Z handler needs no
-//     lengths on the host and stays device-resident.
+//   * The significance boundary sorts each segment's weights and scans them,
+//     and the sort_scan_mode attribute selects how those two run.  Mode 0 is
+//     the oracle: the per-segment cub::DeviceRadixSort::SortKeys plus
+//     relion_ampere_inclusive_sum_f32 of the rectangular path, one call each
+//     per nonempty segment, every output bitwise equal to the rectangular
+//     handler's.  Mode 1 replaces the sorts by one
+//     cub::DeviceSegmentedRadixSort::SortKeys for the whole chunk; a radix
+//     sort is an exact permutation, so the sorted keys stay bitwise identical
+//     and only the launch structure changes.  Mode 2 also replaces the scans
+//     by segmented_inclusive_sum_kernel, one block per segment.  Modes 3 and 4
+//     repeat 1 and 2 with cub::DeviceSegmentedSort, which partitions segments
+//     by size; it sorts the same keys, but its host dispatch copies the group
+//     sizes back and synchronizes the stream inside CUB
+//     (dispatch_segmented_sort.cuh, CUB 2.7.0), so it cannot be part of a
+//     device-resident call and exists for measurement, not for the default.
+//   * Modes 0 and 1 still need the segment lengths on the host, because the
+//     CUB scan takes its item count as a host argument and that count is what
+//     fixes the float32 decoupled-lookback summation order the boundary is
+//     defined by: sum_weight is cumulative[n - 1] and the threshold is a
+//     searchsorted over the same array.  Those two modes copy segment_offsets
+//     back and synchronize the stream once per call.  Mode 2 has no host round
+//     trip at all, at the price of a different float32 summation order: its
+//     cumulative array, sum_weight and threshold may differ from mode 0 by a
+//     few ULP, which can move the significance boundary of an image whose
+//     threshold sits on a near-tie.  Mode 2 is therefore not bitwise with the
+//     rectangular handler; its agreement is a measured, reported property, not
+//     a contract, and mode 0 remains the oracle every test compares against.
+//   * The launch geometry of every mode is capacity-only: each kernel is
+//     launched at the static segment count, the scratch is sized at the static
+//     cell count, and n_valid_images is read only on the device, so nothing on
+//     the host depends on the chunk's occupancy.  Modes 0 and 1 enqueue the
+//     max and exponentiate kernels, and the CUB scratch allocation, before
+//     they synchronize, so the device is working on this call's own kernels
+//     while the host waits.  The log-Z handler needs no lengths on the host
+//     and stays device-resident in every mode.
 //
 // Empty segments and images at or beyond n_valid_images produce exactly the
 // values the rectangular path produces for an all -inf row.  Cells covered by
@@ -697,6 +707,87 @@ __global__ void segmented_exponentiate_kernel(
     exponentiate_cell(state[segment].row, scores[index], raw_weights + index, probs + index);
 }
 
+// Device-side monotone clamp of the segment table.
+//
+// Modes 1 and 2 hand segment_offsets straight to CUB, and the host no longer
+// reads them, so the defensive check the readback used to perform has to run on
+// the device: a malformed table must not make the segmented sort address cells
+// outside the buffers.  n_segments + 1 is a few hundred entries, so one thread
+// walking them costs less than the launch.
+__global__ void clamp_segment_offsets_kernel(
+    const int32_t* offsets, int n_segments, int64_t n_cells, int32_t* clamped)
+{
+    if (blockIdx.x != 0 || threadIdx.x != 0) return;
+    int64_t previous = 0;
+    for (int i = 0; i <= n_segments; ++i)
+    {
+        int64_t value = static_cast<int64_t>(offsets[i]);
+        if (value < previous) value = previous;
+        if (value > n_cells) value = n_cells;
+        clamped[i] = static_cast<int32_t>(value);
+        previous = value;
+    }
+}
+
+// One block per segment, tile-serial float32 inclusive sum (mode 2).
+//
+// This replaces the per-segment CUB scan, whose item count is a host argument.
+// The order is fixed by the launch geometry alone: each thread sums its
+// kScanItemsPerThread consecutive cells, a block scan combines the thread
+// totals, and the block carries a running prefix from tile to tile.  It is
+// therefore reproducible for a given segment length, but it is NOT the
+// decoupled-lookback order of relion_ampere_inclusive_sum_f32, so the float32
+// cumulative array, sum_weight and the significance threshold can differ from
+// modes 0 and 1 by a few ULP.  The sorted keys are unaffected (a radix sort is
+// an exact permutation).
+constexpr int kScanThreads = 256;
+constexpr int kScanItemsPerThread = 4;
+
+__global__ void segmented_inclusive_sum_kernel(
+    const float* input, const int32_t* offsets, const int32_t* n_valid_images,
+    int n_segments, int64_t n_cells, float* output)
+{
+    using BlockScan = cub::BlockScan<float, kScanThreads>;
+    __shared__ typename BlockScan::TempStorage temporary;
+    __shared__ float running_prefix;
+    const int segment = blockIdx.x;
+    const int valid_count = clamp_valid_count(*n_valid_images, n_segments);
+    int64_t begin = 0, n = 0;
+    segment_extent(offsets, segment, valid_count, n_cells, begin, n);
+    if (n <= 0) return;
+    if (threadIdx.x == 0) running_prefix = 0.0f;
+    __syncthreads();
+    constexpr int64_t tile = static_cast<int64_t>(kScanThreads) * kScanItemsPerThread;
+    for (int64_t base = 0; base < n; base += tile)
+    {
+        const int64_t thread_begin =
+            base + static_cast<int64_t>(threadIdx.x) * kScanItemsPerThread;
+        float items[kScanItemsPerThread];
+        float thread_total = 0.0f;
+#pragma unroll
+        for (int i = 0; i < kScanItemsPerThread; ++i)
+        {
+            const int64_t index = thread_begin + i;
+            items[i] = index < n ? input[begin + index] : 0.0f;
+            thread_total += items[i];
+        }
+        float thread_prefix = 0.0f;
+        float block_aggregate = 0.0f;
+        BlockScan(temporary).ExclusiveSum(thread_total, thread_prefix, block_aggregate);
+        float accumulated = running_prefix + thread_prefix;
+#pragma unroll
+        for (int i = 0; i < kScanItemsPerThread; ++i)
+        {
+            const int64_t index = thread_begin + i;
+            accumulated += items[i];
+            if (index < n) output[begin + index] = accumulated;
+        }
+        __syncthreads();
+        if (threadIdx.x == 0) running_prefix += block_aggregate;
+        __syncthreads();
+    }
+}
+
 __global__ void segmented_threshold_kernel(
     const float* sorted, const float* cumulative, const float* external_sum_weight,
     int n_segments, float adaptive_fraction, int keep_all, int use_external_sum_weight,
@@ -808,6 +899,7 @@ ffi::Error segmented_posterior_impl(
     float adaptive_fraction,
     int64_t keep_all,
     int64_t use_external_sum_weight,
+    int64_t sort_scan_mode,
     ffi::AnyBuffer scores,
     ffi::AnyBuffer segment_offsets,
     ffi::AnyBuffer n_valid_images,
@@ -915,75 +1007,160 @@ ffi::Error segmented_posterior_impl(
         return ffi::Error::Internal(
             std::string("SparsePass2SegmentedPosteriorF32 exponentiate: ") + cudaGetErrorString(error));
 
-    // Scratch for the per-segment sort and scan, sized at the capacity: a
-    // query at n_cells bounds every segment of this chunk, so the allocation
-    // and its query are the same for every chunk of a capacity class instead
-    // of following the longest segment of this one.
+    // Scratch for the sort and the scan, sized at the capacity: a query at
+    // n_cells bounds every segment of this chunk, so the allocation and its
+    // query are the same for every chunk of a capacity class instead of
+    // following the longest segment of this one.
     const int capacity_count = static_cast<int>(n_cells);
+    const int segment_count = static_cast<int>(n_segments);
+    const int mode = sort_scan_mode <= 0 ? 0 : (sort_scan_mode >= 4 ? 4 : static_cast<int>(sort_scan_mode));
+    // Which CUB primitive sorts the chunk, and who scans it.  Both segmented
+    // primitives produce the same sorted keys as the per-segment sort (a sort
+    // is an exact permutation); they differ only in how they spread segments
+    // over the device, which matters because the resident capacity classes
+    // range from ten thousand to seven hundred thousand cells per segment.
+    const bool segmented_sort = mode >= 1;
+    const bool partitioned_sort = mode >= 3;
+    const bool device_scan = mode == 2 || mode == 4;
     size_t sort_bytes = 0;
     size_t scan_bytes = 0;
-    error = cub::DeviceRadixSort::SortKeys(
-        nullptr, sort_bytes, raw_ptr, sorted_ptr, capacity_count, 0, sizeof(float) * 8, stream);
+    if (partitioned_sort)
+        error = cub::DeviceSegmentedSort::SortKeys(
+            nullptr, sort_bytes, raw_ptr, sorted_ptr, capacity_count, segment_count,
+            offsets_ptr, offsets_ptr + 1, stream);
+    else if (segmented_sort)
+        error = cub::DeviceSegmentedRadixSort::SortKeys(
+            nullptr, sort_bytes, raw_ptr, sorted_ptr, capacity_count, segment_count,
+            offsets_ptr, offsets_ptr + 1, 0, sizeof(float) * 8, stream);
+    else
+        error = cub::DeviceRadixSort::SortKeys(
+            nullptr, sort_bytes, raw_ptr, sorted_ptr, capacity_count, 0, sizeof(float) * 8, stream);
     if (error != cudaSuccess)
         return ffi::Error::Internal(
             std::string("SparsePass2SegmentedPosteriorF32 sort query: ") + cudaGetErrorString(error));
-    error = relion_ampere_inclusive_sum_f32(
-        nullptr, scan_bytes, sorted_ptr, cumulative_ptr, capacity_count, stream);
-    if (error != cudaSuccess)
-        return ffi::Error::Internal(
-            std::string("SparsePass2SegmentedPosteriorF32 scan query: ") + cudaGetErrorString(error));
+    if (!device_scan)
+    {
+        error = relion_ampere_inclusive_sum_f32(
+            nullptr, scan_bytes, sorted_ptr, cumulative_ptr, capacity_count, stream);
+        if (error != cudaSuccess)
+            return ffi::Error::Internal(
+                std::string("SparsePass2SegmentedPosteriorF32 scan query: ") + cudaGetErrorString(error));
+    }
+    // The segmented modes give CUB a device-side monotone clamp of the
+    // offsets, because the host no longer validates the table it hands to the
+    // sort.
+    const size_t offsets_bytes =
+        segmented_sort ? (static_cast<size_t>(n_segments) + 1) * sizeof(int32_t) : 0;
+    const size_t cub_bytes = std::max<size_t>(1, std::max(sort_bytes, scan_bytes));
+    const size_t aligned_cub_bytes = (cub_bytes + 255) & ~static_cast<size_t>(255);
     void* temporary = nullptr;
-    const size_t temporary_bytes = std::max<size_t>(1, std::max(sort_bytes, scan_bytes));
+    const size_t temporary_bytes = aligned_cub_bytes + offsets_bytes;
     error = cudaMallocAsync(&temporary, temporary_bytes, stream);
     if (error != cudaSuccess)
         return ffi::Error::Internal(
             std::string("SparsePass2SegmentedPosteriorF32 cudaMallocAsync: ") + cudaGetErrorString(error));
+    int32_t* clamped_offsets =
+        offsets_bytes == 0
+            ? nullptr
+            : reinterpret_cast<int32_t*>(static_cast<char*>(temporary) + aligned_cub_bytes);
 
-    // The one host round trip: the per-segment CUB calls take their item count
-    // on the host, and that count is what fixes the float32 scan order the
-    // significance boundary is defined by.  n_valid_images is NOT read back:
-    // segments at or past it carry no cells on the device (segment_extent
-    // clamps them), and sorting a range the device treats as empty writes only
-    // into scratch that the threshold body never reads for that segment.
-    std::vector<int32_t> host_offsets(static_cast<size_t>(n_segments) + 1, 0);
-    error = cudaMemcpyAsync(host_offsets.data(), offsets_ptr,
-                            host_offsets.size() * sizeof(int32_t),
-                            cudaMemcpyDeviceToHost, stream);
-    if (error == cudaSuccess) error = cudaStreamSynchronize(stream);
-    if (error != cudaSuccess)
+    if (segmented_sort)
     {
-        cudaFreeAsync(temporary, stream);
-        return ffi::Error::Internal(
-            std::string("SparsePass2SegmentedPosteriorF32 offset readback: ") + cudaGetErrorString(error));
-    }
-    int64_t previous = 0;
-    for (size_t i = 0; i < host_offsets.size(); ++i)
-    {
-        const int64_t offset = host_offsets[i];
-        if (offset < previous || offset > n_cells)
+        // One segmented sort for the whole chunk.  A sort is an exact
+        // permutation of its keys, so every segment's sorted run is bitwise
+        // what the per-segment sort of mode 0 produces; only the launch
+        // structure changes (one dispatch instead of one per segment, and no
+        // host copy of the offsets).  Cells covered by no segment are left as
+        // the exponentiate kernel wrote them.
+        clamp_segment_offsets_kernel<<<1, 1, 0, stream>>>(
+            offsets_ptr, segment_count, n_cells, clamped_offsets);
+        error = cudaGetLastError();
+        if (error == cudaSuccess && partitioned_sort)
+            error = cub::DeviceSegmentedSort::SortKeys(
+                temporary, sort_bytes, raw_ptr, sorted_ptr, capacity_count, segment_count,
+                clamped_offsets, clamped_offsets + 1, stream);
+        else if (error == cudaSuccess)
+            error = cub::DeviceSegmentedRadixSort::SortKeys(
+                temporary, sort_bytes, raw_ptr, sorted_ptr, capacity_count, segment_count,
+                clamped_offsets, clamped_offsets + 1, 0, sizeof(float) * 8, stream);
+        if (error != cudaSuccess)
         {
             cudaFreeAsync(temporary, stream);
-            return ffi::Error::InvalidArgument(
-                "SparsePass2SegmentedPosteriorF32: segment_offsets must be nondecreasing within [0, n_cells]");
+            return ffi::Error::Internal(
+                std::string("SparsePass2SegmentedPosteriorF32 segmented sort: ") +
+                cudaGetErrorString(error));
         }
-        previous = offset;
     }
 
-    // Same CUB radix sort and pinned Ampere inclusive scan as the rectangular
-    // handler, once per nonempty segment on the caller's stream.
-    for (int64_t segment = 0; segment < n_segments && error == cudaSuccess; ++segment)
+    if (device_scan)
     {
-        const int64_t begin = host_offsets[static_cast<size_t>(segment)];
-        const int64_t length = host_offsets[static_cast<size_t>(segment) + 1] - begin;
-        if (length <= 0) continue;
-        const int segment_count = static_cast<int>(length);
-        error = cub::DeviceRadixSort::SortKeys(
-            temporary, sort_bytes, raw_ptr + begin, sorted_ptr + begin, segment_count,
-            0, sizeof(float) * 8, stream);
-        if (error == cudaSuccess)
-            error = relion_ampere_inclusive_sum_f32(
-                temporary, scan_bytes, sorted_ptr + begin, cumulative_ptr + begin,
-                segment_count, stream);
+        // One segmented scan for the whole chunk: no host round trip is left
+        // in this handler.  See segmented_inclusive_sum_kernel for the order
+        // this changes.
+        segmented_inclusive_sum_kernel<<<segment_count, kScanThreads, 0, stream>>>(
+            sorted_ptr, offsets_ptr,
+            static_cast<const int32_t*>(n_valid_images.untyped_data()),
+            segment_count, n_cells, cumulative_ptr);
+        error = cudaGetLastError();
+        if (error != cudaSuccess)
+        {
+            cudaFreeAsync(temporary, stream);
+            return ffi::Error::Internal(
+                std::string("SparsePass2SegmentedPosteriorF32 segmented scan: ") +
+                cudaGetErrorString(error));
+        }
+    }
+    else
+    {
+        // The one host round trip of the per-segment-scan modes: that CUB scan
+        // takes its item count on the host, and that count is what fixes the
+        // float32 summation order the significance boundary is defined by.
+        // n_valid_images is NOT read back: segments at or past it carry no
+        // cells on the device (segment_extent clamps them), and sorting or
+        // scanning a range the device treats as empty writes only into scratch
+        // that the threshold body never reads for that segment.
+        std::vector<int32_t> host_offsets(static_cast<size_t>(n_segments) + 1, 0);
+        error = cudaMemcpyAsync(host_offsets.data(), offsets_ptr,
+                                host_offsets.size() * sizeof(int32_t),
+                                cudaMemcpyDeviceToHost, stream);
+        if (error == cudaSuccess) error = cudaStreamSynchronize(stream);
+        if (error != cudaSuccess)
+        {
+            cudaFreeAsync(temporary, stream);
+            return ffi::Error::Internal(
+                std::string("SparsePass2SegmentedPosteriorF32 offset readback: ") + cudaGetErrorString(error));
+        }
+        int64_t previous = 0;
+        for (size_t i = 0; i < host_offsets.size(); ++i)
+        {
+            const int64_t offset = host_offsets[i];
+            if (offset < previous || offset > n_cells)
+            {
+                cudaFreeAsync(temporary, stream);
+                return ffi::Error::InvalidArgument(
+                    "SparsePass2SegmentedPosteriorF32: segment_offsets must be nondecreasing within [0, n_cells]");
+            }
+            previous = offset;
+        }
+
+        // Same CUB radix sort and pinned Ampere inclusive scan as the
+        // rectangular handler, once per nonempty segment on the caller's
+        // stream.  Mode 1 has already sorted, so it runs the scan alone.
+        for (int64_t segment = 0; segment < n_segments && error == cudaSuccess; ++segment)
+        {
+            const int64_t begin = host_offsets[static_cast<size_t>(segment)];
+            const int64_t length = host_offsets[static_cast<size_t>(segment) + 1] - begin;
+            if (length <= 0) continue;
+            const int cell_count = static_cast<int>(length);
+            if (!segmented_sort)
+                error = cub::DeviceRadixSort::SortKeys(
+                    temporary, sort_bytes, raw_ptr + begin, sorted_ptr + begin, cell_count,
+                    0, sizeof(float) * 8, stream);
+            if (error == cudaSuccess)
+                error = relion_ampere_inclusive_sum_f32(
+                    temporary, scan_bytes, sorted_ptr + begin, cumulative_ptr + begin,
+                    cell_count, stream);
+        }
     }
     {
         const cudaError_t free_error = cudaFreeAsync(temporary, stream);
@@ -1077,6 +1254,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Attr<float>("adaptive_fraction")
         .Attr<int64_t>("keep_all")
         .Attr<int64_t>("use_external_sum_weight")
+        .Attr<int64_t>("sort_scan_mode")
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
