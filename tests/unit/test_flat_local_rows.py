@@ -698,6 +698,7 @@ def test_bucket_stage_flat_plan_dispatches_on_class_segmented_buckets():
         exact_local_bucket_radix=2,
         dense_batch_size=dense_batch,
         pool_size=3,
+        round_row_widths=True,
     )
     assert klass.packed_row_count <= dense_batch * int(bucket.bucket_rotation_count)
 
@@ -854,3 +855,44 @@ def test_flat_local_pool_size_changes_padding_only(monkeypatch):
     monkeypatch.setenv("RECOVAR_EXACT_LOCAL_FLAT_POOL_SIZE", "0")
     with pytest.raises(ValueError, match="positive integer"):
         resolve_flat_local_pool_size()
+
+
+@pytest.mark.unit
+def test_flat_local_row_rounding_off_packs_exactly_the_needed_rows(monkeypatch):
+    """With rounding off and no pooling, a packed plan holds no padding at all."""
+
+    from recovar.em.local.flat_local_rows import (
+        build_pool_flat_local_row_plan,
+        resolve_flat_local_row_rounding,
+    )
+
+    counts = np.asarray([5, 300, 7, 9, 600, 11, 13, 17], dtype=np.int32)
+    exact = build_pool_flat_local_row_plan(
+        counts, 1024, pool_size=1, rotation_block_size=1024, round_row_widths=False,
+    )
+    rounded = build_pool_flat_local_row_plan(
+        counts, 1024, pool_size=1, rotation_block_size=1024, round_row_widths=True,
+    )
+
+    assert exact.packed_row_count == int(counts.sum())
+    assert bool(exact.valid_mask.all())
+    assert rounded.packed_row_count > exact.packed_row_count
+
+    expected = {
+        (image, rotation)
+        for image, count in enumerate(counts.tolist())
+        for rotation in range(count)
+    }
+    for plan in (exact, rounded):
+        valid = plan.valid_mask
+        assert set(
+            zip(plan.image_indices[valid].tolist(), plan.rotation_rows[valid].tolist())
+        ) == expected
+
+    monkeypatch.setenv("RECOVAR_EXACT_LOCAL_FLAT_ROW_ROUNDING", "0")
+    assert resolve_flat_local_row_rounding() is False
+    monkeypatch.delenv("RECOVAR_EXACT_LOCAL_FLAT_ROW_ROUNDING")
+    assert resolve_flat_local_row_rounding() is True
+    monkeypatch.setenv("RECOVAR_EXACT_LOCAL_FLAT_ROW_ROUNDING", "yes")
+    with pytest.raises(ValueError, match="must be 0 or 1"):
+        resolve_flat_local_row_rounding()

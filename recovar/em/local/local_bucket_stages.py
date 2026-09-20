@@ -40,6 +40,7 @@ from recovar.em.local.flat_local_rows import (
     encode_flat_local_row_plan,
     map_dense_local_rows_to_flat_rows,
     resolve_flat_local_pool_size,
+    resolve_flat_local_row_rounding,
 )
 from recovar.em.local.local_backprojection import (
     compute_local_ctf_sums,
@@ -934,6 +935,7 @@ def _build_pool_flat_plan_for_bucket(
     exact_local_bucket_radix: int,
     dense_batch_size: int,
     pool_size: int,
+    round_row_widths: bool,
     packed_row_count: int | None = None,
 ):
     """Build one bucket's packed plan, class-segmented or single-class.
@@ -955,6 +957,7 @@ def _build_pool_flat_plan_for_bucket(
             np.asarray(class_counts, dtype=np.int32),
             int(segment),
             pool_size=pool_size,
+            round_row_widths=round_row_widths,
             rotation_block_size=rotation_block_size,
             exact_local_bucket_radix=exact_local_bucket_radix,
             packed_row_count=packed_row_count,
@@ -964,6 +967,7 @@ def _build_pool_flat_plan_for_bucket(
         np.asarray(bucket.actual_rotation_counts, dtype=np.int32),
         dense_rotation_count,
         pool_size=pool_size,
+        round_row_widths=round_row_widths,
         rotation_block_size=rotation_block_size,
         exact_local_bucket_radix=exact_local_bucket_radix,
         packed_row_count=packed_row_count,
@@ -984,6 +988,7 @@ class FlatLocalRowCapacities:
     capacities: dict[tuple[int, int], int]
     required_rows: int
     pool_size: int
+    round_row_widths: bool
 
 
 def _plan_flat_local_row_capacities(
@@ -993,6 +998,7 @@ def _plan_flat_local_row_capacities(
     exact_local_bucket_radix: int,
     stable_rectangular_capacity: bool = False,
     pool_size: int | None = None,
+    round_row_widths: bool | None = None,
 ) -> FlatLocalRowCapacities:
     """Choose one packed-row shape for every existing dense bucket ABI.
 
@@ -1004,6 +1010,7 @@ def _plan_flat_local_row_capacities(
     """
 
     resolved_pool_size = resolve_flat_local_pool_size(pool_size)
+    resolved_round_row_widths = resolve_flat_local_row_rounding(round_row_widths)
     capacities: dict[tuple[int, int], int] = {}
     required_rows = 0
     for bucket in bucket_specs:
@@ -1020,6 +1027,7 @@ def _plan_flat_local_row_capacities(
             exact_local_bucket_radix=exact_local_bucket_radix,
             dense_batch_size=dense_batch_size,
             pool_size=resolved_pool_size,
+            round_row_widths=resolved_round_row_widths,
         )
         key = (dense_batch_size, dense_rotation_count)
         required_capacity = int(plan.packed_row_count)
@@ -1031,6 +1039,7 @@ def _plan_flat_local_row_capacities(
         capacities=capacities,
         required_rows=int(required_rows),
         pool_size=resolved_pool_size,
+        round_row_widths=resolved_round_row_widths,
     )
 
 
@@ -1056,6 +1065,7 @@ def _build_flat_local_row_argument(
         packed_row_count=int(capacities.capacities[key]),
         dense_batch_size=int(dense_batch_size),
         pool_size=capacities.pool_size,
+        round_row_widths=capacities.round_row_widths,
     )
     return encode_flat_local_row_plan(plan)
 
@@ -1088,6 +1098,7 @@ def _flat_local_row_class_blocks(
         packed_row_count=int(capacities.capacities[key]),
         dense_batch_size=int(dense_batch_size),
         pool_size=capacities.pool_size,
+        round_row_widths=capacities.round_row_widths,
     )
     return plan.class_row_counts
 

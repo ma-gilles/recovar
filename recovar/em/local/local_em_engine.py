@@ -1473,7 +1473,9 @@ def run_local_em_exact(
             stable_rectangular_capacity=stable_flat_row_capacity_enabled,
         )
         if flat_local_rows_enabled
-        else FlatLocalRowCapacities(capacities={}, required_rows=0, pool_size=1)
+        else FlatLocalRowCapacities(
+            capacities={}, required_rows=0, pool_size=1, round_row_widths=True,
+        )
     )
     fine_job_capacities = (
         _plan_local_fine_job_capacities(bucket_specs)
@@ -6026,6 +6028,9 @@ def run_local_em_exact(
                 flat_local_row_capacities.required_rows
             ),
             "flat_local_pool_size": np.int64(flat_local_row_capacities.pool_size),
+            "flat_local_row_rounding": np.asarray(
+                flat_local_row_capacities.round_row_widths
+            ),
             "sum_fused_pair_candidates": np.int64(total_fused_pair_candidates),
             "sum_fused_pair_capacity": np.int64(total_fused_pair_capacity),
             "sum_fused_pair_dense_capacity": np.int64(

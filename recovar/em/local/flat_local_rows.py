@@ -14,7 +14,6 @@ from recovar.em.local.local_layout import (
     _exact_local_large_bucket_quantum,
 )
 
-
 # Consecutive images are packed in pools that share one rotation width, so a pool
 # costs ``pool_size`` times its largest member's padded neighborhood. Pooling exists
 # to keep the number of distinct packed shapes down, not for any scientific reason:
@@ -23,6 +22,17 @@ from recovar.em.local.local_layout import (
 # shapes and more padded rows; 3 is the historical default.
 EXACT_LOCAL_FLAT_POOL_SIZE = 3
 EXACT_LOCAL_FLAT_POOL_SIZE_ENV = "RECOVAR_EXACT_LOCAL_FLAT_POOL_SIZE"
+
+# Inside a pool, each image's row block is first rounded up to an ordinary exact-local
+# rotation bucket (powers of two below the engine cap). That rounding predates packed
+# rows, where a row block's length was also a compiled shape; in a packed plan the row
+# block is addressed entirely through ``image_indices``/``rotation_rows`` and only the
+# final ``packed_row_count`` is a shape. So the rounding now costs rows and buys
+# nothing, and switching it off is a padding change, not a semantic one -- but it is
+# left on by default until measured, because the rounded widths do make neighboring
+# pools agree more often and so make the shared capacity a tighter fit.
+EXACT_LOCAL_FLAT_ROW_ROUNDING = True
+EXACT_LOCAL_FLAT_ROW_ROUNDING_ENV = "RECOVAR_EXACT_LOCAL_FLAT_ROW_ROUNDING"
 
 
 def resolve_flat_local_pool_size(explicit: int | None = None) -> int:
@@ -44,6 +54,21 @@ def resolve_flat_local_pool_size(explicit: int | None = None) -> int:
     if pool_size < 1:
         raise ValueError(f"{source} must be a positive integer")
     return pool_size
+
+
+def resolve_flat_local_row_rounding(explicit: bool | None = None) -> bool:
+    """Resolve whether packed row blocks round up to ordinary rotation buckets."""
+
+    if explicit is not None:
+        return bool(explicit)
+    raw_value = os.environ.get(EXACT_LOCAL_FLAT_ROW_ROUNDING_ENV, "").strip()
+    if not raw_value:
+        return bool(EXACT_LOCAL_FLAT_ROW_ROUNDING)
+    if raw_value in ("0", "false", "False"):
+        return False
+    if raw_value in ("1", "true", "True"):
+        return True
+    raise ValueError(f"{EXACT_LOCAL_FLAT_ROW_ROUNDING_ENV} must be 0 or 1")
 
 
 @dataclass(frozen=True)
@@ -188,6 +213,7 @@ def build_pool_flat_local_row_plan(
     exact_local_bucket_radix: int | None = None,
     packed_row_count: int | None = None,
     dense_batch_size: int | None = None,
+    round_row_widths: bool | None = None,
 ) -> FlatLocalRowPlan:
     """Pack consecutive physical pools without changing image/rotation order.
 
@@ -215,17 +241,20 @@ def build_pool_flat_local_row_plan(
     if np.any(rotation_counts < 1) or np.any(rotation_counts > dense_rotation_count):
         raise ValueError("rotation counts must lie in [1, dense_rotation_count]")
 
-    ordinary_buckets = np.asarray(
-        [
-            _exact_bucket_rotation_size(
-                int(count),
-                rotation_block_size,
-                exact_local_bucket_radix=exact_local_bucket_radix,
-            )
-            for count in rotation_counts
-        ],
-        dtype=np.int32,
-    )
+    if resolve_flat_local_row_rounding(round_row_widths):
+        ordinary_buckets = np.asarray(
+            [
+                _exact_bucket_rotation_size(
+                    int(count),
+                    rotation_block_size,
+                    exact_local_bucket_radix=exact_local_bucket_radix,
+                )
+                for count in rotation_counts
+            ],
+            dtype=np.int32,
+        )
+    else:
+        ordinary_buckets = rotation_counts.astype(np.int32, copy=True)
     if np.any(ordinary_buckets > dense_rotation_count):
         raise ValueError("a pool bucket exceeds the enclosing dense rotation axis")
 
@@ -281,6 +310,7 @@ def build_pool_flat_local_row_plan_for_classes(
     large_bucket_quantum: int | None = None,
     packed_row_count: int | None = None,
     dense_batch_size: int | None = None,
+    round_row_widths: bool | None = None,
 ) -> FlatLocalRowPlan:
     """Pack class-segmented local rows without changing image/class/rotation order.
 
@@ -328,23 +358,26 @@ def build_pool_flat_local_row_plan_for_classes(
     resolved_large_bucket_quantum = _exact_local_large_bucket_quantum(
         rotation_block_size, large_bucket_quantum,
     )
-    ordinary_buckets = np.asarray(
-        [
+    if resolve_flat_local_row_rounding(round_row_widths):
+        ordinary_buckets = np.asarray(
             [
-                _exact_bucket_rotation_size(
-                    int(count),
-                    rotation_block_size,
-                    large_bucket_quantum=resolved_large_bucket_quantum,
-                    exact_local_bucket_radix=exact_local_bucket_radix,
-                )
-                if int(count) > 0
-                else 0
-                for count in image_counts
-            ]
-            for image_counts in class_rotation_counts
-        ],
-        dtype=np.int32,
-    )
+                [
+                    _exact_bucket_rotation_size(
+                        int(count),
+                        rotation_block_size,
+                        large_bucket_quantum=resolved_large_bucket_quantum,
+                        exact_local_bucket_radix=exact_local_bucket_radix,
+                    )
+                    if int(count) > 0
+                    else 0
+                    for count in image_counts
+                ]
+                for image_counts in class_rotation_counts
+            ],
+            dtype=np.int32,
+        )
+    else:
+        ordinary_buckets = class_rotation_counts.astype(np.int32, copy=True)
     if np.any(ordinary_buckets > segment_rotation_count):
         raise ValueError("a pool bucket exceeds the enclosing class segment")
 
