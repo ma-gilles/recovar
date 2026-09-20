@@ -789,6 +789,14 @@ def _collate_batch_to_jax(batch):
     if isinstance(batch[0], (tuple, list)):
         return [_collate_batch_to_jax(list(samples)) for samples in zip(*batch)]
 
+    # ``jnp.asarray`` on a Python list of scalars traces, lowers and compiles a
+    # ``convert_element_type`` program for every distinct list length; the T19
+    # census counted 97 of them in two early-state iterations, one per batch
+    # size the loader produced. Building the host array first yields the same
+    # dtype, shape, weak type and values with no program at all. Lists of JAX
+    # arrays keep the original call so nothing is pulled back to the host.
+    if not isinstance(batch[0], jax.Array):
+        return jnp.asarray(np.asarray(batch))
     return jnp.asarray(batch)
 
 

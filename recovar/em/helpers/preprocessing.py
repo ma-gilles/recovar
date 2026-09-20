@@ -7,9 +7,28 @@ import jax.numpy as jnp
 import numpy as np
 
 import recovar.core.fourier_transform_utils as fourier_transform_utils
+from recovar.em.helpers.env_flags import parse_env_strict_flag
 from recovar.em.helpers.half_spectrum import make_half_image_weights
 
 SUPPORTED_IMAGE_MASK_MODES = frozenset({"relion_background_fill", "multiply"})
+
+_JIT_STAGE_GLUE_ENV = "RECOVAR_EM_JIT_STAGE_GLUE"
+
+
+def jit_stage_glue_enabled(*, default: bool = False) -> bool:
+    """Whether per-stage host glue runs as one jitted program instead of eager ops.
+
+    The arithmetic after ``process_half_image`` is a fixed chain of elementwise
+    operations and one shell reduction. Run eagerly it is traced, lowered and
+    compiled as one XLA program per primitive per image-batch extent; the T19
+    census charged eight such programs per extent to ``preprocess_batch``
+    alone. The jitted form issues the identical primitives in the identical
+    order on the identical dtypes, so it is a program-count change, not a
+    numerical one, and it is opt-in until that equality is qualified on the
+    production fixtures.
+    """
+
+    return parse_env_strict_flag(_JIT_STAGE_GLUE_ENV, default=default)
 
 
 @jax.jit
@@ -120,6 +139,50 @@ def preprocess_batch(
         ctf_real_dtype=score_real_dtype,
         relion_preprocess_kwargs=relion_preprocess_kwargs,
     )
+    half_weights = make_half_image_weights(config.image_shape)
+    elementwise = (
+        _preprocess_batch_elementwise_jit
+        if jit_stage_glue_enabled()
+        else _preprocess_batch_elementwise
+    )
+    shifted_half, norm_integrand, ctf2_over_nv_half, score_weighted_half = elementwise(
+        processed_half,
+        ctf_half,
+        noise_variance_half,
+        translation_phases_half,
+        half_weights,
+        score_complex_dtype=score_complex_dtype,
+        score_real_dtype=score_real_dtype,
+        norm_real_dtype=norm_real_dtype,
+    )
+    # The shell reduction stays its own program in both paths. Fusing it into
+    # the elementwise chain changes the accumulation XLA emits and moves the
+    # last bit of ``batch_norm``; the elementwise chain itself is bitwise.
+    batch_norm = jnp.sum(norm_integrand, axis=-1, keepdims=True).real
+    if return_unshifted_score_weighted:
+        return shifted_half, batch_norm, ctf2_over_nv_half, score_weighted_half
+    return shifted_half, batch_norm, ctf2_over_nv_half
+
+
+def _preprocess_batch_elementwise(
+    processed_half,
+    ctf_half,
+    noise_variance_half,
+    translation_phases_half,
+    half_weights,
+    *,
+    score_complex_dtype,
+    score_real_dtype,
+    norm_real_dtype,
+):
+    """:func:`preprocess_batch`'s elementwise arithmetic, without the reduction.
+
+    Kept as a plain function so the eager and jitted paths issue exactly the
+    same primitives in the same order on the same dtypes. ``norm_integrand``
+    is the summand of ``batch_norm``, returned unreduced so the caller keeps
+    the reduction in its own program.
+    """
+
     shift_processed_half, shift_ctf_half, shift_noise_half, shift_phases_half = _cast_shift_inputs(
         processed_half,
         ctf_half,
@@ -130,24 +193,29 @@ def preprocess_batch(
     )
     score_weighted_half = shift_processed_half * shift_ctf_half / shift_noise_half
     shifted_half = apply_half_translation_phases(score_weighted_half, shift_phases_half)
-    half_weights = make_half_image_weights(config.image_shape)
     norm_processed_half, norm_noise_half, norm_half_weights = _norm_inputs(
         processed_half,
         noise_variance_half,
         half_weights,
         norm_real_dtype=norm_real_dtype,
     )
-    batch_norm = jnp.sum(
-        (jnp.abs(norm_processed_half) ** 2 / norm_noise_half) * norm_half_weights[None, :],
-        axis=-1,
-        keepdims=True,
-    ).real
+    norm_integrand = (
+        jnp.abs(norm_processed_half) ** 2 / norm_noise_half
+    ) * norm_half_weights[None, :]
     weight_ctf_half = shift_ctf_half if score_real_dtype is not None else ctf_half
     weight_noise_half = shift_noise_half if score_real_dtype is not None else noise_variance_half
     ctf2_over_nv_half = weight_ctf_half**2 / weight_noise_half
-    if return_unshifted_score_weighted:
-        return shifted_half, batch_norm, ctf2_over_nv_half, score_weighted_half
-    return shifted_half, batch_norm, ctf2_over_nv_half
+    return shifted_half, norm_integrand, ctf2_over_nv_half, score_weighted_half
+
+
+_preprocess_batch_elementwise_jit = jax.jit(
+    _preprocess_batch_elementwise,
+    static_argnames=(
+        "score_complex_dtype",
+        "score_real_dtype",
+        "norm_real_dtype",
+    ),
+)
 
 
 def prepare_reconstruction_batch(
