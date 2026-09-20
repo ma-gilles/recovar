@@ -677,53 +677,99 @@ def test_resident_local_repeats_itself(monkeypatch, _resident_local_env):
     ) < 1e-6
 
 
-def test_mstep_adapter_refuses_once_per_half_operands():
-    """The local M-step entry point fails closed on T16's operand family.
+def _mstep_adapter_kwargs(recon, **overrides):
+    """The entry point's required arguments, with only the operand family varying."""
 
-    ``run_resident_mstep_blocks`` has no translate-and-sum kernel path, so a
-    ``recon`` carrying the once-per-half per-image images instead of the
-    per-chunk pre-shifted tiles must be refused by name rather than reach the
-    XLA weighted sums with ``None`` operands.
-    """
+    kwargs = dict(
+        row_capacity=64,
+        n_valid_rows=8,
+        mstep_block_rows=64,
+        image_capacity=2,
+        row_image_local=None,
+        kernel_row_image_ids=None,
+        row_posterior=np.zeros((64, 1), dtype=np.float32),
+        recon=recon,
+        n_rect=1,
+        n_shells=2,
+        n_recon_windowed=1,
+        noise_variance_for_noise=None,
+        shell_indices_noise=None,
+        exact_positions_device=None,
+        Ft_y_total=None,
+        Ft_ctf_total=None,
+        image_shape=IMAGE_SHAPE,
+        recon_volume_shape=VOLUME_SHAPE,
+        mstep_current_size=CURRENT_SIZE,
+        relion_x_half_recon_indices=None,
+        max_adjoint_block_bytes=1 << 20,
+        cuda_backproject=None,
+    )
+    kwargs.update(overrides)
+    return kwargs
 
-    resident_recon = {
+
+def _operand_dict(**overrides):
+    recon = {
         "shifted_recon": None,
         "shifted_noise": None,
-        "recon_image": object(),
+        "recon_image": None,
         "recon_weight": None,
-        "noise_image": object(),
+        "noise_image": None,
         "ctf2_over_nv_recon": object(),
         "direct_ctf_rfloat_recon": None,
         "raw_translated_wavg_rectangle": object(),
         "raw_translated_wavg_for_atomic": object(),
         "scale": object(),
     }
-    with pytest.raises(ValueError, match="pre-shifted"):
-        rp.run_resident_mstep_blocks(
-            lambda start, stop: None,
-            row_capacity=64,
-            n_valid_rows=8,
-            mstep_block_rows=64,
-            image_capacity=2,
-            row_image_local=None,
-            kernel_row_image_ids=None,
-            row_posterior=np.zeros((64, 1), dtype=np.float32),
-            recon=resident_recon,
-            n_rect=1,
-            n_shells=2,
-            n_recon_windowed=1,
-            noise_variance_for_noise=None,
-            shell_indices_noise=None,
-            exact_positions_device=None,
-            Ft_y_total=None,
-            Ft_ctf_total=None,
-            image_shape=IMAGE_SHAPE,
-            recon_volume_shape=VOLUME_SHAPE,
-            mstep_current_size=CURRENT_SIZE,
-            relion_x_half_recon_indices=None,
-            max_adjoint_block_bytes=1 << 20,
-            cuda_backproject=None,
-        )
+    recon.update(overrides)
+    return recon
+
+
+def test_mstep_adapter_takes_exactly_one_operand_family():
+    """Neither family and both families are refused by name (P4-O).
+
+    The entry point serves the per-chunk pre-shifted tiles, whose weighted sums
+    are the XLA statement, and T16's once-per-half unshifted images, whose
+    weighted sums are the translate-and-sum kernel. Which one arrived selects
+    the M-step body, so an ambiguous or empty ``recon`` must stop here rather
+    than reach the body with ``None`` operands.
+    """
+
+    for recon, what in (
+        (_operand_dict(), "neither family"),
+        (
+            _operand_dict(
+                shifted_recon=object(),
+                shifted_noise=object(),
+                recon_image=object(),
+                noise_image=object(),
+            ),
+            "both families",
+        ),
+    ):
+        with pytest.raises(ValueError, match="exactly one reconstruction operand family"):
+            rp.run_resident_mstep_blocks(
+                lambda start, stop: None, **_mstep_adapter_kwargs(recon)
+            ), what
+
+
+def test_mstep_adapter_needs_the_kernels_tables_with_unshifted_operands():
+    """The unshifted family cannot run without the two tables the kernel reads.
+
+    The translate-and-sum kernel addresses the reconstruction window by pixel
+    index and applies each translation itself, so neither table has a default;
+    a caller that hands over the resident operands and forgets them would
+    otherwise reach the kernel with ``None``.
+    """
+
+    recon = _operand_dict(recon_image=object(), noise_image=object())
+    for missing in ("recon_pixel_indices", "translation_angles"):
+        tables = {"recon_pixel_indices": object(), "translation_angles": object()}
+        tables[missing] = None
+        with pytest.raises(ValueError, match=missing):
+            rp.run_resident_mstep_blocks(
+                lambda start, stop: None, **_mstep_adapter_kwargs(recon, **tables)
+            )
 
 
 @requires_resident_gpu

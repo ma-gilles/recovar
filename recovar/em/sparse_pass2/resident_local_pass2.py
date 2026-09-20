@@ -94,6 +94,13 @@ from recovar.em.helpers.scale_groups import prepare_scale_correction_groups
 from recovar.em.helpers.types import LocalEMResult, make_noise_stats, make_relion_stats
 from recovar.em.refinement.projector_preparation import prepare_local_projector_slab
 from recovar.em.sparse_pass2 import resident_pass2 as rp
+from recovar.em.sparse_pass2.resident_operands import (
+    ResidentOperandsUnsupported,
+    gather_resident_chunk_operands,
+    prepare_resident_half_operands,
+    resident_half_operand_bytes,
+    resident_operands_max_bytes,
+)
 from recovar.em.sparse_pass2.resident_local_layout import (
     materialize_local_chunk,
     plan_local_capacity_chunks,
@@ -154,6 +161,18 @@ _CHUNK_PROFILE_ENV = "RECOVAR_LOCAL_SEARCH_RESIDENT_CHUNK_PROFILE"
 # ids and reads the rows inside the jit. The callback is kept as the oracle
 # every bitwise comparison of this change is made against.
 _BLOCK_ROW_PROGRAM_ENV = "RECOVAR_LOCAL_SEARCH_RESIDENT_BLOCK_ROW_PROGRAM"
+# P4-O, opt-in and off by default. Keep T16's unshifted per-image operands
+# resident for the whole pass and let the translate-and-sum kernel apply each
+# translation inside the M-step reduction, instead of rebuilding the pre-shifted
+# ``[C_B, T, P]`` tiles per chunk and reducing them in XLA. The global route has
+# taken this path since T16; the local route never did, which is why at current
+# size 256 its M-step is XLA fusions: node-granularity traces of the final
+# all-data iteration put 64.6 s of the 71.2 s of per-half GPU work in
+# ``input_reduce_fusion``/``loop_multiply_fusion`` and only 6.6 s in the CUDA
+# kernels beside them, while the same M-step at current size 92 runs
+# ``translate_sum_flat_rows_f32`` and ``wavg_sequential`` for 4.9 s together.
+# The per-chunk preparation stays as the oracle every comparison is made against.
+_RESIDENT_OPERANDS_ENV = "RECOVAR_LOCAL_SEARCH_RESIDENT_OPERANDS"
 _PROJECTION_CALL_MAX_BYTES_ENV = "RECOVAR_LOCAL_SEARCH_RESIDENT_PROJECTION_CALL_MAX_BYTES"
 # One projector call's transient. The exact local engine budgets its own fused
 # projection matmul at 4 GiB by default
@@ -762,6 +781,71 @@ def compute_local_search_resident(
             n_dims=int(fine_translations.shape[1]),
         )
 
+    # ---- once-per-half operands (P4-O), when asked for and affordable ------
+    resident_operands = None
+    if parse_env_flag(_RESIDENT_OPERANDS_ENV, default=False):
+        operands_t0 = time.time()
+        estimated = resident_half_operand_bytes(
+            n_images=n_images,
+            n_score_pixels=int(n_windowed),
+            n_recon_pixels=int(n_recon_windowed),
+            n_half_pixels=int(n_half),
+            n_fine_trans=int(n_fine_trans),
+        )
+        budget = resident_operands_max_bytes(device_memory_bytes)
+        if estimated > budget:
+            # Admission, not a failure: an over-budget pass keeps the per-chunk
+            # preparation rather than allocating and dying mid-loop.
+            logger.info(
+                "Resident local pass-2 keeps the per-chunk operand preparation: the "
+                "once-per-half operands need %.1f GiB and the budget is %.1f GiB",
+                estimated / 1024**3,
+                budget / 1024**3,
+            )
+        else:
+            try:
+                resident_operands = prepare_resident_half_operands(
+                    experiment_dataset,
+                    np.arange(n_images, dtype=np.int64),
+                    bucket_io_kwargs=bucket_io_kwargs,
+                    window_indices=window_indices,
+                    recon_window_indices=recon_window_indices,
+                    image_shape=image_shape,
+                    current_size=current_size,
+                    n_fine_trans=int(n_fine_trans),
+                    use_exact_relion_gaussian=True,
+                    accumulate_noise=accumulate_noise,
+                    source_faithful_spectrum_norm=resolved_spectrum_norm,
+                    fine_translation_prior_2d=fine_translation_prior_2d,
+                    scale_corrections_np=scale_corrections_np,
+                    group_ids_np=group_ids_np,
+                    precision_policy=precision_policy,
+                )
+            except ResidentOperandsUnsupported as reason:
+                logger.info(
+                    "Resident local pass-2 keeps the per-chunk operand preparation: %s",
+                    reason,
+                )
+                resident_operands = None
+            else:
+                if int(resident_operands.n_score_pixels) != int(n_windowed):
+                    raise ValueError(
+                        "resident score operand pixel count does not match the score "
+                        f"window: {resident_operands.n_score_pixels} vs {int(n_windowed)}"
+                    )
+                if int(resident_operands.n_recon_pixels) != int(n_recon_windowed):
+                    raise ValueError(
+                        "resident reconstruction operand pixel count does not match the "
+                        f"reconstruction window: {resident_operands.n_recon_pixels} vs "
+                        f"{int(n_recon_windowed)}"
+                    )
+                logger.info(
+                    "Resident local pass-2 once-per-half operand preparation: %.2fs, "
+                    "%.1f GiB resident",
+                    time.time() - operands_t0,
+                    resident_operands.nbytes()["total"] / 1024**3,
+                )
+
     # ---- chunk loop --------------------------------------------------------
     best_chunk_row_by_image = np.full(n_images, -1, dtype=np.int64)
     significant_counts = (
@@ -821,6 +905,7 @@ def compute_local_search_resident(
             Ft_ctf_total=Ft_ctf_total,
             cuda_backproject=cuda_backproject,
             significant_counts=significant_counts,
+            resident_operands=resident_operands,
         )
     loop_s = time.time() - loop_t0
 
@@ -913,6 +998,16 @@ def compute_local_search_resident(
     )
 
 
+def _operand_shape(recon) -> str:
+    """Name the reconstruction operand family in the chunk profile line."""
+
+    tile = recon.get("shifted_recon")
+    if tile is not None:
+        return f"shifted:{tile.dtype}{tuple(tile.shape)}"
+    image = recon["recon_image"]
+    return f"unshifted:{image.dtype}{tuple(image.shape)}"
+
+
 def _local_chunk_segment_offsets(tables, chunk, n_fine_trans: int) -> np.ndarray:
     """Cell offsets of each chunk image slot, in the segmented handler's units.
 
@@ -991,6 +1086,7 @@ def _run_resident_local_chunk(
     Ft_ctf_total,
     cuda_backproject,
     significant_counts,
+    resident_operands=None,
 ):
     """Every resident stage for one local capacity chunk.
 
@@ -1035,32 +1131,51 @@ def _run_resident_local_chunk(
     # ``_prepare_bucket_io`` runs once per image instead of twice and every
     # per-chunk program is keyed on the image-capacity class rather than on
     # the chunk's occupancy.
-    recon = rp._prepare_chunk_reconstruction_operands(
-        chunk=chunk,
-        image_indices=image_indices,
-        experiment_dataset=experiment_dataset,
-        bucket_io_kwargs=bucket_io_kwargs,
-        windowed_prepare=windowed_prepare,
-        recon_window_indices=recon_window_indices,
-        n_fine_trans=int(n_fine_trans),
-        n_recon_windowed=int(n_recon_windowed),
-        image_shape=image_shape,
-        current_size=current_size,
-        use_exact_relion_gaussian=True,
-        accumulate_noise=accumulate_noise,
-        source_faithful_spectrum_norm=bool(source_faithful_spectrum_norm),
-        score_window_indices=window_indices,
-        fine_translation_prior_2d=fine_translation_prior_2d,
-        score_real_dtype=precision_policy.score_real_dtype,
-        relion_score_translation_angles=translation_angles,
-        rect_indices_device=rect_indices_device,
-        exact_positions_device=exact_positions_device,
-        scale_corrections_np=scale_corrections_np,
-        group_ids_np=group_ids_np,
-        precision_policy=precision_policy,
-    )
+    if resident_operands is not None:
+        # The chunk's image slots in the half's own numbering, padded to the
+        # capacity with -1; the gather writes zeros for a padded slot, which is
+        # what the per-chunk preparation's capacity mask produces too.
+        image_slots = np.full(image_capacity, -1, dtype=np.int32)
+        image_slots[:n_valid_images] = image_indices[:n_valid_images].astype(np.int32)
+        recon = gather_resident_chunk_operands(
+            resident_operands,
+            image_slots,
+            translation_angles=translation_angles,
+            rect_indices=rect_indices_device,
+            exact_positions=exact_positions_device,
+            image_shape=image_shape,
+        )
+    else:
+        recon = rp._prepare_chunk_reconstruction_operands(
+            chunk=chunk,
+            image_indices=image_indices,
+            experiment_dataset=experiment_dataset,
+            bucket_io_kwargs=bucket_io_kwargs,
+            windowed_prepare=windowed_prepare,
+            recon_window_indices=recon_window_indices,
+            n_fine_trans=int(n_fine_trans),
+            n_recon_windowed=int(n_recon_windowed),
+            image_shape=image_shape,
+            current_size=current_size,
+            use_exact_relion_gaussian=True,
+            accumulate_noise=accumulate_noise,
+            source_faithful_spectrum_norm=bool(source_faithful_spectrum_norm),
+            score_window_indices=window_indices,
+            fine_translation_prior_2d=fine_translation_prior_2d,
+            score_real_dtype=precision_policy.score_real_dtype,
+            relion_score_translation_angles=translation_angles,
+            rect_indices_device=rect_indices_device,
+            exact_positions_device=exact_positions_device,
+            scale_corrections_np=scale_corrections_np,
+            group_ids_np=group_ids_np,
+            precision_policy=precision_policy,
+        )
 
-    mark("operands", recon["shifted_recon"], recon["score_input"])
+    mark(
+        "operands",
+        recon["shifted_recon"] if recon.get("shifted_recon") is not None else recon["recon_image"],
+        recon["score_input"],
+    )
 
     # --- stages 1-2: project this chunk's own rows -------------------------
     score_proj, recon_proj, recon_abs2 = project_resident_rows(
@@ -1204,6 +1319,14 @@ def _run_resident_local_chunk(
         relion_x_half_recon_indices=relion_x_half_recon_indices,
         max_adjoint_block_bytes=max_adjoint_block_bytes,
         cuda_backproject=cuda_backproject,
+        # Read only when the unshifted operands arrived: the kernel addresses
+        # the reconstruction window by pixel index and applies the translation
+        # itself. Both are None on the per-chunk tile path.
+        recon_pixel_indices=(
+            None if resident_operands is None
+            else jnp.asarray(recon_window_indices, dtype=jnp.int32)
+        ),
+        translation_angles=None if resident_operands is None else translation_angles,
     )
 
     mark("mstep", Ft_y_total, Ft_ctf_total, wavg_triplet_pixels, block_noise_shells)
@@ -1293,7 +1416,7 @@ def _run_resident_local_chunk(
             n_valid_images, image_capacity, n_valid_rows, row_capacity,
             100.0 * (row_capacity - n_valid_rows) / max(row_capacity, 1),
             n_blocks, row_capacity,
-            f"{recon['shifted_recon'].dtype}{tuple(recon['shifted_recon'].shape)}",
+            _operand_shape(recon),
             f"{recon['raw_translated_wavg_rectangle'].dtype}"
             f"{tuple(recon['raw_translated_wavg_rectangle'].shape)}",
             " ".join(f"{k}={v:.3f}s" for k, v in spans.items()),
