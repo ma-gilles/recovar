@@ -397,17 +397,22 @@ def check_bundle(
     # accumulated value actually overflows.
     maxima = {name: float(host[2 * index]) for index, name in enumerate(names)}
     for reduced, operand, slack in dominated_by or ():
-        if reduced not in maxima or operand not in maxima:
+        factors = (operand,) if isinstance(operand, str) else tuple(operand)
+        if reduced not in maxima or any(f not in maxima for f in factors):
             continue
-        limit = maxima[operand] * (1.0 + slack)
+        product = 1.0
+        for factor in factors:
+            product *= maxima[factor]
+        limit = product * (1.0 + slack)
         if maxima[reduced] > limit:
+            shown = " * ".join(f"max |{f}|" for f in factors)
             broken = (
-                f"reduction bound broken in stage {stage!r}: {context}\n"
+                f"operand bound broken in stage {stage!r}: {context}\n"
                 f"  max |{reduced}| = {maxima[reduced]:.6g} exceeds "
-                f"(1+{slack:g}) * max |{operand}| = {limit:.6g}\n"
-                f"  every entry of {reduced} is a posterior-weighted sum of "
-                f"{operand} with weights that are non-negative and sum to at "
-                f"most one, so this cannot be rounding"
+                f"(1+{slack:g}) * {shown} = {limit:.6g}\n"
+                f"  {reduced} is built elementwise or by a posterior-weighted "
+                f"sum from those, with non-negative weights summing to at most "
+                f"one, so this cannot be rounding"
             )
             if finite_check_warn_only():
                 logger.error("%s", broken)

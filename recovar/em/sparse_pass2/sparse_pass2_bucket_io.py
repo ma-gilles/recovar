@@ -496,6 +496,21 @@ def prepare_unshifted_bucket_operands(
                 "recon_bpref_input_half": recon_bpref_input_half,
                 "batch_scale": batch_scale,
             },
+            dominated_by=(
+                # weighted_ctf is the CTF times the inverse noise, and
+                # ctf2_over_nv is that times the CTF again times the squared
+                # per-image scale. Both are elementwise, so each maximum is
+                # bounded by the product of its factors' maxima. These fire at
+                # any magnitude, unlike a finiteness test, and they watch the
+                # one operand family that enters both M-step sums with the
+                # same power, which is what the accumulator nesting requires.
+                ("weighted_ctf_half", ("ctf_half", "inverse_noise_half"), 1e-3),
+                (
+                    "ctf2_over_nv_recon_half",
+                    ("weighted_ctf_half", "ctf_half", "batch_scale", "batch_scale"),
+                    1e-3,
+                ),
+            ),
             context=finite_check.describe_context(
                 images=int(np.asarray(image_indices).size),
                 first_image=int(np.asarray(image_indices).reshape(-1)[0]),
