@@ -37,10 +37,21 @@ __all__ = [
     "FiniteCheckError",
     "check_arrays",
     "check_per_image",
+    "check_posterior_bounds",
     "describe_context",
     "finite_check_enabled",
     "finite_check_warn_only",
+    "report_tracked",
+    "track_max",
 ]
+
+# ``reconstruction_probs`` are ``raw_weight / sum_weight`` where the numerator
+# is one of the terms of the denominator, so every entry is at most one and a
+# whole image's entries sum to at most one.  A value above that bound cannot be
+# a rounding artefact; it means the denominator did not come from the weights
+# it normalises.  One part in a thousand is far outside float32 rounding for a
+# sum of ~600 positive terms and far inside the failure this hunts.
+POSTERIOR_UPPER_BOUND = 1.0 + 1e-3
 
 
 class FiniteCheckError(AssertionError):
@@ -201,6 +212,105 @@ def check_per_image(stage: str, arrays: dict, *, image_ids=None, context: str = 
     if not reports:
         return None
     message = "\n".join([f"non-finite per-image statistic in stage {stage!r}: {context}", *reports])
+    if finite_check_warn_only():
+        logger.error("%s", message)
+        return message
+    raise FiniteCheckError(message)
+
+
+_TRACKED: dict[str, float] = {}
+
+
+def track_max(name: str, value) -> float | None:
+    """Record the largest magnitude seen for ``name`` across the run.
+
+    The maximum is reduced on the device, so one scalar crosses the boundary.
+    A run that never overflows still reports how close it came, which is the
+    only evidence a non-reproducing repeat can give.
+    """
+
+    if not finite_check_enabled() or value is None:
+        return None
+    try:
+        import jax.numpy as jnp
+
+        array = jnp.asarray(value)
+        if array.dtype.kind not in "fgc":
+            return None
+        magnitude = jnp.abs(array)
+        finite = jnp.isfinite(magnitude)
+        current = float(jnp.max(jnp.where(finite, magnitude, jnp.asarray(0, magnitude.dtype))))
+        if not bool(jnp.all(finite)):
+            current = float("inf")
+    except Exception:  # pragma: no cover - host arrays
+        array = np.asarray(value)
+        if array.dtype.kind not in "fgc":
+            return None
+        magnitude = np.abs(array)
+        finite = np.isfinite(magnitude)
+        current = float(magnitude[finite].max()) if finite.any() else 0.0
+        if not finite.all():
+            current = float("inf")
+    previous = _TRACKED.get(name)
+    if previous is None or current > previous:
+        _TRACKED[name] = current
+    return current
+
+
+def report_tracked(context: str = "") -> str | None:
+    """Log every tracked maximum and clear them for the next pass."""
+
+    if not finite_check_enabled() or not _TRACKED:
+        return None
+    parts = " ".join(f"{k}={v:.6g}" for k, v in sorted(_TRACKED.items()))
+    message = f"finite-check maxima {context}: {parts}"
+    logger.warning("%s", message)
+    _TRACKED.clear()
+    return message
+
+
+def check_posterior_bounds(stage: str, probs, *, context: str = "", image_ids=None):
+    """Assert the posterior bound that the M-step operands inherit.
+
+    ``probs`` is ``[images, ...]``.  Both the largest entry and each image's
+    total must stay at or below one.  This fires on a denominator that is only
+    mildly wrong, long before the product overflows float32, so a repeat that
+    never reaches ``inf`` still shows whether the bound is being broken.
+    """
+
+    if not finite_check_enabled() or probs is None:
+        return None
+
+    import jax.numpy as jnp
+
+    array = jnp.asarray(probs)
+    if array.dtype.kind not in "fg":
+        return None
+    rows = array.reshape(array.shape[0], -1)
+    finite_rows = jnp.where(jnp.isfinite(rows), rows, jnp.float32(0.0))
+    row_sums = jnp.sum(finite_rows, axis=1, dtype=jnp.float64)
+    entry_max = float(jnp.max(finite_rows)) if rows.size else 0.0
+    row_sum_max = float(jnp.max(row_sums)) if rows.size else 0.0
+    track_max(f"{stage}.entry_max", jnp.asarray(entry_max))
+    track_max(f"{stage}.image_sum_max", jnp.asarray(row_sum_max))
+
+    if entry_max <= POSTERIOR_UPPER_BOUND and row_sum_max <= POSTERIOR_UPPER_BOUND:
+        return None
+
+    sums = np.asarray(row_sums)
+    offenders = np.flatnonzero(sums > POSTERIOR_UPPER_BOUND)
+    if offenders.size == 0:
+        offenders = np.flatnonzero(np.asarray(jnp.max(finite_rows, axis=1)) > POSTERIOR_UPPER_BOUND)
+    ids = None if image_ids is None else np.asarray(image_ids).reshape(-1)
+    named = offenders if ids is None or ids.size != sums.size else ids[offenders]
+    message = (
+        f"posterior bound broken in stage {stage!r}: {context}\n"
+        f"  entry_max={entry_max:.6g} image_sum_max={row_sum_max:.6g} "
+        f"bound={POSTERIOR_UPPER_BOUND}\n"
+        f"  offending rows {offenders[:8].tolist()} image ids "
+        f"{np.asarray(named[:8]).tolist()} sums "
+        f"{[float(x) for x in sums[offenders[:8]]]}"
+    )
     if finite_check_warn_only():
         logger.error("%s", message)
         return message
