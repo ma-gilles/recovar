@@ -210,6 +210,15 @@ def set_concurrent_device_shares(shares: int) -> int:
     fits together. That is not hypothetical: overlapping the two halves at
     HEALPix order 3 failed with RESOURCE_EXHAUSTED building the second half's
     projection cache, because each half had budgeted the whole 80 GiB device.
+
+    **This declaration covers device memory only.** Host-side caches are not
+    fractions of a device and do not pass through this module, so they neither
+    shrink nor are checked when the share count rises, while a second
+    concurrent worker doubles them just the same. Two at the time of writing:
+    the exact-CTF operand memo in ``recovar/em/relion/relion_ctf.py``, about
+    2.4-2.6 GB of host RAM for two half operands when enabled, and the image
+    loader's prefetch slots at roughly 65 MB each. Budget those on the host
+    side; nothing here will.
     """
 
     global _CONCURRENT_DEVICE_SHARES

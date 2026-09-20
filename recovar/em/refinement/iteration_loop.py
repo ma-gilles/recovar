@@ -363,6 +363,14 @@ def _run_halves_overlapped(run_half, diagnostic_half_indices) -> None:
         except BaseException as exc:  # re-raised below, in half order
             errors[half_index] = exc
 
+    # The name is a process-level label; CPython does not push it to the OS, so
+    # a profile shows these threads unnamed. Naming them through libc was tried
+    # and removed: ctypes defaults a return type to int, which truncates a
+    # 64-bit pthread handle, and the truncated handle segfaults. A profiling
+    # convenience is not worth a crash in the driver. Profiles identify the two
+    # half threads by dispatch volume instead, which is unambiguous: in the
+    # order-1 trace they issued 514,849 and 496,720 CUDA calls against 7,500
+    # for the next busiest thread.
     threads = [
         threading.Thread(target=_target, args=(int(k),), name=f"em-half-{int(k)}")
         for k in diagnostic_half_indices
