@@ -105,13 +105,13 @@ from recovar.em.local.local_backprojection import (
     compute_local_weighted_sums,
 )
 from recovar.em.scoring.sparse_bucket_arrays import _prepare_per_image_pass2_inputs
-from recovar.em.sparse_pass2.resident_candidates import (
-    materialize_chunk,
-    plan_capacity_chunks,
-)
 from recovar.em.sparse_pass2.compile_ahead import (
     CompileAheadPool,
     resolve_compile_ahead_config,
+)
+from recovar.em.sparse_pass2.resident_candidates import (
+    materialize_chunk,
+    plan_capacity_chunks,
 )
 from recovar.em.sparse_pass2.resident_operands import (
     ResidentOperandsUnsupported,

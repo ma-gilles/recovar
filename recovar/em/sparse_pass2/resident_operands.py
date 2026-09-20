@@ -62,7 +62,6 @@ from recovar.em.helpers.half_spectrum import make_shell_indices_half
 from recovar.em.sparse_pass2.sparse_pass2_bucket_io import prepare_unshifted_bucket_operands
 from recovar.em.sparse_pass2.sparse_pass2_scoring import (
     _relion_powerclass_noise_terms,
-    relion_powerclass_noise_dtypes,
     relion_powerclass_noise_presence,
 )
 from recovar.em.sparse_pass2.sparse_pass2_wavg import _relion_cuda_translate_wavg_norm_images

@@ -246,6 +246,7 @@ def test_the_optional_operands_dtypes_against_the_real_preparation(
     """
 
     from test_resident_operands import N_FINE_TRANS, N_IMAGES, _case, _gpu_case
+
     from recovar.em.sparse_pass2.resident_operands import (
         ResidentOperandsUnsupported,
         prepare_resident_half_operands,
@@ -336,8 +337,13 @@ def test_eval_shape_through_the_real_gather_predicts_the_chunk_operands(
     import dataclasses
 
     from test_resident_operands import (
-        IMAGE_SHAPE, N_FINE_TRANS, N_IMAGES, _case, _gpu_case, _resident_operands,
+        IMAGE_SHAPE,
+        N_IMAGES,
+        _case,
+        _gpu_case,
+        _resident_operands,
     )
+
     from recovar.em.sparse_pass2.resident_operands import gather_resident_chunk_operands
 
     _gpu_case(monkeypatch, custom_cuda_lib)

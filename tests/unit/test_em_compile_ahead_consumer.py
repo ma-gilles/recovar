@@ -27,7 +27,6 @@ pytest.importorskip("jax")
 
 import jax
 import jax.numpy as jnp
-
 from test_resident_candidates import (  # noqa: E402
     IMAGE_CAPACITY_LADDER,
     ROW_CAPACITY_LADDER,
@@ -43,7 +42,6 @@ from recovar.em.sparse_pass2.resident_candidates import (  # noqa: E402
     plan_capacity_chunks,
 )
 from recovar.em.sparse_pass2.resident_operands import (  # noqa: E402
-    ResidentHalfOperands,
     describe_resident_operand_mismatch,
     resident_half_operand_avals,
     resident_half_operand_presence,
