@@ -2008,6 +2008,7 @@ def refine_single_volume(
                             else None
                         ),
                         dump_label=f"iter{iteration:03d}_half{_half_idx}",
+                        projector_setup_backend=options.projector_setup_backend,
                     )
                     relion_projector_half_by_half[_half_idx] = projector_half
                     relion_projector_r_max_by_half[_half_idx] = projector_r_max
@@ -4416,6 +4417,7 @@ def refine_single_volume(
                 padding_factor=PROJECTION_PADDING_FACTOR,
                 n_classes=n_classes,
                 dump_label=f"final_half{_half_idx}",
+                projector_setup_backend=options.projector_setup_backend,
             )
             final_relion_projector_half_by_half[_half_idx] = projector_half
             final_relion_projector_r_max_by_half[_half_idx] = projector_r_max
