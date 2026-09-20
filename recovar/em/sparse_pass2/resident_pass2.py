@@ -105,11 +105,14 @@ from recovar.em.local.local_backprojection import (
 )
 from recovar.em.scoring.sparse_bucket_arrays import _prepare_per_image_pass2_inputs
 from recovar.em.sparse_pass2.resident_candidates import (
-    build_resident_candidate_tables,
     materialize_chunk,
     plan_capacity_chunks,
 )
 from recovar.em.sparse_pass2.resident_scoring import score_resident_chunk
+from recovar.em.sparse_pass2.resident_significance import (
+    resident_candidate_tables,
+    resident_significance_csr,
+)
 from recovar.em.sparse_pass2.resident_statistics import (
     ResidentStatistics,
     _drop_index,
@@ -1201,7 +1204,13 @@ def compute_pass2_stats_resident(
 
     # ---- per-image hypotheses (unchanged) ---------------------------------
     prep_t0 = time.time()
-    per_image_inputs = _prepare_per_image_pass2_inputs(
+    significance_csr = resident_significance_csr(
+        significant_sample_indices,
+        n_images=n_images,
+        n_coarse_rot=n_coarse_rot,
+        n_coarse_trans=n_coarse_trans,
+    )
+    per_image_inputs = None if significance_csr is not None else _prepare_per_image_pass2_inputs(
         significant_sample_indices,
         n_coarse_rot=n_coarse_rot,
         n_coarse_trans=n_coarse_trans,
@@ -1224,11 +1233,21 @@ def compute_pass2_stats_resident(
 
     # ---- T5: candidate table and capacity chunks --------------------------
     table_t0 = time.time()
-    tables = build_resident_candidate_tables(
+    tables = resident_candidate_tables(
+        significance_csr,
         per_image_inputs,
         n_coarse_trans=n_coarse_trans,
         n_fine_trans=n_fine_trans,
         fine_translation_parent=fine_translation_parent,
+        nside_level=nside_level,
+        oversampling_order=oversampling_order,
+        rotation_log_prior=rotation_log_prior,
+        random_perturbation=random_perturbation,
+        fine_rotation_parent_override=fine_rotation_parent_override,
+        relion_parent_execution_order=_relion_fine_parent_execution_order_enabled(
+            use_relion_f32_fine_posterior=use_relion_f32_fine_posterior,
+        ),
+        dtype=precision_policy.score_real_dtype,
     )
     if int(tables.n_images) != int(n_images):
         raise ValueError(
