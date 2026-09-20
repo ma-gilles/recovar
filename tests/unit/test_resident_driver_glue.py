@@ -118,10 +118,10 @@ def test_static_carry_dtypes_match_the_traced_block_stages(
         projection_dtypes=(proj_dtype, proj_abs2_dtype),
     )
     # Raises if the arithmetic and the probe disagree.
-    rp._check_mstep_carry_avals(operands, tables, spec=spec, dtypes=dtypes)
+    rp._check_mstep_carry_avals(tables, spec=spec, dtypes=dtypes)
 
     shells, a2, xa = rp._probe_mstep_block_output_avals(
-        operands, tables, spec=spec, dtypes=dtypes
+        tables, spec=spec, dtypes=dtypes
     )
     assert shells.shape == (spec.stats_config.n_shells,)
     assert a2.shape == xa.shape == (spec.image_capacity,)
@@ -189,7 +189,7 @@ def test_the_carry_aval_check_rejects_a_wrong_dtype():
     wrong = dict(dtypes)
     wrong["a2"] = jnp.dtype(jnp.float64)
     with pytest.raises(AssertionError, match="disagree with the traced block stages"):
-        rp._check_mstep_carry_avals(operands, tables, spec=spec, dtypes=wrong)
+        rp._check_mstep_carry_avals(tables, spec=spec, dtypes=wrong)
 
 
 @pytest.mark.parametrize("row_capacity", rp._DEFAULT_ROW_CAPACITY_LADDER)

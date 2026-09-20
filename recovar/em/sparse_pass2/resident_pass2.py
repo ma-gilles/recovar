@@ -2801,7 +2801,6 @@ def _mstep_block_operand_dtypes(
 
 
 def _probe_mstep_block_output_avals(
-    operands: _ChunkStageOperands,
     tables: _ChunkStageTables,
     *,
     spec: _ChunkProgramSpec,
@@ -2845,7 +2844,6 @@ def _probe_mstep_block_output_avals(
 
 
 def _check_mstep_carry_avals(
-    operands: _ChunkStageOperands,
     tables: _ChunkStageTables,
     *,
     spec: _ChunkProgramSpec,
@@ -2854,7 +2852,7 @@ def _check_mstep_carry_avals(
     """Raise when the static dtypes disagree with the traced block stages."""
 
     shells_aval, a2_aval, xa_aval = _probe_mstep_block_output_avals(
-        operands, tables, spec=spec, dtypes=dtypes
+        tables, spec=spec, dtypes=dtypes
     )
     expected = (
         ((int(spec.stats_config.n_shells),), dtypes["noise_shells"]),
@@ -2899,7 +2897,7 @@ def _initial_mstep_carry(
         operands, tables, spec=spec, projection_dtypes=projection_dtypes
     )
     if _carry_aval_probe_enabled():
-        _check_mstep_carry_avals(operands, tables, spec=spec, dtypes=dtypes)
+        _check_mstep_carry_avals(tables, spec=spec, dtypes=dtypes)
     return _ChunkMstepCarry(
         Ft_y=Ft_y,
         Ft_ctf=Ft_ctf,
