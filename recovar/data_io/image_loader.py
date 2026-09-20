@@ -584,6 +584,17 @@ class MRCLoader(ImageLoader):
         breaks = np.flatnonzero(np.diff(sorted_rows) != 1) + 1
         runs = np.split(np.arange(sorted_rows.size), breaks)
 
+        if len(runs) == 1:
+            # One run covers everything, which is what a whole-stack selection is.
+            # Return the ``fromfile`` allocation itself: building a second output
+            # buffer here would double a stack-sized allocation and copy it, which
+            # is the cost ``_load`` documents and avoids on the same path.
+            data = self._read_contiguous(int(sorted_rows[0]), int(sorted_rows.size))
+            source_positions = file_rows - int(sorted_rows[0])
+            if np.array_equal(source_positions, np.arange(file_rows.size)):
+                return data
+            return _permute_image_rows_in_place(data, source_positions)
+
         out = np.empty((positions.size, self._image_size, self._image_size), dtype=self._file_dtype)
         for run in runs:
             first = int(sorted_rows[run[0]])

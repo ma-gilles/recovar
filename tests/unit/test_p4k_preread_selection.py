@@ -274,3 +274,38 @@ def test_star_loader_through_load_images_with_indices(tmp_path, monkeypatch, cou
     child = next(iter(loader._loaders.values()))
     assert child.images_read == 3
     assert _same_bytes(loader.get(None), data[np.asarray(rows)[subset]])
+
+
+def test_a_single_run_returns_the_read_without_a_second_buffer(tmp_path, monkeypatch, counting):
+    """A whole-stack selection must not double a stack-sized allocation.
+
+    ``_load`` deliberately returns the ``fromfile`` allocation itself on this path;
+    an intermediate output buffer here cost +79% wall on the 34 GB fixture
+    (job 14187316: 8.22 s base against 14.72 s) for identical bytes.
+    """
+    path, data = _write_stack(tmp_path, n=40)
+    monkeypatch.setenv(image_loader.PREREAD_IMAGES_ENV, "0")
+    child = MRCLoader(path, skip_staging=True, preread=False)
+
+    allocations = []
+    original_empty = np.empty
+
+    def counting_empty(shape, *args, **kwargs):
+        if isinstance(shape, tuple) and len(shape) == 3:
+            allocations.append(shape)
+        return original_empty(shape, *args, **kwargs)
+
+    monkeypatch.setattr(np, "empty", counting_empty)
+    child.preread_positions(np.arange(40))
+    assert allocations == [], allocations  # no image-stack buffer was allocated
+    assert _same_bytes(child._cached, data)
+
+
+def test_a_single_run_out_of_order_is_permuted_not_copied(tmp_path, monkeypatch):
+    """The same path with a reordered contiguous block still lands in the right order."""
+    path, data = _write_stack(tmp_path, n=40)
+    monkeypatch.setenv(image_loader.PREREAD_IMAGES_ENV, "0")
+    rows = np.asarray([14, 10, 12, 11, 13], dtype=np.int64)  # contiguous 10..14, shuffled
+    child = MRCLoader(path, indices=rows, skip_staging=True, preread=False)
+    child.preread_positions(np.arange(rows.size))
+    assert _same_bytes(child.get(None), data[rows])
