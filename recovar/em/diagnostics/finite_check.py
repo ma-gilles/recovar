@@ -36,6 +36,7 @@ __all__ = [
     "FINITE_CHECK_WARN_ENV",
     "FiniteCheckError",
     "check_arrays",
+    "check_bundle",
     "check_per_image",
     "check_posterior_bounds",
     "describe_context",
@@ -43,6 +44,7 @@ __all__ = [
     "finite_check_warn_only",
     "report_tracked",
     "track_max",
+    "track_max_host",
 ]
 
 # ``reconstruction_probs`` are ``raw_weight / sum_weight`` where the numerator
@@ -315,3 +317,105 @@ def check_posterior_bounds(stage: str, probs, *, context: str = "", image_ids=No
         logger.error("%s", message)
         return message
     raise FiniteCheckError(message)
+
+
+def check_bundle(
+    stage: str,
+    arrays: dict,
+    *,
+    posterior=None,
+    posterior_name: str = "posterior",
+    context: str = "",
+    image_ids=None,
+    operands: dict | None = None,
+):
+    """Check several arrays and the posterior bound with one synchronisation.
+
+    ``check_arrays`` plus ``check_posterior_bounds`` plus ``track_max`` cost one
+    device synchronisation each, and a bucket has half a dozen of them; at 200
+    to 350 buckets a half that serialises the pass being watched and costs
+    about four times the uninstrumented wall, which buys four times less
+    exposure per GPU-hour on a defect measured at 1 in 671 half-iterations.
+
+    Here every reduction is issued asynchronously and only the stacked scalars
+    cross the boundary, so a clean bucket pays one synchronisation for the
+    whole set. The expensive per-array host analysis runs only when a scalar
+    says something is wrong, and then it is free to synchronise again.
+    """
+
+    if not finite_check_enabled():
+        return None
+
+    import jax.numpy as jnp
+
+    names = [name for name, value in arrays.items() if value is not None]
+    scalars = []
+    for name in names:
+        array = jnp.asarray(arrays[name])
+        if array.dtype.kind not in "fgc":
+            scalars.extend([jnp.float64(0.0), jnp.float64(1.0)])
+            continue
+        magnitude = jnp.abs(array)
+        finite = jnp.isfinite(magnitude)
+        scalars.append(jnp.max(jnp.where(finite, magnitude, jnp.zeros((), magnitude.dtype))).astype(jnp.float64))
+        scalars.append(jnp.all(finite).astype(jnp.float64))
+
+    has_posterior = posterior is not None
+    if has_posterior:
+        rows = jnp.asarray(posterior)
+        rows = rows.reshape(rows.shape[0], -1)
+        finite_rows = jnp.where(jnp.isfinite(rows), rows, jnp.zeros((), rows.dtype))
+        scalars.append(jnp.max(finite_rows).astype(jnp.float64))
+        scalars.append(jnp.max(jnp.sum(finite_rows, axis=1, dtype=jnp.float64)))
+
+    if not scalars:
+        return None
+    host = np.asarray(jnp.stack(scalars))  # the single synchronisation
+
+    offenders = []
+    for index, name in enumerate(names):
+        maximum = float(host[2 * index])
+        all_finite = bool(host[2 * index + 1] > 0.5)
+        track_max_host(name, float("inf") if not all_finite else maximum)
+        if not all_finite:
+            offenders.append(name)
+
+    entry_max = row_sum_max = None
+    if has_posterior:
+        entry_max = float(host[-2])
+        row_sum_max = float(host[-1])
+        track_max_host(f"{posterior_name}.entry_max", entry_max)
+        track_max_host(f"{posterior_name}.image_sum_max", row_sum_max)
+
+    messages = []
+    if offenders:
+        messages.append(
+            check_arrays(
+                stage,
+                {name: arrays[name] for name in names},
+                context=context,
+                operands=operands,
+            )
+        )
+    if has_posterior and (
+        entry_max > POSTERIOR_UPPER_BOUND or row_sum_max > POSTERIOR_UPPER_BOUND
+    ):
+        messages.append(
+            check_posterior_bounds(
+                posterior_name,
+                posterior,
+                context=context,
+                image_ids=image_ids,
+            )
+        )
+    return [m for m in messages if m] or None
+
+
+def track_max_host(name: str, value: float) -> None:
+    """Record a maximum already pulled to the host by a bundled check."""
+
+    if not finite_check_enabled():
+        return
+    previous = _TRACKED.get(name)
+    if previous is None or value > previous:
+        _TRACKED[name] = value

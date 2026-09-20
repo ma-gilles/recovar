@@ -3000,30 +3000,6 @@ def compute_pass2_stats_sparse_bucketed(
                                 dtype=np.int32,
                             )
                         )
-                    if finite_check.finite_check_enabled():
-                        _p4d_chunk_context = finite_check.describe_context(
-                            iteration=bpref_diagnostics._bpref_contribution_context.get("iteration"),
-                            half=bpref_diagnostics._bpref_contribution_context.get("half"),
-                            bucket_images=int(np.asarray(image_indices).size),
-                            first_image=int(np.asarray(image_indices).reshape(-1)[0]),
-                            chunk=chunk_idx,
-                            current_size=current_size,
-                        )
-                        finite_check.check_arrays(
-                            "mstep-operands-chunked",
-                            {
-                                "mstep_probs": mstep_probs,
-                                "shifted_recon_split": shifted_recon_split,
-                                "ctf2_over_nv_recon": ctf2_over_nv_recon,
-                            },
-                            context=_p4d_chunk_context,
-                        )
-                        finite_check.check_posterior_bounds(
-                            "mstep-posterior-chunked",
-                            mstep_probs,
-                            context=_p4d_chunk_context,
-                            image_ids=image_indices,
-                        )
                     summed, ctf_probs = compute_local_mstep_sums(
                         mstep_probs,
                         shifted_recon_split,
@@ -3032,17 +3008,27 @@ def compute_pass2_stats_sparse_bucketed(
                         sequential_translation_reduction=use_sequential_translation_reduction,
                     )
                     if finite_check.finite_check_enabled():
-                        finite_check.check_arrays(
-                            "mstep-sums-chunked",
-                            {"summed": summed, "ctf_probs": ctf_probs},
-                            context=_p4d_chunk_context,
-                            operands={
+                        finite_check.check_bundle(
+                            "mstep-operands-and-sums-chunked",
+                            {
                                 "mstep_probs": mstep_probs,
+                                "shifted_recon_split": shifted_recon_split,
                                 "ctf2_over_nv_recon": ctf2_over_nv_recon,
+                                "summed": summed,
+                                "ctf_probs": ctf_probs,
                             },
+                            posterior=mstep_probs,
+                            posterior_name="mstep-posterior-chunked",
+                            context=finite_check.describe_context(
+                                iteration=bpref_diagnostics._bpref_contribution_context.get("iteration"),
+                                half=bpref_diagnostics._bpref_contribution_context.get("half"),
+                                bucket_images=int(np.asarray(image_indices).size),
+                                first_image=int(np.asarray(image_indices).reshape(-1)[0]),
+                                chunk=chunk_idx,
+                                current_size=current_size,
+                            ),
+                            image_ids=image_indices,
                         )
-                        finite_check.track_max("ctf_probs", ctf_probs)
-                        finite_check.track_max("summed", summed)
                     if mstep_subtract_ctf_projection:
                         summed = subtract_projected_reference_from_sparse_mstep_sums(
                             summed,
@@ -4435,35 +4421,6 @@ def compute_pass2_stats_sparse_bucketed(
                     ),
                 )
             shifted_recon_split = shifted_recon_split_for_dump
-            if finite_check.finite_check_enabled():
-                # P4-D. Check the inputs first: a non-finite sum whose operands
-                # are finite is a different defect from one that inherits it.
-                _p4d_context = finite_check.describe_context(
-                    iteration=bpref_diagnostics._bpref_contribution_context.get("iteration"),
-                    half=bpref_diagnostics._bpref_contribution_context.get("half"),
-                    bucket_images=int(np.asarray(image_indices).size),
-                    first_image=int(np.asarray(image_indices).reshape(-1)[0]),
-                    current_size=current_size,
-                )
-                finite_check.check_arrays(
-                    "mstep-operands",
-                    {
-                        "mstep_probs": mstep_probs,
-                        "shifted_recon_split": shifted_recon_split,
-                        "ctf2_over_nv_recon": ctf2_over_nv_recon,
-                    },
-                    context=_p4d_context,
-                )
-                # The posterior bound fires on a denominator that is only
-                # slightly wrong, so a repeat that never overflows still says
-                # whether this is where the magnitude comes from.
-                finite_check.check_posterior_bounds(
-                    "mstep-posterior",
-                    mstep_probs,
-                    context=_p4d_context,
-                    image_ids=image_indices,
-                )
-                finite_check.track_max("ctf2_over_nv_recon", ctf2_over_nv_recon)
             summed, ctf_probs = compute_local_mstep_sums(
                 mstep_probs,
                 shifted_recon_split,
@@ -4472,17 +4429,30 @@ def compute_pass2_stats_sparse_bucketed(
                 sequential_translation_reduction=use_sequential_translation_reduction,
             )
             if finite_check.finite_check_enabled():
-                finite_check.check_arrays(
-                    "mstep-sums",
-                    {"summed": summed, "ctf_probs": ctf_probs},
-                    context=_p4d_context,
-                    operands={
-                        "mstep_probs": mstep_probs,
-                        "ctf2_over_nv_recon": ctf2_over_nv_recon,
-                    },
+                # P4-D. Operands and sums together in one synchronisation: the
+                # report still says which came first, and the posterior bound
+                # fires on a denominator that is only slightly wrong.
+                _p4d_context = finite_check.describe_context(
+                    iteration=bpref_diagnostics._bpref_contribution_context.get("iteration"),
+                    half=bpref_diagnostics._bpref_contribution_context.get("half"),
+                    bucket_images=int(np.asarray(image_indices).size),
+                    first_image=int(np.asarray(image_indices).reshape(-1)[0]),
+                    current_size=current_size,
                 )
-                finite_check.track_max("ctf_probs", ctf_probs)
-                finite_check.track_max("summed", summed)
+                finite_check.check_bundle(
+                    "mstep-operands-and-sums",
+                    {
+                        "mstep_probs": mstep_probs,
+                        "shifted_recon_split": shifted_recon_split,
+                        "ctf2_over_nv_recon": ctf2_over_nv_recon,
+                        "summed": summed,
+                        "ctf_probs": ctf_probs,
+                    },
+                    posterior=mstep_probs,
+                    posterior_name="mstep-posterior",
+                    context=_p4d_context,
+                    image_ids=image_indices,
+                )
             if mstep_subtract_ctf_projection:
                 summed = subtract_projected_reference_from_sparse_mstep_sums(
                     summed,
@@ -4736,7 +4706,7 @@ def compute_pass2_stats_sparse_bucketed(
                     # the sums and the slabs are checked, so a report says
                     # whether the bucket arrived non-finite or the scatter made
                     # it so.
-                    finite_check.check_arrays(
+                    finite_check.check_bundle(
                         "bpref-accumulators",
                         {"Ft_y_total": Ft_y_total, "Ft_ctf_total": Ft_ctf_total},
                         context=finite_check.describe_context(
@@ -4748,8 +4718,6 @@ def compute_pass2_stats_sparse_bucketed(
                         ),
                         operands={"flat_summed": flat_summed, "flat_ctf_probs": flat_ctf_probs},
                     )
-                    finite_check.track_max("Ft_ctf_total", Ft_ctf_total)
-                    finite_check.track_max("Ft_y_total", Ft_y_total)
 
         # Noise accumulation
         _tail_locals = locals()
