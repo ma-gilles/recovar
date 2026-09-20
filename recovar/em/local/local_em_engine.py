@@ -126,6 +126,8 @@ from recovar.em.local.local_big_jit import (
     run_fixed_capacity_segmented_local_scan,
 )
 from recovar.em.local.local_bucket_stages import (
+    LOCAL_BUCKET_CONSTANT_PROGRAM_ENV,
+    LOCAL_POSTPROCESS_ROW_PROGRAM_ENV,
     _accumulate_packed_noise_chunk,
     _adjoint_slice_volume_maybe_windowed_row_chunks,
     _build_flat_local_row_argument,
@@ -155,6 +157,9 @@ from recovar.em.local.local_bucket_stages import (
     _unpadded_bucket_rows,
     build_class_segment_reconstruction_packs,
     encode_hard_assignment,
+    local_bucket_constant_operands,
+    local_bucket_constant_specs,
+    trim_local_postprocess_rows,
     validate_local_relion_projector_window,
 )
 from recovar.em.local.local_caches import (
@@ -498,6 +503,16 @@ def run_local_em_exact(
     if host_plan_cuda_enabled and not host_plan_pack_enabled:
         raise ValueError("CUDA host-plan packing requires host-plan packing")
     host_publication_enabled = parse_env_binary_flag(EXACT_LOCAL_HOST_PUBLICATION_ENV)
+    # P3-H: fold a bucket's per-image row trims into one program. Off by
+    # default; the per-value slice below stays the oracle.
+    postprocess_row_program_enabled = parse_env_binary_flag(
+        LOCAL_POSTPROCESS_ROW_PROGRAM_ENV
+    )
+    # P3-J: build a bucket's constant big-JIT operands in one program. Off by
+    # default; each site's own ``jnp.zeros``/``jnp.ones`` stays the oracle.
+    bucket_constant_program_enabled = parse_env_binary_flag(
+        LOCAL_BUCKET_CONSTANT_PROGRAM_ENV
+    )
     if type(host_stats_publication) is not bool:
         raise TypeError("host_stats_publication must be a bool")
     if host_stats_publication and not host_accumulator_finalize:
@@ -2100,6 +2115,46 @@ def run_local_em_exact(
                     batch_size,
                 )
             bucket_image_indices = np.asarray(unpadded_bucket.image_indices, dtype=np.int32)
+            # P3-J: with the flag on, every constant operand this bucket needs
+            # comes out of one program; ``bucket_constant`` then reads it by
+            # name. With the flag off each site builds its own, which is the
+            # path the folded form is measured against.
+            bucket_constants = None
+            if bucket_constant_program_enabled:
+                bucket_constants = local_bucket_constant_operands(
+                    local_bucket_constant_specs(
+                        batch_size=int(batch_size),
+                        n_half=int(n_half),
+                        n_trans=int(n_trans),
+                        score_real_dtype=precision_policy.score_real_dtype,
+                        normalization_real_dtype=precision_policy.normalization_real_dtype,
+                        relion_exact_bpref_operands=bool(relion_exact_bpref_operands),
+                        apply_integer_pre_shift=integer_pre_shifts is not None,
+                        has_image_pre_shifts=image_pre_shifts is not None,
+                        has_image_corrections=image_corrections is not None,
+                        has_scale_corrections=scale_corrections is not None,
+                        has_translation_sqdist=translation_sqdist_ang is not None,
+                        has_normalization_log_z=normalization_log_z_np is not None,
+                        has_normalization_log_evidence=(
+                            normalization_log_evidence_np is not None
+                        ),
+                        has_normalization_max_posterior=(
+                            normalization_max_posterior_np is not None
+                        ),
+                        accumulate_noise=bool(accumulate_noise),
+                        has_group_ids=group_ids_np is not None,
+                        has_reconstruction_probability_threshold=(
+                            reconstruction_probability_threshold_np is not None
+                        ),
+                        fused_pair_fine_score_enabled=bool(fused_pair_fine_score_enabled),
+                    )
+                )
+
+            def bucket_constant(name, build):
+                """``build()`` with the flag off, the program's value with it on."""
+
+                return build() if bucket_constants is None else bucket_constants[name]
+
             if relion_exact_bpref_operands:
                 ctf_rfloat_unpadded = np.asarray(
                     relion_ctf._relion_exact_ctf_half_from_source_star_host(
@@ -2140,17 +2195,26 @@ def run_local_em_exact(
                     dtype=jnp.float32,
                 )
             else:
-                ctf_rfloat_half_arg = jnp.zeros(
-                    (batch_size, n_half),
-                    dtype=jnp.float64,
+                ctf_rfloat_half_arg = bucket_constant(
+                    "ctf_rfloat_half",
+                    lambda: jnp.zeros(
+                        (batch_size, n_half),
+                        dtype=jnp.float64,
+                    ),
                 )
-                inverse_noise_rfloat_cast_arg = jnp.zeros(
-                    (n_half,),
-                    dtype=jnp.float32,
+                inverse_noise_rfloat_cast_arg = bucket_constant(
+                    "inverse_noise_rfloat_cast",
+                    lambda: jnp.zeros(
+                        (n_half,),
+                        dtype=jnp.float32,
+                    ),
                 )
-                corr_img_rfloat_square_arg = jnp.zeros(
-                    (batch_size, n_half),
-                    dtype=jnp.float32,
+                corr_img_rfloat_square_arg = bucket_constant(
+                    "corr_img_rfloat_square",
+                    lambda: jnp.zeros(
+                        (batch_size, n_half),
+                        dtype=jnp.float32,
+                    ),
                 )
             apply_integer_pre_shift = integer_pre_shifts is not None
             if apply_integer_pre_shift:
@@ -2158,10 +2222,16 @@ def run_local_em_exact(
                     pad_axis(integer_pre_shifts, 0, batch_size, value=0),
                     dtype=jnp.int32,
                 )
-                fourier_pre_shifts_arg = jnp.zeros((batch_size, 2), dtype=precision_policy.score_real_dtype)
+                fourier_pre_shifts_arg = bucket_constant(
+                    "fourier_pre_shifts_zero",
+                    lambda: jnp.zeros((batch_size, 2), dtype=precision_policy.score_real_dtype),
+                )
                 apply_fourier_pre_shift = False
             elif image_pre_shifts is not None:
-                integer_pre_shifts_arg = jnp.zeros((batch_size, 2), dtype=jnp.int32)
+                integer_pre_shifts_arg = bucket_constant(
+                    "integer_pre_shifts_zero",
+                    lambda: jnp.zeros((batch_size, 2), dtype=jnp.int32),
+                )
                 fourier_pre_shifts_arg = jnp.asarray(
                     pad_axis(
                         np.asarray(image_pre_shifts)[bucket_image_indices],
@@ -2173,8 +2243,14 @@ def run_local_em_exact(
                 )
                 apply_fourier_pre_shift = True
             else:
-                integer_pre_shifts_arg = jnp.zeros((batch_size, 2), dtype=jnp.int32)
-                fourier_pre_shifts_arg = jnp.zeros((batch_size, 2), dtype=precision_policy.score_real_dtype)
+                integer_pre_shifts_arg = bucket_constant(
+                    "integer_pre_shifts_zero",
+                    lambda: jnp.zeros((batch_size, 2), dtype=jnp.int32),
+                )
+                fourier_pre_shifts_arg = bucket_constant(
+                    "fourier_pre_shifts_zero",
+                    lambda: jnp.zeros((batch_size, 2), dtype=precision_policy.score_real_dtype),
+                )
                 apply_fourier_pre_shift = False
 
             image_corrections_arg = (
@@ -2188,7 +2264,10 @@ def run_local_em_exact(
                     dtype=precision_policy.score_real_dtype,
                 )
                 if image_corrections is not None
-                else jnp.ones(batch_size, dtype=precision_policy.score_real_dtype)
+                else bucket_constant(
+                    "image_corrections_one",
+                    lambda: jnp.ones(batch_size, dtype=precision_policy.score_real_dtype),
+                )
             )
             scale_corrections_arg = (
                 jnp.asarray(
@@ -2201,12 +2280,18 @@ def run_local_em_exact(
                     dtype=precision_policy.score_real_dtype,
                 )
                 if scale_corrections is not None
-                else jnp.ones(batch_size, dtype=precision_policy.score_real_dtype)
+                else bucket_constant(
+                    "scale_corrections_one",
+                    lambda: jnp.ones(batch_size, dtype=precision_policy.score_real_dtype),
+                )
             )
             image_only_corrections_arg = (
                 image_corrections_arg / scale_corrections_arg
                 if image_corrections is not None
-                else jnp.ones(batch_size, dtype=precision_policy.score_real_dtype)
+                else bucket_constant(
+                    "image_only_corrections_one",
+                    lambda: jnp.ones(batch_size, dtype=precision_policy.score_real_dtype),
+                )
             )
             translation_sqdist_arg = (
                 jnp.asarray(
@@ -2214,7 +2299,12 @@ def run_local_em_exact(
                     dtype=precision_policy.score_real_dtype,
                 )
                 if translation_sqdist_ang is not None
-                else jnp.zeros((batch_size, n_trans), dtype=precision_policy.score_real_dtype)
+                else bucket_constant(
+                    "translation_sqdist_zero",
+                    lambda: jnp.zeros(
+                        (batch_size, n_trans), dtype=precision_policy.score_real_dtype
+                    ),
+                )
             )
             sample_mask_arg = (
                 None
@@ -2227,7 +2317,12 @@ def run_local_em_exact(
                     dtype=(precision_policy.normalization_real_dtype),
                 )
                 if normalization_log_z_np is not None
-                else jnp.zeros(batch_size, dtype=(precision_policy.normalization_real_dtype))
+                else bucket_constant(
+                    "normalization_log_z_zero",
+                    lambda: jnp.zeros(
+                        batch_size, dtype=(precision_policy.normalization_real_dtype)
+                    ),
+                )
             )
             normalization_log_evidence_arg = (
                 jnp.asarray(
@@ -2235,7 +2330,12 @@ def run_local_em_exact(
                     dtype=(precision_policy.normalization_real_dtype),
                 )
                 if normalization_log_evidence_np is not None
-                else jnp.zeros(batch_size, dtype=(precision_policy.normalization_real_dtype))
+                else bucket_constant(
+                    "normalization_log_evidence_zero",
+                    lambda: jnp.zeros(
+                        batch_size, dtype=(precision_policy.normalization_real_dtype)
+                    ),
+                )
             )
             normalization_max_posterior_arg = (
                 jnp.asarray(
@@ -2248,7 +2348,10 @@ def run_local_em_exact(
                     dtype=(precision_policy.normalization_real_dtype),
                 )
                 if normalization_max_posterior_np is not None
-                else jnp.zeros(batch_size, dtype=jnp.float32)
+                else bucket_constant(
+                    "normalization_max_posterior_zero",
+                    lambda: jnp.zeros(batch_size, dtype=jnp.float32),
+                )
             )
             local_rotation_log_prior_arg = jnp.asarray(bucket.local_rotation_log_prior)
             if class_log_prior != 0.0:
@@ -2269,7 +2372,10 @@ def run_local_em_exact(
                         dtype=jnp.int32,
                     )
                     if group_ids_np is not None
-                    else jnp.zeros(batch_size, dtype=jnp.int32)
+                    else bucket_constant(
+                        "group_ids_zero",
+                        lambda: jnp.zeros(batch_size, dtype=jnp.int32),
+                    )
                 )
                 shell_indices_half_arg = shell_indices_half
                 shell_indices_noise_arg = shell_indices_noise
@@ -2287,10 +2393,16 @@ def run_local_em_exact(
                 shell_indices_half_arg = disabled_noise_shell_indices
                 shell_indices_noise_arg = disabled_noise_shell_indices
                 noise_variance_for_noise_arg = noise_variance_half
-                scale_correction_pixel_mask_arg = jnp.zeros(n_half, dtype=bool)
+                scale_correction_pixel_mask_arg = bucket_constant(
+                    "scale_correction_pixel_mask_zero",
+                    lambda: jnp.zeros(n_half, dtype=bool),
+                )
                 n_shells_arg = 1
             if reconstruction_probability_threshold_np is None:
-                reconstruction_probability_threshold_arg = jnp.zeros((batch_size,), dtype=jnp.float64)
+                reconstruction_probability_threshold_arg = bucket_constant(
+                    "reconstruction_probability_threshold_zero",
+                    lambda: jnp.zeros((batch_size,), dtype=jnp.float64),
+                )
                 has_reconstruction_probability_threshold = False
             else:
                 threshold_values = reconstruction_probability_threshold_np[bucket_image_indices]
@@ -2407,10 +2519,13 @@ def run_local_em_exact(
                 total_fused_pair_candidates += valid_pair_count
                 total_fused_pair_dense_capacity += dense_pair_capacity
             else:
-                fused_fine_job_plan_arg = jnp.full(
-                    (1, 4),
-                    -1,
-                    dtype=jnp.int32,
+                fused_fine_job_plan_arg = bucket_constant(
+                    "fused_fine_job_plan_empty",
+                    lambda: jnp.full(
+                        (1, 4),
+                        -1,
+                        dtype=jnp.int32,
+                    ),
                 )
             big_jit_arguments = (
                 jnp.asarray(batch_data),
@@ -4497,13 +4612,50 @@ def run_local_em_exact(
             stats_probs_sum_t = reconstruction_probs_sum_t if stats_use_reconstruction_probs else probs_sum_t
             # The postprocessor already needs these small arrays on the host.
             # Preserve their physical shapes until that consumer when enabled.
-            def postprocess_rows(value):
+            #
+            # P3-H: with the flag on, every row array this bucket trims goes
+            # through one program instead of one single-primitive
+            # ``dynamic_slice`` program per array; ``postprocess_rows`` then
+            # reads the result by name. With the flag off each call slices on
+            # its own, which is the path the folded form is measured against.
+            postprocess_trimmed_rows = None
+            if postprocess_row_program_enabled and not host_publication_enabled:
+                postprocess_row_inputs = {
+                    "batch_norm": batch_norm,
+                    "log_Z": log_Z,
+                    "best_argmax": best_argmax,
+                    "best_log_score": best_log_score,
+                    "max_posterior": max_posterior,
+                    "n_significant_samples": n_significant_samples,
+                    "stats_probs_sum_t": stats_probs_sum_t,
+                    "reconstruction_sample_mask": reconstruction_sample_mask,
+                }
+                if n_classes > 1:
+                    postprocess_row_inputs.update(
+                        bucket_class_probs_sum=bucket_class_probs_sum,
+                        bucket_class_best_log_score=bucket_class_best_log_score,
+                        bucket_class_log_evidence=bucket_class_log_evidence,
+                        bucket_class_best_argmax=bucket_class_best_argmax,
+                    )
+                if (
+                    bucket_uncast_log_Z is not None
+                    and uncast_log_evidence_per_image is not None
+                ):
+                    postprocess_row_inputs["bucket_uncast_log_Z"] = bucket_uncast_log_Z
+                postprocess_trimmed_rows = trim_local_postprocess_rows(
+                    postprocess_row_inputs,
+                    unpadded_batch_size=unpadded_batch_size,
+                )
+
+            def postprocess_rows(value, *, name):
+                if postprocess_trimmed_rows is not None:
+                    return postprocess_trimmed_rows[name]
                 return value if host_publication_enabled else value[:unpadded_batch_size]
 
             stats_probs_sum_t_np = (
                 None
                 if probs_sum_t_np is None
-                else np.asarray(postprocess_rows(stats_probs_sum_t), dtype=np.float64)[:unpadded_batch_size]
+                else np.asarray(postprocess_rows(stats_probs_sum_t, name="stats_probs_sum_t"), dtype=np.float64)[:unpadded_batch_size]
             )
             if n_classes > 1:
                 _accumulate_class_segment_statistics(
@@ -4512,13 +4664,13 @@ def run_local_em_exact(
                     n_classes=n_classes,
                     segment_rotation_count=int(bucket.segment_rotation_count),
                     n_trans=n_trans,
-                    batch_norm=postprocess_rows(batch_norm),
-                    log_Z=postprocess_rows(log_Z),
-                    best_argmax=postprocess_rows(best_argmax),
-                    class_probs_sum=postprocess_rows(bucket_class_probs_sum),
-                    class_best_log_score=postprocess_rows(bucket_class_best_log_score),
-                    class_log_evidence=postprocess_rows(bucket_class_log_evidence),
-                    class_best_argmax=postprocess_rows(bucket_class_best_argmax),
+                    batch_norm=postprocess_rows(batch_norm, name="batch_norm"),
+                    log_Z=postprocess_rows(log_Z, name="log_Z"),
+                    best_argmax=postprocess_rows(best_argmax, name="best_argmax"),
+                    class_probs_sum=postprocess_rows(bucket_class_probs_sum, name="bucket_class_probs_sum"),
+                    class_best_log_score=postprocess_rows(bucket_class_best_log_score, name="bucket_class_best_log_score"),
+                    class_log_evidence=postprocess_rows(bucket_class_log_evidence, name="bucket_class_log_evidence"),
+                    class_best_argmax=postprocess_rows(bucket_class_best_argmax, name="bucket_class_best_argmax"),
                     translation_grid=local_layout.translation_grid,
                     per_class_hard_assignments=per_class_hard_assignments,
                     per_class_best_pose_rotations=per_class_best_pose_rotations,
@@ -4526,7 +4678,7 @@ def run_local_em_exact(
                     per_class_best_pose_rotation_ids=per_class_best_pose_rotation_ids,
                     per_class_best_pose_eulers_deg=per_class_best_pose_eulers_deg,
                     probs_sum_t=(
-                        postprocess_rows(stats_probs_sum_t)
+                        postprocess_rows(stats_probs_sum_t, name="stats_probs_sum_t")
                         if stats_probs_sum_t_np is None
                         else stats_probs_sum_t_np
                     ),
@@ -4539,13 +4691,13 @@ def run_local_em_exact(
                 )
             if bucket_uncast_log_Z is not None and uncast_log_evidence_per_image is not None:
                 uncast_rows = np.asarray(
-                    postprocess_rows(bucket_uncast_log_Z), dtype=np.float64,
+                    postprocess_rows(bucket_uncast_log_Z, name="bucket_uncast_log_Z"), dtype=np.float64,
                 )[:unpadded_batch_size]
                 # Trim to the valid image rows before selecting the column: when host
                 # publication retains the padded rows, reshaping first selects the
                 # wrong rows (four physical rows with two valid would take rows 0 and 2).
                 offset_rows = -0.5 * np.asarray(
-                    postprocess_rows(batch_norm), dtype=np.float64,
+                    postprocess_rows(batch_norm, name="batch_norm"), dtype=np.float64,
                 )[:unpadded_batch_size].reshape(unpadded_batch_size, -1)[:, 0]
                 uncast_log_evidence_per_image[
                     np.asarray(unpadded_bucket.image_indices, dtype=np.int64)
@@ -4555,19 +4707,19 @@ def run_local_em_exact(
                 **_unpadded_bucket_rows(bucket, unpadded_batch_size),
                 translation_grid=local_layout.translation_grid,
                 n_trans=n_trans,
-                best_argmax=postprocess_rows(best_argmax),
-                batch_norm=postprocess_rows(batch_norm),
-                log_Z=postprocess_rows(log_Z),
-                best_log_score=postprocess_rows(best_log_score),
-                max_posterior=postprocess_rows(max_posterior),
+                best_argmax=postprocess_rows(best_argmax, name="best_argmax"),
+                batch_norm=postprocess_rows(batch_norm, name="batch_norm"),
+                log_Z=postprocess_rows(log_Z, name="log_Z"),
+                best_log_score=postprocess_rows(best_log_score, name="best_log_score"),
+                max_posterior=postprocess_rows(max_posterior, name="max_posterior"),
                 probs_sum_t=(
-                    postprocess_rows(stats_probs_sum_t) if stats_probs_sum_t_np is None else stats_probs_sum_t_np
+                    postprocess_rows(stats_probs_sum_t, name="stats_probs_sum_t") if stats_probs_sum_t_np is None else stats_probs_sum_t_np
                 ),
-                n_significant_samples=postprocess_rows(n_significant_samples),
+                n_significant_samples=postprocess_rows(n_significant_samples, name="n_significant_samples"),
                 reconstruction_sample_mask=(
                     None
                     if host_publication_enabled and postprocess_buffers.reconstruction_sample_indices_by_image is None
-                    else postprocess_rows(reconstruction_sample_mask)
+                    else postprocess_rows(reconstruction_sample_mask, name="reconstruction_sample_mask")
                 ),
                 collect_profile_stats=collect_profile_stats,
                 reconstruction_row_count=reconstruction_row_count,

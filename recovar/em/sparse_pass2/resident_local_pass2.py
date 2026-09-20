@@ -148,6 +148,12 @@ _IMAGE_CAPACITY_LADDER_ENV = "RECOVAR_LOCAL_SEARCH_RESIDENT_IMAGE_CAPACITIES"
 # serialises work that normally overlaps and inflates the loop; never use a
 # profiled arm for a wall-time comparison.
 _CHUNK_PROFILE_ENV = "RECOVAR_LOCAL_SEARCH_RESIDENT_CHUNK_PROFILE"
+# P3-G, opt-in and off by default. Hand the M-step entry point the chunk's
+# whole row arrays instead of a Python callback that slices a block out of them
+# per block: the block program then takes its own ``dynamic_slice`` of the row
+# ids and reads the rows inside the jit. The callback is kept as the oracle
+# every bitwise comparison of this change is made against.
+_BLOCK_ROW_PROGRAM_ENV = "RECOVAR_LOCAL_SEARCH_RESIDENT_BLOCK_ROW_PROGRAM"
 _PROJECTION_CALL_MAX_BYTES_ENV = "RECOVAR_LOCAL_SEARCH_RESIDENT_PROJECTION_CALL_MAX_BYTES"
 # One projector call's transient. The exact local engine budgets its own fused
 # projection matmul at 4 GiB by default
@@ -1149,11 +1155,22 @@ def _run_resident_local_chunk(
         host_chunk["mstep_rotations"], dtype=precision_policy.score_real_dtype
     )
 
-    def block_projections(start, stop):
-        # A slice, not a gather: the layout's flat order is the chunk's row
-        # order, so a block's projections are contiguous in the arrays this
-        # chunk just produced.
-        return recon_proj[start:stop], recon_abs2[start:stop], mstep_rotations[start:stop]
+    # P3-G: with the flag on the three chunk-wide arrays go to the M-step entry
+    # point whole and the block program slices them inside the jit; with it off
+    # the Python callback slices them per block, three eager dispatches each
+    # time, which is the path this change is measured against.
+    block_row_program = parse_env_flag(_BLOCK_ROW_PROGRAM_ENV, default=False)
+    if block_row_program:
+        block_projections = None
+        chunk_projections = (recon_proj, recon_abs2, mstep_rotations)
+    else:
+        chunk_projections = None
+
+        def block_projections(start, stop):
+            # A slice, not a gather: the layout's flat order is the chunk's row
+            # order, so a block's projections are contiguous in the arrays this
+            # chunk just produced.
+            return recon_proj[start:stop], recon_abs2[start:stop], mstep_rotations[start:stop]
 
     (
         Ft_y_total,
@@ -1164,6 +1181,7 @@ def _run_resident_local_chunk(
         xa_per_image,
     ) = rp.run_resident_mstep_blocks(
         block_projections,
+        chunk_projections=chunk_projections,
         row_capacity=row_capacity,
         n_valid_rows=n_valid_rows,
         mstep_block_rows=int(mstep_block_rows),
