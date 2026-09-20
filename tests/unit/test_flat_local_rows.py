@@ -896,3 +896,55 @@ def test_flat_local_row_rounding_off_packs_exactly_the_needed_rows(monkeypatch):
     monkeypatch.setenv("RECOVAR_EXACT_LOCAL_FLAT_ROW_ROUNDING", "yes")
     with pytest.raises(ValueError, match="must be 0 or 1"):
         resolve_flat_local_row_rounding()
+
+
+@pytest.mark.unit
+def test_xhalf_projection_budget_follows_device_memory(monkeypatch):
+    """The x-half projection budget belongs to the device, not to a constant.
+
+    The 40 M default was tuned on a 384-box run and is far too small once the Fourier
+    window opens: at K=1 100k/256 it yields 1211 hypotheses per microbatch and 3334
+    buckets of three images, and lifting it moved six exclusive 200-mini-batch runs from
+    7352 s to 6042 s with quality unchanged. It is now derived from free device memory,
+    and these are the properties that keep that safe.
+    """
+
+    from recovar.em.local import local_batch_planning as planning
+
+    floor = planning.EXACT_LOCAL_XHALF_PROJECTION_TARGET_ROW_PIXELS
+    bytes_per = planning.EXACT_LOCAL_XHALF_PROJECTION_BYTES_PER_ROW_PIXEL
+
+    # A device with room uses it, at the conservative per-row-pixel cost.
+    free = 64 * 2**30
+    got = planning._exact_local_xhalf_projection_target_row_pixels(
+        runtime_free_memory_bytes=free,
+    )
+    expected = int(free * planning.EXACT_LOCAL_XHALF_PROJECTION_FREE_MEMORY_FRACTION
+                   // bytes_per)
+    assert got == expected
+    assert got > floor
+
+    # A device without room is never taken below the historical floor.
+    assert planning._exact_local_xhalf_projection_target_row_pixels(
+        runtime_free_memory_bytes=1 << 20,
+    ) == floor
+    # Nor is one where the probe fails.
+    assert planning._exact_local_xhalf_projection_target_row_pixels(
+        runtime_free_memory_bytes=None,
+    ) >= floor
+
+    # An explicit request wins outright, which is how the sweeps were run.
+    monkeypatch.setenv(
+        planning.EXACT_LOCAL_XHALF_PROJECTION_TARGET_ROW_PIXELS_ENV, "320000000",
+    )
+    assert planning._exact_local_xhalf_projection_target_row_pixels(
+        runtime_free_memory_bytes=free,
+    ) == 320_000_000
+    monkeypatch.delenv(planning.EXACT_LOCAL_XHALF_PROJECTION_TARGET_ROW_PIXELS_ENV)
+
+    # Deterministic reductions decline the probe: a budget that reads live allocator
+    # state would change accumulation grouping between otherwise identical runs.
+    monkeypatch.setattr(planning, "deterministic_reductions_enabled", lambda: True)
+    assert planning._exact_local_xhalf_projection_target_row_pixels(
+        runtime_free_memory_bytes=free,
+    ) == floor

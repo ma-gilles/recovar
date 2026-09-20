@@ -47,6 +47,27 @@ EXACT_LOCAL_XHALF_PROJECTION_TARGET_ROW_PIXELS = 40_000_000
 EXACT_LOCAL_XHALF_PROJECTION_TARGET_ROW_PIXELS_ENV = (
     "RECOVAR_EXACT_LOCAL_XHALF_PROJECTION_TARGET_ROW_PIXELS"
 )
+# The 40 M floor above was tuned on the 384-box run in that comment, and it is far too
+# small once the Fourier window opens up. Measured on K=1 100k/256 at the RELION default
+# 200 mini-batches (em_work/codex/vdam_prodcap_20260920, six exclusive runs): at the late
+# iterations `n_projection_windowed` reaches 33 024, so 40 M yields 1211 hypotheses per
+# microbatch and 3334 buckets of three images each. Lifting the budget until a second,
+# already memory-derived limit takes over gives 477 buckets of 21 images and moves the
+# run from 7352 s to 6042 s, -17.8%, with FSC-AUC against ground truth unchanged
+# (0.0368 -> 0.0381, inside the cell's own spread). Peak device memory over those runs
+# was 9.1 GiB at 40 M and 16.9 GiB at the larger budget, on an 80 GB device.
+#
+# So the budget belongs to the device, not to a constant. It is derived from the same
+# runtime free-memory probe the score tile already uses, divided by a per-row-pixel cost.
+# That cost is configuration dependent: the 384-box OOM implies 139 bytes per row-pixel
+# (10.12 GiB at 78.2 M) while this configuration measures 58 bytes (8.00 GiB across 4464
+# extra hypotheses at 33 024 pixels). The larger figure is used, because guessing low
+# reintroduces exactly the OOM the original constant was written to prevent.
+EXACT_LOCAL_XHALF_PROJECTION_BYTES_PER_ROW_PIXEL = 139
+EXACT_LOCAL_XHALF_PROJECTION_FREE_MEMORY_FRACTION = 0.40
+EXACT_LOCAL_XHALF_PROJECTION_FREE_MEMORY_FRACTION_ENV = (
+    "RECOVAR_EXACT_LOCAL_XHALF_PROJECTION_FREE_MEMORY_FRACTION"
+)
 # Score-only big-JIT lowers the score residual to a dense
 # (image, rotation, translation, pixel) float32 tile.  Limit that one tile to
 # a conservative share of memory that is still free at local-search entry;
@@ -361,14 +382,46 @@ def _exact_local_xhalf_tail_microbatch_cap(
     return min(cap, planned_row_cap)
 
 
-def _exact_local_xhalf_projection_target_row_pixels() -> int:
-    """Resolve the x-half projection row-pixel budget."""
+def _exact_local_xhalf_projection_free_memory_fraction() -> float:
+    """Share of free device memory the x-half projection temporary may occupy."""
 
-    target_row_pixels = int(EXACT_LOCAL_XHALF_PROJECTION_TARGET_ROW_PIXELS)
+    raw = os.environ.get(
+        EXACT_LOCAL_XHALF_PROJECTION_FREE_MEMORY_FRACTION_ENV, ""
+    ).strip()
+    if not raw:
+        return float(EXACT_LOCAL_XHALF_PROJECTION_FREE_MEMORY_FRACTION)
+    try:
+        fraction = float(raw)
+    except ValueError:
+        logger.warning(
+            "Ignoring invalid %s=%r; using default %.2f",
+            EXACT_LOCAL_XHALF_PROJECTION_FREE_MEMORY_FRACTION_ENV,
+            raw,
+            EXACT_LOCAL_XHALF_PROJECTION_FREE_MEMORY_FRACTION,
+        )
+        return float(EXACT_LOCAL_XHALF_PROJECTION_FREE_MEMORY_FRACTION)
+    if not (0.0 < fraction <= 1.0):
+        raise ValueError(
+            f"{EXACT_LOCAL_XHALF_PROJECTION_FREE_MEMORY_FRACTION_ENV} must lie in (0, 1]"
+        )
+    return fraction
+
+
+def _exact_local_xhalf_projection_target_row_pixels(
+    runtime_free_memory_bytes: int | None = None,
+) -> int:
+    """Resolve the x-half projection row-pixel budget.
+
+    An explicit environment value wins outright. Otherwise the budget is the larger of
+    the historical floor and what free device memory affords at a conservative cost per
+    row-pixel, so a device with room uses it and a device without one is no worse off
+    than before.
+    """
+
     raw = os.environ.get(EXACT_LOCAL_XHALF_PROJECTION_TARGET_ROW_PIXELS_ENV, "").strip()
     if raw:
         try:
-            target_row_pixels = max(1, int(raw))
+            return max(1, int(raw))
         except ValueError:
             logger.warning(
                 "Ignoring invalid %s=%r; using default %d row-pixels",
@@ -376,8 +429,23 @@ def _exact_local_xhalf_projection_target_row_pixels() -> int:
                 raw,
                 EXACT_LOCAL_XHALF_PROJECTION_TARGET_ROW_PIXELS,
             )
-            target_row_pixels = int(EXACT_LOCAL_XHALF_PROJECTION_TARGET_ROW_PIXELS)
-    return target_row_pixels
+
+    floor_row_pixels = int(EXACT_LOCAL_XHALF_PROJECTION_TARGET_ROW_PIXELS)
+    if deterministic_reductions_enabled():
+        # A budget that reads live allocator state makes bucket geometry depend on it,
+        # which changes the accumulation grouping between otherwise identical runs. The
+        # score-tile cap declines the probe for the same reason; match that here.
+        return floor_row_pixels
+    if runtime_free_memory_bytes is None:
+        runtime_free_memory_bytes = _exact_local_runtime_free_memory_bytes()
+    if runtime_free_memory_bytes is None:
+        return floor_row_pixels
+    affordable = int(
+        int(runtime_free_memory_bytes)
+        * _exact_local_xhalf_projection_free_memory_fraction()
+        // EXACT_LOCAL_XHALF_PROJECTION_BYTES_PER_ROW_PIXEL
+    )
+    return max(floor_row_pixels, affordable)
 
 
 def _exact_local_xhalf_projection_microbatch_cap(
