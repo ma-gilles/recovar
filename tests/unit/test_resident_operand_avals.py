@@ -439,107 +439,123 @@ def test_the_optional_operands_against_a_star_backed_preparation(
 ):
     """The exact-BPref operands, built for real, against the prediction.
 
-    The mock dataset cannot reach this path on its own: the exact RELION CTF is
-    read from a source STAR and the mock has none, so the test above skips.
-    `RECOVAR_K1_RELION_EXACT_CTF_STAR` is the supported way in, and pointing it
-    at a real RELION particles STAR makes the preparation build all four
-    optional operands with real CTF evaluation.
+    This is job 14191649 as a test. Two things have to line up for the four
+    optional operands to exist at all: a STAR to read the source-precision CTF
+    from, which resolves from the dataset's own `particles_file`, and the
+    RELION CUDA Fourier backend, without which there are no preprocess kwargs
+    and the preparation refuses. A mock dataset has neither, so this loads a
+    real dataset and sets the backend the way `refine_single_volume` does.
 
-    This is what settles their dtypes against a run rather than against a
-    reading of the source. It covers both settings of source-faithful
-    normalization, because that is the flag on which the two `powerClass` terms
-    stop sharing a dtype, and production has it on.
+    It covers both settings of source-faithful normalization, because that is
+    the flag on which the two `powerClass` terms stop sharing a dtype and
+    production has it on. Shapes and dtypes only, so the RELION-labelled
+    Nyquist row on the full box does not enter.
 
-    Two things have to line up for the operands to be built at all: the CTF
-    source, which resolves from the dataset's own `particles_file` when that is
-    a STAR and otherwise from `RECOVAR_K1_RELION_EXACT_CTF_STAR`, and the RELION
-    CUDA Fourier backend, without which the preprocess kwargs do not exist and
-    the preparation refuses. A mock dataset supplies neither, so point
-    `RECOVAR_P4J_STAR_FIXTURE` at a real STAR and run this where a dataset built
-    from it can be used. Unset, the test says so rather than passing quietly.
+    Point `RECOVAR_P4J_STAR_FIXTURE` at the particles STAR. Unset, the test
+    says so rather than passing quietly.
     """
 
     import os
 
-    from test_resident_operands import N_FINE_TRANS, N_IMAGES, _case, _gpu_case
+    from test_resident_operands import _gpu_case
 
+    from recovar.core.configs import ForwardModelConfig
+    from recovar.data_io.cryoem_dataset import load_dataset
+    from recovar.em.helpers.preprocessing import image_preprocess_backend
     from recovar.em.sparse_pass2.resident_operands import (
-        ResidentOperandsUnsupported,
         describe_resident_operand_mismatch,
         prepare_resident_half_operands,
         resident_half_operand_presence,
     )
+    from recovar.em.sparse_pass2.sparse_pass2_bucket_io import (
+        _relion_cuda_score_translation_angles_if_available,
+    )
     from recovar.em.sparse_pass2.sparse_pass2_scoring import (
         relion_powerclass_noise_dtypes,
     )
+    from recovar.reconstruction import noise as noise_utils
 
     star = os.environ.get("RECOVAR_P4J_STAR_FIXTURE", "").strip()
     if not star:
         pytest.skip(
-            "set RECOVAR_P4J_STAR_FIXTURE to a RELION particles STAR with an "
-            "optics table to run the STAR-backed operand check"
+            "set RECOVAR_P4J_STAR_FIXTURE to a RELION particles STAR whose dataset "
+            "takes the relion_cuda preprocess backend"
         )
-    monkeypatch.setenv("RECOVAR_K1_RELION_EXACT_CTF_STAR", star)
     _gpu_case(monkeypatch, custom_cuda_lib)
 
-    case = _case(relion_angles=True)
-    kwargs = dict(case["bucket_io_kwargs"])
-    kwargs["relion_exact_bpref_operands"] = True
+    n_images, current_size, n_fine_trans = 8, 32, 4
+    dataset = load_dataset(star, lazy=False, dtype=np.complex64)
+    backend = image_preprocess_backend(dataset)
+    assert hasattr(backend, "set_relion_fourier_backend"), (
+        f"this dataset's backend cannot take relion_cuda: {backend!r}"
+    )
+    backend.set_relion_fourier_backend("relion_cuda")
+
+    image_shape = dataset.image_shape
+    half_pixels = image_shape[0] * (image_shape[1] // 2 + 1)
+    window = np.arange(half_pixels, dtype=np.int32)
+    noise_variance_half = noise_utils.to_batched_half_pixel_noise(
+        jnp.ones(half_pixels, dtype=jnp.float32), image_shape
+    ).squeeze()
+    fine_translations = np.zeros((n_fine_trans, 2), dtype=np.float32)
+    kwargs = dict(
+        noise_variance_half=noise_variance_half,
+        fine_translations=fine_translations,
+        config=ForwardModelConfig.from_dataset(
+            dataset, disc_type="linear_interp", process_fn=dataset.process_images
+        ),
+        n_trans=n_fine_trans,
+        score_with_masked_images=True,
+        half_spectrum_scoring=True,
+        image_corrections=None,
+        scale_corrections=None,
+        image_pre_shifts=None,
+        use_float64_scoring=False,
+        score_only=False,
+        score_mode="gaussian",
+        window_indices=window,
+        recon_window_indices=window,
+        translation_phases_half=None,
+        relion_score_translation_angles=(
+            _relion_cuda_score_translation_angles_if_available(
+                fine_translations, image_shape, enabled=True, dtype=np.float32
+            )
+        ),
+        return_windowed_shifted=False,
+        relion_exact_normalized_cc_operands=False,
+        relion_exact_bpref_operands=True,
+    )
 
     for source_faithful in (False, True):
-        try:
-            real = prepare_resident_half_operands(
-                case["dataset"],
-                np.arange(N_IMAGES),
-                bucket_io_kwargs=kwargs,
-                window_indices=case["window_indices"],
-                recon_window_indices=case["window_indices"],
-                image_shape=case["image_shape"],
-                current_size=case["current_size"],
-                n_fine_trans=N_FINE_TRANS,
-                use_exact_relion_gaussian=True,
-                accumulate_noise=True,
-                source_faithful_spectrum_norm=source_faithful,
-                image_batch_size=N_IMAGES,
-            )
-        except ResidentOperandsUnsupported as exc:
-            # Declared refusal. The driver catches this and keeps the per-chunk
-            # path, which is the module's stated contract, so there is nothing
-            # for this test to compare.
-            pytest.xfail(f"the preparation declares this unsupported: {exc}")
-        except ValueError as exc:
-            # The exact-BPref operands need the RELION CUDA Fourier backend:
-            # `prepare_batch_preprocess_operands` produces the preprocess
-            # kwargs only when the dataset's preprocess backend is
-            # `relion_cuda`, and without them `prepare_unshifted_bucket_operands`
-            # refuses. That guard is correct and not specific to the resident
-            # path: the per-chunk oracle calls the same helper and refuses the
-            # same way. A mock dataset has no such backend, so this fixture
-            # cannot reach the operands; a dataset built the way production
-            # builds one can, which is what `RECOVAR_P4J_STAR_FIXTURE` is for.
-            pytest.xfail(f"this dataset has no RELION CUDA preprocess backend: {exc}")
-
+        label = f"source_faithful={source_faithful}"
+        real = prepare_resident_half_operands(
+            dataset,
+            np.arange(n_images, dtype=np.int64),
+            bucket_io_kwargs=kwargs,
+            window_indices=window,
+            recon_window_indices=window,
+            image_shape=image_shape,
+            current_size=current_size,
+            n_fine_trans=n_fine_trans,
+            use_exact_relion_gaussian=True,
+            accumulate_noise=True,
+            source_faithful_spectrum_norm=source_faithful,
+            image_batch_size=n_images,
+        )
         presence = resident_half_operand_presence(
             relion_exact_bpref_operands=True,
             use_exact_relion_gaussian=True,
             accumulate_noise=True,
-            current_size=case["current_size"],
+            current_size=current_size,
         )
-        built = {
-            name: getattr(real, name) is not None
-            for name in ("recon_weight", "direct_ctf_rfloat_recon",
-                         "highres_xi2_half", "relion_norm_high_shell")
-        }
-        assert built == {
-            "recon_weight": presence.has_recon_weight,
-            "direct_ctf_rfloat_recon": presence.has_direct_ctf_rfloat,
-            "highres_xi2_half": presence.has_highres_xi2,
-            "relion_norm_high_shell": presence.has_relion_norm_high_shell,
-        }, f"source_faithful={source_faithful}: the presence predicate is wrong"
-        assert all(built.values()), (
-            f"source_faithful={source_faithful}: this fixture built only {built}, "
-            "so it does not cover the optional operands"
-        )
+        for name, flag in (
+            ("recon_weight", presence.has_recon_weight),
+            ("direct_ctf_rfloat_recon", presence.has_direct_ctf_rfloat),
+            ("highres_xi2_half", presence.has_highres_xi2),
+            ("relion_norm_high_shell", presence.has_relion_norm_high_shell),
+        ):
+            assert (getattr(real, name) is not None) is flag, f"{label}: {name}"
+            assert flag, f"{label}: this dataset did not build {name}"
 
         _, norm_dtype = relion_powerclass_noise_dtypes(
             real_dtype=jnp.float32, source_faithful_spectrum_norm=source_faithful
@@ -561,18 +577,15 @@ def test_the_optional_operands_against_a_star_backed_preparation(
             has_relion_norm_high_shell=presence.has_relion_norm_high_shell,
         )
         difference = describe_resident_operand_mismatch(predicted, real)
-        assert difference == "", (
-            f"source_faithful={source_faithful}: {difference}"
-        )
+        assert difference == "", f"{label}: {difference}"
 
-        # the two facts the source reading claimed, now against a real run
+        # the settled rule, stated rather than inferred
         assert jnp.dtype(real.direct_ctf_rfloat_recon.dtype) == jnp.dtype(jnp.float64)
+        assert jnp.dtype(real.highres_xi2_half.dtype) == jnp.dtype(jnp.float32)
         assert jnp.dtype(real.relion_norm_high_shell.dtype) == jnp.dtype(
             jnp.float64 if source_faithful else jnp.float32
         )
 
-
-# ------------------------------- the exact-BPref guard is not resident-specific ---
 
 
 def test_exact_bpref_is_refused_by_name_on_a_dataset_that_is_not_production_shaped():
