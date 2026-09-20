@@ -2293,6 +2293,20 @@ def _carry_aval_probe_enabled() -> bool:
 _DEVICE_INT32_CACHE: dict[int, jax.Array] = {}
 
 
+def _scalar_operand(value, dtype) -> jax.Array:
+    """Put a host scalar on the device without an eager conversion.
+
+    ``jnp.asarray(np.int32(7), dtype=jnp.int32)`` dispatches a
+    ``convert_element_type`` because a NumPy scalar is not an array; the same
+    value wrapped in a 0-d NumPy array of the target dtype is transferred with
+    no primitive at all. The chunk driver builds two of these per chunk, so on
+    the early state that was 834 eager dispatches over two iterations for two
+    integers whose value never leaves the host.
+    """
+
+    return jnp.asarray(np.asarray(value, dtype=jnp.dtype(dtype)))
+
+
 def _device_int32(value: int) -> jax.Array:
     """A device int32 scalar, made once per distinct value for the process.
 
@@ -2782,8 +2796,13 @@ def _mstep_block_operand_dtypes(
 
     a2_dtype = jnp.dtype(jnp.result_type(proj_abs2_dtype, ctf_probs_dtype, noise_dtype))
     cross_dtype = jnp.dtype(jnp.result_type(proj_dtype, summed_masked_dtype))
+    # ``np.zeros`` rather than ``jnp.zeros``: this asks for the real part's
+    # dtype, not for a value, and the device version dispatched one
+    # ``convert_element_type`` per chunk to allocate a 0-d array that is read
+    # for its dtype and thrown away. NumPy's promotion of a real part is the
+    # same table JAX consults.
     xa_dtype = jnp.dtype(
-        jnp.result_type(noise_dtype, jnp.zeros((), dtype=cross_dtype).real.dtype)
+        jnp.result_type(noise_dtype, np.zeros((), dtype=cross_dtype).real.dtype)
     )
     return {
         "proj": proj_dtype,
@@ -3351,8 +3370,12 @@ def _run_resident_chunk(
         row_mask_bits=jnp.asarray(host_chunk["row_mask_bits"], dtype=jnp.uint32),
         row_mask_mode=jnp.asarray(host_chunk["row_mask_mode"], dtype=jnp.int8),
         image_ids=jnp.asarray(host_chunk["image_ids"], dtype=jnp.int32),
-        n_valid_rows=jnp.asarray(host_chunk["n_valid_rows"], dtype=jnp.int32),
-        n_valid_images=jnp.asarray(host_chunk["n_valid_images"], dtype=jnp.int32),
+        # ``np.asarray`` first: a NumPy *scalar* reaches the device through one
+        # eager ``convert_element_type`` per chunk, a 0-d NumPy *array* of the
+        # same dtype through a plain transfer. Same dtype, shape, weak type and
+        # value either way.
+        n_valid_rows=_scalar_operand(host_chunk["n_valid_rows"], jnp.int32),
+        n_valid_images=_scalar_operand(host_chunk["n_valid_images"], jnp.int32),
         segment_offsets=jnp.asarray(segment_offsets_np, dtype=jnp.int32),
         image_row_start=jnp.asarray(image_row_start_np, dtype=jnp.int64),
         image_row_count=jnp.asarray(image_row_count_np, dtype=jnp.int64),
