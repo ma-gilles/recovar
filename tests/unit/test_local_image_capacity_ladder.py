@@ -153,6 +153,20 @@ def test_snapping_never_raises_the_planner_memory_bound(max_images):
 # ------------------------------------------------------------------- planner ---
 
 
+def test_planners_ignore_the_environment_unless_the_caller_opts_in(monkeypatch):
+    """`recovar/em/ppca_refinement/local_dataset.py` also plans local buckets.
+
+    It passes no ladder, so an EM-scoped environment variable must not
+    re-bucket a pipeline with its own validation. Only `run_local_em_exact`
+    reads the environment.
+    """
+
+    monkeypatch.setenv(LOCAL_IMAGE_CAPACITY_LADDER_ENV, "1")
+    counts = np.full(500, 180, dtype=np.int32)
+    assert _capacities(_plan(None, counts=counts, image_batch_size=135)) == [135]
+    assert _capacities(_plan(True, counts=counts, image_batch_size=135)) == [128]
+
+
 def test_planner_stabilizes_the_image_axis_across_batch_size_estimates():
     """135 and 136 images per bucket are two programs; both snap to one rung."""
 

@@ -51,6 +51,11 @@ def resolve_local_image_capacity_ladder(explicit=None) -> tuple[int, ...]:
     environment), ``False``/``""``/``"0"``/``"off"`` (ladder off), ``True``/
     ``"1"``/``"on"``/``"auto"`` (the default ladder) or an explicit sequence or
     comma-separated string of positive capacities.
+
+    Only ``run_local_em_exact`` calls this with ``None``. The bucket planners
+    below treat ``None`` as off, because they are also called by
+    ``recovar/em/ppca_refinement/local_dataset.py``, a pipeline with its own
+    validation that an EM-scoped environment variable must not re-bucket.
     """
 
     source = "local_image_capacity_ladder"
@@ -80,6 +85,14 @@ def resolve_local_image_capacity_ladder(explicit=None) -> tuple[int, ...]:
     if ladder[0] < 1:
         raise ValueError(f"{source} capacities must be positive")
     return ladder
+
+
+def _planner_image_capacity_ladder(explicit) -> tuple[int, ...]:
+    """Resolve a planner's ladder argument; ``None`` means off, not "ask the env"."""
+
+    if explicit is None:
+        return ()
+    return resolve_local_image_capacity_ladder(explicit)
 
 
 def _ladder_image_capacity(max_images: int, ladder: tuple[int, ...]) -> int:
@@ -1386,7 +1399,7 @@ def plan_local_hypothesis_buckets(
 
     image_batch_size = int(max(1, image_batch_size))
     max_hypotheses_per_microbatch = int(max(1, max_hypotheses_per_microbatch))
-    image_capacity_ladder = resolve_local_image_capacity_ladder(image_capacity_ladder)
+    image_capacity_ladder = _planner_image_capacity_ladder(image_capacity_ladder)
     rotations_dtype = np.asarray(layout.rotations_flat).dtype
     mstep_rotations_flat = (
         np.asarray(layout.rotations_flat, dtype=rotations_dtype)
@@ -1632,7 +1645,7 @@ def _plan_local_bucket_groups(
     """
     rotation_counts = np.asarray(rotation_counts)
     bucket_sizes = np.asarray(bucket_sizes)
-    image_capacity_ladder = resolve_local_image_capacity_ladder(image_capacity_ladder)
+    image_capacity_ladder = _planner_image_capacity_ladder(image_capacity_ladder)
     n_images = int(rotation_counts.shape[0])
     processing_order = (
         np.arange(n_images, dtype=np.int32)
