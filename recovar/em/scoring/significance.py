@@ -3064,6 +3064,15 @@ def _compute_k_class_significance_batched(
                 indices,
                 image_shape,
             )
+            if batch_size > actual_batch_size:
+                # This operand is rebuilt from the source STAR at ``indices``,
+                # which the coarse-batch padding does not touch, so it is the one
+                # per-image array in this branch still at the unpadded extent.
+                # Repeat-pad it the same way every other operand here is padded;
+                # the padded rows are sliced off with the rest.
+                exact_cc_ctf_rfloat = jnp.asarray(
+                    _repeat_pad_batch_axis(exact_cc_ctf_rfloat, batch_size),
+                )
             batch_scale_f32 = jnp.asarray(batch_scale_np, dtype=jnp.float32)
             exact_cc_pixel_correction = _relion_cuda_pixel_correction_from_rfloat_ctf(
                 batch_scale_f32[:, None],

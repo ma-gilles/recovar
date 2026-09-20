@@ -339,3 +339,51 @@ def test_stage_glue_flags_fail_closed_on_bad_tokens(monkeypatch, name, reader):
     monkeypatch.setenv(name, "maybe")
     with pytest.raises(ValueError, match=name):
         read()
+
+
+def test_source_star_ctf_pads_with_the_rest_of_the_coarse_batch():
+    """The firstiter-CC operand rebuilt from the source STAR must pad too.
+
+    ``RECOVAR_COARSE_PAD_FINAL_IMAGE_BATCH`` pads the coarse batch's images,
+    CTF parameters, pre-shifts, corrections and scales, but the normalized-CC
+    tree-rescore branch of ``_compute_k_class_significance_batched`` rebuilds one
+    more per-image operand from the source STAR at the *unpadded* ``indices``.
+    With the flag on, the first iteration of a K=1 end-to-end died there:
+
+        TypeError: div got incompatible shapes for broadcasting:
+                   (250, 1), (216, 33024)
+
+    (250 = the padded batch scale, 216 = the half set's last batch). The branch
+    itself needs RELION CUDA preprocessing and a real source STAR, so the
+    end-to-end is its regression check; this test pins the padding contract the
+    fix relies on: the repeat-padded operand keeps every live row, repeats row
+    zero, and broadcasts against the padded per-image scale.
+    """
+
+    from recovar.em.relion.relion_coarse_operands import _repeat_pad_batch_axis
+    from recovar.em.sparse_pass2.sparse_pass2_scoring import (
+        _relion_cuda_pixel_correction_from_rfloat_ctf,
+    )
+
+    actual, padded_size, pixels = 216, 250, 12
+    rng = np.random.default_rng(20260920)
+    ctf = jnp.asarray(rng.uniform(0.5, 1.5, (actual, pixels)), dtype=jnp.float32)
+    padded = jnp.asarray(_repeat_pad_batch_axis(ctf, padded_size))
+
+    assert padded.shape == (padded_size, pixels)
+    np.testing.assert_array_equal(np.asarray(padded[:actual]), np.asarray(ctf))
+    np.testing.assert_array_equal(
+        np.asarray(padded[actual:]),
+        np.repeat(np.asarray(ctf[:1]), padded_size - actual, axis=0),
+    )
+
+    scale = jnp.asarray(rng.uniform(0.9, 1.1, (padded_size, 1)), dtype=jnp.float32)
+    correction = _relion_cuda_pixel_correction_from_rfloat_ctf(scale, padded)
+    assert correction.shape == (padded_size, pixels)
+    # The live rows are the unpadded answer: padding may not move a science row.
+    unpadded_correction = _relion_cuda_pixel_correction_from_rfloat_ctf(
+        scale[:actual], ctf
+    )
+    np.testing.assert_array_equal(
+        np.asarray(correction[:actual]), np.asarray(unpadded_correction)
+    )
