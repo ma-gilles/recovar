@@ -241,8 +241,15 @@ def test_the_optional_operands_dtypes_against_the_real_preparation(
     shape derivation and the required fields only. This one turns on the exact
     RELION BPref operands and the noise accumulation so `recon_weight`,
     `direct_ctf_rfloat_recon`, `highres_xi2_half` and `relion_norm_high_shell`
-    are really built, which is what settles their dtypes -- in particular
-    whether the exact RELION CTF is the float64 the admission check assumes.
+    are really built.
+
+    Their dtypes are settled from the source, not from here: the exact RELION
+    CTF is float64 because `relion_ctf.py` places binary64 and the window slice
+    does not cast it, and the norm high-shell term follows
+    `relion_powerclass_noise_dtypes`. This case runs with source-faithful
+    normalization off, so its norm term is float32; the prediction is built with
+    that same rule rather than with a literal, so the test still holds if the
+    case's flags change.
     """
 
     from test_resident_operands import N_FINE_TRANS, N_IMAGES, _case, _gpu_case
@@ -250,6 +257,9 @@ def test_the_optional_operands_dtypes_against_the_real_preparation(
     from recovar.em.sparse_pass2.resident_operands import (
         ResidentOperandsUnsupported,
         prepare_resident_half_operands,
+    )
+    from recovar.em.sparse_pass2.sparse_pass2_scoring import (
+        relion_powerclass_noise_dtypes,
     )
 
     _gpu_case(monkeypatch, custom_cuda_lib)
@@ -272,12 +282,9 @@ def test_the_optional_operands_dtypes_against_the_real_preparation(
             image_batch_size=4,
         )
     except (ResidentOperandsUnsupported, NotImplementedError, ValueError) as exc:
-        # The mock dataset is not STAR-backed, and the exact RELION CTF is read
-        # from the source STAR, so this fixture cannot reach the configuration
-        # that builds the optional operands. Recorded rather than worked around:
-        # their dtypes, and with them whether the exact RELION CTF really is the
-        # float64 the admission check assumes, are settled by a STAR-backed
-        # fixture and not by anything in this file.
+        # The mock dataset is not STAR-backed and the exact RELION CTF is read
+        # from the source STAR, so this fixture may not reach the configuration
+        # that builds the optional operands. Recorded rather than worked around.
         pytest.skip(f"this fixture cannot build the exact-BPref operands: {exc}")
 
     present = {
@@ -300,6 +307,9 @@ def test_the_optional_operands_dtypes_against_the_real_preparation(
         score_real_dtype=jnp.float32,
         acc_real_dtype=jnp.float32,
         rfloat_ctf_dtype=jnp.float64,
+        norm_high_shell_dtype=relion_powerclass_noise_dtypes(
+            real_dtype=jnp.float32, source_faithful_spectrum_norm=False
+        )[1],
         has_recon_weight=real.recon_weight is not None,
         has_direct_ctf_rfloat=real.direct_ctf_rfloat_recon is not None,
         has_highres_xi2=real.highres_xi2_half is not None,
