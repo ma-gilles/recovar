@@ -125,3 +125,49 @@ def test_dispatcher_waits_for_both_before_raising():
     with pytest.raises(RuntimeError):
         _run_halves_overlapped(run_half, (0, 1))
     assert finished == [1]
+
+
+def _runner_path():
+    from pathlib import Path
+
+    import recovar
+
+    return Path(recovar.__file__).resolve().parent.parent / "scripts" / "run_full_refinement.py"
+
+
+def test_runner_registers_the_overlap_flag():
+    """The typed option is worthless if the entry point cannot set it.
+
+    This is the failure that wasted a four-arm measurement: the option existed
+    and the harness invoked a checkout whose parser did not know the flag, so
+    every overlapped arm died at argparse.
+    """
+    import subprocess
+    import sys
+
+    runner = _runner_path()
+    assert runner.is_file(), runner
+    proc = subprocess.run(
+        [sys.executable, str(runner), "--help"],
+        capture_output=True,
+        text=True,
+        timeout=600,
+    )
+    assert proc.returncode == 0, proc.stderr[-2000:]
+    assert "--overlap_halves" in proc.stdout
+
+
+def test_overlap_option_threads_into_refinement_options():
+    """Setting the group must reach the field the iteration loop reads."""
+    on = RefinementOptions(overlap=HalfOverlapOptions(overlap_halves=True))
+    off = RefinementOptions(overlap=HalfOverlapOptions(overlap_halves=False))
+    assert on.overlap.overlap_halves is True
+    assert off.overlap.overlap_halves is False
+    assert RefinementOptions().overlap.overlap_halves is False
+
+
+def test_runner_wires_the_flag_into_the_option_group():
+    """The parser flag must be handed to HalfOverlapOptions, not just parsed."""
+    source = _runner_path().read_text()
+    assert "overlap=HalfOverlapOptions(" in source
+    assert "overlap_halves=bool(args.overlap_halves)" in source
