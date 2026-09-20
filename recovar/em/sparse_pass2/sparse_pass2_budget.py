@@ -186,8 +186,62 @@ def _nvidia_smi_visible_device_memory_bytes(output: str, visible_devices: str | 
     return next(iter(rows.values()))
 
 
+_CONCURRENT_DEVICE_SHARES = 1
+
+
+def _share(total_bytes: int | None) -> int | None:
+    """This worker's slice of a device total, given the declared share count."""
+
+    if total_bytes is None:
+        return None
+    shares = _CONCURRENT_DEVICE_SHARES
+    if shares <= 1:
+        return int(total_bytes)
+    return max(1, int(total_bytes) // shares)
+
+
+def set_concurrent_device_shares(shares: int) -> int:
+    """Declare how many workers are sharing this device, and return the previous count.
+
+    Every budget in this module is a fraction of the device's memory and is
+    written for one worker at a time. When two half-sets run concurrently they
+    size their caches against the same device, so each must be told it owns
+    only its share; otherwise both admit a plan that fits alone and neither
+    fits together. That is not hypothetical: overlapping the two halves at
+    HEALPix order 3 failed with RESOURCE_EXHAUSTED building the second half's
+    projection cache, because each half had budgeted the whole 80 GiB device.
+
+    **This declaration covers device memory only.** Host-side caches are not
+    fractions of a device and do not pass through this module, so they neither
+    shrink nor are checked when the share count rises, while a second
+    concurrent worker doubles them just the same. Two at the time of writing:
+    the exact-CTF operand memo in ``recovar/em/relion/relion_ctf.py``, about
+    2.4-2.6 GB of host RAM for two half operands when enabled, and the image
+    loader's prefetch slots at roughly 65 MB each. Budget those on the host
+    side; nothing here will.
+    """
+
+    global _CONCURRENT_DEVICE_SHARES
+    shares = int(shares)
+    if shares < 1:
+        raise ValueError(f"concurrent device shares must be at least 1, got {shares}")
+    previous, _CONCURRENT_DEVICE_SHARES = _CONCURRENT_DEVICE_SHARES, shares
+    return previous
+
+
+def concurrent_device_shares() -> int:
+    """How many workers are currently declared to share this device."""
+
+    return _CONCURRENT_DEVICE_SHARES
+
+
 def _device_memory_limit_bytes() -> int | None:
-    """Return selected accelerator memory, preferring physical GPU memory."""
+    """Return this worker's share of the selected accelerator's memory.
+
+    The share is the whole device unless several workers have been declared
+    through :func:`set_concurrent_device_shares`, in which case every fraction
+    computed downstream is a fraction of one worker's share.
+    """
 
     # ``RECOVAR_SPARSE_PASS2_DEVICE_MEMORY_GB`` overrides the nvidia-smi probe.
     # Keep this as a manual escape hatch for reserving headroom on shared GPUs
@@ -197,7 +251,7 @@ def _device_memory_limit_bytes() -> int | None:
         try:
             override_gb = float(_override.strip())
             if override_gb > 0:
-                return int(override_gb * (1024 ** 3))
+                return _share(int(override_gb * (1024 ** 3)))
         except ValueError:
             pass
 
@@ -219,7 +273,7 @@ def _device_memory_limit_bytes() -> int | None:
                 os.environ.get("CUDA_VISIBLE_DEVICES"),
             )
             if memory_bytes is not None:
-                return memory_bytes
+                return _share(memory_bytes)
     except Exception:
         pass
     try:
@@ -234,7 +288,7 @@ def _device_memory_limit_bytes() -> int | None:
     for key in ("bytes_limit", "bytesLimit", "memory_limit", "total_memory"):
         value = stats.get(key)
         if value is not None and int(value) > 0:
-            return int(value)
+            return _share(int(value))
     return None
 
 

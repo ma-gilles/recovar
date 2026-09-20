@@ -2830,6 +2830,16 @@ def main():
         help="Rotations per block (larger = faster, less Python overhead)",
     )
     parser.add_argument(
+        "--overlap_halves",
+        action="store_true",
+        help=(
+            "Run the two half-sets' E-steps in one thread each. The halves are "
+            "independent inside the E-step and kernels still serialise on one "
+            "stream, so this only stops the host idling. Off by default; it is "
+            "a performance experiment, not a scientific setting."
+        ),
+    )
+    parser.add_argument(
         "--seed",
         type=int,
         default=None,
@@ -4312,6 +4322,7 @@ def main():
         ExpectedAccuracyOptions,
         KClassOptions,
         LocalSearchOptions,
+        HalfOverlapOptions,
         RefinementBatching,
         RefinementOptions,
         RefinementSchedule,
@@ -4751,6 +4762,9 @@ def main():
             batching=RefinementBatching(
                 image_batch_size=args.image_batch_size,
                 rotation_block_size=args.rotation_block_size,
+            ),
+            overlap=HalfOverlapOptions(
+                overlap_halves=bool(args.overlap_halves),
             ),
             adaptive=AdaptiveOptions(
                 relion_current_sizes=oracle_current_sizes,

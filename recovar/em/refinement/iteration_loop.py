@@ -305,6 +305,174 @@ def _initial_coarse_grids(
     return _CoarseGrids(rotations, rotation_eulers, base_translations, current_translations, int(healpix_order))
 
 
+_BPREF_DUMP_ENV_VARS = (
+    "RECOVAR_BPREF_MEMBERSHIP_DUMP_DIR",
+    "RECOVAR_BPREF_CONTRIBUTION_DUMP_DIR",
+    "RECOVAR_BPREF_DEVICE_SIGNATURE_DUMP_DIR",
+)
+
+
+def _half_overlap_active(requested: bool, *, diagnostic_half_indices, log) -> bool:
+    """Decide whether the two halves' E-steps may run concurrently.
+
+    Refuses rather than degrades. Each guard is a place where running the two
+    halves at once would change what is observed, not merely when:
+
+    * a subset of halves is being scored, so there is nothing to overlap;
+    * a BPref dump is armed. The dump context is process-global and is set per
+      half at the top of the half's work, so two halves in flight would write
+      each other's context. The dump is a diagnostic, so the overlap yields.
+    """
+
+    if not requested:
+        return False
+    if tuple(diagnostic_half_indices) != (0, 1):
+        log.info("Half overlap off: scoring halves %s, not both", tuple(diagnostic_half_indices))
+        return False
+    armed = [name for name in _BPREF_DUMP_ENV_VARS if os.environ.get(name, "").strip()]
+    if armed:
+        log.info("Half overlap off: a BPref dump is armed (%s)", ", ".join(armed))
+        return False
+    log.info("Half overlap ON: the two halves' E-steps run in one thread each")
+    return True
+
+
+def _run_halves_overlapped(run_half, diagnostic_half_indices) -> None:
+    """Run each half's E-step in its own thread and re-raise in half order.
+
+    Kernels still serialise on JAX's single compute stream, so the device order
+    within a half is unchanged and the two halves' kernels cannot interleave
+    mid-kernel. What overlaps is host work: one half's dispatch and operand
+    preparation proceed while the other's kernels run.
+
+    The halves write disjoint state, each indexed by its own half, so no
+    accumulator is shared. Exceptions are collected and re-raised in half order
+    so a failure reports the same way it would have when the halves ran one
+    after another.
+    """
+
+    import threading
+
+    from recovar.em.sparse_pass2.sparse_pass2_budget import set_concurrent_device_shares
+
+    errors: dict[int, BaseException] = {}
+
+    def _target(half_index):
+        try:
+            run_half(half_index)
+        except BaseException as exc:  # re-raised below, in half order
+            errors[half_index] = exc
+
+    # The name is a process-level label; CPython does not push it to the OS, so
+    # a profile shows these threads unnamed. Naming them through libc was tried
+    # and removed: ctypes defaults a return type to int, which truncates a
+    # 64-bit pthread handle, and the truncated handle segfaults. A profiling
+    # convenience is not worth a crash in the driver. Profiles identify the two
+    # half threads by dispatch volume instead, which is unambiguous: in the
+    # order-1 trace they issued 514,849 and 496,720 CUDA calls against 7,500
+    # for the next busiest thread.
+    threads = [
+        threading.Thread(target=_target, args=(int(k),), name=f"em-half-{int(k)}")
+        for k in diagnostic_half_indices
+    ]
+    # Every pass-2 cache budget is a fraction of the device, written for one
+    # worker at a time. Both halves sizing against the whole device is what
+    # made the order-3 overlap fail with RESOURCE_EXHAUSTED while building the
+    # second half's projection cache, so each is told it owns its share.
+    previous_shares = set_concurrent_device_shares(len(threads))
+    try:
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+    finally:
+        set_concurrent_device_shares(previous_shares)
+    for k in diagnostic_half_indices:
+        if int(k) in errors:
+            raise errors[int(k)]
+
+
+class DenseHalfScoringPlan(NamedTuple):
+    """One half's dense E-step call, gathered as a value before it runs.
+
+    The two halves are independent inside the E-step, so holding each call's
+    arguments in one value lets both plans be built before either call runs.
+    That is the seam an overlapped driver needs; on its own it changes nothing.
+    ``kwargs`` is the same mapping the driver used to build inline and
+    ``adaptive_kwargs`` the same adaptive-only additions, so the arguments and
+    their values are unchanged.
+    """
+
+    half_index: int
+    use_adaptive: bool
+    effective_rotations: object
+    adaptive_kwargs: dict
+    kwargs: dict
+
+
+def _run_dense_half_scoring(plan: DenseHalfScoringPlan):
+    """Execute one half's dense E-step from its plan.
+
+    Keyword arguments bind by name, so folding the adaptive additions and the
+    shared mapping into one call is the same call the driver made through two
+    branches. The plan's key sets are disjoint by construction.
+    """
+
+    return _score_half_dense_in_bpref_scope(
+        effective_rotations=plan.effective_rotations,
+        **plan.adaptive_kwargs,
+        **plan.kwargs,
+    )
+
+
+class DenseHalfScoringOutputs(NamedTuple):
+    """The per-half values the driver reads out of one dense E-step result."""
+
+    ha: object
+    Ft_y: object
+    Ft_ctf: object
+    em_stats: object
+    noise_stats: object
+    pose_rotations: object
+    pose_rotation_eulers: object
+    coarse_ha: object
+
+
+def _dense_half_scoring_outputs(
+    dense_result,
+    *,
+    use_adaptive: bool,
+    effective_rotations,
+    effective_rotation_eulers,
+) -> DenseHalfScoringOutputs:
+    """Read one half's dense result into the values the driver stores.
+
+    Single-pass scoring keeps the scoring grid as the pose grid and reuses the
+    fine assignment as the coarse one, which is what the driver did inline.
+    """
+
+    if use_adaptive and dense_result.pose_rotations is not None:
+        pose_rotations = dense_result.pose_rotations
+        pose_rotation_eulers = dense_result.pose_rotation_eulers
+    else:
+        pose_rotations = effective_rotations
+        pose_rotation_eulers = effective_rotation_eulers
+    return DenseHalfScoringOutputs(
+        ha=dense_result.ha,
+        Ft_y=dense_result.Ft_y,
+        Ft_ctf=dense_result.Ft_ctf,
+        em_stats=dense_result.em_stats,
+        noise_stats=dense_result.noise_stats,
+        pose_rotations=pose_rotations,
+        pose_rotation_eulers=pose_rotation_eulers,
+        coarse_ha=(
+            dense_result.coarse_ha
+            if use_adaptive and dense_result.coarse_ha is not None
+            else dense_result.ha  # single pass: same grid, no oversampling
+        ),
+    )
+
+
 def _sigma_offset_for_half(current_sigma_offset_angstrom, current_sigma_offset_angstrom_per_half, half_index):
     if current_sigma_offset_angstrom_per_half is None:
         return float(current_sigma_offset_angstrom)
@@ -1729,6 +1897,9 @@ def refine_single_volume(
         # into effective_rotations, even when adaptive oversampling is used).
         coarse_ha = per_half.coarse_ha
         class_posterior_per_half = per_half.class_posterior
+        # One dense E-step plan per half, kept after the call so a later
+        # driver can build both before running either. Nothing reads it today.
+        dense_half_plans: list[DenseHalfScoringPlan | None] = [None, None]
 
         if use_adaptive:
             # --- TWO-PASS ADAPTIVE OVERSAMPLING (RELION parity) ---
@@ -1862,7 +2033,14 @@ def refine_single_volume(
             n_classes=n_classes,
             experiment_datasets=experiment_datasets,
         )
-        for k in diagnostic_half_indices:
+        # The two halves are independent inside the E-step. Extracting one
+        # half's work into a function changes neither what runs nor its
+        # order; it makes the two callable independently, which is what the
+        # overlap option uses. Serial dispatch stays the default.
+        Ft_y_0 = Ft_ctf_0 = Ft_y_1 = Ft_ctf_1 = None
+
+        def _run_half_estep(k):
+            nonlocal Ft_y_0, Ft_ctf_0, Ft_y_1, Ft_ctf_1
             bpref_diagnostics.set_bpref_contribution_dump_context(
                 iteration=iteration + 1,
                 half=k + 1,
@@ -2081,7 +2259,7 @@ def refine_single_volume(
                     translation_search_base=translation_search_bases[k],
                     original_image_indices=np.zeros(0, dtype=np.int64),
                 )
-                continue
+                return
             if use_local:
                 local_parent_oversampling_order = int(state.adaptive_oversampling) if state.adaptive_oversampling > 0 else 0
                 local_result = _score_half_local_in_bpref_scope(
@@ -2192,46 +2370,54 @@ def refine_single_volume(
                         adaptive_pass1_rotations if int(state.adaptive_oversampling) == 0 else None
                     ),
                 )
-                if use_adaptive:
-                    dense_result = _score_half_dense_in_bpref_scope(
-                        effective_rotations=(
+                # The call's arguments become one value so both halves' plans
+                # can be built before either call runs. Same arguments, same
+                # values, same order of construction as the two branches this
+                # replaces.
+                dense_half_plans[k] = DenseHalfScoringPlan(
+                    half_index=k,
+                    use_adaptive=bool(use_adaptive),
+                    effective_rotations=(
+                        (
                             adaptive_pass1_rotations
                             if adaptive_pass1_rotations is not None
                             else effective_rotations
-                        ),
-                        k_class_image_batch_size_override=k_class_image_batch_size,
-                        k_class_rotation_block_size_override=dense_k_class_rotation_block_size,
-                        significance_image_batch_size_override=significance_image_batch_size,
-                        significance_rotation_block_size_override=significance_rotation_block_size,
-                        firstiter_coarse_current_size=coarse_cs,
-                        firstiter_fine_current_size=cs_for_engine,
-                        firstiter_log_label="",
-                        firstiter_updates_em_kwargs_ibs=True,
-                        **dense_half_kwargs,
-                    )
-                else:
-                    # --- SINGLE-PASS E+M (no adaptive oversampling) ---
-                    dense_result = _score_half_dense_in_bpref_scope(
-                        effective_rotations=effective_rotations,
-                        **dense_half_kwargs,
-                    )
-                ha_k = dense_result.ha
-                Ft_y_k = dense_result.Ft_y
-                Ft_ctf_k = dense_result.Ft_ctf
-                em_stats_k = dense_result.em_stats
-                noise_stats_k = dense_result.noise_stats
-                noise_stats_per_half[k] = noise_stats_k
-                if use_adaptive and dense_result.pose_rotations is not None:
-                    pose_rotations[k] = dense_result.pose_rotations
-                    pose_rotation_eulers[k] = dense_result.pose_rotation_eulers
-                else:
-                    pose_rotations[k] = effective_rotations
-                    pose_rotation_eulers[k] = effective_rotation_eulers
-                coarse_ha[k] = (
-                    dense_result.coarse_ha
-                    if use_adaptive and dense_result.coarse_ha is not None
-                    else ha_k  # single pass: same grid, no oversampling
+                        )
+                        if use_adaptive
+                        else effective_rotations
+                    ),
+                    adaptive_kwargs=(
+                        dict(
+                            k_class_image_batch_size_override=k_class_image_batch_size,
+                            k_class_rotation_block_size_override=dense_k_class_rotation_block_size,
+                            significance_image_batch_size_override=significance_image_batch_size,
+                            significance_rotation_block_size_override=significance_rotation_block_size,
+                            firstiter_coarse_current_size=coarse_cs,
+                            firstiter_fine_current_size=cs_for_engine,
+                            firstiter_log_label="",
+                            firstiter_updates_em_kwargs_ibs=True,
+                        )
+                        if use_adaptive
+                        else {}
+                    ),
+                    kwargs=dense_half_kwargs,
                 )
+                dense_result = _run_dense_half_scoring(dense_half_plans[k])
+                dense_outputs = _dense_half_scoring_outputs(
+                    dense_result,
+                    use_adaptive=use_adaptive,
+                    effective_rotations=effective_rotations,
+                    effective_rotation_eulers=effective_rotation_eulers,
+                )
+                ha_k = dense_outputs.ha
+                Ft_y_k = dense_outputs.Ft_y
+                Ft_ctf_k = dense_outputs.Ft_ctf
+                em_stats_k = dense_outputs.em_stats
+                noise_stats_k = dense_outputs.noise_stats
+                noise_stats_per_half[k] = noise_stats_k
+                pose_rotations[k] = dense_outputs.pose_rotations
+                pose_rotation_eulers[k] = dense_outputs.pose_rotation_eulers
+                coarse_ha[k] = dense_outputs.coarse_ha
                 score_result = dense_result
 
                 # --- Manifest dump for deterministic replay (Phase 0.1) ---
@@ -2342,6 +2528,18 @@ def refine_single_volume(
                 original_image_indices=_half_orig_idx,
             )
 
+
+        _overlap_active = _half_overlap_active(
+            options.overlap.overlap_halves,
+            diagnostic_half_indices=diagnostic_half_indices,
+            log=logger,
+        )
+        if _overlap_active:
+            _run_halves_overlapped(_run_half_estep, diagnostic_half_indices)
+            k = diagnostic_half_indices[-1]
+        else:
+            for k in diagnostic_half_indices:
+                _run_half_estep(k)
         if diagnostic_half_indices != (0, 1):
             raise RuntimeError(
                 "targeted half-only significance diagnostic returned without writing its "
