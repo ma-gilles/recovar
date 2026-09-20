@@ -10,6 +10,13 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Sequence
 
+# This is an EM entry point, so it opts in to recovar's EM-scoped XLA defaults
+# (currently --xla_gpu_autotune_level=0; recovar/jax_config.py carries the
+# receipts). It must be set before the first import that reaches jax, because
+# XLA_FLAGS is read at jax import time, and with setdefault so an explicit
+# RECOVAR_EM_XLA_DEFAULTS=0 in the environment still wins.
+os.environ.setdefault("RECOVAR_EM_XLA_DEFAULTS", "1")
+
 from recovar.em.vdam.native_options import InitialModelDefaults
 
 

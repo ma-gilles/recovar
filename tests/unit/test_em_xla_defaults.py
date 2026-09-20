@@ -28,7 +28,12 @@ from recovar.jax_config import em_xla_flag_additions
 pytestmark = pytest.mark.unit
 
 REPO = Path(__file__).resolve().parents[2]
-ENTRY = REPO / "scripts" / "run_full_refinement.py"
+# Every EM entry point must opt in, so the entry assertions below run over all
+# of them rather than over one named script.
+ENTRIES = (
+    REPO / "scripts" / "run_full_refinement.py",
+    REPO / "recovar" / "commands" / "initial_model.py",
+)
 MARKER = "RECOVAR_EM_XLA_DEFAULTS"
 FLAG = "--xla_gpu_autotune_level=0"
 
@@ -74,7 +79,8 @@ def test_unrelated_flags_are_left_alone():
 # --------------------------------------------------------- the entry point ---
 
 
-def test_the_em_entry_sets_the_marker_before_importing_jax():
+@pytest.mark.parametrize("ENTRY", ENTRIES, ids=lambda p: p.name)
+def test_the_em_entry_sets_the_marker_before_importing_jax(ENTRY):
     """`XLA_FLAGS` is read when jax is imported, so the order is load-bearing."""
 
     lines = ENTRY.read_text().splitlines()
@@ -91,7 +97,8 @@ def test_the_em_entry_sets_the_marker_before_importing_jax():
     )
 
 
-def test_the_entry_uses_setdefault_so_an_explicit_zero_wins():
+@pytest.mark.parametrize("ENTRY", ENTRIES, ids=lambda p: p.name)
+def test_the_entry_uses_setdefault_so_an_explicit_zero_wins(ENTRY):
     text = ENTRY.read_text()
     assert f'os.environ.setdefault("{MARKER}", "1")' in text, (
         "the entry must use setdefault, or RECOVAR_EM_XLA_DEFAULTS=0 in the "
