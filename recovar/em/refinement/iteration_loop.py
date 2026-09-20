@@ -40,6 +40,7 @@ from recovar.em.dense.scoring_policy import (
     _dense_global_scoring_dtype,
     _k1_relion_x_half_mstep_enabled,
 )
+from recovar.em.diagnostics import finite_check
 from recovar.em.diagnostics import bpref_diagnostics
 from recovar.em.diagnostics import parity_dump as _parity_dump
 from recovar.em.diagnostics import reconstruction as reconstruction_diagnostics
@@ -3265,6 +3266,23 @@ def refine_single_volume(
                 else group_ids_k
                 for _half_idx, group_ids_k in enumerate(relion_half_inputs.group_ids)
             ]
+            if finite_check.finite_check_enabled():
+                # P4-D. Name the particles behind a non-finite statistic before
+                # the shared validator raises with only "must be finite".
+                for _p4d_half, _p4d_stats in enumerate(noise_stats_per_half):
+                    finite_check.check_per_image(
+                        "norm-scale-statistics",
+                        {
+                            "wsum_norm_correction": getattr(_p4d_stats, "wsum_norm_correction", None),
+                            "wsum_scale_correction_xa": getattr(_p4d_stats, "wsum_scale_correction_xa", None),
+                            "wsum_scale_correction_aa": getattr(_p4d_stats, "wsum_scale_correction_aa", None),
+                            "wsum_sigma2_noise": getattr(_p4d_stats, "wsum_sigma2_noise", None),
+                            "sumw": getattr(_p4d_stats, "sumw", None),
+                        },
+                        context=finite_check.describe_context(
+                            iteration=iteration + 1, half=_p4d_half + 1, current_size=current_size
+                        ),
+                    )
             norm_scale_update = update_relion_norm_scale_corrections(
                 noise_stats_per_half=noise_stats_per_half,
                 image_corrections_per_half=relion_half_inputs.image_corrections,

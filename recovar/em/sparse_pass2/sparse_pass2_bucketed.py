@@ -41,6 +41,7 @@ from recovar.em.classification.k_class_results import (
     SparseKClassNoiseStatistics,
 )
 from recovar.em.diagnostics import bpref_diagnostics
+from recovar.em.diagnostics import finite_check
 from recovar.em.diagnostics import norm_scale as norm_scale_diagnostics
 from recovar.em.diagnostics import pass2 as pass2_diagnostics
 from recovar.em.diagnostics.compact_candidate_capture import (
@@ -4398,6 +4399,25 @@ def compute_pass2_stats_sparse_bucketed(
                     ),
                 )
             shifted_recon_split = shifted_recon_split_for_dump
+            if finite_check.finite_check_enabled():
+                # P4-D. Check the inputs first: a non-finite sum whose operands
+                # are finite is a different defect from one that inherits it.
+                _p4d_context = finite_check.describe_context(
+                    iteration=bpref_diagnostics._bpref_contribution_context.get("iteration"),
+                    half=bpref_diagnostics._bpref_contribution_context.get("half"),
+                    bucket_images=int(np.asarray(image_indices).size),
+                    first_image=int(np.asarray(image_indices).reshape(-1)[0]),
+                    current_size=current_size,
+                )
+                finite_check.check_arrays(
+                    "mstep-operands",
+                    {
+                        "mstep_probs": mstep_probs,
+                        "shifted_recon_split": shifted_recon_split,
+                        "ctf2_over_nv_recon": ctf2_over_nv_recon,
+                    },
+                    context=_p4d_context,
+                )
             summed, ctf_probs = compute_local_mstep_sums(
                 mstep_probs,
                 shifted_recon_split,
@@ -4405,6 +4425,16 @@ def compute_pass2_stats_sparse_bucketed(
                 relion_x_half=use_relion_x_half_mstep,
                 sequential_translation_reduction=use_sequential_translation_reduction,
             )
+            if finite_check.finite_check_enabled():
+                finite_check.check_arrays(
+                    "mstep-sums",
+                    {"summed": summed, "ctf_probs": ctf_probs},
+                    context=_p4d_context,
+                    operands={
+                        "mstep_probs": mstep_probs,
+                        "ctf2_over_nv_recon": ctf2_over_nv_recon,
+                    },
+                )
             if mstep_subtract_ctf_projection:
                 summed = subtract_projected_reference_from_sparse_mstep_sums(
                     summed,
