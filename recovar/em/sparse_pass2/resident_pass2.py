@@ -1772,90 +1772,103 @@ def compute_pass2_stats_resident(
             warmed_classes = ()
             with warm_pool:
                 if warm_config.enabled:
-                    warm_t0 = time.time()
-                    presence = resident_half_operand_presence(
-                        relion_exact_bpref_operands=bool(
-                            bucket_io_kwargs.get("relion_exact_bpref_operands")
-                        ),
-                        use_exact_relion_gaussian=use_exact_relion_gaussian,
-                        accumulate_noise=accumulate_noise,
-                        current_size=current_size,
-                    )
-                    warm_predicted = resident_half_operand_avals(
-                        n_images=int(n_images),
-                        n_score_pixels=int(n_windowed),
-                        n_recon_pixels=int(n_recon_windowed),
-                        n_half_pixels=int(np.asarray(noise_variance_half).size),
-                        n_fine_trans=int(n_fine_trans),
-                        score_complex_dtype=precision_policy.score_complex_dtype,
-                        score_real_dtype=precision_policy.score_real_dtype,
-                        acc_real_dtype=jnp.float64 if use_float64_scoring else jnp.float32,
-                        has_recon_weight=presence.has_recon_weight,
-                        has_direct_ctf_rfloat=presence.has_direct_ctf_rfloat,
-                        has_highres_xi2=presence.has_highres_xi2,
-                        has_relion_norm_high_shell=presence.has_relion_norm_high_shell,
-                    )
-                    warmed_classes = _submit_resident_chunk_warmup(
-                        warm_pool,
-                        chunks=chunks,
-                        tables=tables,
-                        n_fine_trans=int(n_fine_trans),
-                        half_operand_avals=warm_predicted,
-                        stage_tables=_make_chunk_stage_tables(
-                            projection_score_cache=projection_score_cache,
-                            projection_recon_cache=projection_recon_cache,
-                            projection_recon_abs2_cache=projection_recon_abs2_cache,
-                            mstep_grid=mstep_grid,
-                            coarse_parent_grid=coarse_parent_grid,
-                            fine_translation_parent_device=fine_translation_parent_device,
-                            half_weights=jnp.asarray(half_weights_windowed),
+                    # A warm-up must never fail a run. The pool swallows a
+                    # failure on its helper thread; this covers the submission
+                    # itself, which runs here on the main thread and reaches
+                    # into the plan, the tables and the operand predictor.
+                    try:
+                        warm_t0 = time.time()
+                        presence = resident_half_operand_presence(
+                            relion_exact_bpref_operands=bool(
+                                bucket_io_kwargs.get("relion_exact_bpref_operands")
+                            ),
+                            use_exact_relion_gaussian=use_exact_relion_gaussian,
+                            accumulate_noise=accumulate_noise,
+                            current_size=current_size,
+                        )
+                        warm_predicted = resident_half_operand_avals(
+                            n_images=int(n_images),
+                            n_score_pixels=int(n_windowed),
+                            n_recon_pixels=int(n_recon_windowed),
+                            n_half_pixels=int(np.asarray(noise_variance_half).size),
+                            n_fine_trans=int(n_fine_trans),
+                            score_complex_dtype=precision_policy.score_complex_dtype,
+                            score_real_dtype=precision_policy.score_real_dtype,
+                            acc_real_dtype=jnp.float64 if use_float64_scoring else jnp.float32,
+                            has_recon_weight=presence.has_recon_weight,
+                            has_direct_ctf_rfloat=presence.has_direct_ctf_rfloat,
+                            has_highres_xi2=presence.has_highres_xi2,
+                            has_relion_norm_high_shell=presence.has_relion_norm_high_shell,
+                        )
+                        warmed_classes = _submit_resident_chunk_warmup(
+                            warm_pool,
+                            chunks=chunks,
+                            tables=tables,
+                            n_fine_trans=int(n_fine_trans),
+                            half_operand_avals=warm_predicted,
+                            stage_tables=_make_chunk_stage_tables(
+                                projection_score_cache=projection_score_cache,
+                                projection_recon_cache=projection_recon_cache,
+                                projection_recon_abs2_cache=projection_recon_abs2_cache,
+                                mstep_grid=mstep_grid,
+                                coarse_parent_grid=coarse_parent_grid,
+                                fine_translation_parent_device=fine_translation_parent_device,
+                                half_weights=jnp.asarray(half_weights_windowed),
+                                translation_angles=jnp.asarray(
+                                    relion_score_translation_angles, dtype=jnp.float32
+                                ),
+                                full_to_compact=relion_score_full_to_compact,
+                                noise_variance_for_noise=noise_variance_for_noise_device,
+                                shell_indices_noise=shell_indices_noise_device,
+                                exact_positions_device=exact_positions_device,
+                                recon_pixel_indices=recon_pixel_indices_device,
+                                relion_x_half_recon_indices=relion_x_half_recon_indices,
+                                image_tables=image_tables,
+                            ),
+                            carry=(Ft_y_total, Ft_ctf_total, stats),
                             translation_angles=jnp.asarray(
                                 relion_score_translation_angles, dtype=jnp.float32
                             ),
-                            full_to_compact=relion_score_full_to_compact,
-                            noise_variance_for_noise=noise_variance_for_noise_device,
-                            shell_indices_noise=shell_indices_noise_device,
-                            exact_positions_device=exact_positions_device,
-                            recon_pixel_indices=recon_pixel_indices_device,
-                            relion_x_half_recon_indices=relion_x_half_recon_indices,
-                            image_tables=image_tables,
-                        ),
-                        carry=(Ft_y_total, Ft_ctf_total, stats),
-                        translation_angles=jnp.asarray(
-                            relion_score_translation_angles, dtype=jnp.float32
-                        ),
-                        rect_indices=rect_indices_device,
-                        exact_positions=exact_positions_device,
-                        image_shape=image_shape,
-                        spec_kwargs=dict(
-                            n_fine_trans=n_fine_trans,
-                            n_score_pixels=n_windowed,
-                            n_recon_pixels=n_recon_windowed,
-                            n_rect=n_rect,
-                            mstep_block_rows=mstep_block_rows,
-                            adaptive_fraction=adaptive_fraction,
-                            current_size=current_size,
-                            mstep_current_size=mstep_current_size,
+                            rect_indices=rect_indices_device,
+                            exact_positions=exact_positions_device,
                             image_shape=image_shape,
-                            recon_volume_shape=recon_volume_shape,
-                            max_adjoint_block_bytes=max_adjoint_block_bytes,
-                            stats_config=stats_config,
-                            use_rfloat_ctf_wavg=presence.has_direct_ctf_rfloat,
-                            use_translate_sum_kernel=True,
-                            bpref_recon_operand=presence.has_recon_weight,
-                        ),
-                        translation_prior_centers_np=translation_prior_centers_np,
-                        fine_translations=fine_translations,
-                        voxel_size=experiment_dataset.voxel_size,
-                        default_translation_sqdist=image_tables.translation_sqdist_ang,
-                    )
-                    logger.info(
-                        "Resident pass-2 compile-ahead: queued %d capacity classes %s, "
-                        "host cost %.2fs",
-                        len(warmed_classes),
-                        ",".join(f"{r}x{b}" for r, b in warmed_classes),
-                        time.time() - warm_t0,
-                    )
+                            spec_kwargs=dict(
+                                n_fine_trans=n_fine_trans,
+                                n_score_pixels=n_windowed,
+                                n_recon_pixels=n_recon_windowed,
+                                n_rect=n_rect,
+                                mstep_block_rows=mstep_block_rows,
+                                adaptive_fraction=adaptive_fraction,
+                                current_size=current_size,
+                                mstep_current_size=mstep_current_size,
+                                image_shape=image_shape,
+                                recon_volume_shape=recon_volume_shape,
+                                max_adjoint_block_bytes=max_adjoint_block_bytes,
+                                stats_config=stats_config,
+                                use_rfloat_ctf_wavg=presence.has_direct_ctf_rfloat,
+                                use_translate_sum_kernel=True,
+                                bpref_recon_operand=presence.has_recon_weight,
+                            ),
+                            translation_prior_centers_np=translation_prior_centers_np,
+                            fine_translations=fine_translations,
+                            voxel_size=experiment_dataset.voxel_size,
+                            default_translation_sqdist=image_tables.translation_sqdist_ang,
+                        )
+                        logger.info(
+                            "Resident pass-2 compile-ahead: queued %d capacity classes %s, "
+                            "host cost %.2fs",
+                            len(warmed_classes),
+                            ",".join(f"{r}x{b}" for r, b in warmed_classes),
+                            time.time() - warm_t0,
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        logger.info(
+                            "Resident pass-2 compile-ahead could not be submitted (%s: %s); the chunk loop compiles its own programs",
+                            type(exc).__name__,
+                            exc,
+                        )
+                        warm_predicted = None
+                        warmed_classes = ()
                 operands_t0 = time.time()
                 try:
                     resident_operands = prepare_resident_half_operands(
@@ -1907,7 +1920,9 @@ def compute_pass2_stats_resident(
                 # after it, so this cannot be satisfied by construction. A
                 # mismatch means the warm-up described operands the loop will not
                 # pass and its compiles were wasted; the run is unaffected.
-                if resident_operands is None:
+                if warm_predicted is None:
+                    pass
+                elif resident_operands is None:
                     logger.info(
                         "Resident pass-2 compile-ahead predicted operands the half did not "
                         "prepare; its programs go unused"
