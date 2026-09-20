@@ -308,8 +308,22 @@ def _relion_half_layout_mask(coords, current_size, *, square=False, include_dc=F
         else:
             radii = np.sqrt(np.sum(coords**2, axis=-1))
             mask = np.round(radii).astype(np.int32) <= r_max
-        mask &= ky != -r_max
-        mask &= ~((kx == 0) & (ky < 0))
+        # RELION's row label is ``ip = (i < XSIZE) ? i : i - YSIZE`` on the
+        # array it is iterating (``fftw.h:99-109``), so the packed Nyquist row
+        # is ``ip = +N/2``, not ``-N/2``.  A ``windowFourierTransform`` crop to
+        # ``current_size < N`` keeps rows ``ip = -(cs/2 - 1) .. +cs/2`` and
+        # therefore drops recovar's ``ky = -cs/2`` row; with no crop
+        # (``current_size == N``) that same physical row is RELION's ``+N/2``
+        # and is kept, with a positive label for the redundant-column rule.
+        uncropped_nyquist = (
+            int(current_size) >= full_size
+            and full_size % 2 == 0
+        )
+        ky_relion = (
+            np.where(ky == -(full_size // 2), -ky, ky) if uncropped_nyquist else ky
+        )
+        mask &= ky_relion != -r_max
+        mask &= ~((kx == 0) & (ky_relion < 0))
 
     if exact_radius:
         mask &= kx * kx + ky * ky <= r_max * r_max

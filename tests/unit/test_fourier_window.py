@@ -1185,3 +1185,84 @@ class TestWindowedMultipleBlocks:
             err_msg="Mean differs between single-block and multi-block with windowing",
         )
         np.testing.assert_array_equal(ha_1, ha_2)
+
+
+def _relion_scored_packed_indices(image_size, current_size):
+    """Packed centered-half indices RELION scores at ``current_size``.
+
+    Mirrors ``ml_optimiser.cpp:6955-6967`` (``Mresol_fine`` labels on the array
+    RELION iterates) and ``ml_optimiser.cpp:8046-8053`` (``Minvsigma2`` is
+    nonzero only where ``ires > 0``), with the row labels of ``fftw.h:99-109``:
+    ``ip = (i < XSIZE) ? i : i - YSIZE`` on that same array, so the Nyquist row
+    of an uncropped half image is ``ip = +N/2``.
+    """
+
+    n = int(image_size)
+    cs = int(current_size)
+    x_size = cs // 2 + 1
+    packed_width = n // 2 + 1
+    kept = []
+    for row_index in range(cs):
+        ip = row_index if row_index < x_size else row_index - cs
+        for jp in range(x_size):
+            ires = int(round(math.sqrt(float(ip * ip + jp * jp))))
+            if ires >= x_size or (jp == 0 and ip < 0) or ires == 0:
+                continue
+            # recovar's packed half stores the Nyquist row and column at -N/2.
+            ky = -(n // 2) if ip == n // 2 else ip
+            kx_col = n // 2 if jp == n // 2 else jp
+            kept.append((ky + n // 2) * packed_width + kx_col)
+    return np.array(sorted(kept), dtype=np.int64)
+
+
+@pytest.mark.parametrize(
+    "image_size,current_size",
+    [(32, 16), (32, 24), (32, 32), (64, 32), (64, 56), (64, 64), (256, 92), (256, 256)],
+)
+def test_radial_window_matches_relion_scored_pixels(image_size, current_size):
+    """The radial score window must be RELION's scored pixel list exactly."""
+
+    indices, count = make_fourier_window_indices_np((image_size, image_size), current_size)
+    expected = _relion_scored_packed_indices(image_size, current_size)
+    assert count == expected.size
+    np.testing.assert_array_equal(np.asarray(indices, dtype=np.int64), expected)
+
+
+def test_radial_window_keeps_the_uncropped_nyquist_row_and_drops_the_cropped_one():
+    """RELION labels the uncropped Nyquist row +N/2; a crop removes it instead.
+
+    ``windowFourierTransform`` (``fftw.h:849-855``) keeps rows ``ip = 0..cs/2``
+    and ``ip = -(cs/2-1)..-1``, so recovar's ``ky = -cs/2`` row is absent from
+    every crop; at ``current_size == ori_size`` there is no crop and that same
+    packed row is RELION's ``+N/2``, whose ``kx = 0`` entry is inside the
+    projector disk and therefore carries a candidate-dependent reference.
+    """
+
+    image_size = 256
+    coords = make_frequency_coords_half_np((image_size, image_size))
+    ky = np.rint(coords[:, 1]).astype(int)
+    kx = np.rint(coords[:, 0]).astype(int)
+    nyquist_row = ky == -(image_size // 2)
+
+    full, _ = make_fourier_window_indices_np((image_size, image_size), image_size)
+    full_mask = np.zeros(coords.shape[0], dtype=bool)
+    full_mask[full] = True
+    assert int(np.count_nonzero(full_mask & nyquist_row)) == 12
+    kept_columns = sorted(kx[full_mask & nyquist_row].tolist())
+    assert kept_columns == list(range(0, 12))
+
+    cropped, _ = make_fourier_window_indices_np((image_size, image_size), 92)
+    cropped_mask = np.zeros(coords.shape[0], dtype=bool)
+    cropped_mask[cropped] = True
+    assert not np.any(cropped_mask & nyquist_row)
+
+
+def test_radial_window_counts_at_the_final_all_data_size():
+    """Pin the step-1 counts for RELION's final all-data iteration at 256."""
+
+    shape = (256, 256)
+    _, scored = make_fourier_window_indices_np(shape, 256)
+    _, live = make_fourier_window_indices_np(shape, 256, exact_radius=True)
+    assert scored == 25933          # RELION's Minvsigma2 support
+    assert live == 25716            # of those, the ones the projector can fill
+    assert scored - live == 217     # rounded-in, exact-out rim: reference is zero
