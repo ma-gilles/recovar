@@ -67,8 +67,8 @@ import logging
 import os
 import time
 from dataclasses import dataclass
-from functools import partial
-from typing import NamedTuple
+from functools import lru_cache, partial
+from typing import Callable, NamedTuple
 
 import jax
 import jax.numpy as jnp
@@ -2889,6 +2889,29 @@ def _check_mstep_carry_avals(
         )
 
 
+@lru_cache(maxsize=None)
+def _zero_block_partials(shapes_and_dtypes: tuple) -> Callable[[], tuple]:
+    """One program per capacity class that allocates the zero accumulators.
+
+    ``jnp.zeros`` outside a jit is two eager dispatches, a
+    ``convert_element_type`` of the scalar zero and a ``broadcast_in_dim`` to
+    the shape; the M-step carry has four of them and the driver builds one
+    carry per chunk, which on the early state was 3336 eager dispatches over
+    two iterations. Inside a program with static shapes and dtypes the same
+    four buffers cost none, and each call still returns fresh buffers, which
+    the donated M-step block program requires.
+
+    Keyed on the shapes and dtypes, so a class compiles once and every chunk
+    of that class reuses it.
+    """
+
+    @jax.jit
+    def build():
+        return tuple(jnp.zeros(shape, dtype=dtype) for shape, dtype in shapes_and_dtypes)
+
+    return build
+
+
 def _initial_mstep_carry(
     Ft_y,
     Ft_ctf,
@@ -2917,17 +2940,21 @@ def _initial_mstep_carry(
     )
     if _carry_aval_probe_enabled():
         _check_mstep_carry_avals(tables, spec=spec, dtypes=dtypes)
+    wavg_triplet_pixels, noise_shells, a2_per_image, xa_per_image = _zero_block_partials(
+        (
+            ((image_capacity, int(spec.n_rect), 3), jnp.dtype(jnp.float32)),
+            ((int(spec.stats_config.n_shells),), jnp.dtype(dtypes["noise_shells"])),
+            ((image_capacity,), jnp.dtype(dtypes["a2"])),
+            ((image_capacity,), jnp.dtype(dtypes["xa"])),
+        )
+    )()
     return _ChunkMstepCarry(
         Ft_y=Ft_y,
         Ft_ctf=Ft_ctf,
-        wavg_triplet_pixels=jnp.zeros(
-            (image_capacity, int(spec.n_rect), 3), dtype=jnp.float32
-        ),
-        noise_shells=jnp.zeros(
-            (int(spec.stats_config.n_shells),), dtype=dtypes["noise_shells"]
-        ),
-        a2_per_image=jnp.zeros((image_capacity,), dtype=dtypes["a2"]),
-        xa_per_image=jnp.zeros((image_capacity,), dtype=dtypes["xa"]),
+        wavg_triplet_pixels=wavg_triplet_pixels,
+        noise_shells=noise_shells,
+        a2_per_image=a2_per_image,
+        xa_per_image=xa_per_image,
     )
 
 

@@ -13,6 +13,8 @@ Covered here:
 * two per-chunk host scalars reach the device without an eager
   ``convert_element_type``, and the M-step carry's real-part dtype is NumPy
   promotion rather than a 0-d device allocation read for its dtype;
+* the four zero accumulators of the M-step carry are one program per
+  capacity class;
 """
 
 from __future__ import annotations
@@ -107,5 +109,42 @@ def test_real_part_dtype_is_numpy_promotion(cross_dtype):
         np.zeros((), dtype=cross_dtype).real.dtype
         == jnp.zeros((), dtype=cross_dtype).real.dtype
     )
+
+
+# ----------------------------------------------------- zero accumulators -----
+
+
+def test_zero_block_partials_match_jnp_zeros_bitwise():
+    key = (
+        ((7, 5, 3), jnp.dtype(jnp.float32)),
+        ((9,), jnp.dtype(jnp.float64)),
+        ((7,), jnp.dtype(jnp.float64)),
+        ((7,), jnp.dtype(jnp.float32)),
+    )
+    folded = rp._zero_block_partials(key)()
+    loose = tuple(jnp.zeros(shape, dtype=dtype) for shape, dtype in key)
+    assert len(folded) == len(loose)
+    for got, want in zip(folded, loose):
+        assert _same(got, want)
+
+
+def test_zero_block_partials_issue_no_eager_dispatch_and_return_fresh_buffers():
+    key = (((4, 2, 3), jnp.dtype(jnp.float32)), ((5,), jnp.dtype(jnp.float64)))
+    build = rp._zero_block_partials(key)
+    build()  # compile
+    with _DispatchCounter() as counter:
+        first = build()
+        second = build()
+    assert counter.count == 0, counter.by_primitive
+    # The M-step block program donates the carry, so every call must hand back
+    # buffers of its own rather than a cached constant.
+    assert first[0].unsafe_buffer_pointer() != second[0].unsafe_buffer_pointer()
+
+
+def test_zero_block_partials_reuses_one_program_per_class():
+    key = (((6,), jnp.dtype(jnp.float32)),)
+    assert rp._zero_block_partials(key) is rp._zero_block_partials(key)
+    other = (((7,), jnp.dtype(jnp.float32)),)
+    assert rp._zero_block_partials(other) is not rp._zero_block_partials(key)
 
 
