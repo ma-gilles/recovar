@@ -671,6 +671,16 @@ def prepare_resident_half_operands(
         operands.nbytes()["total"] / float(1024**3),
         (n_images + batch_size - 1) // batch_size,
     )
+    # A separate line, not an addition to the one above: the census parsers key
+    # on that line's text. The batch size and the last batch's remainder are
+    # what set the leading extent of every program inside the preparation, so
+    # P4-A's shape census could not classify those extents without them.
+    logger.info(
+        "Resident pass-2 per-half operand batching: image_batch_size=%d, "
+        "last_batch_images=%d",
+        batch_size,
+        n_images - batch_size * ((n_images - 1) // batch_size) if n_images else 0,
+    )
     return operands
 
 
