@@ -38,6 +38,9 @@ _K1_RELION_EXACT_COMPACT_PREPROCESS_ENV = (
 )
 
 
+_COARSE_OPERAND_PROGRAM_ENV = "RECOVAR_COARSE_OPERAND_PROGRAM"
+
+
 def _repeat_pad_batch_axis(value, target_size: int):
     """Pad a non-empty image batch by repeating row zero.
 
@@ -145,10 +148,267 @@ def _resolve_k1_relion_exact_compact_preprocess(
     return True
 
 
+def _coarse_operand_program_enabled(*, default: bool = False) -> bool:
+    """Return whether the coarse operand assembly runs as one jitted program.
+
+    Off by default: the eager assembly, one compiled program per primitive,
+    stays the oracle. With the flag on the same Python function is traced once
+    per batch shape, so a coarse image batch costs one program call instead of
+    roughly fifty-five single-primitive dispatches.
+    """
+
+    return parse_env_strict_flag(_COARSE_OPERAND_PROGRAM_ENV, default=default)
+
+
 def _k1_relion_f32_coarse_support_enabled(*, default: bool = False) -> bool:
     """Return whether the RELION CUDA float32 coarse support is active."""
 
     return parse_env_strict_flag(_K1_RELION_F32_COARSE_SUPPORT_ENV, default=default)
+
+
+def _relion_coarse_sincosf_operands(
+    unshifted_score_weighted,
+    score_weight_half,
+    half_weights,
+    score_indices,
+    score_active_mask,
+):
+    """Assemble the coarse sincosf operands of one image batch.
+
+    These are the statements of RELION's coarse sincosf operand assembly, less
+    the translate FFI call that consumes ``unshifted_corrected`` and the
+    reshape of its result, which stay with the caller in
+    :func:`_relion_coarse_gaussian_square_operands_sincosf`. ``pixel_weight``
+    does not depend on the FFI output, so it is produced here rather than
+    after the call.
+
+    :data:`_relion_coarse_sincosf_operand_program` is ``jax.jit`` of this exact
+    function, which is what ``RECOVAR_COARSE_OPERAND_PROGRAM=1`` selects: the
+    two paths share their source, so the only difference between them is that
+    XLA sees the whole chain at once. Nothing here reduces along an axis and no
+    multiply feeds an add, so that cannot re-associate an expression or
+    contract a multiply-add; the paired unit tests hold the pair bitwise.
+    """
+
+    square_score_weight = score_weight_half[:, score_indices]
+    square_score_weight = jnp.where(
+        score_active_mask[None, :],
+        square_score_weight,
+        jnp.zeros((), dtype=square_score_weight.dtype),
+    )
+    square_unshifted_weighted = unshifted_score_weighted[:, score_indices]
+    nonzero_weight = square_score_weight != 0.0
+    safe_weight = jnp.where(nonzero_weight, square_score_weight, 1.0)
+    unshifted_corrected = square_unshifted_weighted / safe_weight
+    unshifted_corrected = jnp.where(
+        nonzero_weight,
+        unshifted_corrected,
+        jnp.zeros((), dtype=unshifted_corrected.dtype),
+    )
+    use_float64 = unshifted_corrected.dtype == jnp.complex128
+    complex_dtype = jnp.complex128 if use_float64 else jnp.complex64
+    real_dtype = jnp.float64 if use_float64 else jnp.float32
+    pixel_weight = square_score_weight * half_weights[score_indices][None, :]
+    return (
+        jnp.asarray(unshifted_corrected, dtype=complex_dtype),
+        jnp.asarray(pixel_weight, dtype=real_dtype),
+    )
+
+
+_relion_coarse_sincosf_operand_program = jax.jit(_relion_coarse_sincosf_operands)
+
+
+def _relion_exact_coarse_operands(
+    ctf_half_rfloat,
+    batch_scale_exact,
+    processed_direct,
+    score_indices,
+    score_active_mask,
+    noise_variance_half,
+    half_weights,
+    *,
+    image_shape,
+    use_float64_scoring,
+    scale_corrections_enabled,
+):
+    """Assemble the exact-source coarse operands of one image batch.
+
+    The statements of the exact assembly in
+    :func:`_assemble_relion_exact_coarse_gaussian_operands`, less the host CTF
+    read, the translate FFI call, the reshape of its result and ``powerClass``.
+    Neither returned operand depends on the FFI output, so both are produced
+    before the call instead of straddling it.
+
+    RELION's cast order inside ``_relion_cuda_pixel_correction_from_rfloat_ctf``
+    and the ``corr_img`` helpers is carried by their own ``optimization_barrier``
+    calls, which survive tracing, and nothing here reduces along an axis or
+    adds a product. :data:`_relion_exact_coarse_operand_program` is ``jax.jit``
+    of this function.
+    """
+
+    from recovar.em.sparse_pass2.sparse_pass2_scoring import (
+        _relion_cuda_corr_img_from_native_noise_variance,
+        _relion_cuda_corr_img_from_rfloat_ctf,
+        _relion_cuda_pixel_correction_from_rfloat_ctf,
+    )
+
+    real_dtype = jnp.float64 if use_float64_scoring else jnp.float32
+    complex_dtype = jnp.complex128 if use_float64_scoring else jnp.complex64
+    pixel_correction = _relion_cuda_pixel_correction_from_rfloat_ctf(
+        batch_scale_exact[:, None],
+        ctf_half_rfloat,
+        output_dtype=real_dtype,
+    )
+    processed_score = jnp.asarray(processed_direct, dtype=complex_dtype)[:, score_indices]
+    exact_unshifted_corrected = processed_score * pixel_correction
+    exact_unshifted_corrected = jnp.where(
+        score_active_mask[None, :],
+        exact_unshifted_corrected,
+        jnp.zeros((), dtype=exact_unshifted_corrected.dtype),
+    ).astype(complex_dtype)
+    score_noise_variance = noise_variance_half[score_indices]
+    if use_float64_scoring:
+        inverse_noise_half = jnp.reciprocal(jnp.asarray(score_noise_variance, dtype=jnp.float64))
+        exact_corr_img = _relion_cuda_corr_img_from_rfloat_ctf(
+            inverse_noise_half[None, :], ctf_half_rfloat,
+            batch_scale_exact[:, None] if scale_corrections_enabled else None,
+            output_dtype=real_dtype,
+        )
+    else:
+        exact_corr_img = _relion_cuda_corr_img_from_native_noise_variance(
+            score_noise_variance[None, :],
+            ctf_half_rfloat,
+            image_shape,
+            batch_scale_exact[:, None] if scale_corrections_enabled else None,
+        )
+    exact_square_corr_img = exact_corr_img
+    exact_square_corr_img = jnp.where(
+        score_active_mask[None, :],
+        exact_square_corr_img,
+        jnp.zeros((), dtype=exact_square_corr_img.dtype),
+    )
+    pixel_weight = jnp.asarray(
+        exact_square_corr_img
+        * jnp.asarray(half_weights[score_indices], dtype=real_dtype)[None, :],
+        dtype=real_dtype,
+    )
+    return exact_unshifted_corrected, pixel_weight
+
+
+_relion_exact_coarse_operand_program = jax.jit(
+    _relion_exact_coarse_operands,
+    static_argnames=(
+        "image_shape",
+        "use_float64_scoring",
+        "scale_corrections_enabled",
+    ),
+)
+
+
+class RelionCcCoarseOperands(NamedTuple):
+    """Normalized-CC tree-rescore operands of one coarse image batch."""
+
+    unshifted_corrected: jax.Array
+    corr_img: jax.Array
+    windowed_unshifted: jax.Array
+    windowed_corr_img: jax.Array
+
+
+def _relion_cc_coarse_operands(
+    processed,
+    ctf_rfloat,
+    inverse_power,
+    batch_scale_f32,
+    phase_factors,
+    window_indices,
+    *,
+    scale_corrections_enabled,
+) -> RelionCcCoarseOperands:
+    """Assemble the normalized-CC (``--firstiter_cc``) tree-rescore operands.
+
+    ``inverse_power`` is computed by the caller and passed in. It is a shell
+    reduction over ``|Fimg|**2``, and fusing a reduction into its producer is
+    the one transformation this pass has measured to move a last bit, so it
+    stays outside the program. :data:`_relion_cc_coarse_operand_program` is
+    ``jax.jit`` of this function.
+    """
+
+    from recovar.em.sparse_pass2.sparse_pass2_scoring import (
+        _relion_cuda_corr_img_from_rfloat_ctf,
+        _relion_cuda_pixel_correction_from_rfloat_ctf,
+    )
+
+    pixel_correction = _relion_cuda_pixel_correction_from_rfloat_ctf(
+        batch_scale_f32[:, None],
+        ctf_rfloat,
+    )
+    unshifted_corrected = jnp.asarray(
+        processed * pixel_correction,
+        dtype=jnp.complex64,
+    )
+    if phase_factors is not None:
+        unshifted_corrected = unshifted_corrected * phase_factors
+    corr_img = _relion_cuda_corr_img_from_rfloat_ctf(
+        inverse_power,
+        ctf_rfloat,
+        batch_scale_f32[:, None] if scale_corrections_enabled else None,
+    )
+    if window_indices is None:
+        return RelionCcCoarseOperands(
+            unshifted_corrected,
+            corr_img,
+            unshifted_corrected,
+            corr_img,
+        )
+    return RelionCcCoarseOperands(
+        unshifted_corrected,
+        corr_img,
+        unshifted_corrected[:, window_indices],
+        corr_img[:, window_indices],
+    )
+
+
+_relion_cc_coarse_operand_program = jax.jit(
+    _relion_cc_coarse_operands,
+    static_argnames=("scale_corrections_enabled",),
+)
+
+
+def assemble_relion_cc_coarse_operands(
+    processed,
+    ctf_rfloat,
+    inverse_power,
+    batch_scale_f32,
+    *,
+    phase_factors=None,
+    window_indices=None,
+    scale_corrections_enabled: bool,
+) -> RelionCcCoarseOperands:
+    """Build one coarse batch's ``--firstiter_cc`` tree-rescore operands.
+
+    ``RECOVAR_COARSE_OPERAND_PROGRAM=1`` traces the assembly once per batch
+    shape; the default eager path is the oracle. ``ctf_rfloat`` is already
+    repeat-padded by the caller when the coarse image batch is padded, so every
+    operand carries the padded extent and the caller slices the repeated rows
+    off with the rest.
+    """
+
+    assemble = (
+        _relion_cc_coarse_operand_program
+        if _coarse_operand_program_enabled()
+        else _relion_cc_coarse_operands
+    )
+    return RelionCcCoarseOperands(
+        *assemble(
+            processed,
+            ctf_rfloat,
+            inverse_power,
+            batch_scale_f32,
+            phase_factors,
+            window_indices,
+            scale_corrections_enabled=bool(scale_corrections_enabled),
+        )
+    )
 
 
 def _relion_coarse_gaussian_square_operands(
@@ -211,21 +471,21 @@ def _relion_coarse_gaussian_square_operands_sincosf(
     score_indices = jnp.asarray(score_indices, dtype=jnp.int32)
     if translation_phase_source is None:
         translation_phase_source = translations
-    square_score_weight = score_weight_half[:, score_indices]
-    square_score_weight = jnp.where(
-        score_active_mask[None, :],
-        square_score_weight,
-        jnp.zeros((), dtype=square_score_weight.dtype),
+    assemble = (
+        _relion_coarse_sincosf_operand_program
+        if _coarse_operand_program_enabled()
+        else _relion_coarse_sincosf_operands
     )
-    square_unshifted_weighted = unshifted_score_weighted[:, score_indices]
-    nonzero_weight = square_score_weight != 0.0
-    safe_weight = jnp.where(nonzero_weight, square_score_weight, 1.0)
-    unshifted_corrected = square_unshifted_weighted / safe_weight
-    unshifted_corrected = jnp.where(
-        nonzero_weight,
-        unshifted_corrected,
-        jnp.zeros((), dtype=unshifted_corrected.dtype),
+    unshifted_corrected, pixel_weight = assemble(
+        unshifted_score_weighted,
+        score_weight_half,
+        half_weights,
+        score_indices,
+        score_active_mask,
     )
+    # ``unshifted_corrected`` arrives already cast, and that cast is to
+    # complex128 exactly when the uncast quotient is complex128, so this test
+    # selects the same dtypes the assembly used.
     use_float64 = unshifted_corrected.dtype == jnp.complex128
     complex_dtype = jnp.complex128 if use_float64 else jnp.complex64
     real_dtype = jnp.float64 if use_float64 else jnp.float32
@@ -248,17 +508,16 @@ def _relion_coarse_gaussian_square_operands_sincosf(
         score_indices,
         image_shape,
     )
-    pixel_weight = square_score_weight * half_weights[score_indices][None, :]
     result = (
         shifted_corrected.reshape(
             unshifted_corrected.shape[0],
             len(translations),
             unshifted_corrected.shape[1],
         ),
-        jnp.asarray(pixel_weight, dtype=real_dtype),
+        pixel_weight,
     )
     if return_unshifted:
-        return (*result, jnp.asarray(unshifted_corrected, dtype=complex_dtype))
+        return (*result, unshifted_corrected)
     return result
 
 
@@ -327,11 +586,6 @@ def _assemble_relion_exact_coarse_gaussian_operands(
         _relion_translation_angles_f32,
         _relion_translation_angles_f64,
     )
-    from recovar.em.sparse_pass2.sparse_pass2_scoring import (
-        _relion_cuda_corr_img_from_native_noise_variance,
-        _relion_cuda_corr_img_from_rfloat_ctf,
-        _relion_cuda_pixel_correction_from_rfloat_ctf,
-    )
 
     real_dtype = jnp.float64 if use_float64_scoring else jnp.float32
     complex_dtype = jnp.complex128 if use_float64_scoring else jnp.complex64
@@ -354,18 +608,23 @@ def _assemble_relion_exact_coarse_gaussian_operands(
         )
     ctf_half_rfloat = jnp.asarray(ctf_half_rfloat_np, dtype=jnp.float64)
     batch_scale_exact = jnp.asarray(batch_scale_np, dtype=real_dtype)
-    pixel_correction = _relion_cuda_pixel_correction_from_rfloat_ctf(
-        batch_scale_exact[:, None],
-        ctf_half_rfloat,
-        output_dtype=real_dtype,
+    assemble = (
+        _relion_exact_coarse_operand_program
+        if _coarse_operand_program_enabled()
+        else _relion_exact_coarse_operands
     )
-    processed_score = jnp.asarray(processed_direct, dtype=complex_dtype)[:, score_indices]
-    exact_unshifted_corrected = processed_score * pixel_correction
-    exact_unshifted_corrected = jnp.where(
-        score_active_mask[None, :],
-        exact_unshifted_corrected,
-        jnp.zeros((), dtype=exact_unshifted_corrected.dtype),
-    ).astype(complex_dtype)
+    exact_unshifted_corrected, pixel_weight = assemble(
+        ctf_half_rfloat,
+        batch_scale_exact,
+        processed_direct,
+        score_indices,
+        score_active_mask,
+        noise_variance_half,
+        half_weights,
+        image_shape=tuple(int(size) for size in image_shape),
+        use_float64_scoring=bool(use_float64_scoring),
+        scale_corrections_enabled=bool(scale_corrections_enabled),
+    )
     translation_angles = jnp.asarray(
         angle_fn(translations_source, image_shape),
         dtype=real_dtype,
@@ -376,32 +635,6 @@ def _assemble_relion_exact_coarse_gaussian_operands(
         score_indices,
         image_shape,
     ).reshape(batch_size, int(translation_angles.shape[0]), -1)
-    score_noise_variance = noise_variance_half[score_indices]
-    if use_float64_scoring:
-        inverse_noise_half = jnp.reciprocal(jnp.asarray(score_noise_variance, dtype=jnp.float64))
-        exact_corr_img = _relion_cuda_corr_img_from_rfloat_ctf(
-            inverse_noise_half[None, :], ctf_half_rfloat,
-            batch_scale_exact[:, None] if scale_corrections_enabled else None,
-            output_dtype=real_dtype,
-        )
-    else:
-        exact_corr_img = _relion_cuda_corr_img_from_native_noise_variance(
-            score_noise_variance[None, :],
-            ctf_half_rfloat,
-            image_shape,
-            batch_scale_exact[:, None] if scale_corrections_enabled else None,
-        )
-    exact_square_corr_img = exact_corr_img
-    exact_square_corr_img = jnp.where(
-        score_active_mask[None, :],
-        exact_square_corr_img,
-        jnp.zeros((), dtype=exact_square_corr_img.dtype),
-    )
-    pixel_weight = jnp.asarray(
-        exact_square_corr_img
-        * jnp.asarray(half_weights[score_indices], dtype=real_dtype)[None, :],
-        dtype=real_dtype,
-    )
     return RelionExactCoarseGaussianOperands(
         shifted_corrected=jnp.asarray(shifted_corrected, dtype=complex_dtype),
         pixel_weight=pixel_weight,
