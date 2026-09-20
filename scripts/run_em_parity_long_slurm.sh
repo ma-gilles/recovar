@@ -34,6 +34,10 @@ K1_FIXTURE_DIR="${K1_FIXTURE_DIR:-/scratch/gpfs/GILLES/mg6942/em_relion_proj/dat
 K1_NATIVE_RELION_DIR="${K1_NATIVE_RELION_DIR:-${K1_FIXTURE_DIR}/relion_initialmodel_k1_it008}"
 RELION_REFINE="${RELION_REFINE:-/scratch/gpfs/GILLES/mg6942/relion/build_patched/bin/relion_refine}"
 mkdir -p "${SCRATCH_DIR}"
+# pytest --basetemp creates only its own leaf directory, so the results root has to
+# exist first; without it every test job dies in setup with FileNotFoundError before
+# running anything.
+mkdir -p "${SCRATCH_DIR}/results"
 touch "${SCRATCH_DIR}/SAFE_TO_DELETE"
 
 WATCH=0
