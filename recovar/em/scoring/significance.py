@@ -147,6 +147,9 @@ _K1_COARSE_GAUSSIAN_NATIVE_TEXTURE_ENV = (
 _SIGNIFICANCE_DUMP_PASSIVE_CACHE_ENV = (
     "RECOVAR_SIGNIFICANCE_DUMP_PASSIVE_CACHE"
 )
+_COARSE_PAD_FINAL_IMAGE_BATCH_ENV = (
+    "RECOVAR_COARSE_PAD_FINAL_IMAGE_BATCH"
+)
 NVTX_DOMAIN_EM = "recovar_em"
 logger = logging.getLogger(__name__)
 
@@ -191,6 +194,29 @@ def _pad_significance_preprocess_inputs(
         None if batch_corr is None else _repeat_pad_batch_axis(batch_corr, target_size),
         _repeat_pad_batch_axis(batch_scale, target_size),
         padded_kwargs,
+    )
+
+
+@partial(jax.jit, static_argnames=("complex_dtype", "real_dtype"))
+def _windowed_score_operands(
+    shifted_half,
+    score_weight_half,
+    window_indices,
+    *,
+    complex_dtype,
+    real_dtype,
+):
+    """Gather and cast the coarse score operands in one program.
+
+    Eagerly these four lines are six XLA programs (two gathers, two index
+    broadcasts and two element casts), retraced for every image-batch extent.
+    The primitives, their order and their dtypes are unchanged, so the result
+    is bit-for-bit the eager one; only the program count differs.
+    """
+
+    return (
+        shifted_half[:, window_indices].astype(complex_dtype),
+        score_weight_half[:, window_indices].astype(real_dtype),
     )
 
 
@@ -540,6 +566,28 @@ def _coarse_significance_support_audit_enabled(
     """Resolve exact, diagnostic-only coarse-support hashing."""
 
     return parse_env_strict_flag(_COARSE_SIGNIFICANCE_SUPPORT_AUDIT_ENV, default=default)
+
+
+def _coarse_pad_final_image_batch_enabled(*, default: bool = False) -> bool:
+    """Whether every coarse image batch is padded to the requested batch size.
+
+    A half set is rarely an exact multiple of ``image_batch_size``, so its last
+    batch has its own image extent and every program in the coarse pass,
+    significance and image preprocessing is traced and compiled a second time
+    for it. Padding repeats image row zero up to ``image_batch_size``; the
+    repeated rows are discarded from every science output, so the retained
+    values are bit-for-bit those of the unpadded batch (the per-image
+    computations are independent, and the batch-level reductions are maxima
+    over rows that row zero already contributes).
+
+    The knob is opt-in while the equality is being qualified; VDAM already
+    requests the same padding explicitly through ``pad_final_image_batch``.
+    """
+
+    return parse_env_strict_flag(
+        _COARSE_PAD_FINAL_IMAGE_BATCH_ENV,
+        default=default,
+    )
 
 
 def _coarse_significance_support_audit_ids_enabled() -> bool:
@@ -913,7 +961,11 @@ def _compute_k_class_significance_batched(
     from recovar.em.helpers.half_spectrum import make_half_image_weights, make_scoring_half_image_weights
     from recovar.em.helpers.image_shifts import apply_relion_integer_pre_shifts, tiled_half_image_phase_factors
     from recovar.em.helpers.oversampling import find_significant_rotations as _find_sig
-    from recovar.em.helpers.preprocessing import prepare_batch_preprocess_operands, process_half_image
+    from recovar.em.helpers.preprocessing import (
+        jit_stage_glue_enabled,
+        prepare_batch_preprocess_operands,
+        process_half_image,
+    )
     from recovar.em.helpers.preprocessing import preprocess_batch as _preprocess_batch
     from recovar.em.helpers.preprocessing import preprocess_batch_firstiter_cc as _preprocess_batch_firstiter_cc
     from recovar.em.helpers.projection import compute_projections_block as _compute_projections_block
@@ -936,6 +988,9 @@ def _compute_k_class_significance_batched(
     score_mode = str(score_mode)
     if score_mode not in {"gaussian", "normalized_cc"}:
         raise ValueError(f"score_mode must be 'gaussian' or 'normalized_cc', got {score_mode!r}")
+    # VDAM asks for the padded tail batch explicitly; the global coarse pass
+    # opts in through the environment while the bitwise equality is qualified.
+    pad_final_image_batch = bool(pad_final_image_batch) or _coarse_pad_final_image_batch_enabled()
     # RELION's pdf_orientation/pdf_offset priors and score/evidence/Pmax
     # outputs are RFLOAT (double), never narrowed -- derive from the
     # caller's own use_float64_scoring instead of hardcoding float32.
@@ -2943,9 +2998,23 @@ def _compute_k_class_significance_batched(
                     0.0,
                     coarse_gaussian_unshifted_score_weighted,
                 )
+        fused_window_operands = (
+            jit_stage_glue_enabled()
+            and use_window
+            and not exact_compact_preprocess_enabled
+            and not (score_mode == "normalized_cc" and tree_rescore_enabled)
+        )
         if exact_compact_preprocess_enabled:
             shifted_data = None
             ctf2_data = None
+        elif fused_window_operands:
+            shifted_data, ctf2_data = _windowed_score_operands(
+                shifted_half,
+                score_weight_half,
+                window_indices,
+                complex_dtype=jnp.complex128 if use_float64_scoring else jnp.complex64,
+                real_dtype=jnp.float64 if use_float64_scoring else jnp.float32,
+            )
         elif use_window:
             shifted_data = shifted_half[:, window_indices]
             ctf2_data = score_weight_half[:, window_indices]
@@ -2958,7 +3027,8 @@ def _compute_k_class_significance_batched(
             ctf2_data = score_weight_half
             if score_mode == "normalized_cc" and tree_rescore_enabled:
                 tree_rescore_unshifted_data = tree_rescore_unshifted_half
-        if exact_compact_preprocess_enabled:
+        if exact_compact_preprocess_enabled or fused_window_operands:
+            # ``_windowed_score_operands`` already cast both operands.
             pass
         elif use_float64_scoring:
             shifted_data = shifted_data.astype(jnp.complex128)
