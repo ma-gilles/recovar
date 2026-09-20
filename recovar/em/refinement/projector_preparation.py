@@ -99,8 +99,19 @@ def _relion_projector_half_maps_for_scoring(
     n_classes: int,
     real_references=None,
     dump_label: str | None = None,
+    projector_setup_backend: str = "native",
 ) -> tuple[np.ndarray, int]:
-    """Build RELION ``Projector::data`` slabs from current Fourier references."""
+    """Build RELION ``Projector::data`` slabs from current Fourier references.
+
+    ``projector_setup_backend`` selects who computes the padded transform.
+    ``"native"`` calls RELION's own ``Projector::computeFourierTransformMap``
+    through the binding, on the host and in double; ``"jax"`` takes the
+    device path in the same precision. Refinement has always taken the native
+    default because this argument did not exist here, which is why the two
+    transforms, one per half, cost 3.6 to 3.8 s per iteration with the GPU
+    idle. The default stays native until the device path is qualified against
+    it at padding factor 2, the factor refinement uses.
+    """
 
     from recovar.core import fourier_transform_utils as ftu
     from recovar.em.relion.relion_projector_setup import reference_to_relion_projector_half_maps
@@ -130,7 +141,13 @@ def _relion_projector_half_maps_for_scoring(
             refs_ft if refs_real_override is None else refs_real_override
         )
         hasher = hashlib.sha256()
-        hasher.update(b"recovar-relion-projector-cache-v1")
+        # v2: the backend joins the key. Two backends compute the same slab by
+        # different transforms and do not agree bitwise, so a v1 key would
+        # serve one backend's slab to the other and hide exactly the difference
+        # a comparison is trying to measure. Old v1 entries become unreachable,
+        # which costs one rebuild and is the safe direction.
+        hasher.update(b"recovar-relion-projector-cache-v2")
+        hasher.update(str(projector_setup_backend).encode("utf-8"))
         hasher.update(b"fourier-reference" if refs_real_override is None else b"real-reference")
         hasher.update(str(refs_for_hash.dtype).encode("utf-8"))
         hasher.update(np.asarray(refs_for_hash.shape, dtype=np.int64).tobytes())
@@ -170,6 +187,13 @@ def _relion_projector_half_maps_for_scoring(
         refs_real,
         current_size=resolved_current_size,
         padding_factor=int(padding_factor),
+        projector_setup_backend=projector_setup_backend,
+        # Refinement consumes complex128, which its own log line reports. The
+        # native binding already returns that, so this is a no-op there; the
+        # JAX path narrows to complex64 for the InitialModel consumer unless
+        # told otherwise. Asking explicitly is what keeps the backend a choice
+        # of who computes the transform rather than a change of precision.
+        projector_data_dtype="complex128",
     )
     if cache_path is not None:
         os.makedirs(cache_dir, exist_ok=True)

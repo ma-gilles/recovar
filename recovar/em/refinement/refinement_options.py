@@ -252,6 +252,12 @@ class RefinementOptions:
     batching: RefinementBatching = field(default_factory=RefinementBatching)
     overlap: HalfOverlapOptions = field(default_factory=HalfOverlapOptions)
     disc_type: str = "linear_interp"
+    # Who computes RELION's padded projector transform. "native" runs
+    # Projector::computeFourierTransformMap on the host through the
+    # binding, which costs 3.6-3.8 s per iteration with the GPU idle;
+    # "jax" takes the device path in the same double precision. Native
+    # until the device path is qualified at padding factor 2.
+    projector_setup_backend: Literal["native", "jax"] = "native"
 
 
 def _validate_relion_healpix_orders(orders, *, max_iter, init_healpix_order, max_healpix_order):

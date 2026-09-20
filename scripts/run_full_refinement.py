@@ -2830,6 +2830,18 @@ def main():
         help="Rotations per block (larger = faster, less Python overhead)",
     )
     parser.add_argument(
+        "--projector_setup_backend",
+        choices=("native", "jax"),
+        default="native",
+        help=(
+            "Who computes RELION's padded projector transform. 'native' runs "
+            "Projector::computeFourierTransformMap on the host in double, "
+            "which costs 3.6-3.8 s per iteration with the GPU idle; 'jax' "
+            "takes the device path in the same precision. Native until the "
+            "device path is qualified at padding factor 2."
+        ),
+    )
+    parser.add_argument(
         "--overlap_halves",
         action="store_true",
         help=(
@@ -4766,6 +4778,7 @@ def main():
             overlap=HalfOverlapOptions(
                 overlap_halves=bool(args.overlap_halves),
             ),
+            projector_setup_backend=args.projector_setup_backend,
             adaptive=AdaptiveOptions(
                 relion_current_sizes=oracle_current_sizes,
                 relion_healpix_orders=oracle_healpix_orders,
