@@ -3019,6 +3019,10 @@ def compute_pass2_stats_sparse_bucketed(
                             },
                             posterior=mstep_probs,
                             posterior_name="mstep-posterior-chunked",
+                            dominated_by=(
+                                ("ctf_probs", "ctf2_over_nv_recon", 1e-3),
+                                ("summed", "shifted_recon_split", 1e-3),
+                            ),
                             context=finite_check.describe_context(
                                 iteration=bpref_diagnostics._bpref_contribution_context.get("iteration"),
                                 half=bpref_diagnostics._bpref_contribution_context.get("half"),
@@ -4450,6 +4454,10 @@ def compute_pass2_stats_sparse_bucketed(
                     },
                     posterior=mstep_probs,
                     posterior_name="mstep-posterior",
+                    dominated_by=(
+                        ("ctf_probs", "ctf2_over_nv_recon", 1e-3),
+                        ("summed", "shifted_recon_split", 1e-3),
+                    ),
                     context=_p4d_context,
                     image_ids=image_indices,
                 )

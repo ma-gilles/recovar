@@ -325,6 +325,7 @@ def check_bundle(
     *,
     posterior=None,
     posterior_name: str = "posterior",
+    dominated_by: tuple | None = None,
     context: str = "",
     image_ids=None,
     operands: dict | None = None,
@@ -388,6 +389,31 @@ def check_bundle(
         track_max_host(f"{posterior_name}.image_sum_max", row_sum_max)
 
     messages = []
+    # Exact reduction invariants, free because the maxima are already here.
+    # ``sum_t probs <= 1`` and ``probs >= 0`` make each M-step sum bounded by
+    # the largest operand it reduces, whatever the magnitudes. This catches an
+    # element-level fault inside the reduction that never appears in any
+    # materialised input array, which a finiteness test cannot see until the
+    # accumulated value actually overflows.
+    maxima = {name: float(host[2 * index]) for index, name in enumerate(names)}
+    for reduced, operand, slack in dominated_by or ():
+        if reduced not in maxima or operand not in maxima:
+            continue
+        limit = maxima[operand] * (1.0 + slack)
+        if maxima[reduced] > limit:
+            broken = (
+                f"reduction bound broken in stage {stage!r}: {context}\n"
+                f"  max |{reduced}| = {maxima[reduced]:.6g} exceeds "
+                f"(1+{slack:g}) * max |{operand}| = {limit:.6g}\n"
+                f"  every entry of {reduced} is a posterior-weighted sum of "
+                f"{operand} with weights that are non-negative and sum to at "
+                f"most one, so this cannot be rounding"
+            )
+            if finite_check_warn_only():
+                logger.error("%s", broken)
+                messages.append(broken)
+            else:
+                raise FiniteCheckError(broken)
     if offenders:
         messages.append(
             check_arrays(
