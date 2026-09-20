@@ -680,6 +680,66 @@ def test_resident_driver_repeats_itself(_resident_production_env):
 
 
 @requires_resident_gpu
+def test_glue_programs_match_the_loose_dispatch(_resident_production_env, monkeypatch):
+    """P3-A: where the chunk loop's JIT boundary sits changes no output.
+
+    ``RECOVAR_SPARSE_PASS2_RESIDENT_GLUE_JIT`` picks between one program per
+    M-step block and the loose sequence of eager operations the per-stage path
+    used before P3-A. The stage bodies are the same functions in both
+    settings, so the discrete state and the ordered statistics must be
+    bitwise; the two reductions that are not bit-reproducible even between two
+    identical runs -- the float32 BPref atomics and the CUDA shell binning --
+    are held to the repeat band
+    :func:`test_resident_driver_repeats_itself` measures.
+    """
+
+    args = _driver_fixture_args()
+    monkeypatch.setenv("RECOVAR_SPARSE_PASS2_RESIDENT_GLUE_JIT", "0")
+    loose = rp.compute_pass2_stats_resident(**args)
+    monkeypatch.setenv("RECOVAR_SPARSE_PASS2_RESIDENT_GLUE_JIT", "1")
+    programs = rp.compute_pass2_stats_resident(**args)
+
+    np.testing.assert_array_equal(loose.hard_assignment, programs.hard_assignment)
+    np.testing.assert_array_equal(
+        loose.best_rotation_indices, programs.best_rotation_indices
+    )
+    np.testing.assert_array_equal(loose.best_rotations, programs.best_rotations)
+    np.testing.assert_array_equal(loose.best_translations, programs.best_translations)
+    np.testing.assert_array_equal(
+        np.asarray(loose.score_log_z), np.asarray(programs.score_log_z)
+    )
+    for field in (
+        "log_evidence_per_image",
+        "best_log_score_per_image",
+        "max_posterior_per_image",
+        "rotation_posterior_sums",
+    ):
+        np.testing.assert_array_equal(
+            np.asarray(getattr(loose.relion_stats, field)),
+            np.asarray(getattr(programs.relion_stats, field)),
+            err_msg=field,
+        )
+    for field in ("wsum_sigma2_noise", "wsum_norm_correction"):
+        np.testing.assert_array_equal(
+            np.asarray(getattr(loose.noise_stats, field)),
+            np.asarray(getattr(programs.noise_stats, field)),
+            err_msg=field,
+        )
+
+    def rel_l2(a, b):
+        a = np.asarray(a)
+        b = np.asarray(b)
+        den = float(np.linalg.norm(a))
+        return float(np.linalg.norm(a - b) / den) if den else 0.0
+
+    assert rel_l2(loose.Ft_y, programs.Ft_y) < 1e-7
+    assert rel_l2(loose.Ft_ctf, programs.Ft_ctf) < 1e-7
+    assert rel_l2(
+        loose.noise_stats.wsum_img_power, programs.noise_stats.wsum_img_power
+    ) < 1e-7
+
+
+@requires_resident_gpu
 def test_degenerate_cross_class_normalizer_is_a_no_op_for_the_compact_engine(
     _resident_production_env,
 ):

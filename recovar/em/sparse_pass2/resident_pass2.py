@@ -221,6 +221,19 @@ _RESIDENT_OPERANDS_VERIFY_ENV = "RECOVAR_SPARSE_PASS2_RESIDENT_OPERANDS_VERIFY"
 # of the XLA statement. Measurement only: see
 # ``_resident_block_weighted_sums_kernel`` for why it is not the default.
 _KERNEL_CTF_PROBS_ENV = "RECOVAR_SPARSE_PASS2_RESIDENT_KERNEL_CTF_PROBS"
+# P3-A: dispatch the per-stage chunk loop's three stages as jitted programs
+# keyed on the capacity class instead of as loose eager operations. Default on.
+# ``RECOVAR_SPARSE_PASS2_RESIDENT_GLUE_JIT=0`` restores the loose dispatch,
+# which stays the oracle every bitwise comparison of this change is made
+# against. The stage bodies are the same functions in both settings, so the
+# flag changes only where the JIT boundary sits.
+_RESIDENT_GLUE_JIT_ENV = "RECOVAR_SPARSE_PASS2_RESIDENT_GLUE_JIT"
+# Diagnostic, default off. Checks the statically computed M-step carry avals
+# against a ``jax.eval_shape`` probe of the same block stages, once per
+# capacity class. The probes are what this change removes from the chunk loop;
+# the flag exists so a test, or a suspicious run, can prove the arithmetic
+# still agrees with them.
+_CARRY_AVAL_PROBE_ENV = "RECOVAR_SPARSE_PASS2_RESIDENT_CARRY_AVAL_PROBE"
 # Relative band the racing shell-binning scatter is allowed in the verification
 # arm: 12x the measured same-call spread of 5.8e-8, still far inside one
 # float32 ulp of the accumulated shell power.
@@ -2259,6 +2272,49 @@ def _resident_operands_requested() -> bool:
     return parse_env_flag(_RESIDENT_OPERANDS_ENV, default=True)
 
 
+def _resident_glue_jit_enabled() -> bool:
+    """Whether the chunk loop's three stages are dispatched as jitted programs.
+
+    Default on. With the flag off every stage runs as the loose sequence of
+    eager operations the per-stage path used before P3-A: the same functions,
+    the same order, only without the enclosing ``jax.jit``. That form is the
+    oracle for the bitwise comparison, so it is kept rather than deleted.
+    """
+
+    return parse_env_flag(_RESIDENT_GLUE_JIT_ENV, default=True)
+
+
+def _carry_aval_probe_enabled() -> bool:
+    """Whether to check the static carry avals against a shape probe."""
+
+    return parse_env_flag(_CARRY_AVAL_PROBE_ENV, default=False)
+
+
+_DEVICE_INT32_CACHE: dict[int, jax.Array] = {}
+
+
+def _device_int32(value: int) -> jax.Array:
+    """A device int32 scalar, made once per distinct value for the process.
+
+    The M-step block program takes its row offset as a device operand so that
+    one program serves every block of a capacity class. Building that scalar
+    with ``jnp.asarray`` inside the loop would put one eager dispatch back per
+    block, which is the cost this program exists to remove; the offsets are a
+    handful of multiples of the block size, so they are made once and reused.
+    Single-device only, which is what the EM engines run on; a multi-device
+    process falls through to a fresh array.
+    """
+
+    key = int(value)
+    if len(jax.devices()) != 1:
+        return jnp.asarray(key, dtype=jnp.int32)
+    cached = _DEVICE_INT32_CACHE.get(key)
+    if cached is None:
+        cached = jnp.asarray(key, dtype=jnp.int32)
+        _DEVICE_INT32_CACHE[key] = cached
+    return cached
+
+
 def _chunk_static_block_trip_enabled() -> bool:
     """Whether the chunk program's M-step loop runs the whole row capacity.
 
@@ -2673,28 +2729,34 @@ def _resident_mstep_block(
     )
 
 
-def _initial_mstep_carry(
-    Ft_y,
-    Ft_ctf,
+def _mstep_block_operand_dtypes(
     operands: _ChunkStageOperands,
     tables: _ChunkStageTables,
     *,
     spec: _ChunkProgramSpec,
     projection_dtypes=None,
-) -> _ChunkMstepCarry:
-    """Zero-initialized block accumulators with the block stages' own dtypes.
+) -> dict:
+    """Dtypes of the M-step block's intermediates, by promotion arithmetic.
 
-    The per-image ``A2``/``XA`` partials take whatever dtype the noise and
-    projection operands promote to, so the initial carry is typed by tracing
-    the two block programs on the real operand avals instead of guessing.
-    Zero-initializing (rather than seeding with the first block, as an earlier
-    revision did) makes the loop a ``lax.fori_loop`` carry; adding a leading
-    zero changes no float value except the unobservable ``-0.0`` case.
+    Every statement between the block's operands and its three accumulating
+    outputs promotes; none of them casts, except the one explicit
+    ``astype(float64)`` on the noise shells. So the output dtypes follow from
+    the operand dtypes alone, on the host, without tracing anything:
+
+    * ``summed_masked`` is the translate-and-sum kernel's declared complex64
+      output, or ``compute_local_weighted_sums`` of the float32 posterior
+      against the noise tile;
+    * ``ctf_probs`` is the kernel's declared float32 fourth output when it is
+      selected, and otherwise ``compute_local_ctf_sums_from_probs_sum_t`` of
+      the float32 translation mass against the gathered CTF row;
+    * ``A2`` promotes ``|proj|^2``, ``ctf_probs`` and the noise variance;
+    * ``XA`` promotes the noise variance against the real part of
+      ``proj * conj(summed_masked)``.
+
+    ``_carry_aval_probe_enabled`` checks this against ``jax.eval_shape`` of the
+    real block stages; the unit tests set it.
     """
 
-    image_capacity = int(spec.image_capacity)
-    block_rows = int(spec.mstep_block_rows)
-    n_pixels = int(spec.n_recon_pixels)
     if projection_dtypes is None:
         # The global pass reads the per-iteration caches; local search has no
         # cache and hands the dtypes of the projections it just computed.
@@ -2702,24 +2764,59 @@ def _initial_mstep_carry(
             tables.projection_recon_cache.dtype,
             tables.projection_recon_abs2_cache.dtype,
         )
-    proj_dtype, proj_abs2_dtype = projection_dtypes
+    proj_dtype, proj_abs2_dtype = (jnp.dtype(value) for value in projection_dtypes)
+    noise_dtype = jnp.dtype(tables.noise_variance_for_noise.dtype)
 
     if spec.use_translate_sum_kernel:
-        # The kernel's wrapper declares these two outputs, so their avals are
-        # known without tracing an FFI call.
-        summed_masked_aval = jax.ShapeDtypeStruct((block_rows, n_pixels), jnp.complex64)
-        ctf_probs_aval = jax.ShapeDtypeStruct((block_rows, n_pixels), jnp.float32)
+        summed_masked_dtype = jnp.dtype(jnp.complex64)
     else:
-        summed_masked_aval, ctf_probs_aval = jax.eval_shape(
-            lambda posterior, row_image, recon, noise, ctf2: _resident_block_weighted_sums(
-                posterior, row_image, recon, noise, ctf2
-            )[1:3],
-            jax.ShapeDtypeStruct((block_rows, int(spec.n_fine_trans)), jnp.float32),
-            jax.ShapeDtypeStruct((block_rows,), jnp.int32),
-            operands.shifted_recon,
-            operands.shifted_noise,
-            operands.ctf2_over_nv_recon,
+        summed_masked_dtype = jnp.dtype(
+            jnp.result_type(jnp.float32, operands.shifted_noise.dtype)
         )
+    if spec.use_translate_sum_kernel and spec.kernel_ctf_probs:
+        ctf_probs_dtype = jnp.dtype(jnp.float32)
+    else:
+        ctf_probs_dtype = jnp.dtype(
+            jnp.result_type(jnp.float32, operands.ctf2_over_nv_recon.dtype)
+        )
+
+    a2_dtype = jnp.dtype(jnp.result_type(proj_abs2_dtype, ctf_probs_dtype, noise_dtype))
+    cross_dtype = jnp.dtype(jnp.result_type(proj_dtype, summed_masked_dtype))
+    xa_dtype = jnp.dtype(
+        jnp.result_type(noise_dtype, jnp.zeros((), dtype=cross_dtype).real.dtype)
+    )
+    return {
+        "proj": proj_dtype,
+        "proj_abs2": proj_abs2_dtype,
+        "summed_masked": summed_masked_dtype,
+        "ctf_probs": ctf_probs_dtype,
+        "noise": noise_dtype,
+        "a2": a2_dtype,
+        "xa": xa_dtype,
+        # ``_resident_block_noise_and_norm`` casts the binned shells to float64
+        # before they leave the block, so the carry is float64 whatever the
+        # operands promote to.
+        "noise_shells": jnp.dtype(jnp.float64),
+    }
+
+
+def _probe_mstep_block_output_avals(
+    tables: _ChunkStageTables,
+    *,
+    spec: _ChunkProgramSpec,
+    dtypes: dict,
+):
+    """``jax.eval_shape`` of the block's noise/norm stage, for the aval check.
+
+    This is the probe the chunk loop used to run once per chunk. It is kept as
+    a diagnostic only: :func:`_mstep_block_operand_dtypes` is what the driver
+    uses, and this function exists so that arithmetic can be proved equal to
+    the traced answer.
+    """
+
+    block_rows = int(spec.mstep_block_rows)
+    n_pixels = int(spec.n_recon_pixels)
+    image_capacity = int(spec.image_capacity)
 
     def probe(summed_masked, ctf_probs, proj, proj_abs2, noise, shells, row_image):
         return _resident_block_noise_and_norm(
@@ -2734,25 +2831,220 @@ def _initial_mstep_carry(
             image_capacity=image_capacity,
         )
 
-    shells_aval, a2_aval, xa_aval = jax.eval_shape(
+    return jax.eval_shape(
         probe,
-        summed_masked_aval,
-        ctf_probs_aval,
-        jax.ShapeDtypeStruct((block_rows, n_pixels), proj_dtype),
-        jax.ShapeDtypeStruct((block_rows, n_pixels), proj_abs2_dtype),
+        jax.ShapeDtypeStruct((block_rows, n_pixels), dtypes["summed_masked"]),
+        jax.ShapeDtypeStruct((block_rows, n_pixels), dtypes["ctf_probs"]),
+        jax.ShapeDtypeStruct((block_rows, n_pixels), dtypes["proj"]),
+        jax.ShapeDtypeStruct((block_rows, n_pixels), dtypes["proj_abs2"]),
         tables.noise_variance_for_noise,
         tables.shell_indices_noise,
         jax.ShapeDtypeStruct((block_rows,), jnp.int32),
     )
+
+
+def _check_mstep_carry_avals(
+    tables: _ChunkStageTables,
+    *,
+    spec: _ChunkProgramSpec,
+    dtypes: dict,
+) -> None:
+    """Raise when the static dtypes disagree with the traced block stages."""
+
+    shells_aval, a2_aval, xa_aval = _probe_mstep_block_output_avals(
+        tables, spec=spec, dtypes=dtypes
+    )
+    expected = (
+        ((int(spec.stats_config.n_shells),), dtypes["noise_shells"]),
+        ((int(spec.image_capacity),), dtypes["a2"]),
+        ((int(spec.image_capacity),), dtypes["xa"]),
+    )
+    probed = tuple(
+        (tuple(int(size) for size in aval.shape), jnp.dtype(aval.dtype))
+        for aval in (shells_aval, a2_aval, xa_aval)
+    )
+    if probed != expected:
+        raise AssertionError(
+            "resident M-step carry avals disagree with the traced block stages: "
+            f"static={expected} probed={probed}"
+        )
+
+
+def _initial_mstep_carry(
+    Ft_y,
+    Ft_ctf,
+    operands: _ChunkStageOperands,
+    tables: _ChunkStageTables,
+    *,
+    spec: _ChunkProgramSpec,
+    projection_dtypes=None,
+) -> _ChunkMstepCarry:
+    """Zero-initialized block accumulators with the block stages' own dtypes.
+
+    The per-image ``A2``/``XA`` partials take whatever dtype the noise and
+    projection operands promote to. Those dtypes are computed from the operand
+    dtypes and the capacity class by :func:`_mstep_block_operand_dtypes`, which
+    is host arithmetic; the chunk loop used to learn them by tracing two
+    ``jax.eval_shape`` probes per chunk instead, three traces of Python work
+    for an answer that is the same for every chunk of a class.
+    Zero-initializing (rather than seeding with the first block, as an earlier
+    revision did) makes the loop a ``lax.fori_loop`` carry; adding a leading
+    zero changes no float value except the unobservable ``-0.0`` case.
+    """
+
+    image_capacity = int(spec.image_capacity)
+    dtypes = _mstep_block_operand_dtypes(
+        operands, tables, spec=spec, projection_dtypes=projection_dtypes
+    )
+    if _carry_aval_probe_enabled():
+        _check_mstep_carry_avals(tables, spec=spec, dtypes=dtypes)
     return _ChunkMstepCarry(
         Ft_y=Ft_y,
         Ft_ctf=Ft_ctf,
         wavg_triplet_pixels=jnp.zeros(
             (image_capacity, int(spec.n_rect), 3), dtype=jnp.float32
         ),
-        noise_shells=jnp.zeros(shells_aval.shape, dtype=shells_aval.dtype),
-        a2_per_image=jnp.zeros(a2_aval.shape, dtype=a2_aval.dtype),
-        xa_per_image=jnp.zeros(xa_aval.shape, dtype=xa_aval.dtype),
+        noise_shells=jnp.zeros(
+            (int(spec.stats_config.n_shells),), dtype=dtypes["noise_shells"]
+        ),
+        a2_per_image=jnp.zeros((image_capacity,), dtype=dtypes["a2"]),
+        xa_per_image=jnp.zeros((image_capacity,), dtype=dtypes["xa"]),
+    )
+
+
+class _MstepBlockInputs(NamedTuple):
+    """Chunk-wide row arrays the M-step block program slices its block out of.
+
+    ``row_fine_rot`` and ``projections`` are alternatives, and exactly one is
+    populated: the global pass hands the fine-rotation ids and the program
+    gathers the block's projections out of the per-iteration caches, while
+    local search has no cacheable fine grid and hands the block's projections
+    directly. ``None`` is a pytree structure, so the two callers key different
+    programs without a flag.
+    """
+
+    row_image_local: jax.Array  # int32 [C_R]
+    kernel_row_image_ids: jax.Array  # int32 [C_R]
+    row_posterior: jax.Array  # float32 [C_R, T]
+    row_fine_rot: jax.Array | None  # int32 [C_R]
+    projections: tuple | None  # (proj, |proj|^2, M-step rotations) of one block
+
+
+def _resident_mstep_block_at(
+    block_start,
+    blocks: _MstepBlockInputs,
+    operands: _ChunkStageOperands,
+    tables: _ChunkStageTables,
+    carry: _ChunkMstepCarry,
+    *,
+    spec: _ChunkProgramSpec,
+    cuda_backproject,
+) -> _ChunkMstepCarry:
+    """Slice one block out of the chunk's row arrays and run the block body.
+
+    The per-stage loop did these four slices and three gathers as loose eager
+    operations, one dispatch each per block. They are the same slices: every
+    row capacity is a whole number of blocks, so ``block_start + block_rows``
+    never exceeds the capacity and ``dynamic_slice_in_dim`` never clamps, which
+    makes the rows it returns the rows the Python slice returned.
+    """
+
+    block_rows = int(spec.mstep_block_rows)
+
+    def take(values):
+        return jax.lax.dynamic_slice_in_dim(values, block_start, block_rows, axis=0)
+
+    if blocks.projections is None:
+        block_projections = _cached_block_projections(tables, take(blocks.row_fine_rot))
+    else:
+        block_projections = blocks.projections
+    return _resident_mstep_block(
+        block_row_image=take(blocks.row_image_local),
+        block_kernel_ids=take(blocks.kernel_row_image_ids),
+        block_posterior=take(blocks.row_posterior),
+        block_projections=block_projections,
+        operands=operands,
+        tables=tables,
+        carry=carry,
+        spec=spec,
+        cuda_backproject=cuda_backproject,
+    )
+
+
+@partial(jax.jit, static_argnames=("spec",), donate_argnums=(4,))
+def _resident_mstep_block_program(
+    block_start,
+    blocks: _MstepBlockInputs,
+    operands: _ChunkStageOperands,
+    tables: _ChunkStageTables,
+    carry: _ChunkMstepCarry,
+    *,
+    spec: _ChunkProgramSpec,
+) -> _ChunkMstepCarry:
+    """One M-step block as one program, keyed on the capacity and pixel class.
+
+    Same statements, same order, same dtypes as the loose dispatch; the only
+    change is where the JIT boundary sits. The carry is donated so the two
+    half-volumes the windowed adjoint accumulates into keep being updated in
+    place, as they are when the adjoint FFI is dispatched on its own.
+    """
+
+    from recovar import cuda_backproject
+
+    return _resident_mstep_block_at(
+        block_start,
+        blocks,
+        operands,
+        tables,
+        carry,
+        spec=spec,
+        cuda_backproject=cuda_backproject,
+    )
+
+
+@partial(jax.jit, static_argnames=("spec",))
+def _resident_chunk_posterior_program(
+    rows: _ChunkRowArrays,
+    operands: _ChunkStageOperands,
+    tables: _ChunkStageTables,
+    *,
+    spec: _ChunkProgramSpec,
+) -> _ChunkPosterior:
+    """:func:`_resident_chunk_posterior` as one program per capacity class.
+
+    The stage's own arithmetic is unchanged; what leaves the chunk loop is the
+    dozen eager operations around it -- the two ``arange`` row/image masks, the
+    logical current size, the score reshape and the posterior's unit external
+    weight -- each of which was a dispatch and a single-primitive program.
+    """
+
+    from recovar import cuda_backproject
+
+    return _resident_chunk_posterior(
+        rows, operands, tables, spec=spec, cuda_backproject=cuda_backproject
+    )
+
+
+@partial(jax.jit, static_argnames=("spec",), donate_argnums=(0,))
+def _resident_chunk_statistics_program(
+    stats,
+    rows: _ChunkRowArrays,
+    operands: _ChunkStageOperands,
+    tables: _ChunkStageTables,
+    posterior: _ChunkPosterior,
+    mstep: _ChunkMstepCarry,
+    *,
+    spec: _ChunkProgramSpec,
+):
+    """:func:`_resident_chunk_statistics` as one program per capacity class.
+
+    The statistics accumulator is donated: it is a running total the driver
+    rebinds every chunk, so updating it in place is what the loose dispatch
+    already did through ``_accumulate_chunk_image_terms``.
+    """
+
+    return _resident_chunk_statistics(
+        stats, rows, operands, tables, posterior, mstep, spec=spec
     )
 
 
@@ -2913,15 +3205,26 @@ def _run_resident_chunk_stages(
 
     from recovar import cuda_backproject
 
+    glue_jit = _resident_glue_jit_enabled()
     Ft_y_total, Ft_ctf_total, stats = carry
-    posterior = _resident_chunk_posterior(
-        rows, operands, tables, spec=spec, cuda_backproject=cuda_backproject
-    )
+    if glue_jit:
+        posterior = _resident_chunk_posterior_program(rows, operands, tables, spec=spec)
+    else:
+        posterior = _resident_chunk_posterior(
+            rows, operands, tables, spec=spec, cuda_backproject=cuda_backproject
+        )
     if timing_hook is not None:
         timing_hook("posterior", posterior.row_posterior)
 
     block_rows = int(spec.mstep_block_rows)
     mstep = _initial_mstep_carry(Ft_y_total, Ft_ctf_total, operands, tables, spec=spec)
+    blocks = _MstepBlockInputs(
+        row_image_local=rows.row_image_local,
+        kernel_row_image_ids=posterior.kernel_row_image_ids,
+        row_posterior=posterior.row_posterior,
+        row_fine_rot=rows.row_fine_rot,
+        projections=None,
+    )
     for start in range(0, int(spec.row_capacity), block_rows):
         if start >= int(n_valid_rows):
             # Every row of this block is chunk padding: its posterior is zero,
@@ -2929,6 +3232,11 @@ def _run_resident_chunk_stages(
             # adjoint scatters are exactly zero and adding them changes no
             # accumulator bit.
             break
+        if glue_jit:
+            mstep = _resident_mstep_block_program(
+                _device_int32(start), blocks, operands, tables, mstep, spec=spec
+            )
+            continue
         block = slice(start, start + block_rows)
         mstep = _resident_mstep_block(
             block_row_image=rows.row_image_local[block],
@@ -2944,9 +3252,14 @@ def _run_resident_chunk_stages(
     if timing_hook is not None:
         timing_hook("mstep", (mstep.Ft_y, mstep.Ft_ctf))
 
-    stats = _resident_chunk_statistics(
-        stats, rows, operands, tables, posterior, mstep, spec=spec
-    )
+    if glue_jit:
+        stats = _resident_chunk_statistics_program(
+            stats, rows, operands, tables, posterior, mstep, spec=spec
+        )
+    else:
+        stats = _resident_chunk_statistics(
+            stats, rows, operands, tables, posterior, mstep, spec=spec
+        )
     return mstep.Ft_y, mstep.Ft_ctf, stats
 
 
@@ -3389,6 +3702,7 @@ def run_resident_mstep_blocks(
 
     block_rows = int(mstep_block_rows)
     carry = None
+    glue_jit = _resident_glue_jit_enabled()
 
     def start_carry(projections):
         return _initial_mstep_carry(
@@ -3412,6 +3726,22 @@ def run_resident_mstep_blocks(
         projections = block_projections(start, stop)
         if carry is None:
             carry = start_carry(projections)
+        if glue_jit:
+            carry = _resident_mstep_block_program(
+                _device_int32(start),
+                _MstepBlockInputs(
+                    row_image_local=row_image_local,
+                    kernel_row_image_ids=kernel_row_image_ids,
+                    row_posterior=row_posterior,
+                    row_fine_rot=None,
+                    projections=projections,
+                ),
+                operands,
+                tables,
+                carry,
+                spec=spec,
+            )
+            continue
         carry = _resident_mstep_block(
             block_row_image=row_image_local[block],
             block_kernel_ids=kernel_row_image_ids[block],
