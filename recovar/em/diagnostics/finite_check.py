@@ -7,11 +7,13 @@ but not its source: ``Ft_ctf`` for half 2 holds 2.35 M ``+inf`` entries and
 that ``joinTwoHalvesAtLowResolution`` copies across from half 2. The sums cannot
 say which row produced the first ``inf``, because a sum hides its terms.
 
-This module adds that missing step. It is off unless
+This module adds that missing step. The per-bucket checks are off unless
 ``RECOVAR_EM_FINITE_CHECK=1``: the clean path reduces on the device and pulls
 back one boolean per field, so it costs a reduction and a synchronisation
 rather than a transfer, but it still serialises the pass it watches. An arm
-with it set is a diagnostic arm and never a timing arm.
+with it set is a diagnostic arm and never a timing arm. The once-per-iteration
+accumulator guard (:func:`check_half_accumulators`) is the exception: it is on
+by default, see :func:`half_accumulator_guard_mode`.
 
 On the first non-finite value it reports the half, the bucket, the field, how
 many entries are bad, the first bad flat index, and the operands at that index,
@@ -43,6 +45,7 @@ __all__ = [
     "finite_check_enabled",
     "finite_check_warn_only",
     "half_accumulator_guard_enabled",
+    "half_accumulator_guard_mode",
     "check_half_accumulators",
     "report_tracked",
     "track_max",
@@ -50,6 +53,9 @@ __all__ = [
 ]
 
 HALF_ACCUMULATOR_GUARD_ENV = "RECOVAR_EM_BPREF_FINITE_GUARD"
+HALF_ACCUMULATOR_GUARD_MODES = ("raise", "warn", "off")
+_GUARD_OFF_VALUES = frozenset({"0", "false", "no", "off"})
+_GUARD_RAISE_VALUES = frozenset({"", "1", "true", "yes", "on", "raise"})
 
 # ``reconstruction_probs`` are ``raw_weight / sum_weight`` where the numerator
 # is one of the terms of the denominator, so every entry is at most one and a
@@ -456,10 +462,42 @@ def track_max_host(name: str, value: float) -> None:
         _TRACKED[name] = value
 
 
-def half_accumulator_guard_enabled() -> bool:
-    """Whether the cheap once-per-iteration accumulator guard runs."""
+def half_accumulator_guard_mode() -> str:
+    """How the once-per-iteration accumulator guard behaves: raise, warn or off.
 
-    return _flag(HALF_ACCUMULATOR_GUARD_ENV)
+    The guard is on by default in ``raise`` mode. Job 14193291 (P4-D,
+    2026-09-20) measured its cost on an interleaved off/on pair of twelve
+    one-iteration arms at current size 74 on one H100: in the eight arms that
+    ran without a co-located cold compile the medians were 218.0 s off and
+    218.3 s on, inside the 217.4 to 219.1 s same-source spread, so production
+    pays nothing measurable for stopping where the damage is instead of four
+    stages later.
+
+    ``RECOVAR_EM_BPREF_FINITE_GUARD=0`` (also ``off``, ``false``, ``no``) opts
+    out; ``warn`` logs the offending accumulators and continues;
+    ``RECOVAR_EM_FINITE_CHECK_WARN=1`` demotes it to ``warn`` as well, as it
+    does the per-bucket checks. Any other value is a configuration error and
+    raises, rather than silently running with a guard the caller did not ask
+    for.
+    """
+
+    raw = os.environ.get(HALF_ACCUMULATOR_GUARD_ENV, "").strip().lower()
+    if raw in _GUARD_OFF_VALUES:
+        return "off"
+    if raw == "warn":
+        return "warn"
+    if raw not in _GUARD_RAISE_VALUES:
+        raise ValueError(
+            f"{HALF_ACCUMULATOR_GUARD_ENV}={raw!r}: expected one of 1/on/raise "
+            "(the default), warn, or 0/off"
+        )
+    return "warn" if finite_check_warn_only() else "raise"
+
+
+def half_accumulator_guard_enabled() -> bool:
+    """Whether the cheap once-per-iteration accumulator guard runs (default: yes)."""
+
+    return half_accumulator_guard_mode() != "off"
 
 
 def check_half_accumulators(accumulators: dict, *, context: str = ""):
@@ -473,12 +511,14 @@ def check_half_accumulators(accumulators: dict, *, context: str = ""):
 
     Unlike the per-bucket checks this costs one reduction per accumulator and
     one synchronisation per iteration, against a pass that takes tens of
-    seconds, so it is affordable in production. It is still opt-in
-    (``RECOVAR_EM_BPREF_FINITE_GUARD``) because turning it on changes where a
-    failing run stops, which is a decision for whoever owns the pipeline.
+    seconds, so it is affordable in production and runs by default in raise
+    mode (:func:`half_accumulator_guard_mode`; ``RECOVAR_EM_BPREF_FINITE_GUARD=0``
+    opts out, ``warn`` logs and continues). Turning it off restores the
+    earlier behaviour of failing four stages later on ``wsum_norm_correction``.
     """
 
-    if not half_accumulator_guard_enabled():
+    mode = half_accumulator_guard_mode()
+    if mode == "off":
         return None
     offenders = [
         name
@@ -491,7 +531,7 @@ def check_half_accumulators(accumulators: dict, *, context: str = ""):
     for name in offenders:
         lines.append("  " + _summarise(name, accumulators[name], None))
     message = "\n".join(lines)
-    if finite_check_warn_only():
+    if mode == "warn":
         logger.error("%s", message)
         return message
     raise FiniteCheckError(message)
