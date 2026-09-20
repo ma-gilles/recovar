@@ -1741,6 +1741,7 @@ def compute_pass2_stats_resident(
     # the half's CUDA launches. The operands are per-image pure, so one pass
     # over the half produces the same rows; the chunk loop then gathers them.
     resident_operands = None
+    warmup = None
     if _resident_operands_requested():
         _, _norm_high_shell_dtype = relion_powerclass_noise_dtypes(
             real_dtype=precision_policy.score_real_dtype,
@@ -1775,7 +1776,6 @@ def compute_pass2_stats_resident(
             warm_config = resolve_compile_ahead_config()
             warm_pool = CompileAheadPool(warm_config)
             warm_predicted = None
-            warmed_classes = ()
             with warm_pool:
                 if warm_config.enabled:
                     # A warm-up must never fail a run. The pool swallows a
@@ -1807,7 +1807,7 @@ def compute_pass2_stats_resident(
                             has_highres_xi2=presence.has_highres_xi2,
                             has_relion_norm_high_shell=presence.has_relion_norm_high_shell,
                         )
-                        warmed_classes = _submit_resident_chunk_warmup(
+                        warmup = _submit_resident_chunk_warmup(
                             warm_pool,
                             chunks=chunks,
                             tables=tables,
@@ -1864,9 +1864,9 @@ def compute_pass2_stats_resident(
                         logger.info(
                             "Resident pass-2 compile-ahead: queued %d capacity classes %s "
                             "for the %s chunk path, host cost %.2fs",
-                            len(warmed_classes),
-                            ",".join(f"{r}x{b}" for r, b in warmed_classes) or "-",
-                            chunk_program_path(),
+                            len(warmup.classes),
+                            ",".join(f"{r}x{b}" for r, b in warmup.classes) or "-",
+                            warmup.path,
                             time.time() - warm_t0,
                         )
                     except Exception as exc:  # noqa: BLE001
@@ -1876,7 +1876,7 @@ def compute_pass2_stats_resident(
                             exc,
                         )
                         warm_predicted = None
-                        warmed_classes = ()
+                        warmup = None
                 operands_t0 = time.time()
                 try:
                     resident_operands = prepare_resident_half_operands(
@@ -1943,10 +1943,30 @@ def compute_pass2_stats_resident(
                         "Resident pass-2 compile-ahead operand prediction: %s",
                         difference if difference else "matches the prepared operands",
                     )
+                    # The three spec booleans are the other thing the warm-up has
+                    # to predict from configuration rather than read. They key the
+                    # program, so getting one wrong warms a signature the loop
+                    # never submits even when every operand aval is right.
+                    spec_difference = describe_chunk_spec_prediction(
+                        predicted_rfloat_ctf_wavg=presence.has_direct_ctf_rfloat,
+                        predicted_bpref_recon_operand=presence.has_recon_weight,
+                        predicted_translate_sum_kernel=True,
+                        operands=resident_operands,
+                    )
+                    logger.info(
+                        "Resident pass-2 compile-ahead spec prediction: %s",
+                        spec_difference if spec_difference
+                        else "matches the prepared operands",
+                    )
 
     verify_operands = resident_operands is not None and _resident_operands_verify_enabled()
 
     # ---- chunk loop --------------------------------------------------------
+    # With the warm-up on, collect the (program, spec) keys the loop actually
+    # submits. Comparing them against what the helper compiled is the hit rate:
+    # a key the loop used and the warm-up did not is a program the loop compiled
+    # itself, which is what a mis-predicted spec looks like.
+    submitted_keys = set() if warmup is not None else None
     loop_t0 = time.time()
     for chunk in chunks:
         Ft_y_total, Ft_ctf_total, stats = _run_resident_chunk(
@@ -2002,8 +2022,22 @@ def compute_pass2_stats_resident(
             Ft_y_total=Ft_y_total,
             Ft_ctf_total=Ft_ctf_total,
             cuda_backproject=cuda_backproject,
+            submitted_keys=submitted_keys,
         )
     loop_s = time.time() - loop_t0
+    if warmup is not None:
+        used = submitted_keys or set()
+        covered = used & warmup.keys
+        missed = used - warmup.keys
+        logger.info(
+            "Resident pass-2 compile-ahead hit rate: %d of %d programs the chunk "
+            "loop submitted were already compiled (%d warmed and unused)%s",
+            len(covered),
+            len(used),
+            len(warmup.keys - used),
+            "" if not missed
+            else "; missed " + ", ".join(sorted(name for name, _ in missed)),
+        )
 
     # ---- finalize (identical to the compact return block) ------------------
     Ft_y_total, Ft_ctf_total = enforce_half_volume_x0(
@@ -2241,6 +2275,59 @@ def chunk_program_path() -> str:
     return "eager"
 
 
+class _ChunkWarmup(NamedTuple):
+    """What the warm-up queued, in the terms the chunk loop can be compared in."""
+
+    classes: tuple
+    keys: frozenset
+    path: str
+
+
+def describe_chunk_spec_prediction(
+    *,
+    predicted_rfloat_ctf_wavg,
+    predicted_bpref_recon_operand,
+    predicted_translate_sum_kernel,
+    operands,
+) -> str:
+    """Name every spec boolean the warm-up predicted differently from the loop.
+
+    Returns an empty string when they agree. The loop reads these three from the
+    prepared operands; the warm-up has to predict them from configuration before
+    the preparation runs, so this is the same predict-early verify-late check the
+    operand tree gets, applied to the part of the program key that is not an aval.
+    """
+
+    if operands is None:
+        return "the half prepared no resident operands, so no spec was used"
+    problems = []
+    for name, predicted, actual in (
+        ("use_rfloat_ctf_wavg", bool(predicted_rfloat_ctf_wavg),
+         operands.direct_ctf_rfloat_recon is not None),
+        ("bpref_recon_operand", bool(predicted_bpref_recon_operand),
+         operands.recon_weight is not None),
+        ("use_translate_sum_kernel", bool(predicted_translate_sum_kernel), True),
+    ):
+        if predicted != actual:
+            problems.append(f"{name}: predicted {predicted}, really {actual}")
+    return "; ".join(problems)
+
+
+def chunk_program_keys(path: str, spec) -> frozenset:
+    """The ``(program name, spec)`` keys a chunk of ``spec`` will submit.
+
+    A compiled program is identified by its function and its static argument,
+    so this is the unit in which "what the warm-up compiled" and "what the loop
+    ran" are the same kind of thing. Comparing capacity classes alone would
+    miss a spec that differs in one of the booleans the warm-up has to predict
+    from configuration, which is a real way for a warmed program to go unused.
+    """
+
+    return frozenset(
+        (program.__name__, spec) for program in chunk_programs_for_path(path)
+    )
+
+
 def chunk_programs_for_path(path: str) -> tuple:
     """The jitted programs a chunk will submit on ``path``.
 
@@ -2423,6 +2510,7 @@ def _submit_resident_chunk_warmup(
     present_avals = [getattr(half_operand_avals, n) for n in present]
 
     submitted = []
+    submitted_keys = set()
     for chunk in chunks:
         capacity_class = (int(chunk.row_capacity), int(chunk.image_capacity))
         if capacity_class in submitted:
@@ -2528,7 +2616,8 @@ def _submit_resident_chunk_warmup(
 
         if pool.submit_thunk(f"resident chunk rows={row_capacity} images={image_capacity}", thunk):
             submitted.append(capacity_class)
-    return tuple(submitted)
+            submitted_keys.update(chunk_program_keys(path, spec))
+    return _ChunkWarmup(classes=tuple(submitted), keys=frozenset(submitted_keys), path=path)
 
 
 def _make_chunk_stage_tables(
@@ -4068,8 +4157,13 @@ def _run_resident_chunk(
     Ft_y_total,
     Ft_ctf_total,
     cuda_backproject,
+    submitted_keys=None,
 ):
     """Run every resident stage for one capacity chunk.
+
+    ``submitted_keys``, when given, collects the ``(program name, spec)`` keys
+    this chunk submits, so the driver can say how many of them the compile-ahead
+    warm-up had already compiled. Recording costs a set insert per chunk.
 
     Returns the updated ``(Ft_y_total, Ft_ctf_total, stats)``. Host work inside
     is the chunk's materialize/pad, its operand preparation and the T7 offsets
@@ -4224,6 +4318,9 @@ def _run_resident_chunk(
             resident_operands is not None and resident_operands.recon_weight is not None
         ),
     )
+
+    if submitted_keys is not None:
+        submitted_keys.update(chunk_program_keys(chunk_program_path(), spec))
 
     use_jit = _chunk_jit_enabled()
     if use_jit:

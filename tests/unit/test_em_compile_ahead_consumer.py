@@ -410,3 +410,217 @@ def test_the_eager_path_warms_nothing():
 def test_an_unknown_path_is_refused_rather_than_silently_warming_nothing():
     with pytest.raises(ValueError, match="unknown chunk program path"):
         rp.chunk_programs_for_path("something-else")
+
+
+# ------------------------------------------------------- the hit rate's unit ---
+
+
+class _Spec(str):
+    """Stand-in for `_ChunkProgramSpec`: hashable, compares by value."""
+
+
+def test_a_program_key_is_the_function_and_its_static_argument():
+    """Capacity classes alone are not enough to say a warm-up was used.
+
+    Two chunks of one class share a class but key their programs on the whole
+    spec, so a spec boolean predicted wrongly gives a warmed program the loop
+    never submits while the class looks covered. The key is what the hit rate
+    is counted in.
+    """
+
+    a, b = _Spec("rows=131072,rfloat=1"), _Spec("rows=131072,rfloat=0")
+    keys_a = rp.chunk_program_keys("per-stage", a)
+    keys_b = rp.chunk_program_keys("per-stage", b)
+    assert len(keys_a) == 3
+    assert keys_a.isdisjoint(keys_b), "a different spec must give different keys"
+    assert {name for name, _ in keys_a} == {
+        f.__name__ for f in rp.chunk_programs_for_path("per-stage")
+    }
+
+
+def test_the_fused_path_has_one_key_and_the_eager_path_none():
+    spec = _Spec("s")
+    assert len(rp.chunk_program_keys("fused", spec)) == 1
+    assert rp.chunk_program_keys("eager", spec) == frozenset()
+
+
+# --------------------------------------------- the spec prediction's unit ---
+
+
+class _Operands:
+    def __init__(self, direct_ctf_rfloat_recon=None, recon_weight=None):
+        self.direct_ctf_rfloat_recon = direct_ctf_rfloat_recon
+        self.recon_weight = recon_weight
+
+
+def test_the_spec_prediction_is_quiet_when_it_agrees():
+    message = rp.describe_chunk_spec_prediction(
+        predicted_rfloat_ctf_wavg=True,
+        predicted_bpref_recon_operand=True,
+        predicted_translate_sum_kernel=True,
+        operands=_Operands(direct_ctf_rfloat_recon=object(), recon_weight=object()),
+    )
+    assert message == ""
+
+
+def test_the_spec_prediction_names_a_wrong_rfloat_ctf_flag():
+    """The case that would warm a program the loop never submits.
+
+    Every operand aval can be right and the program still be keyed differently,
+    because `use_rfloat_ctf_wavg` is part of the static argument. The operand
+    comparison cannot see this; that is why it has its own check.
+    """
+
+    message = rp.describe_chunk_spec_prediction(
+        predicted_rfloat_ctf_wavg=True,
+        predicted_bpref_recon_operand=False,
+        predicted_translate_sum_kernel=True,
+        operands=_Operands(direct_ctf_rfloat_recon=None),
+    )
+    assert "use_rfloat_ctf_wavg" in message
+    assert "predicted True, really False" in message
+
+
+def test_the_spec_prediction_names_a_wrong_bpref_flag():
+    message = rp.describe_chunk_spec_prediction(
+        predicted_rfloat_ctf_wavg=False,
+        predicted_bpref_recon_operand=True,
+        predicted_translate_sum_kernel=True,
+        operands=_Operands(recon_weight=None),
+    )
+    assert "bpref_recon_operand" in message
+
+
+def test_the_spec_prediction_says_so_when_no_operands_were_prepared():
+    message = rp.describe_chunk_spec_prediction(
+        predicted_rfloat_ctf_wavg=False,
+        predicted_bpref_recon_operand=False,
+        predicted_translate_sum_kernel=True,
+        operands=None,
+    )
+    assert "no resident operands" in message
+
+
+def test_the_presence_predicate_and_the_spec_check_tell_one_story():
+    """What the warm-up predicts must be what the loop reads, by construction.
+
+    The warm-up feeds `resident_half_operand_presence` into the spec, and the
+    loop reads the same two facts off the prepared operands. This runs both
+    sides of that over the exact-BPref flag and asserts they never disagree.
+    """
+
+    for exact_bpref in (False, True):
+        presence = resident_half_operand_presence(
+            relion_exact_bpref_operands=exact_bpref,
+            use_exact_relion_gaussian=True,
+            accumulate_noise=True,
+            current_size=8,
+        )
+        operands = _Operands(
+            direct_ctf_rfloat_recon=object() if exact_bpref else None,
+            recon_weight=object() if exact_bpref else None,
+        )
+        assert rp.describe_chunk_spec_prediction(
+            predicted_rfloat_ctf_wavg=presence.has_direct_ctf_rfloat,
+            predicted_bpref_recon_operand=presence.has_recon_weight,
+            predicted_translate_sum_kernel=True,
+            operands=operands,
+        ) == ""
+
+
+def _spec_kwargs():
+    """The driver-level half of the spec, identical for both callers."""
+
+    return dict(
+        n_fine_trans=N_FINE_TRANS,
+        n_score_pixels=1024,
+        n_recon_pixels=512,
+        n_rect=2048,
+        mstep_block_rows=8192,
+        adaptive_fraction=0.999,
+        current_size=32,
+        mstep_current_size=32,
+        image_shape=(64, 64),
+        recon_volume_shape=(64, 64, 64),
+        max_adjoint_block_bytes=1 << 30,
+        stats_config=("stats", 33),
+    )
+
+
+def test_the_warm_ups_spec_equals_the_loops_spec():
+    """The whole point of one spec constructor: both callers build one key.
+
+    The warm-up takes the three data-dependent booleans from
+    `resident_half_operand_presence` before the preparation; the loop takes them
+    from the prepared operands after it. Given a configuration where those agree,
+    the two specs must be equal, because the spec is the program's static
+    argument and an unequal spec means a warmed program the loop never submits.
+    """
+
+    for exact_bpref in (False, True):
+        presence = resident_half_operand_presence(
+            relion_exact_bpref_operands=exact_bpref,
+            use_exact_relion_gaussian=True,
+            accumulate_noise=True,
+            current_size=32,
+        )
+        warm = rp._make_chunk_program_spec(
+            row_capacity=131072,
+            image_capacity=128,
+            use_rfloat_ctf_wavg=presence.has_direct_ctf_rfloat,
+            use_translate_sum_kernel=True,
+            bpref_recon_operand=presence.has_recon_weight,
+            **_spec_kwargs(),
+        )
+        # what the loop builds, from the prepared operands rather than the flags
+        loop = rp._make_chunk_program_spec(
+            row_capacity=131072,
+            image_capacity=128,
+            use_rfloat_ctf_wavg=exact_bpref,
+            use_translate_sum_kernel=True,
+            bpref_recon_operand=exact_bpref,
+            **_spec_kwargs(),
+        )
+        assert warm == loop
+        assert hash(warm) == hash(loop)
+        assert rp.chunk_program_keys("per-stage", warm) == rp.chunk_program_keys(
+            "per-stage", loop
+        )
+
+
+def test_one_wrong_boolean_makes_the_keys_disjoint():
+    """So the hit rate, not an assertion, is what reports a mis-predicted spec."""
+
+    right = rp._make_chunk_program_spec(
+        row_capacity=131072, image_capacity=128, use_rfloat_ctf_wavg=True,
+        use_translate_sum_kernel=True, bpref_recon_operand=True, **_spec_kwargs(),
+    )
+    wrong = rp._make_chunk_program_spec(
+        row_capacity=131072, image_capacity=128, use_rfloat_ctf_wavg=False,
+        use_translate_sum_kernel=True, bpref_recon_operand=True, **_spec_kwargs(),
+    )
+    assert right != wrong
+    assert rp.chunk_program_keys("per-stage", right).isdisjoint(
+        rp.chunk_program_keys("per-stage", wrong)
+    )
+
+
+def test_the_environment_fields_are_read_by_the_constructor(monkeypatch):
+    """The three environment-read fields are why one constructor had to exist.
+
+    Both callers must read them at the same moment. This pins that they come
+    from the constructor rather than from either call site, so the only way to
+    get two different values is to change the environment mid-iteration.
+    """
+
+    monkeypatch.setenv("RECOVAR_SPARSE_PASS2_RESIDENT_CHUNK_BLOCK_UNROLL", "1")
+    one = rp._make_chunk_program_spec(
+        row_capacity=8192, image_capacity=32, use_rfloat_ctf_wavg=False,
+        use_translate_sum_kernel=True, bpref_recon_operand=False, **_spec_kwargs(),
+    )
+    monkeypatch.setenv("RECOVAR_SPARSE_PASS2_RESIDENT_CHUNK_BLOCK_UNROLL", "2")
+    two = rp._make_chunk_program_spec(
+        row_capacity=8192, image_capacity=32, use_rfloat_ctf_wavg=False,
+        use_translate_sum_kernel=True, bpref_recon_operand=False, **_spec_kwargs(),
+    )
+    assert one.block_unroll != two.block_unroll
