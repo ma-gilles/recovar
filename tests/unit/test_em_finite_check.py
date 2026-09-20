@@ -139,3 +139,20 @@ def test_tracked_maxima_survive_a_clean_pass_and_record_infinity(enabled):
     assert "summed=inf" in message
     # Reporting clears them, so the next pass starts from its own maxima.
     assert finite_check.report_tracked("again") is None
+
+
+def test_half_accumulator_guard_is_off_by_default_and_names_the_half(monkeypatch):
+    """The cheap once-per-iteration guard, which production could afford."""
+
+    monkeypatch.delenv(finite_check.HALF_ACCUMULATOR_GUARD_ENV, raising=False)
+    poisoned = {"Ft_ctf_1": np.array([1.0, np.inf]), "Ft_y_0": np.array([1.0, 2.0])}
+    assert finite_check.check_half_accumulators(poisoned) is None
+
+    monkeypatch.setenv(finite_check.HALF_ACCUMULATOR_GUARD_ENV, "1")
+    with pytest.raises(finite_check.FiniteCheckError) as excinfo:
+        finite_check.check_half_accumulators(poisoned, context="relion_iteration=15")
+    message = str(excinfo.value)
+    assert "relion_iteration=15" in message
+    assert "Ft_ctf_1" in message and "nonfinite=1/2" in message
+    # The clean half is not named, so the report points at the damage.
+    assert "Ft_y_0" not in message

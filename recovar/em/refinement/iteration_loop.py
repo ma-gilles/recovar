@@ -2448,6 +2448,23 @@ def refine_single_volume(
                 Ft_ctf_1=Ft_ctf_1,
             )
 
+        if finite_check.half_accumulator_guard_enabled():
+            # Before the join, so a report names the half that is actually
+            # damaged rather than the one the join copied it into.
+            finite_check.check_half_accumulators(
+                {
+                    "Ft_y_0": Ft_y_0,
+                    "Ft_y_1": Ft_y_1,
+                    "Ft_ctf_0": Ft_ctf_0,
+                    "Ft_ctf_1": Ft_ctf_1,
+                },
+                context=finite_check.describe_context(
+                    iteration=iteration,
+                    relion_iteration=int(init_relion_iteration) + int(iteration) + 1,
+                    current_size=getattr(state, "current_size", None),
+                ),
+            )
+
         # RELION's --low_resol_join_halves averages the low-resolution shells of
         # the K=1 half accumulators before the Wiener solve; see
         # join_half_accumulators_at_low_resolution for the rationale and cap.

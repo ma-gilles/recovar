@@ -42,10 +42,14 @@ __all__ = [
     "describe_context",
     "finite_check_enabled",
     "finite_check_warn_only",
+    "half_accumulator_guard_enabled",
+    "check_half_accumulators",
     "report_tracked",
     "track_max",
     "track_max_host",
 ]
+
+HALF_ACCUMULATOR_GUARD_ENV = "RECOVAR_EM_BPREF_FINITE_GUARD"
 
 # ``reconstruction_probs`` are ``raw_weight / sum_weight`` where the numerator
 # is one of the terms of the denominator, so every entry is at most one and a
@@ -450,3 +454,44 @@ def track_max_host(name: str, value: float) -> None:
     previous = _TRACKED.get(name)
     if previous is None or value > previous:
         _TRACKED[name] = value
+
+
+def half_accumulator_guard_enabled() -> bool:
+    """Whether the cheap once-per-iteration accumulator guard runs."""
+
+    return _flag(HALF_ACCUMULATOR_GUARD_ENV)
+
+
+def check_half_accumulators(accumulators: dict, *, context: str = ""):
+    """Fail where the damage is, not four stages later.
+
+    Job 14178118's compact control wrote a non-finite BPref accumulator, then
+    reconstructed and saved two all-NaN half maps, updated tau2 from an FSC of
+    [1, 0, 0, ...], printed a healthy noise spectrum, and only then raised on a
+    non-finite ``wsum_norm_correction``. Nothing in that sequence says which
+    accumulator went wrong or in which half.
+
+    Unlike the per-bucket checks this costs one reduction per accumulator and
+    one synchronisation per iteration, against a pass that takes tens of
+    seconds, so it is affordable in production. It is still opt-in
+    (``RECOVAR_EM_BPREF_FINITE_GUARD``) because turning it on changes where a
+    failing run stops, which is a decision for whoever owns the pipeline.
+    """
+
+    if not half_accumulator_guard_enabled():
+        return None
+    offenders = [
+        name
+        for name, value in accumulators.items()
+        if value is not None and not _all_finite(value)
+    ]
+    if not offenders:
+        return None
+    lines = [f"non-finite BPref accumulator before reconstruction: {context}"]
+    for name in offenders:
+        lines.append("  " + _summarise(name, accumulators[name], None))
+    message = "\n".join(lines)
+    if finite_check_warn_only():
+        logger.error("%s", message)
+        return message
+    raise FiniteCheckError(message)
