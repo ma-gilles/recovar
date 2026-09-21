@@ -11,6 +11,7 @@ waive a scientific gate.
 | GF46 coarse GEMM gate, streaming selector, hybrid transition and H100 certificate/hybrid batches | Fixed-geometry runners, analyzers and their exclusive harness tests | Independent coarse GEMM, certificate and hybrid numerical tests |
 | Fixed case-7/case-26 report classification | Four report builders and three exclusive harness-test files | Generic FSC/trajectory/particle-state auditors and independent numerical tests |
 | Historical K1 case captures | 88 shell launchers bound to dated external checkouts and fixed experiments | Configurable launchers, reusable capture tools and independent analyzers |
+| K4 iteration-10 panel12 decomposition | Three-way, cohort, posterior and numerator analyzers with their exclusive tests | Current K4 scorecards, capture validators and production numerical tests |
 
 The 19 GF46/raw-cache files are available at [the last retained source](https://github.com/ma-gilles/recovar/tree/4e3e5396d8c5fee4e207b9df3acb7f9987e17473/scripts),
 with [exact paths, hashes, test inventory and caller audit](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_retired_experiments_20260912/result.json).
@@ -40,6 +41,9 @@ panels are preserved with their dedicated summarizers and tests in the
 [causal-scorecard archive](https://github.com/ma-gilles/recovar-experiments/tree/58574b101593004d65cea4b14872e795335ad475/snapshots/em_causal_scorecards_20260921).
 The main repository retains the current K1, exactly-K4, VDAM, and real-data
 scientific scorecards.
+
+The completed K4 iteration-10 panel12 diagnostic family is preserved
+[with its exclusive tests](https://github.com/ma-gilles/recovar-experiments/tree/13f3163/snapshots/k4_iter10_panel12_diagnostics_20260921).
 
 The first-iteration M-step repeatability launcher/analyzer and its recorded result
 are [archived](https://github.com/ma-gilles/recovar-experiments/tree/cce8ed8b61bdc754414195f5640608fb9d64e28d/experiments/vdam_mstep_repeatability_20260821).
