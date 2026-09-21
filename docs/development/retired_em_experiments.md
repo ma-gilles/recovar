@@ -48,6 +48,8 @@ The completed K4 iteration-10 panel12 diagnostic family is preserved
 [with its exclusive tests](https://github.com/ma-gilles/recovar-experiments/tree/13f3163/snapshots/k4_iter10_panel12_diagnostics_20260921).
 The fixed K4 iteration-2 raw diagnostic family is preserved in a separate
 [source-pinned snapshot](https://github.com/ma-gilles/recovar-experiments/tree/578890a/snapshots/k4_iter2_fixed_raw_diagnostics_20260921).
+Its now-stranded native-target operand audit is preserved
+[with its exclusive test](https://github.com/ma-gilles/recovar-experiments/tree/673e2ec/snapshots/k4_iter2_native_target_diagnostic_20260921).
 The completed single-component frozen-boundary experiment is also
 [source-pinned with its tests](https://github.com/ma-gilles/recovar-experiments/tree/8e2724a/snapshots/frozen_boundary_variant_20260921).
 
