@@ -93,6 +93,15 @@ export RATTLER_CACHE_DIR="${SCRATCH_DIR}/rattler_cache/${job_name}_\${SLURM_JOB_
 # build silently loads someone else's binary. Giving the tier its own cache root
 # makes the library this tier builds and loads private to this tier.
 export RECOVAR_CUDA_CACHE_DIR="${SCRATCH_DIR}/cuda_cache"
+# tests/conftest.py builds its own library at <repo>/.tmp/pytest_custom_cuda/ and
+# overrides RECOVAR_CUDA_CACHE_DIR while doing so, so that path -- not the cache root
+# -- is what these jobs would load. It is shared by every test job running from this
+# checkout and is resolved by a plain exists() check taken before the build lock, so a
+# second concurrent job can pick up a partially written .so. conftest honors
+# RECOVAR_CUDA_LIB read-only, resolving it and never rebuilding, so pointing every job
+# at the one library the launcher already built removes the race, avoids an nvcc build
+# inside each GPU allocation, and gives the tier a single binary identity.
+export RECOVAR_CUDA_LIB="${SCRATCH_DIR}/cuda_cache/libcuda_backproject.so"
 mkdir -p "\${TMPDIR}" "\${PIXI_HOME}" "\${RATTLER_CACHE_DIR}" "\${RECOVAR_CUDA_CACHE_DIR}"
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
 
@@ -109,8 +118,8 @@ git -C "${REPO_ROOT}" rev-parse HEAD
 git -C "${REPO_ROOT}" symbolic-ref --short HEAD || echo '<detached>'
 # A configured path is not a loaded-binary identity; print the digest of the file
 # that will actually be loaded so a result can be tied to one binary after the fact.
-sha256sum "\${RECOVAR_CUDA_CACHE_DIR}/libcuda_backproject.so" 2>/dev/null \
-  || echo "custom CUDA library not yet built in \${RECOVAR_CUDA_CACHE_DIR}"
+sha256sum "\${RECOVAR_CUDA_LIB}" 2>/dev/null \
+  || { echo "custom CUDA library missing at \${RECOVAR_CUDA_LIB}" >&2; exit 1; }
 
 pixi run python -m pytest --em-parity-long -v -s \
   --basetemp "${SCRATCH_DIR}/results/${job_name}_\${SLURM_JOB_ID}" "${test_path}"
