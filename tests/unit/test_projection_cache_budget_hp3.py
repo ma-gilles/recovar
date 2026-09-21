@@ -177,11 +177,16 @@ def test_candidate_density_logging_is_default_off(monkeypatch):
     assert bucketed._CANDIDATE_DENSITY_LOG_ENV == "RECOVAR_SPARSE_PASS2_LOG_CANDIDATE_DENSITY"
 
 
-def test_texture_projector_fallback_is_reported_once_per_reason(monkeypatch, caplog):
-    """A silent fallback to the vmapped JAX projector costs pass-2 host time."""
-    import logging
+def test_a_refused_texture_is_an_error_when_a_device_is_present(monkeypatch):
+    """RELION has no JAX projection, so with a device this is a defect, not a fallback.
 
+    RELION's accelerated build reads float texels through cudaFilterModeLinear
+    with unnormalized coordinates, and this projector's texture is configured
+    the same way, so the vmapped JAX projection is a different computation as
+    well as a slower one. On a machine with a device it must not be reached.
+    """
     import jax.numpy as jnp
+    import pytest
 
     from recovar.em.helpers import projection
 
@@ -190,19 +195,31 @@ def test_texture_projector_fallback_is_reported_once_per_reason(monkeypatch, cap
     good = jnp.zeros((187, 187, 94), jnp.complex64)
     assert projection._relion_projector_texture_enabled(good, r_max=46, padding_factor=2) is True
 
-    wrong_dtype = jnp.zeros((187, 187, 94), jnp.complex128)
+    wrong_shape = jnp.zeros((99, 99, 50), jnp.complex64)
+    with pytest.raises(RuntimeError, match="would fall back to JAX"):
+        projection._relion_projector_texture_enabled(wrong_shape, r_max=46, padding_factor=2)
+
+
+def test_the_fallback_survives_where_there_is_no_device(monkeypatch, caplog):
+    """Without a device there is no texture to use, and CPU tests take this path."""
+    import logging
+
+    import jax.numpy as jnp
+
+    from recovar.em.helpers import projection
+
+    monkeypatch.setattr(projection, "_cuda_projection_available", lambda: False)
+    projection._TEXTURE_FALLBACK_REPORTED.clear()
+    slab = jnp.zeros((187, 187, 94), jnp.complex64)
     with caplog.at_level(logging.WARNING, logger=projection.logger.name):
         assert (
-            projection._relion_projector_texture_enabled(wrong_dtype, r_max=46, padding_factor=2)
-            is False
+            projection._relion_projector_texture_enabled(slab, r_max=46, padding_factor=2) is False
         )
         assert (
-            projection._relion_projector_texture_enabled(wrong_dtype, r_max=46, padding_factor=2)
-            is False
+            projection._relion_projector_texture_enabled(slab, r_max=46, padding_factor=2) is False
         )
     messages = [r.message for r in caplog.records if "texture projector unavailable" in r.message]
     assert len(messages) == 1, messages
-    assert "complex128" in messages[0] and "want complex64" in messages[0]
 
 
 def test_pass2_projector_complex64_knob_is_default_off(monkeypatch):
@@ -219,8 +236,14 @@ def test_pass2_projector_complex64_knob_is_default_off(monkeypatch):
     )
 
 
-def test_pass2_projector_cast_unblocks_the_texture_projector(monkeypatch):
-    """complex128 is exactly what makes the texture path reject the slab."""
+def test_a_double_slab_is_narrowed_at_the_device_boundary_as_relion_does(monkeypatch):
+    """RELION stores Projector::data in double and narrows only the texture copy.
+
+    ``AccProjector::initMdl(Complex *data)`` copies element by element into
+    XFLOAT, which is float in the accelerated build, and leaves the caller's
+    slab alone. So a double slab must reach the texture, not be refused by it,
+    and the caller's array must keep its own dtype.
+    """
     import jax.numpy as jnp
 
     from recovar.em.helpers import projection
@@ -228,13 +251,16 @@ def test_pass2_projector_cast_unblocks_the_texture_projector(monkeypatch):
     monkeypatch.setattr(projection, "_cuda_projection_available", lambda: True)
     projection._TEXTURE_FALLBACK_REPORTED.clear()
     slab = jnp.zeros((187, 187, 94), jnp.complex128)
-    assert projection._relion_projector_texture_enabled(slab, r_max=46, padding_factor=2) is False
+
+    narrowed = projection.narrow_projector_slab_for_texture(slab)
+    assert narrowed.dtype == jnp.complex64
+    assert slab.dtype == jnp.complex128, "the stored slab must not be narrowed in place"
     assert (
-        projection._relion_projector_texture_enabled(
-            slab.astype(jnp.complex64), r_max=46, padding_factor=2
-        )
-        is True
+        projection._relion_projector_texture_enabled(narrowed, r_max=46, padding_factor=2) is True
     )
+
+    already = projection.narrow_projector_slab_for_texture(narrowed)
+    assert already is narrowed, "an already-narrow slab must not be copied again"
 
 
 def test_projector_build_log_reports_the_slab_dtype():

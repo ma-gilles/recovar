@@ -20,6 +20,10 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_PROJECTION_MAX_R = object()
 _RELION_PROJECTOR_TEXTURE_ENV = "RECOVAR_RELION_PROJECTOR_TEXTURE_INTERP"
+# On a machine with a device, a refused texture is an error rather than a
+# silent switch to an arithmetic RELION does not have. Diagnostics that want
+# to compare the two paths set this to 0.
+_REQUIRE_CUDA_PROJECTOR_ENV = "RECOVAR_EM_REQUIRE_CUDA_PROJECTOR"
 
 
 @partial(jax.jit, static_argnums=(2, 3, 4, 5))
@@ -258,6 +262,40 @@ def relion_projector_half_to_texture_full(volume_relion_half: jax.Array) -> jax.
 
 _TEXTURE_FALLBACK_REPORTED: set[str] = set()
 
+# RELION keeps ``Projector::data`` in complex double and narrows only the copy
+# it uploads to the device. Its accelerated build is configured exactly that
+# way: ``DoublePrec_CPU=ON`` makes ``RFLOAT`` double, so ``Projector::data`` is
+# ``MultidimArray<Complex>`` with ``Complex = tComplex<RFLOAT>``
+# (src/projector.h:75, src/complex.h:26), while ``DoublePrec_ACC=OFF`` makes
+# ``XFLOAT`` float (src/acc/settings.h), and
+# ``AccProjector::initMdl(Complex *data)`` copies element by element with
+# ``tmpReal[i] = (XFLOAT) data[i].real`` before building the texture
+# (src/acc/acc_projector_impl.h:276-290). Every projection in a ``--gpu`` run,
+# which is what our oracle runs, therefore reads float texels from a slab that
+# is stored in double.
+#
+# So narrowing here is RELION's behaviour, not a deviation from it, and it is
+# the narrowing RELION performs: at the device boundary, leaving the stored
+# slab alone. Refusing the texture on dtype and projecting from the double slab
+# in JAX instead, which is what this function used to do, is the deviation.
+def narrow_projector_slab_for_texture(volume_relion_half):
+    """Cast a ``Projector::data`` slab to the texture's element type.
+
+    The counterpart of ``AccProjector::initMdl(Complex *data)``: the caller's
+    slab is left as it is and the returned copy is what the texture reads.
+    """
+
+    volume = jnp.asarray(volume_relion_half)
+    if jnp.dtype(volume.dtype) == jnp.dtype(jnp.complex64):
+        return volume
+    if jnp.dtype(volume.dtype) != jnp.dtype(jnp.complex128):
+        raise ValueError(
+            "a RELION projector slab is complex; got "
+            f"{volume.dtype}. Only complex128 is narrowed here, because that is "
+            "the one RELION itself narrows at the device boundary."
+        )
+    return volume.astype(jnp.complex64)
+
 
 def _relion_projector_texture_enabled(
     volume_relion_half,
@@ -278,14 +316,30 @@ def _relion_projector_texture_enabled(
     shape_ok = len(shape) == 3 and shape == (expected_pad, expected_pad, expected_pad // 2 + 1)
     enabled_now = cuda_ok and dtype_ok and shape_ok
     if not enabled_now:
-        # Falling back here replaces one texture-projector call with a vmapped
-        # JAX projection whose per-row dispatch dominates pass-2 host time, so
-        # report the reason once per distinct cause instead of failing silent.
         reason = (
             f"cuda={cuda_ok} dtype={volume_relion_half.dtype} (want complex64) "
             f"shape={shape} (want {(expected_pad, expected_pad, expected_pad // 2 + 1)}) "
             f"r_max={int(r_max)} padding_factor={int(padding_factor)}"
         )
+        # There is no JAX projection anywhere in RELION. Its accelerated build
+        # reads float texels through cudaFilterModeLinear with unnormalized
+        # coordinates, which is exactly how this projector's texture is
+        # configured, so falling back to a vmapped JAX projection is both
+        # slower and a different computation from the oracle. With a device
+        # present that is a defect in the caller, not a condition to work
+        # around, and it stops here.
+        if cuda_ok and parse_env_strict_flag(_REQUIRE_CUDA_PROJECTOR_ENV, default=True):
+            raise RuntimeError(
+                "the RELION texture projector was refused on a machine that has "
+                f"CUDA, so the projection would fall back to JAX: {reason}. "
+                "RELION projects only through its texture; narrow the slab at "
+                "the device boundary with narrow_projector_slab_for_texture, or "
+                "fix the shape. Set "
+                f"{_REQUIRE_CUDA_PROJECTOR_ENV}=0 to allow the fallback for a "
+                "diagnostic comparison."
+            )
+        # Without a device there is no texture to use and the fallback is the
+        # only path; CPU unit tests take it deliberately.
         if reason not in _TEXTURE_FALLBACK_REPORTED:
             _TEXTURE_FALLBACK_REPORTED.add(reason)
             logger.warning(
@@ -580,6 +634,10 @@ def compute_relion_projector_projections_block(
             raise ValueError("projector capacity cannot use the manual projection fallback")
         use_texture = True
     else:
+        # Narrow before asking, so a double slab engages the texture the way
+        # RELION's own initMdl does instead of falling back to a JAX
+        # projection RELION has no equivalent of.
+        volume_relion_half = narrow_projector_slab_for_texture(volume_relion_half)
         use_texture = _relion_projector_texture_enabled(
             volume_relion_half,
             r_max=int(r_max),
