@@ -148,7 +148,7 @@ def test_em_parity_fast_k1_replay(tmp_path):
     _require_fixture(PARITY_SCRIPT, K1_RELION_DIR, K1_DATA_STAR, K1_GT_VOLUME, model_path)
 
     output_dir = tmp_path / "k1_replay"
-    output_dir.mkdir()
+    output_dir.mkdir(parents=True)
 
     cmd = [
         sys.executable,
@@ -249,7 +249,7 @@ def test_em_parity_fast_kclass_replay(tmp_path):
     _require_fixture(KCLASS_SCRIPT, K2_RELION_DIR, K2_DATA_STAR)
 
     output_dir = tmp_path / "kclass_replay"
-    output_dir.mkdir()
+    output_dir.mkdir(parents=True)
 
     cmd = [
         sys.executable,
@@ -344,7 +344,7 @@ def test_em_parity_fast_k1_coldstart(tmp_path):
     _require_fixture(REFINE_SCRIPT, K1_FIXTURE_DIR, K1_RELION_DIR, K1_DATA_STAR)
 
     output_dir = tmp_path / "k1_coldstart"
-    output_dir.mkdir()
+    output_dir.mkdir(parents=True)
 
     cmd = [
         sys.executable,
@@ -490,7 +490,7 @@ def test_em_parity_fast_k1_perturbreplay(tmp_path):
     _require_fixture(REFINE_SCRIPT, K1_FIXTURE_DIR, K1_RELION_DIR, K1_DATA_STAR)
 
     output_dir = tmp_path / "k1_perturbreplay"
-    output_dir.mkdir()
+    output_dir.mkdir(parents=True)
 
     cmd = [
         sys.executable,
@@ -597,7 +597,7 @@ def test_em_parity_fast_kclass_coldstart(tmp_path):
     _require_fixture(REFINE_SCRIPT, K4_FIXTURE_DIR, K4_RELION_DIR, K4_DATA_STAR)
 
     output_dir = tmp_path / "kclass_coldstart"
-    output_dir.mkdir()
+    output_dir.mkdir(parents=True)
 
     cmd = [
         sys.executable,
@@ -709,7 +709,7 @@ def test_em_parity_fast_kclass_nonadaptive_replay(tmp_path):
     relion_dir = K4_RELION_DIR
 
     output_dir = tmp_path / "kclass_strict"
-    output_dir.mkdir()
+    output_dir.mkdir(parents=True)
 
     cmd = [
         sys.executable,
@@ -857,7 +857,7 @@ def test_em_parity_fast_kclass_strict_oversample_coldstart(tmp_path):
     relion_dir = K4_RELION_DIR
 
     output_dir = tmp_path / "kclass_strict_os1"
-    output_dir.mkdir()
+    output_dir.mkdir(parents=True)
 
     cmd = [
         sys.executable,

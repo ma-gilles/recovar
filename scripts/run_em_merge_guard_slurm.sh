@@ -134,7 +134,9 @@ EOF
 chmod +x "${KCLASS_SCRIPT}"
 
 UNIT_JOB=$(sbatch --parsable "${UNIT_SCRIPT}")
-KCLASS_JOB=$(sbatch --parsable "${KCLASS_SCRIPT}")
+# Both jobs rebuild the binding in the shared checkout. Keep those builds
+# sequential so one job cannot remove the other's module while it imports it.
+KCLASS_JOB=$(sbatch --parsable --dependency="afterok:${UNIT_JOB}" "${KCLASS_SCRIPT}")
 
 SUMMARY_SCRIPT="${SCRATCH_DIR}/em_merge_guard_summary.sh"
 cat > "${SUMMARY_SCRIPT}" <<EOF
