@@ -3,6 +3,9 @@
 The seven cases cover K1 replay/cold start/perturbation replay, K2 replay,
 and three K4 initialization/sampling combinations. K4 replay requires a
 same-oracle dispatch schedule; choose the oracle for each case's grid.
+Set EM_PARITY_FAST_K4_H{order}_OS{oversampling}_RELION_DIR and the matching
+_DISPATCH_SCHEDULE for (2, 1), (1, 0), and (1, 1). Admission verifies grid and
+same-capture manifest before launching refinement.
 The historical strict K4 case disables oversampling, unlike the available
 oversampling-1 captures. Its name does not establish matched-state parity.
 
@@ -26,6 +29,7 @@ import numpy as np
 import pytest
 import starfile
 from conftest import gpu_subprocess_env
+from helpers.em_parity_oracles import k4_oracle
 
 logger = logging.getLogger(__name__)
 
@@ -51,21 +55,7 @@ K2_RELION_DIR = K2_FIXTURE_DIR / "relion_pdb_k2_os0_ref"
 K2_DATA_STAR = K2_FIXTURE_DIR / "particles.star"
 
 K4_FIXTURE_DIR = FIXTURE_BASE / "data_pdb_k4_5k_128"
-# The shipped K4 oracle was a single-process RELION run captured before dispatch
-# logging existed, so strict K>1 replay cannot use it. Point these at a
-# dispatch-capable oracle rerun (RELION MPI with RELION_DISPATCH_LOG) and its
-# schema-3 schedule to run the K4 cases; unset, the tests report the fixture gap.
-K4_RELION_DIR = Path(os.environ.get("EM_PARITY_FAST_K4_RELION_DIR", str(K4_FIXTURE_DIR / "relion_pdb_k4_os0_ref")))
-K4_DISPATCH_SCHEDULE = os.environ.get("EM_PARITY_FAST_K4_DISPATCH_SCHEDULE") or None
-
-
-def _k4_dispatch_schedule_args() -> list[str]:
-    """Strict K>1 replay needs the dispatch schedule captured with the oracle."""
-
-    if K4_DISPATCH_SCHEDULE is None:
-        return []
-    _require_fixture(Path(K4_DISPATCH_SCHEDULE))
-    return ["--relion-dispatch-schedule", K4_DISPATCH_SCHEDULE]
+# Each K4 case admits its own same-capture schedule and sampling grid.
 K4_DATA_STAR = K4_FIXTURE_DIR / "particles.star"
 
 
@@ -594,7 +584,8 @@ def test_em_parity_fast_kclass_coldstart(tmp_path):
     iteration-3 class maps. The dispatch oracle must use the same sampling grid.
     """
     _assert_parity_ancestors_or_skip()
-    _require_fixture(REFINE_SCRIPT, K4_FIXTURE_DIR, K4_RELION_DIR, K4_DATA_STAR)
+    relion_dir, dispatch_args = k4_oracle(2, 1)
+    _require_fixture(REFINE_SCRIPT, K4_FIXTURE_DIR, relion_dir, K4_DATA_STAR)
 
     output_dir = tmp_path / "kclass_coldstart"
     output_dir.mkdir(parents=True)
@@ -623,8 +614,8 @@ def test_em_parity_fast_kclass_coldstart(tmp_path):
         "--perturb_factor",
         "0.5",
         "--perturb_replay_relion_dir",
-        str(K4_RELION_DIR),
-        *_k4_dispatch_schedule_args(),
+        str(relion_dir),
+        *dispatch_args,
         "--firstiter_cc",
         "--init_resolution",
         "30.0",
@@ -653,7 +644,7 @@ def test_em_parity_fast_kclass_coldstart(tmp_path):
     ]
     relion_classes = [
         np.asarray(
-            _recovar_helpers.load_relion_volume(str(K4_RELION_DIR / f"run_it003_class{c + 1:03d}.mrc")),
+            _recovar_helpers.load_relion_volume(str(relion_dir / f"run_it003_class{c + 1:03d}.mrc")),
             dtype=np.float64,
         )
         for c in range(4)
@@ -705,8 +696,8 @@ def test_em_parity_fast_kclass_nonadaptive_replay(tmp_path):
     strict matched-state parity.
     """
     _assert_parity_ancestors_or_skip()
-    _require_fixture(REFINE_SCRIPT, K4_FIXTURE_DIR, K4_RELION_DIR, K4_DATA_STAR)
-    relion_dir = K4_RELION_DIR
+    relion_dir, dispatch_args = k4_oracle(1, 0)
+    _require_fixture(REFINE_SCRIPT, K4_FIXTURE_DIR, relion_dir, K4_DATA_STAR)
 
     output_dir = tmp_path / "kclass_strict"
     output_dir.mkdir(parents=True)
@@ -736,7 +727,7 @@ def test_em_parity_fast_kclass_nonadaptive_replay(tmp_path):
         str(relion_dir),
         "--relion_init_dir",
         str(relion_dir),
-        *_k4_dispatch_schedule_args(),
+        *dispatch_args,
         "--firstiter_cc",
         "--init_resolution",
         "30.0",
@@ -853,8 +844,8 @@ def test_em_parity_fast_kclass_strict_oversample_coldstart(tmp_path):
     class maps against iteration 3 from the same dispatch-capable oracle.
     """
     _assert_parity_ancestors_or_skip()
-    _require_fixture(REFINE_SCRIPT, K4_FIXTURE_DIR, K4_RELION_DIR, K4_DATA_STAR)
-    relion_dir = K4_RELION_DIR
+    relion_dir, dispatch_args = k4_oracle(1, 1)
+    _require_fixture(REFINE_SCRIPT, K4_FIXTURE_DIR, relion_dir, K4_DATA_STAR)
 
     output_dir = tmp_path / "kclass_strict_os1"
     output_dir.mkdir(parents=True)
@@ -884,7 +875,7 @@ def test_em_parity_fast_kclass_strict_oversample_coldstart(tmp_path):
         str(relion_dir),
         "--relion_init_dir",
         str(relion_dir),
-        *_k4_dispatch_schedule_args(),
+        *dispatch_args,
         "--firstiter_cc",
         "--init_resolution",
         "30.0",
