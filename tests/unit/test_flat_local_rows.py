@@ -521,3 +521,45 @@ def test_pool_flat_row_plan_rejects_invalid_shapes(counts, dense_rotation_count,
             exact_local_bucket_radix=4,
             **kwargs,
         )
+
+
+@pytest.mark.unit
+def test_pool_flat_rows_follow_the_bucket_planner_quantum_above_the_engine_cap():
+    """Auto-refine pass-2 supports reach ~90k rows with a 1655-row block size.
+
+    The bucket planner quantizes supports above the engine cap with
+    ``_exact_local_large_bucket_quantum`` (max(256, cap)); the pool plan must
+    use the same quantum, or its bucket outgrows the dense rotation axis.
+    """
+    from recovar.em.local.local_layout import (
+        _exact_bucket_rotation_size,
+        _exact_local_large_bucket_quantum,
+    )
+
+    rotation_block_size = 1655
+    counts = np.asarray([104, 2591, 87456], dtype=np.int32)
+    quantum = _exact_local_large_bucket_quantum(rotation_block_size)
+    dense_rotation_count = max(
+        _exact_bucket_rotation_size(
+            int(count), rotation_block_size, large_bucket_quantum=quantum, exact_local_bucket_radix=4
+        )
+        for count in counts
+    )
+    plan = build_pool_flat_local_row_plan(
+        counts,
+        dense_rotation_count,
+        pool_size=3,
+        rotation_block_size=rotation_block_size,
+        exact_local_bucket_radix=4,
+        large_bucket_quantum=quantum,
+    )
+    assert plan.dense_rotation_count == dense_rotation_count
+    assert int(plan.valid_mask.sum()) == int(counts.sum())
+    with pytest.raises(ValueError, match="exceeds the enclosing dense rotation axis"):
+        build_pool_flat_local_row_plan(
+            counts,
+            dense_rotation_count,
+            pool_size=3,
+            rotation_block_size=rotation_block_size,
+            exact_local_bucket_radix=4,
+        )

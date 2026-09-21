@@ -42,6 +42,15 @@ model/delegation evidence and compact task handoffs.
 4. Choose one concrete change and its smallest useful check. Preserve unrelated
    work. Keep control checkouts and queued/running candidates immutable.
 
+Metrics are tracked in standing artifacts, not only in run reports: the EMPIAR
+real-data scorecard, the synthetic fixed-suite scorecards, the pinned completion
+baselines and the per-run parity ledgers. Read the value your change touches
+before running, and write the new value back after. `recovar/em/CLAUDE.md`
+lists each artifact with the command that regenerates or checks it, and records
+two setup traps that make the parity tier look red for reasons that are not
+numerical. End-to-end runs are what fill the real-data rows; short tests do not
+substitute for them.
+
 | Affected area | Read before working |
 | --- | --- |
 | Python source and numerical conventions | [recovar/CLAUDE.md](recovar/CLAUDE.md) |

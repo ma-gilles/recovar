@@ -49,7 +49,16 @@ _AUTO_EXTERNAL_NORMALIZATION_TRANSLATION_TILE_DEVICE_FRACTION = 0.014
 _AUTO_FUSED_KCLASS_TRANSLATION_TILE_DEVICE_FRACTION = 0.007
 
 
-_AUTO_PROJECTION_CACHE_DEVICE_FRACTION = 0.100
+# Fine-projection cache cap as a fraction of device memory.  The K=1 sparse
+# pass-2 recomputes every image chunk's fine projections when the cache is
+# skipped; at HEALPix order 3 (294912 fine rotations, current_size 92, 256^2)
+# the score+recon+abs2 cache estimate is 18.4 GiB, which the former 10% cap
+# (7.96 GiB on an 80 GB device) rejected in every hp3 iteration of the 10k
+# EMPIAR-10097 convergence run while per-chunk recompute cost 1200-3900 s per
+# iteration.  25% admits that cache on 80 GB devices and still rejects it on
+# 40 GB devices.  Measured evidence: docs handoff em_soft_posterior_block_bpref
+# prototype 2026-09-17, jobs 14045912 / 14046044.
+_AUTO_PROJECTION_CACHE_DEVICE_FRACTION = 0.250
 
 
 _AUTO_PROJECTED_ROTATIONS_DEVICE_FRACTION = 0.040
@@ -177,8 +186,62 @@ def _nvidia_smi_visible_device_memory_bytes(output: str, visible_devices: str | 
     return next(iter(rows.values()))
 
 
+_CONCURRENT_DEVICE_SHARES = 1
+
+
+def _share(total_bytes: int | None) -> int | None:
+    """This worker's slice of a device total, given the declared share count."""
+
+    if total_bytes is None:
+        return None
+    shares = _CONCURRENT_DEVICE_SHARES
+    if shares <= 1:
+        return int(total_bytes)
+    return max(1, int(total_bytes) // shares)
+
+
+def set_concurrent_device_shares(shares: int) -> int:
+    """Declare how many workers are sharing this device, and return the previous count.
+
+    Every budget in this module is a fraction of the device's memory and is
+    written for one worker at a time. When two half-sets run concurrently they
+    size their caches against the same device, so each must be told it owns
+    only its share; otherwise both admit a plan that fits alone and neither
+    fits together. That is not hypothetical: overlapping the two halves at
+    HEALPix order 3 failed with RESOURCE_EXHAUSTED building the second half's
+    projection cache, because each half had budgeted the whole 80 GiB device.
+
+    **This declaration covers device memory only.** Host-side caches are not
+    fractions of a device and do not pass through this module, so they neither
+    shrink nor are checked when the share count rises, while a second
+    concurrent worker doubles them just the same. Two at the time of writing:
+    the exact-CTF operand memo in ``recovar/em/relion/relion_ctf.py``, about
+    2.4-2.6 GB of host RAM for two half operands when enabled, and the image
+    loader's prefetch slots at roughly 65 MB each. Budget those on the host
+    side; nothing here will.
+    """
+
+    global _CONCURRENT_DEVICE_SHARES
+    shares = int(shares)
+    if shares < 1:
+        raise ValueError(f"concurrent device shares must be at least 1, got {shares}")
+    previous, _CONCURRENT_DEVICE_SHARES = _CONCURRENT_DEVICE_SHARES, shares
+    return previous
+
+
+def concurrent_device_shares() -> int:
+    """How many workers are currently declared to share this device."""
+
+    return _CONCURRENT_DEVICE_SHARES
+
+
 def _device_memory_limit_bytes() -> int | None:
-    """Return selected accelerator memory, preferring physical GPU memory."""
+    """Return this worker's share of the selected accelerator's memory.
+
+    The share is the whole device unless several workers have been declared
+    through :func:`set_concurrent_device_shares`, in which case every fraction
+    computed downstream is a fraction of one worker's share.
+    """
 
     # ``RECOVAR_SPARSE_PASS2_DEVICE_MEMORY_GB`` overrides the nvidia-smi probe.
     # Keep this as a manual escape hatch for reserving headroom on shared GPUs
@@ -188,7 +251,7 @@ def _device_memory_limit_bytes() -> int | None:
         try:
             override_gb = float(_override.strip())
             if override_gb > 0:
-                return int(override_gb * (1024 ** 3))
+                return _share(int(override_gb * (1024 ** 3)))
         except ValueError:
             pass
 
@@ -210,7 +273,7 @@ def _device_memory_limit_bytes() -> int | None:
                 os.environ.get("CUDA_VISIBLE_DEVICES"),
             )
             if memory_bytes is not None:
-                return memory_bytes
+                return _share(memory_bytes)
     except Exception:
         pass
     try:
@@ -225,7 +288,7 @@ def _device_memory_limit_bytes() -> int | None:
     for key in ("bytes_limit", "bytesLimit", "memory_limit", "total_memory"):
         value = stats.get(key)
         if value is not None and int(value) > 0:
-            return int(value)
+            return _share(int(value))
     return None
 
 
@@ -584,6 +647,35 @@ def _max_projected_rotations_per_call_for_pass(
     if max_bytes <= 0 or bytes_per_rotation <= 0:
         return None
     return max(1, int(max_bytes) // int(bytes_per_rotation))
+
+
+_PROJECTION_CACHE_BUILD_ROTATION_MULTIPLIER = 4
+
+
+def _projection_cache_build_max_rotations_per_call(
+    per_call_max_rotations: int | None,
+    n_fine_rotations: int,
+) -> int | None:
+    """Rotations per projection call while building the fine-projection cache.
+
+    The per-chunk budget ``per_call_max_rotations`` is sized for the scoring
+    loop, where per-image translation tiles, score blocks and Wavg operands are
+    live next to the projection intermediates.  The cache build runs before
+    any of those exist, so it may project several times more rotations per
+    call: at HEALPix order 3 (294912 fine rotations, current_size 92) the
+    build took 19.9 s per half at 809 rotations per call and 3.6 s at 4096
+    (jobs 14051847 / 14052595), while the scoring-loop budget kept the peak
+    memory profile unchanged.  An explicit
+    ``RECOVAR_SPARSE_PASS2_MAX_PROJECTED_ROTATIONS`` still applies verbatim.
+    """
+
+    if per_call_max_rotations is None:
+        return None
+    override = _optional_positive_int_env(_MAX_PROJECTED_ROTATIONS_ENV)
+    if override is not None:
+        return int(override)
+    scaled = int(per_call_max_rotations) * _PROJECTION_CACHE_BUILD_ROTATION_MULTIPLIER
+    return max(1, min(int(n_fine_rotations), scaled))
 
 
 def _projection_budget_pixels_for_pass(

@@ -10,6 +10,9 @@ from __future__ import annotations
 
 import logging
 
+import functools
+
+import jax
 import jax.numpy as jnp
 import numpy as np
 
@@ -61,6 +64,51 @@ def _adjoint_block_chunk_rows(flat_block, *, max_block_bytes: int) -> int:
         return 1
     row_bytes = _flat_block_row_bytes(flat_block)
     return max(1, int(max_block_bytes) // row_bytes)
+
+
+def _per_particle_launch_rung(count: int, limit: int) -> int:
+    """Rows per particle-owned adjoint launch: the power of two at or above ``count``.
+
+    Every particle used to launch with exactly its own ``count`` rows, so a
+    10k-particle iteration compiled (or fetched from the persistent cache) a
+    fresh adjoint program for every distinct count: ~20k compilations and
+    ~1000 s per iteration on the exact per-particle path (control census).
+    Padding to a power of two bounds the distinct launch shapes per bucket to
+    about log2(bucket rows) while the caller zeroes the spare rows, so the
+    per-particle accumulation order and every contribution are unchanged.
+    """
+
+    count = int(count)
+    limit = int(limit)
+    if count <= 0:
+        return 0
+    rung = 1
+    while rung < count:
+        rung *= 2
+    return min(rung, limit)
+
+
+@functools.partial(jax.jit, static_argnames=("rung",))
+def _particle_launch_rows(values, ctf_values, rotations, particle_index, count, *, rung: int):
+    """Rows of one particle-owned launch: ``rung`` rows, live rows ``< count``.
+
+    ``particle_index`` and ``count`` are traced scalars so one compiled program
+    serves every particle of a bucket shape at a given rung; static Python
+    slicing compiled a separate program per (particle index, count).
+    """
+
+    def take(array):
+        return jax.lax.dynamic_index_in_dim(array, particle_index, axis=0, keepdims=False)[:rung]
+
+    particle_values = take(values)
+    particle_ctf = take(ctf_values)
+    particle_rotations = take(rotations)
+    live_row = (jnp.arange(rung) < count)[:, None]
+    return (
+        jnp.where(live_row, particle_values, 0),
+        jnp.where(live_row, particle_ctf, 0),
+        particle_rotations,
+    )
 
 
 def _accumulate_relion_x_half_per_particle_launches(
@@ -195,15 +243,21 @@ def _accumulate_relion_x_half_per_particle_launches(
             count = int(actual_counts[particle_index])
             if count <= 0:
                 continue
-            particle_slice = (
-                slice(particle_index, particle_index + 1),
-                slice(0, count),
+            rung = _per_particle_launch_rung(count, int(values.shape[1]))
+            # Spare rung rows carry zero contributions regardless of what the
+            # padded bucket holds there; the scatter of exact zeros leaves the
+            # accumulators bitwise unchanged.
+            particle_values, particle_ctf, particle_rotations = _particle_launch_rows(
+                values,
+                ctf_values,
+                rotations,
+                jnp.int32(particle_index),
+                jnp.int32(count),
+                rung=rung,
             )
-            value_rows.append(values[particle_slice].reshape(count, values.shape[-1]))
-            ctf_rows.append(
-                ctf_values[particle_slice].reshape(count, ctf_values.shape[-1])
-            )
-            rotation_rows.append(rotations[particle_slice].reshape(count, 3, 3))
+            value_rows.append(particle_values)
+            ctf_rows.append(particle_ctf)
+            rotation_rows.append(particle_rotations)
         if not value_rows:
             continue
         particle_values = jnp.concatenate(value_rows, axis=0)

@@ -59,6 +59,8 @@ _CUDA_BUILD_SOURCE_NAMES = (
     "relion_preprocess.cuh",
     "relion_vdam_mstep.cuh",
     "relion_scoring.cuh",
+    "sparse_pass2_posterior.cuh",
+    "relion_translate_sum.cuh",
     "cuda_backproject.cu",
     "relion_coarse_diff2_projector_body.inc",
     "Makefile",
@@ -145,6 +147,17 @@ def bpref_device_signature_scope(active: bool):
         yield
     finally:
         _bpref_device_signature_scope.reset(token)
+
+
+def backproject_skip_zero_requested() -> bool:
+    """Return whether indexed backprojection skips exactly-zero pixels.
+
+    Opt-in (``RECOVAR_BACKPROJECT_SKIP_ZERO=1``). Sparse pass-2 M-step rows are
+    padded to bucket size and pruned rows are entirely zero; scattering them
+    only adds ``+0.0`` to every touched voxel. Skipping removes those atomics.
+    """
+
+    return _env_flag(_BACKPROJECT_SKIP_ZERO_ENV)
 
 
 def custom_cuda_requested() -> bool:
@@ -542,6 +555,8 @@ _ffi_lock = threading.Lock()
 # FFI target name constants
 _TARGET_BACKPROJECT = "cuda_backproject"
 _TARGET_BACKPROJECT_INDEXED = "cuda_backproject_indexed"
+_TARGET_BACKPROJECT_INDEXED_SKIP_ZERO = "cuda_backproject_indexed_skip_zero"
+_BACKPROJECT_SKIP_ZERO_ENV = "RECOVAR_BACKPROJECT_SKIP_ZERO"
 _TARGET_BACKPROJECT_INDEXED_SIGNATURE = "cuda_backproject_indexed_signature"
 _TARGET_PROJECT = "cuda_project"
 _TARGET_PROJECT_RELION_HALF_RUNTIME = "cuda_project_relion_half_runtime"
@@ -572,6 +587,14 @@ _TARGET_BPREF_PARTICLE_PACK = "cuda_bpref_particle_pack"
 _TARGET_DEFERRED_VDAM_HOST_PACK = "cuda_deferred_vdam_host_pack"
 _TARGET_NOISE_PIXEL_PACK = "cuda_noise_pixel_pack"
 _TARGET_NOISE_RESIDUAL_STATISTICS = "recovar_noise_residual_statistics"
+_TARGET_SPARSE_PASS2_LOG_Z_F64 = "recovar_sparse_pass2_log_z_f64"
+_TARGET_SPARSE_PASS2_POSTERIOR_F32 = "recovar_sparse_pass2_posterior_f32"
+_TARGET_SPARSE_PASS2_SEGMENTED_LOG_Z_F64 = (
+    "cuda_sparse_pass2_segmented_log_z_f64"
+)
+_TARGET_SPARSE_PASS2_SEGMENTED_POSTERIOR_F32 = (
+    "cuda_sparse_pass2_segmented_posterior_f32"
+)
 _TARGET_RELION_VDAM_MSTEP_SUMS_F32 = "cuda_relion_vdam_mstep_sums_f32"
 _TARGET_RELION_VDAM_MSTEP_DENOMINATOR_F32 = (
     "cuda_relion_vdam_mstep_denominator_f32"
@@ -618,6 +641,9 @@ _TARGET_RELION_COARSE_DIFF2_RECTANGULAR_F64 = (
 )
 _TARGET_RELION_FINE_DIFF2_RECTANGULAR_F32 = (
     "cuda_relion_fine_diff2_rectangular_f32"
+)
+_TARGET_RELION_FINE_DIFF2_RECTANGULAR_MASKED_F32 = (
+    "cuda_relion_fine_diff2_rectangular_masked_f32"
 )
 _TARGET_RELION_FINE_DIFF2_FUSED_TRANSLATE_RECTANGULAR_F32 = (
     "cuda_relion_fine_diff2_fused_translate_rectangular_f32"
@@ -674,6 +700,15 @@ _TARGET_RELION_WAVG_SEQUENTIAL_TRIPLET_F32 = (
 )
 _TARGET_RELION_WAVG_SEQUENTIAL_RUNTIME_TRIPLET_F32 = (
     "cuda_relion_wavg_sequential_runtime_triplet_f32"
+)
+_TARGET_RELION_WAVG_SEQUENTIAL_RUNTIME_FLAT_ROWS_TRIPLET_F32 = (
+    "cuda_relion_wavg_sequential_runtime_flat_rows_triplet_f32"
+)
+_TARGET_RELION_WAVG_ROTATION_ATOMIC_RUNTIME_FLAT_ROWS_TRIPLET_ADD_F32 = (
+    "cuda_relion_wavg_rotation_atomic_runtime_flat_rows_triplet_add_f32"
+)
+_TARGET_RELION_TRANSLATE_SUM_FLAT_ROWS_F32 = (
+    "cuda_relion_translate_sum_flat_rows_f32"
 )
 _TARGET_RELION_WAVG_NATIVE_PREFIX_F32 = "cuda_relion_wavg_native_prefix_f32"
 _TARGET_RELION_WAVG_NATIVE_PREFIX_DEBUG_F32 = "cuda_relion_wavg_native_prefix_debug_f32"
@@ -1124,6 +1159,42 @@ _OPTIONAL_FFI_REGISTRATIONS = {
     _TARGET_BPREF_PARTICLE_PACK: (
         "BprefParticlePack",
         "CUDA BPref packing requires an explicit build with BprefParticlePack",
+    ),
+    _TARGET_RELION_FINE_DIFF2_RECTANGULAR_MASKED_F32: (
+        "RelionFineDiff2RectangularMaskedF32",
+        "Masked rectangular fine diff2 requires an explicit CUDA build with RelionFineDiff2RectangularMaskedF32",
+    ),
+    _TARGET_SPARSE_PASS2_LOG_Z_F64: (
+        "SparsePass2LogZF64",
+        "The fused sparse pass-2 log-Z requires an explicit CUDA build with SparsePass2LogZF64",
+    ),
+    _TARGET_SPARSE_PASS2_POSTERIOR_F32: (
+        "SparsePass2PosteriorF32",
+        "The fused sparse pass-2 posterior requires an explicit CUDA build with SparsePass2PosteriorF32",
+    ),
+    _TARGET_SPARSE_PASS2_SEGMENTED_LOG_Z_F64: (
+        "SparsePass2SegmentedLogZF64",
+        "The segmented sparse pass-2 log-Z requires an explicit CUDA build with SparsePass2SegmentedLogZF64",
+    ),
+    _TARGET_SPARSE_PASS2_SEGMENTED_POSTERIOR_F32: (
+        "SparsePass2SegmentedPosteriorF32",
+        "The segmented sparse pass-2 posterior requires an explicit CUDA build with SparsePass2SegmentedPosteriorF32",
+    ),
+    _TARGET_BACKPROJECT_INDEXED_SKIP_ZERO: (
+        "BackprojectIndexedSkipZero",
+        "RECOVAR_BACKPROJECT_SKIP_ZERO requires an explicit CUDA build with BackprojectIndexedSkipZero",
+    ),
+    _TARGET_RELION_WAVG_SEQUENTIAL_RUNTIME_FLAT_ROWS_TRIPLET_F32: (
+        "RelionWavgSequentialRuntimeFlatRowsTripletF32",
+        "Flat-row RELION Wavg requires an explicit CUDA build with RelionWavgSequentialRuntimeFlatRowsTripletF32",
+    ),
+    _TARGET_RELION_WAVG_ROTATION_ATOMIC_RUNTIME_FLAT_ROWS_TRIPLET_ADD_F32: (
+        "RelionWavgRotationAtomicRuntimeFlatRowsTripletAddF32",
+        "Flat-row RELION Wavg atomics require an explicit CUDA build with RelionWavgRotationAtomicRuntimeFlatRowsTripletAddF32",
+    ),
+    _TARGET_RELION_TRANSLATE_SUM_FLAT_ROWS_F32: (
+        "RelionTranslateSumFlatRowsF32",
+        "Flat-row translate-and-sum requires an explicit CUDA build with RelionTranslateSumFlatRowsF32",
     ),
 }
 
@@ -1837,6 +1908,423 @@ def relion_cub_sort_scan_batched_f32(
         _TARGET_RELION_CUB_SORT_SCAN_BATCHED_F32,
         (output_type, output_type),
     )(values)
+
+
+def _sparse_pass2_scores_geometry(scores: jax.Array) -> tuple[int, int]:
+    """Validate a fused sparse pass-2 score block and return ``(rows, row_size)``."""
+
+    if scores.dtype != jnp.float32:
+        raise TypeError(f"scores must be float32, got {scores.dtype}")
+    if scores.ndim < 2 or any(int(d) < 1 for d in scores.shape):
+        raise ValueError(f"scores must be a nonempty (B, ...) array, got {scores.shape}")
+    rows = int(scores.shape[0])
+    row_size = int(np.prod(scores.shape[1:]))
+    if rows > np.iinfo(np.int32).max or row_size > np.iinfo(np.int32).max:
+        raise ValueError(f"scores {scores.shape} exceed the CUDA/CUB row limits")
+    return rows, row_size
+
+
+def _require_sparse_pass2_cuda_backend(label: str) -> None:
+    if jax.default_backend() != "gpu":
+        raise RuntimeError(f"{label} requires a JAX GPU backend")
+    if not custom_cuda_requested():
+        raise RuntimeError(f"{label} was requested but custom CUDA is disabled")
+
+
+@jax.jit
+def sparse_pass2_log_z_f64(scores: jax.Array) -> jax.Array:
+    """Per-image float64 log-sum-exp of float32 sparse pass-2 scores.
+
+    Runtime-shaped replacement for ``_logsumexp_pass2_bucket_score_only``:
+    rows without a finite score return ``-inf``. The float64 sum uses a fixed
+    block tree rather than XLA's reduction order.
+    """
+
+    rows, _ = _sparse_pass2_scores_geometry(scores)
+    _require_sparse_pass2_cuda_backend("Fused sparse pass-2 log-Z")
+    _ensure_optional_ffi(_TARGET_SPARSE_PASS2_LOG_Z_F64)
+    return jax.ffi.ffi_call(
+        _TARGET_SPARSE_PASS2_LOG_Z_F64,
+        jax.ShapeDtypeStruct((rows,), jnp.float64),
+    )(scores)
+
+
+# Byte size of the device-side per-row state record of SparsePass2PosteriorF32.
+_SPARSE_PASS2_ROW_STATE_BYTES = 40
+
+
+@functools.partial(jax.jit, static_argnames=("adaptive_fraction", "keep_all", "use_external_sum_weight"))
+def sparse_pass2_posterior_f32(
+    scores: jax.Array,
+    log_z: jax.Array,
+    external_sum_weight: jax.Array,
+    *,
+    adaptive_fraction: float,
+    keep_all: bool,
+    use_external_sum_weight: bool,
+) -> tuple[jax.Array, ...]:
+    """Fused ``_normalize_pass2_bucket_with_log_z`` + ``_relion_f32_fine_posterior``.
+
+    Returns ``(log_z, best_log_score, best_argmax, max_posterior, probs,
+    normalized_weights, reconstruction_probs, mask, n_significant, sum_weight,
+    threshold)`` with the dtypes of the XLA path: ``log_z``/``probs`` float64,
+    ``best_argmax`` int64, ``n_significant`` int32, the rest float32/bool.
+    ``max_posterior`` is the maximum pruned reconstruction probability, the
+    value the RELION float32 path reports as Pmax.  The RELION significance
+    boundary reuses the CUB radix sort and pinned Ampere scan of
+    :func:`relion_cub_sort_scan_batched_f32`.
+    """
+
+    rows, _ = _sparse_pass2_scores_geometry(scores)
+    if log_z.dtype != jnp.float64 or log_z.shape != (rows,):
+        raise TypeError(f"log_z must be float64 with shape ({rows},), got {log_z.dtype} {log_z.shape}")
+    if external_sum_weight.dtype != jnp.float32 or external_sum_weight.shape != (rows,):
+        raise TypeError(
+            f"external_sum_weight must be float32 with shape ({rows},), got "
+            f"{external_sum_weight.dtype} {external_sum_weight.shape}"
+        )
+    if type(keep_all) is not bool or type(use_external_sum_weight) is not bool:
+        raise TypeError("keep_all and use_external_sum_weight must be static Python bools")
+    _require_sparse_pass2_cuda_backend("Fused sparse pass-2 posterior")
+    _ensure_optional_ffi(_TARGET_SPARSE_PASS2_POSTERIOR_F32)
+    full = scores.shape
+    outputs = (
+        jax.ShapeDtypeStruct((rows,), jnp.float64),   # log_z
+        jax.ShapeDtypeStruct((rows,), jnp.float32),   # best_log_score
+        jax.ShapeDtypeStruct((rows,), jnp.int64),     # best_argmax
+        jax.ShapeDtypeStruct((rows,), jnp.float32),   # max_posterior
+        jax.ShapeDtypeStruct(full, jnp.float64),      # probs
+        jax.ShapeDtypeStruct(full, jnp.float32),      # normalized_weights
+        jax.ShapeDtypeStruct(full, jnp.float32),      # reconstruction_probs
+        jax.ShapeDtypeStruct(full, jnp.bool_),        # mask
+        jax.ShapeDtypeStruct((rows,), jnp.int32),     # n_significant
+        jax.ShapeDtypeStruct((rows,), jnp.float32),   # sum_weight
+        jax.ShapeDtypeStruct((rows,), jnp.float32),   # threshold
+        jax.ShapeDtypeStruct(full, jnp.float32),      # raw weights (scratch)
+        jax.ShapeDtypeStruct(full, jnp.float32),      # sorted (scratch)
+        jax.ShapeDtypeStruct(full, jnp.float32),      # cumulative (scratch)
+        jax.ShapeDtypeStruct((rows, _SPARSE_PASS2_ROW_STATE_BYTES), jnp.uint8),  # row state
+    )
+    result = jax.ffi.ffi_call(_TARGET_SPARSE_PASS2_POSTERIOR_F32, outputs)(
+        scores,
+        log_z,
+        external_sum_weight,
+        adaptive_fraction=np.float32(adaptive_fraction),
+        keep_all=np.int64(keep_all),
+        use_external_sum_weight=np.int64(use_external_sum_weight),
+    )
+    return tuple(result[:11])
+
+
+# Byte size of the device-side per-segment state record of
+# SparsePass2SegmentedPosteriorF32: the rectangular RowState plus the segment
+# extent (valid flag, explicit padding, begin, cell count).
+_SPARSE_PASS2_SEGMENT_STATE_BYTES = _SPARSE_PASS2_ROW_STATE_BYTES + 24
+
+
+# Sort/scan structure of SparsePass2SegmentedPosteriorF32.  Mode 0 keeps one
+# CUB radix sort and one CUB inclusive scan per segment and is the oracle every
+# bitwise test compares against.  Mode 1 replaces the sorts by a single
+# cub::DeviceSegmentedRadixSort for the chunk; a radix sort is an exact
+# permutation, so every output stays bitwise equal to mode 0 while the handler
+# issues one sort dispatch instead of one per image.  Mode 2 also replaces the
+# scans by one device-side segmented scan, which removes the handler's last
+# host round trip and changes the float32 summation order of the significance
+# boundary: its ``sum_weight`` and ``threshold`` can differ from mode 0 by a
+# few ULP.  See the header comment of recovar/cuda/sparse_pass2_posterior.cuh.
+SPARSE_PASS2_SORT_SCAN_PER_SEGMENT = 0
+SPARSE_PASS2_SORT_SCAN_SEGMENTED_SORT = 1
+SPARSE_PASS2_SORT_SCAN_SEGMENTED = 2
+# Modes 3 and 4 are modes 1 and 2 with cub::DeviceSegmentedSort, which
+# partitions segments by size, in place of cub::DeviceSegmentedRadixSort, whose
+# one-block-per-segment dispatch is slow once a segment holds hundreds of
+# thousands of cells.  Both sorts produce the same keys.
+SPARSE_PASS2_SORT_SCAN_PARTITIONED_SORT = 3
+SPARSE_PASS2_SORT_SCAN_PARTITIONED = 4
+# The default: pick per capacity class.  cub::DeviceSegmentedRadixSort gives
+# one block per segment, so it wins by a wide margin while a segment holds tens
+# of thousands of cells and loses once a segment holds hundreds of thousands,
+# where the per-segment cub::DeviceRadixSort has the whole device per sort.  A
+# chunk's cell and segment counts are static (they are buffer shapes), so this
+# choice is a property of the capacity class, never of the data.
+SPARSE_PASS2_SORT_SCAN_AUTO = -1
+# Measured on one A100 with measure/posterior_stage_bench.py in the T17 report
+# root: the crossover sits between the classes listed in that table.
+SPARSE_PASS2_SEGMENTED_CELLS_PER_SEGMENT_MAX = 262144
+
+_SPARSE_PASS2_SORT_SCAN_ENV = "RECOVAR_SPARSE_PASS2_SEGMENTED_SORT_SCAN"
+_SPARSE_PASS2_SORT_SCAN_NAMES = {
+    "per_segment": SPARSE_PASS2_SORT_SCAN_PER_SEGMENT,
+    "0": SPARSE_PASS2_SORT_SCAN_PER_SEGMENT,
+    "segmented_sort": SPARSE_PASS2_SORT_SCAN_SEGMENTED_SORT,
+    "1": SPARSE_PASS2_SORT_SCAN_SEGMENTED_SORT,
+    "segmented": SPARSE_PASS2_SORT_SCAN_SEGMENTED,
+    "2": SPARSE_PASS2_SORT_SCAN_SEGMENTED,
+    "partitioned_sort": SPARSE_PASS2_SORT_SCAN_PARTITIONED_SORT,
+    "3": SPARSE_PASS2_SORT_SCAN_PARTITIONED_SORT,
+    "partitioned": SPARSE_PASS2_SORT_SCAN_PARTITIONED,
+    "4": SPARSE_PASS2_SORT_SCAN_PARTITIONED,
+    "auto": SPARSE_PASS2_SORT_SCAN_AUTO,
+    "-1": SPARSE_PASS2_SORT_SCAN_AUTO,
+}
+_SPARSE_PASS2_SORT_SCAN_DEFAULT = SPARSE_PASS2_SORT_SCAN_AUTO
+
+
+@functools.lru_cache(maxsize=1)
+def sparse_pass2_segmented_sort_scan_mode() -> int:
+    """Default sort/scan structure of the segmented pass-2 posterior.
+
+    ``RECOVAR_SPARSE_PASS2_SEGMENTED_SORT_SCAN`` selects ``auto`` (the default),
+    ``per_segment`` (0), ``segmented_sort`` (1), ``segmented`` (2),
+    ``partitioned_sort`` (3) or ``partitioned`` (4).  The value is read once per
+    process: it is baked into compiled programs, so changing the environment
+    after the first call does not invalidate them.
+    """
+
+    text = os.environ.get(_SPARSE_PASS2_SORT_SCAN_ENV, "").strip().lower()
+    if not text:
+        return _SPARSE_PASS2_SORT_SCAN_DEFAULT
+    if text not in _SPARSE_PASS2_SORT_SCAN_NAMES:
+        raise ValueError(
+            f"{_SPARSE_PASS2_SORT_SCAN_ENV}={text!r} is not one of "
+            f"{sorted(_SPARSE_PASS2_SORT_SCAN_NAMES)}"
+        )
+    return _SPARSE_PASS2_SORT_SCAN_NAMES[text]
+
+
+def sparse_pass2_segmented_supported() -> bool:
+    """Return whether the loaded library exports both segmented pass-2 targets.
+
+    The segmented handlers are an optional ABI, so a library built before them
+    stays loadable and callers fall back to the rectangular handlers.
+    """
+
+    try:
+        _ensure_ffi()
+        lib = _get_lib()
+        return all(
+            getattr(lib, _OPTIONAL_FFI_REGISTRATIONS[target][0], None) is not None
+            for target in (
+                _TARGET_SPARSE_PASS2_SEGMENTED_LOG_Z_F64,
+                _TARGET_SPARSE_PASS2_SEGMENTED_POSTERIOR_F32,
+            )
+        )
+    except Exception:
+        return False
+
+
+def sparse_pass2_segmented_auto_mode(cells: int, segments: int) -> int:
+    """Sort/scan mode for a chunk of ``cells`` cells in ``segments`` segments.
+
+    Both counts are buffer shapes, so this is a property of the capacity class
+    and identical for every chunk of that class.  Below the measured crossover
+    the segmented sort and the device scan win by a wide margin and remove the
+    handler's host round trip; above it, one block per segment is slower than
+    the per-segment sorts, which keep the whole device per segment.
+    """
+
+    if segments <= 0:
+        return SPARSE_PASS2_SORT_SCAN_PER_SEGMENT
+    if cells // segments > SPARSE_PASS2_SEGMENTED_CELLS_PER_SEGMENT_MAX:
+        return SPARSE_PASS2_SORT_SCAN_PER_SEGMENT
+    return SPARSE_PASS2_SORT_SCAN_SEGMENTED
+
+
+def _sparse_pass2_segment_geometry(
+    scores: jax.Array, segment_offsets: jax.Array, n_valid_images: jax.Array
+) -> tuple[int, int]:
+    """Validate a segmented pass-2 operand set and return ``(cells, segments)``.
+
+    ``scores`` holds ``cells`` candidate scores in image order; image ``i`` owns
+    ``scores.reshape(-1)[segment_offsets[i]:segment_offsets[i + 1]]``.  Offsets
+    are cell indices, must be nondecreasing and must stay within ``[0, cells]``;
+    cells covered by no segment are treated as padding.
+    """
+
+    if scores.dtype != jnp.float32:
+        raise TypeError(f"scores must be float32, got {scores.dtype}")
+    if scores.ndim < 1 or any(int(d) < 1 for d in scores.shape):
+        raise ValueError(f"scores must be a nonempty array, got {scores.shape}")
+    cells = int(np.prod(scores.shape))
+    if cells > np.iinfo(np.int32).max:
+        raise ValueError(f"scores {scores.shape} exceed the int32 cell-offset range")
+    if segment_offsets.dtype != jnp.int32:
+        raise TypeError(f"segment_offsets must be int32, got {segment_offsets.dtype}")
+    if segment_offsets.ndim != 1 or int(segment_offsets.shape[0]) < 2:
+        raise ValueError(
+            "segment_offsets must have shape (n_segments + 1,) with n_segments >= 1, "
+            f"got {segment_offsets.shape}"
+        )
+    segments = int(segment_offsets.shape[0]) - 1
+    if n_valid_images.dtype != jnp.int32:
+        raise TypeError(f"n_valid_images must be int32, got {n_valid_images.dtype}")
+    if int(np.prod(n_valid_images.shape)) != 1:
+        raise ValueError(
+            f"n_valid_images must hold exactly one value, got {n_valid_images.shape}"
+        )
+    return cells, segments
+
+
+@jax.jit
+def sparse_pass2_segmented_log_z_f64(
+    scores: jax.Array,
+    segment_offsets: jax.Array,
+    n_valid_images: jax.Array,
+) -> jax.Array:
+    """Per-segment float64 log-sum-exp of flat float32 sparse pass-2 scores.
+
+    Segmented form of :func:`sparse_pass2_log_z_f64`: segments without a finite
+    score, empty segments and segments at or beyond ``n_valid_images`` return
+    ``-inf``, which is what the rectangular handler returns for an all ``-inf``
+    row.  Flattening a rectangular row into a segment reproduces that row's
+    value bitwise.  This handler runs entirely on the device.
+    """
+
+    _, segments = _sparse_pass2_segment_geometry(scores, segment_offsets, n_valid_images)
+    _require_sparse_pass2_cuda_backend("Segmented sparse pass-2 log-Z")
+    _ensure_optional_ffi(_TARGET_SPARSE_PASS2_SEGMENTED_LOG_Z_F64)
+    return jax.ffi.ffi_call(
+        _TARGET_SPARSE_PASS2_SEGMENTED_LOG_Z_F64,
+        jax.ShapeDtypeStruct((segments,), jnp.float64),
+    )(scores, segment_offsets, n_valid_images.astype(jnp.int32).reshape(()))
+
+
+@functools.partial(
+    jax.jit,
+    static_argnames=(
+        "adaptive_fraction",
+        "keep_all",
+        "use_external_sum_weight",
+        "sort_scan_mode",
+        "return_scratch",
+    ),
+)
+def sparse_pass2_segmented_posterior_f32(
+    scores: jax.Array,
+    segment_offsets: jax.Array,
+    n_valid_images: jax.Array,
+    log_z: jax.Array,
+    external_sum_weight: jax.Array,
+    *,
+    adaptive_fraction: float,
+    keep_all: bool,
+    use_external_sum_weight: bool,
+    sort_scan_mode: int | None = None,
+    return_scratch: bool = False,
+) -> tuple[jax.Array, ...]:
+    """Segmented form of :func:`sparse_pass2_posterior_f32`.
+
+    ``scores`` is a flat cell array whose segment ``i`` is
+    ``[segment_offsets[i], segment_offsets[i + 1])``; the per-segment operands
+    and outputs replace the rectangular per-row ones.  Returns ``(log_z,
+    best_log_score, best_cell_index, max_posterior, probs, normalized_weights,
+    reconstruction_probs, mask, n_significant, sum_weight, threshold)``.
+    ``best_cell_index`` is relative to the segment, so it equals the rectangular
+    ``best_argmax`` of the row a segment was flattened from; add
+    ``segment_offsets[i]`` for the flat cell.  Per-cell outputs keep the shape
+    of ``scores``; cells covered by no segment, empty segments and segments at
+    or beyond ``n_valid_images`` carry the values the rectangular handler
+    produces for an all ``-inf`` row.
+
+    Launch geometry is capacity-only: every kernel is launched at the static
+    segment count from ``segment_offsets.shape``, the CUB scratch is sized at
+    the static cell count, and ``n_valid_images`` is read on the device alone,
+    so nothing on the host depends on the chunk's occupancy and two chunks of
+    one capacity class issue identical work.
+
+    ``sort_scan_mode`` selects how the RELION significance boundary sorts and
+    scans the candidate weights; ``None`` takes
+    :func:`sparse_pass2_segmented_sort_scan_mode`, whose default is ``auto``:
+    :func:`sparse_pass2_segmented_auto_mode` then picks mode 2 or mode 0 from
+    this chunk's capacity class. Modes 3 and 4 repeat modes 1 and 2 with
+    ``cub::DeviceSegmentedSort``, which partitions segments by size, in place of
+    ``cub::DeviceSegmentedRadixSort``.
+
+    * ``0`` (``per_segment``) is the oracle: one CUB radix sort and one pinned
+      Ampere inclusive scan per nonempty segment, every output bitwise equal to
+      :func:`sparse_pass2_posterior_f32` on the same candidates.
+    * ``1`` (``segmented_sort``) issues one ``cub::DeviceSegmentedRadixSort``
+      for the chunk instead of one sort per image. A radix sort is an exact
+      permutation of its keys, so every output stays bitwise equal to mode 0.
+    * ``2`` (``segmented``, what ``auto`` picks below the crossover) also
+      replaces the per-segment scans by one device-side segmented scan and is
+      the only mode with no host round trip.
+      Its float32 summation order differs, so ``sum_weight`` and ``threshold``
+      can differ from mode 0 by a few ULP and an image whose significance
+      boundary sits on a near-tie can keep a different number of candidates.
+      Mode 2 is therefore not bitwise with the rectangular handler.
+
+    The per-segment-scan modes (0, 1 and 3) copy ``segment_offsets`` back and
+    synchronize once, after they have enqueued the first two kernels and
+    reserved the scratch, so the device works on this call while the host waits:
+    the CUB scan takes its item count as a host argument, and that count is what
+    fixes the float32 summation order the boundary is defined by (``sum_weight``
+    is the scan's last element and the threshold is a searchsorted over it).
+
+    ``return_scratch`` appends the handler's ``(raw_weights, sorted,
+    cumulative)`` scratch to the result, for tests that compare the sorted keys
+    or the cumulative sums across modes.
+    """
+
+    cells, segments = _sparse_pass2_segment_geometry(
+        scores, segment_offsets, n_valid_images
+    )
+    if log_z.dtype != jnp.float64 or log_z.shape != (segments,):
+        raise TypeError(
+            f"log_z must be float64 with shape ({segments},), got {log_z.dtype} {log_z.shape}"
+        )
+    if external_sum_weight.dtype != jnp.float32 or external_sum_weight.shape != (segments,):
+        raise TypeError(
+            f"external_sum_weight must be float32 with shape ({segments},), got "
+            f"{external_sum_weight.dtype} {external_sum_weight.shape}"
+        )
+    if type(keep_all) is not bool or type(use_external_sum_weight) is not bool:
+        raise TypeError("keep_all and use_external_sum_weight must be static Python bools")
+    if type(return_scratch) is not bool:
+        raise TypeError("return_scratch must be a static Python bool")
+    mode = (
+        sparse_pass2_segmented_sort_scan_mode()
+        if sort_scan_mode is None
+        else int(sort_scan_mode)
+    )
+    if mode != SPARSE_PASS2_SORT_SCAN_AUTO and mode not in range(5):
+        raise ValueError(f"sort_scan_mode must be -1 or 0-4, got {sort_scan_mode!r}")
+    if mode == SPARSE_PASS2_SORT_SCAN_AUTO:
+        mode = sparse_pass2_segmented_auto_mode(cells, segments)
+    _require_sparse_pass2_cuda_backend("Segmented sparse pass-2 posterior")
+    _ensure_optional_ffi(_TARGET_SPARSE_PASS2_SEGMENTED_POSTERIOR_F32)
+    full = scores.shape
+    outputs = (
+        jax.ShapeDtypeStruct((segments,), jnp.float64),  # log_z
+        jax.ShapeDtypeStruct((segments,), jnp.float32),  # best_log_score
+        jax.ShapeDtypeStruct((segments,), jnp.int64),    # best_cell_index
+        jax.ShapeDtypeStruct((segments,), jnp.float32),  # max_posterior
+        jax.ShapeDtypeStruct(full, jnp.float64),         # probs
+        jax.ShapeDtypeStruct(full, jnp.float32),         # normalized_weights
+        jax.ShapeDtypeStruct(full, jnp.float32),         # reconstruction_probs
+        jax.ShapeDtypeStruct(full, jnp.bool_),           # mask
+        jax.ShapeDtypeStruct((segments,), jnp.int32),    # n_significant
+        jax.ShapeDtypeStruct((segments,), jnp.float32),  # sum_weight
+        jax.ShapeDtypeStruct((segments,), jnp.float32),  # threshold
+        jax.ShapeDtypeStruct(full, jnp.float32),         # raw weights (scratch)
+        jax.ShapeDtypeStruct(full, jnp.float32),         # sorted (scratch)
+        jax.ShapeDtypeStruct(full, jnp.float32),         # cumulative (scratch)
+        jax.ShapeDtypeStruct(
+            (segments, _SPARSE_PASS2_SEGMENT_STATE_BYTES), jnp.uint8
+        ),                                               # segment state
+    )
+    result = jax.ffi.ffi_call(_TARGET_SPARSE_PASS2_SEGMENTED_POSTERIOR_F32, outputs)(
+        scores,
+        segment_offsets,
+        n_valid_images.astype(jnp.int32).reshape(()),
+        log_z,
+        external_sum_weight,
+        adaptive_fraction=np.float32(adaptive_fraction),
+        keep_all=np.int64(keep_all),
+        use_external_sum_weight=np.int64(use_external_sum_weight),
+        sort_scan_mode=np.int64(mode),
+    )
+    return tuple(result[:14] if return_scratch else result[:11])
 
 
 @jax.jit
@@ -3882,6 +4370,7 @@ def _validate_relion_coarse_prehalf_weight(
         "current_size",
         "physical_image_size",
         "model_max_r",
+        "padding_factor",
         "canonical_reduction",
         "single_lane_canonical",
         "prehalf_weight",
@@ -3899,6 +4388,7 @@ def relion_coarse_diff2_projector_f32(
     current_size: int,
     physical_image_size: int,
     model_max_r: int,
+    padding_factor: int = 1,
     canonical_reduction: bool = False,
     single_lane_canonical: bool = False,
     prehalf_weight: bool = False,
@@ -3959,6 +4449,7 @@ def relion_coarse_diff2_projector_f32(
         current_size=np.int64(current_size),
         physical_image_size=np.int64(physical_image_size),
         model_max_r=np.int64(model_max_r),
+        padding_factor=np.int64(int(padding_factor)),
         canonical_reduction=np.int64(bool(canonical_reduction)),
         single_lane_canonical=np.int64(bool(single_lane_canonical)),
         prehalf_weight=np.int64(bool(prehalf_weight)),
@@ -3971,6 +4462,7 @@ def relion_coarse_diff2_projector_f32(
         "current_size",
         "physical_image_size",
         "model_max_r",
+        "padding_factor",
         "canonical_reduction",
         "single_lane_canonical",
         "prehalf_weight",
@@ -3988,6 +4480,7 @@ def relion_coarse_diff2_projector_multistream_f32(
     current_size: int,
     physical_image_size: int,
     model_max_r: int,
+    padding_factor: int = 1,
     actual_batch_size: jax.Array,
     canonical_reduction: bool = True,
     single_lane_canonical: bool = False,
@@ -4049,6 +4542,7 @@ def relion_coarse_diff2_projector_multistream_f32(
         current_size=np.int64(current_size),
         physical_image_size=np.int64(physical_image_size),
         model_max_r=np.int64(model_max_r),
+        padding_factor=np.int64(int(padding_factor)),
         canonical_reduction=np.int64(bool(canonical_reduction)),
         single_lane_canonical=np.int64(bool(single_lane_canonical)),
         prehalf_weight=np.int64(bool(prehalf_weight)),
@@ -4061,6 +4555,7 @@ def relion_coarse_diff2_projector_multistream_f32(
         "current_size",
         "physical_image_size",
         "model_max_r",
+        "padding_factor",
         "prehalf_weight",
     ),
 )
@@ -4076,6 +4571,7 @@ def relion_coarse_diff2_projector_lanes_f32(
     current_size: int,
     physical_image_size: int,
     model_max_r: int,
+    padding_factor: int = 1,
     prehalf_weight: bool = False,
 ) -> tuple[jax.Array, jax.Array]:
     """Expose pre-atomic lanes from the shared fused coarse projector.
@@ -4121,6 +4617,7 @@ def relion_coarse_diff2_projector_lanes_f32(
         current_size=np.int64(current_size),
         physical_image_size=np.int64(physical_image_size),
         model_max_r=np.int64(model_max_r),
+        padding_factor=np.int64(int(padding_factor)),
         prehalf_weight=np.int64(bool(prehalf_weight)),
     )
 
@@ -4365,6 +4862,76 @@ def relion_fine_diff2_rectangular_f32(
         out_type,
         vmap_method="sequential",
     )(reference, shifted_image, weight, initial_diff2, full_to_compact)
+
+
+def relion_fine_diff2_rectangular_masked_supported() -> bool:
+    """Return whether the loaded library exports the masked fine diff2 target.
+
+    The masked kernel is an optional ABI, so a library built before it exists
+    stays loadable; callers fall back to the unmasked rectangular kernel.
+    """
+
+    try:
+        _ensure_ffi()
+        symbol_name = _OPTIONAL_FFI_REGISTRATIONS[
+            _TARGET_RELION_FINE_DIFF2_RECTANGULAR_MASKED_F32
+        ][0]
+        return getattr(_get_lib(), symbol_name, None) is not None
+    except Exception:
+        return False
+
+
+@jax.jit
+def relion_fine_diff2_rectangular_masked_f32(
+    reference: jax.Array,
+    shifted_image: jax.Array,
+    weight: jax.Array,
+    full_to_compact: jax.Array,
+    candidate_mask: jax.Array,
+    initial_diff2: jax.Array | None = None,
+) -> jax.Array:
+    """Rectangular fine diff2 that skips cells whose candidate mask is False.
+
+    Same operands and output layout as :func:`relion_fine_diff2_rectangular_f32`
+    plus ``candidate_mask=(B,R,T)`` bool.  Masked cells return 0 without any
+    pixel work, mirroring RELION's fine pass, which only evaluates significant
+    (orientation, translation) pairs (``makeJobsForDiff2Fine``).  Valid cells
+    are bitwise identical to the unmasked kernel.  Optional FFI target: it
+    requires a library built with ``RelionFineDiff2RectangularMaskedF32``.
+    """
+
+    _validate_relion_fine_diff2_inputs(
+        reference,
+        shifted_image,
+        weight,
+        full_to_compact,
+    )
+    _validate_relion_fine_rectangular_shapes(reference, shifted_image, weight)
+    candidate_mask = jnp.asarray(candidate_mask)
+    expected = (reference.shape[0], reference.shape[1], shifted_image.shape[1])
+    if candidate_mask.shape != expected or candidate_mask.dtype != jnp.bool_:
+        raise ValueError(
+            "masked rectangular fine diff2 candidate_mask must be bool with shape "
+            f"{expected}, got {candidate_mask.shape} {candidate_mask.dtype}"
+        )
+    if initial_diff2 is None:
+        initial_diff2 = jnp.zeros((reference.shape[0],), dtype=jnp.float32)
+    else:
+        initial_diff2 = jnp.asarray(initial_diff2)
+    if initial_diff2.dtype != jnp.float32 or initial_diff2.shape != (
+        reference.shape[0],
+    ):
+        raise ValueError(
+            "masked rectangular fine diff2 initial_diff2 must be float32 with shape "
+            f"({reference.shape[0]},), got {initial_diff2.shape} {initial_diff2.dtype}"
+        )
+    _ensure_optional_ffi(_TARGET_RELION_FINE_DIFF2_RECTANGULAR_MASKED_F32)
+    out_type = jax.ShapeDtypeStruct(expected, jnp.float32)
+    return jax.ffi.ffi_call(
+        _TARGET_RELION_FINE_DIFF2_RECTANGULAR_MASKED_F32,
+        out_type,
+        vmap_method="sequential",
+    )(reference, shifted_image, weight, initial_diff2, full_to_compact, candidate_mask)
 
 
 @functools.partial(
@@ -5419,6 +5986,24 @@ def relion_preprocess_real_f32(
     )
 
 
+def _backproject_indexed_target(use_relion_block_topology: bool) -> str:
+    """Pick the indexed-backprojection FFI target for the current gate.
+
+    The zero-skipping variant is opt-in and is unavailable under the RELION
+    block topology, which re-expands operands onto the dense FFTW rectangle.
+
+    ``backproject_indexed`` is jitted, so this runs at trace time and the
+    chosen target is baked into the cached executable. Changing
+    ``RECOVAR_BACKPROJECT_SKIP_ZERO`` part-way through a process therefore has
+    no effect on already-traced shapes; set it before the first call.
+    """
+
+    if backproject_skip_zero_requested() and not use_relion_block_topology:
+        _ensure_optional_ffi(_TARGET_BACKPROJECT_INDEXED_SKIP_ZERO)
+        return _TARGET_BACKPROJECT_INDEXED_SKIP_ZERO
+    return _TARGET_BACKPROJECT_INDEXED
+
+
 @functools.partial(jax.jit, static_argnums=(4, 5, 6, 7, 8, 9, 10))
 def backproject_indexed(
     volume: jax.Array,
@@ -5464,8 +6049,9 @@ def backproject_indexed(
     rot6 = _rot_to_compact(rotation_matrices, _volume_real_dtype(volume))
     out_type = jax.ShapeDtypeStruct(volume.shape, volume.dtype)
 
+    target = _backproject_indexed_target(use_relion_block_topology)
     return jax.ffi.ffi_call(
-        _TARGET_BACKPROJECT_INDEXED,
+        target,
         out_type,
         input_output_aliases={3: 0},
         vmap_method="sequential",
@@ -6575,6 +7161,380 @@ def relion_wavg_sequential_runtime_triplet_f32(
         posterior,
         logical_pixel_count,
     )
+
+
+def _optional_target_supported(target: str) -> bool:
+    """Return whether the loaded library exports an optional target's symbol."""
+
+    try:
+        _ensure_ffi()
+        symbol_name = _OPTIONAL_FFI_REGISTRATIONS[target][0]
+        return getattr(_get_lib(), symbol_name, None) is not None
+    except Exception:
+        return False
+
+
+def relion_wavg_sequential_runtime_flat_rows_triplet_f32_supported() -> bool:
+    """Return whether the loaded library exports the flat-row Wavg target."""
+
+    return _optional_target_supported(
+        _TARGET_RELION_WAVG_SEQUENTIAL_RUNTIME_FLAT_ROWS_TRIPLET_F32
+    )
+
+
+def relion_wavg_rotation_atomic_runtime_flat_rows_triplet_add_f32_supported() -> bool:
+    """Return whether the loaded library exports the flat-row Wavg atomics."""
+
+    return _optional_target_supported(
+        _TARGET_RELION_WAVG_ROTATION_ATOMIC_RUNTIME_FLAT_ROWS_TRIPLET_ADD_F32
+    )
+
+
+@jax.jit
+def relion_wavg_sequential_runtime_flat_rows_triplet_f32(
+    projections: jax.Array,
+    row_image_ids: jax.Array,
+    raw_ctf: jax.Array,
+    scale: jax.Array,
+    shifted_images: jax.Array,
+    posterior: jax.Array,
+    logical_pixel_count: jax.Array,
+) -> jax.Array:
+    """Accumulate Wavg triplets over packed candidate rows.
+
+    ``projections`` is ``(Q,P)`` and ``posterior`` is ``(Q,T)``; every row's
+    image/CTF/scale/shifted-image address comes from ``row_image_ids`` ``(Q,)``
+    instead of the rectangular ``[B,R]`` grid, the same substitution the
+    flat-row fine scorer makes.  The CUDA implementation shares the rectangular
+    kernel's per-pixel binary32 arithmetic and its translation-storage order, so
+    a flattened rectangular problem returns bitwise identical triplets.  Rows
+    whose id is negative are padding: they read nothing and stay zero.  The
+    output is ``(Q,P,3)`` holding ``[XA, AA, diff2]``.
+    """
+
+    projections = jnp.asarray(projections)
+    row_image_ids = jnp.asarray(row_image_ids)
+    raw_ctf = jnp.asarray(raw_ctf)
+    scale = jnp.asarray(scale)
+    shifted_images = jnp.asarray(shifted_images)
+    posterior = jnp.asarray(posterior)
+    logical_pixel_count = jnp.asarray(logical_pixel_count, dtype=jnp.int32)
+    if projections.dtype != jnp.complex64 or projections.ndim != 2:
+        raise ValueError(
+            "flat-row RELION Wavg expects complex64 projections[Q,P]"
+        )
+    row_count, pixel_capacity = projections.shape
+    if row_image_ids.dtype != jnp.int32 or row_image_ids.shape != (row_count,):
+        raise ValueError("flat-row RELION Wavg expects int32 row_image_ids[Q]")
+    if raw_ctf.dtype != jnp.float32 or raw_ctf.ndim != 2 or (
+        raw_ctf.shape[1] != pixel_capacity
+    ):
+        raise ValueError("flat-row RELION Wavg expects float32 raw_ctf[B,P]")
+    batch_size = raw_ctf.shape[0]
+    if scale.dtype != jnp.float32 or scale.shape != (batch_size,):
+        raise ValueError("flat-row RELION Wavg expects float32 scale[B]")
+    if (
+        shifted_images.dtype != jnp.complex64
+        or shifted_images.ndim != 3
+        or shifted_images.shape[0] != batch_size
+        or shifted_images.shape[2] != pixel_capacity
+    ):
+        raise ValueError(
+            "flat-row RELION Wavg expects complex64 shifted_images[B,T,P]"
+        )
+    if posterior.dtype != jnp.float32 or posterior.shape != (
+        row_count,
+        shifted_images.shape[1],
+    ):
+        raise ValueError("flat-row RELION Wavg expects float32 posterior[Q,T]")
+    if logical_pixel_count.shape != ():
+        raise ValueError("logical_pixel_count must be an int32 scalar")
+    if jax.default_backend() != "gpu":
+        raise RuntimeError("flat-row RELION Wavg requires a JAX GPU backend")
+    if not custom_cuda_requested():
+        raise RuntimeError("flat-row RELION Wavg requires custom CUDA")
+    _ensure_optional_ffi(
+        _TARGET_RELION_WAVG_SEQUENTIAL_RUNTIME_FLAT_ROWS_TRIPLET_F32
+    )
+    output_type = jax.ShapeDtypeStruct((row_count, pixel_capacity, 3), jnp.float32)
+    return jax.ffi.ffi_call(
+        _TARGET_RELION_WAVG_SEQUENTIAL_RUNTIME_FLAT_ROWS_TRIPLET_F32,
+        output_type,
+        vmap_method="sequential",
+    )(
+        projections,
+        row_image_ids,
+        raw_ctf,
+        scale,
+        shifted_images,
+        posterior,
+        logical_pixel_count,
+    )
+
+
+@jax.jit
+def relion_wavg_rotation_atomic_runtime_flat_rows_triplet_add_f32(
+    terms: jax.Array,
+    row_image_ids: jax.Array,
+    accumulator: jax.Array,
+    logical_pixel_count: jax.Array,
+) -> jax.Array:
+    """Atomically add packed-row Wavg triplets into per-image accumulators.
+
+    ``terms`` is ``(Q,P,3)``, ``row_image_ids`` ``(Q,)`` and ``accumulator``
+    ``(B,P,3)``.  The launch keeps one block per row, so a flattened
+    rectangular problem issues exactly the same multiset of per-cell atomic
+    adds as :func:`relion_wavg_rotation_atomic_runtime_triplet_add_f32`, and
+    the linear block index matches that kernel's ``rotation + image *
+    rotation_count``.  The order in which those adds land is hardware
+    scheduled, so the accumulated float32 sums agree bitwise only when the
+    summands are exactly representable; the rectangular kernel does not
+    reproduce itself bitwise either at realistic rotation counts.  Rows whose
+    id is negative contribute nothing.
+    """
+
+    terms = jnp.asarray(terms)
+    row_image_ids = jnp.asarray(row_image_ids)
+    accumulator = jnp.asarray(accumulator)
+    logical_pixel_count = jnp.asarray(logical_pixel_count, dtype=jnp.int32)
+    if terms.dtype != jnp.float32 or terms.ndim != 3 or terms.shape[-1] != 3:
+        raise ValueError(
+            "flat-row RELION Wavg atomics require float32 [row, pixel, 3] terms"
+        )
+    row_count, pixel_capacity = terms.shape[0], terms.shape[1]
+    if row_image_ids.dtype != jnp.int32 or row_image_ids.shape != (row_count,):
+        raise ValueError(
+            "flat-row RELION Wavg atomics require int32 row_image_ids[Q]"
+        )
+    if (
+        accumulator.dtype != jnp.float32
+        or accumulator.ndim != 3
+        or accumulator.shape[1] != pixel_capacity
+        or accumulator.shape[2] != 3
+    ):
+        raise ValueError(
+            "flat-row RELION Wavg atomics require a float32 [batch,pixel,3] accumulator"
+        )
+    if logical_pixel_count.shape != ():
+        raise ValueError("logical_pixel_count must be an int32 scalar")
+    _ensure_optional_ffi(
+        _TARGET_RELION_WAVG_ROTATION_ATOMIC_RUNTIME_FLAT_ROWS_TRIPLET_ADD_F32
+    )
+    output_type = jax.ShapeDtypeStruct(accumulator.shape, jnp.float32)
+    return jax.ffi.ffi_call(
+        _TARGET_RELION_WAVG_ROTATION_ATOMIC_RUNTIME_FLAT_ROWS_TRIPLET_ADD_F32,
+        output_type,
+        input_output_aliases={2: 0},
+        vmap_method="sequential",
+    )(terms, row_image_ids, accumulator, logical_pixel_count)
+
+
+def relion_translate_sum_flat_rows_f32_supported() -> bool:
+    """Return whether the loaded library exports the translate-and-sum target."""
+
+    return _optional_target_supported(_TARGET_RELION_TRANSLATE_SUM_FLAT_ROWS_F32)
+
+
+@functools.partial(
+    jax.jit, static_argnames=("image_shape", "rows_per_block")
+)
+def relion_translate_sum_flat_rows_f32(
+    recon_image: jax.Array,
+    noise_image: jax.Array,
+    row_image_ids: jax.Array,
+    posterior: jax.Array,
+    translation_angles: jax.Array,
+    pixel_indices: jax.Array,
+    n_valid_rows: jax.Array,
+    logical_pixel_count: jax.Array,
+    recon_weight: jax.Array | None = None,
+    ctf2_over_nv: jax.Array | None = None,
+    *,
+    image_shape: Tuple[int, int],
+    rows_per_block: int = 0,
+) -> tuple[jax.Array, ...]:
+    """Translate and posterior-weight two per-image operands over packed rows.
+
+    This is the flat-row form of the resident M-step's weighted sums. For every
+    row ``r`` with image ``row_image_ids[r]`` and every reconstruction pixel
+    ``p`` it returns
+
+    ``summed[r, p]        = sum_t posterior[r, t] * shift_t(recon_image[id, p])``
+    ``summed_masked[r, p] = sum_t posterior[r, t] * shift_t(noise_image[id, p])``
+    ``probs_sum_t[r]      = sum_t posterior[r, t]``
+
+    The translation is applied inside the reduction with the phase and complex
+    rotation of :func:`relion_translate_score_f32`, so the kernel replaces a
+    pre-shifted ``[images, translations, pixels]`` tile and its contraction
+    without ever materialising the tile. ``pixel_indices`` are RECOVAR's
+    centered packed-half indices, the same operand
+    :func:`relion_translate_score_f32` takes.
+
+    ``recon_weight`` switches the first operand to the exact RELION BPref
+    convention, the one ``_prepare_bucket_io`` uses when
+    ``relion_exact_bpref_operands`` is selected: pass the raw BPref image as
+    ``recon_image`` and the weighted CTF as ``recon_weight``, and the kernel
+    reproduces :func:`relion_translate_bpref_f32`, whose imaginary component
+    and post-rotation weighting round differently from the score primitive.
+    The noise operand always uses the score convention, which is how
+    ``shifted_score_half_with_dc`` is built in both modes.
+
+    ``n_valid_rows`` and ``logical_pixel_count`` are device int32 scalars, so a
+    capacity-shaped chunk keeps one traced program: rows at or past
+    ``n_valid_rows``, rows whose image id is negative, and pixels at or past
+    ``logical_pixel_count`` are written as zeros and read nothing. The sum over
+    translations is sequential in increasing ``t`` with a rounded multiply and a
+    rounded add; the XLA path it replaces contracts the same products at
+    ``Precision.HIGHEST``, so the two agree to a few float32 ulp and exactly at
+    ``T == 1``.
+
+    ``ctf2_over_nv`` adds the M-step block's fourth output. Supplied, the call
+    returns ``(summed, summed_masked, probs_sum_t, ctf_probs)`` with
+
+    ``ctf_probs[r, p] = probs_sum_t[r] != 0 ? probs_sum_t[r] * ctf2[id, p] : 0``
+
+    which is :func:`recovar.em.local.local_backprojection.compute_local_ctf_sums_from_probs_sum_t`
+    term for term, including its predicate on the mass rather than on the
+    product, and bitwise against it on the same ``probs_sum_t``. Omitted, the
+    call returns the three-output form and reads no CTF operand.
+
+    ``rows_per_block`` selects how many packed rows share one ``sincosf``
+    evaluation. Zero picks the kernel's default; it changes performance only,
+    never the arithmetic.
+    """
+
+    recon_image = jnp.asarray(recon_image)
+    noise_image = jnp.asarray(noise_image)
+    row_image_ids = jnp.asarray(row_image_ids)
+    posterior = jnp.asarray(posterior)
+    translation_angles = jnp.asarray(translation_angles)
+    pixel_indices = jnp.asarray(pixel_indices)
+    n_valid_rows = jnp.asarray(n_valid_rows, dtype=jnp.int32)
+    logical_pixel_count = jnp.asarray(logical_pixel_count, dtype=jnp.int32)
+    if recon_image.dtype != jnp.complex64 or noise_image.dtype != jnp.complex64:
+        raise TypeError(
+            "flat-row translate-and-sum expects complex64 image operands, got "
+            f"{recon_image.dtype} and {noise_image.dtype}"
+        )
+    if recon_image.ndim != 2 or noise_image.shape != recon_image.shape:
+        raise ValueError(
+            "flat-row translate-and-sum expects matching [batch, pixels] image "
+            f"operands, got {recon_image.shape} and {noise_image.shape}"
+        )
+    batch_size, pixel_capacity = (int(size) for size in recon_image.shape)
+    if row_image_ids.dtype != jnp.int32 or row_image_ids.ndim != 1:
+        raise ValueError(
+            "flat-row translate-and-sum expects int32 row_image_ids[Q]"
+        )
+    row_count = int(row_image_ids.shape[0])
+    if translation_angles.dtype != jnp.float32 or (
+        translation_angles.ndim != 2 or translation_angles.shape[1] != 2
+    ):
+        raise ValueError(
+            "flat-row translate-and-sum expects float32 translation_angles[T,2]"
+        )
+    n_trans = int(translation_angles.shape[0])
+    if posterior.dtype != jnp.float32 or posterior.shape != (row_count, n_trans):
+        raise ValueError(
+            "flat-row translate-and-sum expects float32 posterior[Q,T], got "
+            f"{posterior.shape} {posterior.dtype}"
+        )
+    if pixel_indices.dtype != jnp.int32 or pixel_indices.shape != (
+        pixel_capacity,
+    ):
+        raise ValueError(
+            "flat-row translate-and-sum expects int32 pixel_indices[P], got "
+            f"{pixel_indices.shape} {pixel_indices.dtype}"
+        )
+    if n_valid_rows.shape != () or logical_pixel_count.shape != ():
+        raise ValueError(
+            "n_valid_rows and logical_pixel_count must be int32 scalars"
+        )
+    if len(image_shape) != 2 or any(int(size) <= 0 for size in image_shape):
+        raise ValueError(
+            f"image_shape must contain two positive sizes, got {image_shape}"
+        )
+    if int(rows_per_block) not in (0, 1, 2, 4, 8):
+        raise ValueError(
+            f"rows_per_block must be 0, 1, 2, 4 or 8, got {rows_per_block}"
+        )
+    bpref_recon = recon_weight is not None
+    if bpref_recon:
+        recon_weight = jnp.asarray(recon_weight)
+        if recon_weight.dtype != jnp.float32 or recon_weight.shape != (
+            batch_size,
+            pixel_capacity,
+        ):
+            raise ValueError(
+                "flat-row translate-and-sum expects float32 recon_weight[B,P], "
+                f"got {recon_weight.shape} {recon_weight.dtype}"
+            )
+    else:
+        recon_weight = jnp.zeros((1, 1), dtype=jnp.float32)
+    write_ctf_probs = ctf2_over_nv is not None
+    if write_ctf_probs:
+        ctf2_over_nv = jnp.asarray(ctf2_over_nv)
+        if ctf2_over_nv.dtype != jnp.float32 or ctf2_over_nv.shape != (
+            batch_size,
+            pixel_capacity,
+        ):
+            raise ValueError(
+                "flat-row translate-and-sum expects float32 ctf2_over_nv[B,P], "
+                f"got {ctf2_over_nv.shape} {ctf2_over_nv.dtype}"
+            )
+    else:
+        ctf2_over_nv = jnp.zeros((1, 1), dtype=jnp.float32)
+    if batch_size <= 0 or pixel_capacity <= 0 or row_count <= 0 or n_trans <= 0:
+        raise ValueError(
+            "flat-row translate-and-sum operands must be non-empty, got "
+            f"batch={batch_size} pixels={pixel_capacity} rows={row_count} "
+            f"translations={n_trans}"
+        )
+    if jax.default_backend() != "gpu":
+        raise RuntimeError(
+            "flat-row translate-and-sum requires a JAX GPU backend"
+        )
+    if not custom_cuda_requested():
+        raise RuntimeError(
+            "flat-row translate-and-sum was explicitly requested but custom "
+            "CUDA is disabled"
+        )
+    _ensure_optional_ffi(_TARGET_RELION_TRANSLATE_SUM_FLAT_ROWS_F32)
+
+    image_h, image_w = (int(size) for size in image_shape)
+    outputs = (
+        jax.ShapeDtypeStruct((row_count, pixel_capacity), jnp.complex64),
+        jax.ShapeDtypeStruct((row_count, pixel_capacity), jnp.complex64),
+        jax.ShapeDtypeStruct((row_count,), jnp.float32),
+        jax.ShapeDtypeStruct(
+            (row_count, pixel_capacity) if write_ctf_probs else (1, 1),
+            jnp.float32,
+        ),
+    )
+    results = jax.ffi.ffi_call(
+        _TARGET_RELION_TRANSLATE_SUM_FLAT_ROWS_F32,
+        outputs,
+        vmap_method="sequential",
+    )(
+        recon_image,
+        noise_image,
+        recon_weight,
+        ctf2_over_nv,
+        row_image_ids,
+        posterior,
+        translation_angles,
+        pixel_indices,
+        n_valid_rows,
+        logical_pixel_count,
+        image_h=np.int64(image_h),
+        image_half_width=np.int64(image_w // 2 + 1),
+        rows_per_block=np.int64(int(rows_per_block)),
+        bpref_recon=np.int64(int(bpref_recon)),
+        write_ctf_probs=np.int64(int(write_ctf_probs)),
+    )
+    # The unused fourth buffer is a 1x1 placeholder; the three-output form
+    # never exposes it.
+    return tuple(results) if write_ctf_probs else tuple(results[:3])
 
 
 @jax.jit

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 from functools import partial
+from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
@@ -31,6 +32,108 @@ _RELION_X_HALF_F32_FINE_POSTERIOR_ENV = "RECOVAR_RELION_X_HALF_F32_FINE_POSTERIO
 
 
 _SPARSE_KCLASS_RELION_FINE_MSTEP_PRUNE_JOINT_MODES = {"joint", "global", "class_pose", "class-pose"}
+
+
+_SPARSE_PASS2_CUDA_POSTERIOR_ENV = "RECOVAR_SPARSE_PASS2_CUDA_POSTERIOR"
+
+
+def sparse_pass2_cuda_posterior_enabled() -> bool:
+    """Return whether the fused CUDA pass-2 posterior replaces the XLA glue.
+
+    Default off: unset behaviour is the shape-specialised XLA path.  The fused
+    kernel is a performance candidate (one runtime-shaped FFI call per bucket
+    instead of three XLA programs per ``(images, rotations)`` pair) and keeps
+    the XLA arithmetic except for the float64 log-sum-exp reduction order.
+    """
+
+    return parse_env_flag(_SPARSE_PASS2_CUDA_POSTERIOR_ENV, default=False)
+
+
+class FusedPass2Posterior(NamedTuple):
+    """Outputs of :func:`cuda_fused_pass2_posterior` in XLA-path dtypes."""
+
+    log_z: jax.Array
+    probs: jax.Array
+    best_log_score: jax.Array
+    best_argmax: jax.Array
+    max_posterior: jax.Array
+    normalized_weights: jax.Array
+    reconstruction_probs: jax.Array
+    mask: jax.Array
+    n_significant: jax.Array
+    sum_weight: jax.Array
+    threshold: jax.Array
+
+
+def cuda_logsumexp_pass2_bucket_score_only(scores):
+    """CUDA counterpart of :func:`_logsumexp_pass2_bucket_score_only`."""
+
+    from recovar import cuda_backproject
+
+    return cuda_backproject.sparse_pass2_log_z_f64(jnp.asarray(scores, dtype=jnp.float32))
+
+
+def cuda_fused_pass2_posterior(
+    scores,
+    log_z,
+    *,
+    adaptive_fraction: float,
+    normalization_sum_weight=None,
+    keep_all: bool = False,
+) -> FusedPass2Posterior:
+    """Fused :func:`_normalize_pass2_bucket_with_log_z` and :func:`_relion_f32_fine_posterior`.
+
+    ``scores`` are float32 ``(B, R, T)`` candidate scores and ``log_z`` the
+    precomputed per-image normalizer.  ``max_posterior`` is the maximum pruned
+    reconstruction probability, matching the Pmax the RELION float32 path
+    reports.  ``normalization_sum_weight`` retains a coarse float32 denominator
+    exactly as in :func:`_relion_f32_fine_posterior`.
+    """
+
+    from recovar import cuda_backproject
+
+    scores = jnp.asarray(scores, dtype=jnp.float32)
+    log_z = jnp.asarray(log_z, dtype=jnp.float64)
+    if normalization_sum_weight is None:
+        external = jnp.ones((scores.shape[0],), dtype=jnp.float32)
+        use_external = False
+    else:
+        external = jnp.asarray(normalization_sum_weight, dtype=jnp.float32)
+        use_external = True
+    outputs = cuda_backproject.sparse_pass2_posterior_f32(
+        scores,
+        log_z,
+        external,
+        adaptive_fraction=float(adaptive_fraction),
+        keep_all=bool(keep_all),
+        use_external_sum_weight=use_external,
+    )
+    (
+        log_z_out,
+        best_log_score,
+        best_argmax,
+        max_posterior,
+        probs,
+        normalized_weights,
+        reconstruction_probs,
+        mask,
+        n_significant,
+        sum_weight,
+        threshold,
+    ) = outputs
+    return FusedPass2Posterior(
+        log_z=log_z_out,
+        probs=probs,
+        best_log_score=best_log_score,
+        best_argmax=best_argmax,
+        max_posterior=max_posterior,
+        normalized_weights=normalized_weights,
+        reconstruction_probs=reconstruction_probs,
+        mask=mask,
+        n_significant=n_significant,
+        sum_weight=sum_weight,
+        threshold=threshold,
+    )
 
 
 @jax.jit

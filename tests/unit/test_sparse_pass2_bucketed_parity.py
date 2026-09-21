@@ -638,7 +638,8 @@ def test_sparse_pass2_distinct_mstep_rotations_do_not_change_score_path(monkeypa
 def test_sparse_pass2_per_particle_xhalf_uses_mstep_rotation_tensor():
     source = inspect.getsource(sparse_pass2_module.compute_pass2_stats_sparse_bucketed)
     assert "flat_backproject_rotations" in source
-    assert "flatten_bucket_rotations(jnp.asarray(mstep_rotations[:, start:stop]))" in source
+    # host-side flatten (no jit, no device round trip) of the M-step rotation slice
+    assert "flatten_bucket_rotations(mstep_rotations[:, start:stop])" in source
     assert (
         "_accumulate_relion_x_half_per_particle_launches(\n"
         "                    summed,\n"

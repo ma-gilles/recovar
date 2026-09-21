@@ -62,6 +62,7 @@ from recovar.em.relion.relion_coarse_operands import (
     _resolve_k1_relion_exact_coarse_skip_generic_operands,
     _resolve_k1_relion_exact_compact_preprocess,
     _select_relion_coarse_rescore_winner_slots,
+    assemble_relion_cc_coarse_operands,
 )
 from recovar.em.scoring.coarse_gaussian_gemm import (
     _COARSE_GAUSSIAN_GEMM_COMPACT_POSTERIOR_ENV,
@@ -108,6 +109,9 @@ from recovar.em.scoring.coarse_gemm_streaming import (
 )
 from recovar.em.scoring.scoring import _e_step_block_scores, _e_step_block_scores_windowed, _update_logsumexp
 from recovar.em.scoring.significant_samples import compact_significant_sample_indices_from_mask
+from recovar.em.sparse_pass2.resident_significance import (
+    coarse_significance_device_requested,
+)
 from recovar.utils.nvtx_shim import nvtx
 
 _SIGNIFICANCE_SCORE_CACHE_ENV = "RECOVAR_SIGNIFICANCE_SCORE_CACHE"
@@ -140,6 +144,9 @@ _COARSE_SIGNIFICANCE_SUPPORT_AUDIT_IDS_ENV = (
 )
 _K1_COARSE_GAUSSIAN_NATIVE_TEXTURE_ENV = (
     "RECOVAR_K1_COARSE_GAUSSIAN_NATIVE_TEXTURE"
+)
+_COARSE_PAD_FINAL_IMAGE_BATCH_ENV = (
+    "RECOVAR_COARSE_PAD_FINAL_IMAGE_BATCH"
 )
 NVTX_DOMAIN_EM = "recovar_em"
 logger = logging.getLogger(__name__)
@@ -185,6 +192,29 @@ def _pad_significance_preprocess_inputs(
         None if batch_corr is None else _repeat_pad_batch_axis(batch_corr, target_size),
         _repeat_pad_batch_axis(batch_scale, target_size),
         padded_kwargs,
+    )
+
+
+@partial(jax.jit, static_argnames=("complex_dtype", "real_dtype"))
+def _windowed_score_operands(
+    shifted_half,
+    score_weight_half,
+    window_indices,
+    *,
+    complex_dtype,
+    real_dtype,
+):
+    """Gather and cast the coarse score operands in one program.
+
+    Eagerly these four lines are six XLA programs (two gathers, two index
+    broadcasts and two element casts), retraced for every image-batch extent.
+    The primitives, their order and their dtypes are unchanged, so the result
+    is bit-for-bit the eager one; only the program count differs.
+    """
+
+    return (
+        shifted_half[:, window_indices].astype(complex_dtype),
+        score_weight_half[:, window_indices].astype(real_dtype),
     )
 
 
@@ -536,6 +566,28 @@ def _coarse_significance_support_audit_enabled(
     return parse_env_strict_flag(_COARSE_SIGNIFICANCE_SUPPORT_AUDIT_ENV, default=default)
 
 
+def _coarse_pad_final_image_batch_enabled(*, default: bool = False) -> bool:
+    """Whether every coarse image batch is padded to the requested batch size.
+
+    A half set is rarely an exact multiple of ``image_batch_size``, so its last
+    batch has its own image extent and every program in the coarse pass,
+    significance and image preprocessing is traced and compiled a second time
+    for it. Padding repeats image row zero up to ``image_batch_size``; the
+    repeated rows are discarded from every science output, so the retained
+    values are bit-for-bit those of the unpadded batch (the per-image
+    computations are independent, and the batch-level reductions are maxima
+    over rows that row zero already contributes).
+
+    The knob is opt-in while the equality is being qualified; VDAM already
+    requests the same padding explicitly through ``pad_final_image_batch``.
+    """
+
+    return parse_env_strict_flag(
+        _COARSE_PAD_FINAL_IMAGE_BATCH_ENV,
+        default=default,
+    )
+
+
 def _coarse_significance_support_audit_ids_enabled() -> bool:
     """Whether a support audit also retains its exact selected IDs."""
     return parse_env_strict_flag(_COARSE_SIGNIFICANCE_SUPPORT_AUDIT_IDS_ENV)
@@ -638,10 +690,10 @@ def _resolve_coarse_gaussian_score_backend(
 def _k1_coarse_fused_projector_supports_padding(padding_factor: int) -> bool:
     """Whether the fused CUDA projector implements this RELION padding."""
 
-    # The fused kernel stages the compact pad-1 Projector texture and samples
-    # unscaled Fourier coordinates.  The general texture-projector path below
-    # infers and applies larger padding factors from the projector shape.
-    return int(padding_factor) == 1
+    # The fused kernel stages the compact Projector texture over the padded
+    # radius and scales the rotated coordinates by ``padding_factor`` before the
+    # texture fetch, as RELION's AccProjectorKernel::project3Dmodel does.
+    return int(padding_factor) >= 1
 
 
 def _capture_offset_free_and_absolute_float32_scores(scores, log_score_offset):
@@ -903,7 +955,11 @@ def _compute_k_class_significance_batched(
     from recovar.em.helpers.half_spectrum import make_half_image_weights, make_scoring_half_image_weights
     from recovar.em.helpers.image_shifts import apply_relion_integer_pre_shifts, tiled_half_image_phase_factors
     from recovar.em.helpers.oversampling import find_significant_rotations as _find_sig
-    from recovar.em.helpers.preprocessing import prepare_batch_preprocess_operands, process_half_image
+    from recovar.em.helpers.preprocessing import (
+        jit_stage_glue_enabled,
+        prepare_batch_preprocess_operands,
+        process_half_image,
+    )
     from recovar.em.helpers.preprocessing import preprocess_batch as _preprocess_batch
     from recovar.em.helpers.preprocessing import preprocess_batch_firstiter_cc as _preprocess_batch_firstiter_cc
     from recovar.em.helpers.projection import compute_projections_block as _compute_projections_block
@@ -926,6 +982,9 @@ def _compute_k_class_significance_batched(
     score_mode = str(score_mode)
     if score_mode not in {"gaussian", "normalized_cc"}:
         raise ValueError(f"score_mode must be 'gaussian' or 'normalized_cc', got {score_mode!r}")
+    # VDAM asks for the padded tail batch explicitly; the global coarse pass
+    # opts in through the environment while the bitwise equality is qualified.
+    pad_final_image_batch = bool(pad_final_image_batch) or _coarse_pad_final_image_batch_enabled()
     # RELION's pdf_orientation/pdf_offset priors and score/evidence/Pmax
     # outputs are RFLOAT (double), never narrowed -- derive from the
     # caller's own use_float64_scoring instead of hardcoding float32.
@@ -1423,6 +1482,21 @@ def _compute_k_class_significance_batched(
     relion_f32_coarse_support_enabled = (
         relion_f32_coarse_support_requested and score_mode == "gaussian"
     )
+    # Compact the coarse support mask on the device instead of pulling it
+    # (ticket T13).  K=1 only, and only when the ids are actually collected;
+    # every dense-mask diagnostic keeps the host pull, checked per batch.
+    coarse_significance_device_enabled = (
+        coarse_significance_device_requested()
+        and int(n_classes) == 1
+        and bool(collect_significance)
+    )
+    device_significance_counts = []
+    device_significance_polarity = []
+    device_significance_ids = []
+    if coarse_significance_device_enabled:
+        from recovar.em.sparse_pass2.resident_significance import (
+            compact_batch_significance,
+        )
     if coarse_gaussian_gemm_hybrid_requested:
         _validate_coarse_gaussian_gemm_hybrid_request(
             macro_enabled=coarse_gaussian_gemm_macro_enabled,
@@ -1544,8 +1618,6 @@ def _compute_k_class_significance_batched(
         from recovar.em.relion.relion_ctf import _relion_exact_ctf_half_from_source_star
         from recovar.em.sparse_pass2.sparse_pass2_bucket_io import _relion_translation_angles_f32
         from recovar.em.sparse_pass2.sparse_pass2_scoring import (
-            _relion_cuda_corr_img_from_rfloat_ctf,
-            _relion_cuda_pixel_correction_from_rfloat_ctf,
             _relion_cuda_powerclass_highres_xi2_half,
         )
 
@@ -1665,10 +1737,14 @@ def _compute_k_class_significance_batched(
             in _COARSE_GAUSSIAN_FUSED_SCORE_BACKENDS
             or coarse_gaussian_fused_full_fallback_armed
         ):
+            # RELION uploads the (RFLOAT) padded Projector data as XFLOAT
+            # textures (AccProjector::setMdlData); the fused kernel takes the
+            # same float32 texture, so narrow the pad-2 complex128 projector
+            # here instead of rejecting it at the FFI boundary.
             coarse_gaussian_projector_full_by_class = [
                 relion_projector_half_to_texture_full(
                     relion_projector_half[class_index],
-                )
+                ).astype(jnp.complex64)
                 for class_index in range(n_classes)
             ]
             coarse_gaussian_translation_angles = jnp.asarray(
@@ -1873,10 +1949,6 @@ def _compute_k_class_significance_batched(
         from recovar.em.helpers.projection import relion_projector_half_to_texture_full
         from recovar.em.relion.relion_ctf import _relion_exact_ctf_half_from_source_star
         from recovar.em.sparse_pass2.sparse_pass2_bucket_io import _relion_translation_angles_f32
-        from recovar.em.sparse_pass2.sparse_pass2_scoring import (
-            _relion_cuda_corr_img_from_rfloat_ctf,
-            _relion_cuda_pixel_correction_from_rfloat_ctf,
-        )
 
         if (
             jax.default_backend() != "gpu"
@@ -2244,6 +2316,7 @@ def _compute_k_class_significance_batched(
             current_size=score_size,
             physical_image_size=int(image_shape[0]),
             model_max_r=int(relion_projector_r_max),
+            padding_factor=int(projection_padding_factor),
             canonical_reduction=coarse_canonical_reduction_enabled,
             single_lane_canonical=coarse_single_lane_canonical_enabled,
             **coarse_projector_kwargs,
@@ -2631,6 +2704,7 @@ def _compute_k_class_significance_batched(
     ):
         actual_batch_size = len(indices)
         end_idx = start_idx + actual_batch_size
+        device_significance_batch = False
         coarse_gaussian_gemm_hybrid_batch_result = None
         (
             relion_cuda_preprocess,
@@ -2908,9 +2982,23 @@ def _compute_k_class_significance_batched(
                     0.0,
                     coarse_gaussian_unshifted_score_weighted,
                 )
+        fused_window_operands = (
+            jit_stage_glue_enabled()
+            and use_window
+            and not exact_compact_preprocess_enabled
+            and not (score_mode == "normalized_cc" and tree_rescore_enabled)
+        )
         if exact_compact_preprocess_enabled:
             shifted_data = None
             ctf2_data = None
+        elif fused_window_operands:
+            shifted_data, ctf2_data = _windowed_score_operands(
+                shifted_half,
+                score_weight_half,
+                window_indices,
+                complex_dtype=jnp.complex128 if use_float64_scoring else jnp.complex64,
+                real_dtype=jnp.float64 if use_float64_scoring else jnp.float32,
+            )
         elif use_window:
             shifted_data = shifted_half[:, window_indices]
             ctf2_data = score_weight_half[:, window_indices]
@@ -2923,7 +3011,8 @@ def _compute_k_class_significance_batched(
             ctf2_data = score_weight_half
             if score_mode == "normalized_cc" and tree_rescore_enabled:
                 tree_rescore_unshifted_data = tree_rescore_unshifted_half
-        if exact_compact_preprocess_enabled:
+        if exact_compact_preprocess_enabled or fused_window_operands:
+            # ``_windowed_score_operands`` already cast both operands.
             pass
         elif use_float64_scoring:
             shifted_data = shifted_data.astype(jnp.complex128)
@@ -2959,33 +3048,32 @@ def _compute_k_class_significance_batched(
                 indices,
                 image_shape,
             )
-            batch_scale_f32 = jnp.asarray(batch_scale_np, dtype=jnp.float32)
-            exact_cc_pixel_correction = _relion_cuda_pixel_correction_from_rfloat_ctf(
-                batch_scale_f32[:, None],
-                exact_cc_ctf_rfloat,
-            )
-            exact_cc_unshifted_corrected = jnp.asarray(
-                exact_cc_processed * exact_cc_pixel_correction,
-                dtype=jnp.complex64,
-            )
-            if image_pre_shifts is not None and not real_space_pre_shift_applied:
-                exact_cc_unshifted_corrected = (
-                    exact_cc_unshifted_corrected
-                    * tiled_half_image_phase_factors(image_shape, batch_shifts, 1)
+            if batch_size > actual_batch_size:
+                # This operand is rebuilt from the source STAR at ``indices``,
+                # which the coarse-batch padding does not touch, so it is the one
+                # per-image array in this branch still at the unpadded extent.
+                # Repeat-pad it the same way every other operand here is padded;
+                # the padded rows are sliced off with the rest.
+                exact_cc_ctf_rfloat = jnp.asarray(
+                    _repeat_pad_batch_axis(exact_cc_ctf_rfloat, batch_size),
                 )
-            exact_cc_corr_img = _relion_cuda_corr_img_from_rfloat_ctf(
-                exact_cc_inv_xi2,
+            batch_scale_f32 = jnp.asarray(batch_scale_np, dtype=jnp.float32)
+            exact_cc_operands = assemble_relion_cc_coarse_operands(
+                exact_cc_processed,
                 exact_cc_ctf_rfloat,
-                batch_scale_f32[:, None] if scale_corrections is not None else None,
+                exact_cc_inv_xi2,
+                batch_scale_f32,
+                phase_factors=(
+                    tiled_half_image_phase_factors(image_shape, batch_shifts, 1)
+                    if image_pre_shifts is not None
+                    and not real_space_pre_shift_applied
+                    else None
+                ),
+                window_indices=window_indices if use_window else None,
+                scale_corrections_enabled=scale_corrections is not None,
             )
-            if use_window:
-                tree_rescore_unshifted_data = exact_cc_unshifted_corrected[
-                    :, window_indices
-                ]
-                tree_rescore_corr_img_data = exact_cc_corr_img[:, window_indices]
-            else:
-                tree_rescore_unshifted_data = exact_cc_unshifted_corrected
-                tree_rescore_corr_img_data = exact_cc_corr_img
+            tree_rescore_unshifted_data = exact_cc_operands.windowed_unshifted
+            tree_rescore_corr_img_data = exact_cc_operands.windowed_corr_img
 
         if coarse_gaussian_ffi_enabled:
             coarse_preprocess_kwargs = relion_preprocess_kwargs
@@ -4053,7 +4141,43 @@ def _compute_k_class_significance_batched(
                     max_significants=max_significants,
                     return_cutoff_count=True,
                 )
-            batch_sig_mask_np = np.array(batch_sig_mask, dtype=bool, copy=True)
+            device_significance_batch = (
+                coarse_significance_device_enabled
+                and compact_hybrid_scores is None
+                and coarse_gemm_diagnostic_positions is None
+                and coarse_gemm_stream_state is None
+                and not debug_dump_enabled
+            )
+            if device_significance_batch:
+                # The mask stays on the device; only the per-image ids cross
+                # the bus.  ``sig_rot_any`` below is already a device
+                # reduction, so it is unaffected.
+                if not np.array_equal(
+                    np.asarray(indices, dtype=np.int64),
+                    np.arange(start_idx, end_idx, dtype=np.int64),
+                ):
+                    raise RuntimeError(
+                        "the device significance compaction needs image batches in "
+                        "dataset order",
+                    )
+                batch_sig_mask_np = None
+                (
+                    batch_device_counts,
+                    batch_device_polarity,
+                    batch_device_ids,
+                    _batch_device_rot_any,
+                ) = compact_batch_significance(
+                    batch_sig_mask,
+                    actual_batch_size=actual_batch_size,
+                    n_coarse_rot=n_rot,
+                    n_coarse_trans=n_trans,
+                    batch_n_sig=batch_n_sig,
+                )
+                device_significance_counts.append(batch_device_counts)
+                device_significance_polarity.append(batch_device_polarity)
+                device_significance_ids.append(batch_device_ids)
+            else:
+                batch_sig_mask_np = np.array(batch_sig_mask, dtype=bool, copy=True)
             if compact_hybrid_scores is None:
                 sig_rot_any |= np.asarray(
                     jnp.any(batch_sig_rot_mask[:actual_batch_size], axis=0),
@@ -4499,7 +4623,7 @@ def _compute_k_class_significance_batched(
                 debug_iteration=debug_iteration,
             )
 
-        if collect_significance:
+        if collect_significance and not device_significance_batch:
             if compact_hybrid_scores is not None:
                 if compact_support_pose_ids is None:
                     raise RuntimeError("compact hybrid support mapping was not produced")
@@ -4519,6 +4643,40 @@ def _compute_k_class_significance_batched(
                             mask,
                         )
         start_idx = end_idx
+
+    if device_significance_counts:
+        from recovar.em.sparse_pass2.resident_significance import (
+            DeviceCompactedSignificantSamples,
+            build_coarse_significance_csr,
+            host_support_rows,
+        )
+
+        covered = int(sum(int(counts.size) for counts in device_significance_counts))
+        if covered != n_images:
+            raise RuntimeError(
+                "the device significance compaction covered "
+                f"{covered} of {n_images} images; some batches took the host path",
+            )
+        coarse_significance_csr = build_coarse_significance_csr(
+            n_images=n_images,
+            n_coarse_rot=n_rot,
+            n_coarse_trans=n_trans,
+            n_significant_per_batch=device_significance_counts,
+            store_excluded_per_batch=device_significance_polarity,
+            ids_per_batch=device_significance_ids,
+        )
+        significant_sample_indices[0] = DeviceCompactedSignificantSamples(
+            host_support_rows(coarse_significance_csr),
+            csr=coarse_significance_csr,
+        )
+        logger.info(
+            "Coarse significance compacted on the device: %d images, %d ids "
+            "(%.2f MB) instead of a %.2f GB support mask",
+            n_images,
+            int(coarse_significance_csr.ids.size),
+            coarse_significance_csr.ids.nbytes / 1e6,
+            float(n_images) * float(n_rot) * float(n_trans) / 1e9,
+        )
 
     coarse_gaussian_gemm_hybrid_full_dense_batch_count = (
         coarse_gaussian_gemm_hybrid_static_dense_batch_count

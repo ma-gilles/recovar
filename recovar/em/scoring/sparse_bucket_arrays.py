@@ -8,10 +8,64 @@ they neither execute scoring nor choose scientific or device policies.
 
 from __future__ import annotations
 
+import os
+
 import numpy as np
 
 from recovar.em.helpers.batch_planning import _plan_consecutive_padded_batches
 from recovar.em.local.local_layout import _exact_bucket_rotation_size
+from recovar.em.helpers.env_flags import parse_env_flag
+from recovar.em.helpers.shape_buckets import power_of_two_bucket
+
+_LARGE_BUCKET_POW2_ENV = "RECOVAR_SPARSE_PASS2_LARGE_BUCKET_POW2"
+_LARGE_BUCKET_POW2_THRESHOLD = 1024
+_MIN_CHUNK_IMAGES_ENV = "RECOVAR_SPARSE_PASS2_MIN_CHUNK_IMAGES"
+# Default on (2026-09-17): matched hp3 arm 14074207 vs 14055202: cold iteration 79.4 s
+# vs 98.2 s (302 vs 652 compilations), warm 67.5 s vs 71.4 s; best poses bitwise
+# identical, maps 4-6e-7 relative.  Set the env var to 0 to restore largest-first
+# remainder chunks.
+_DEFAULT_MIN_CHUNK_IMAGES = 8
+
+
+def _min_chunk_images_for_pass() -> int:
+    """Smallest image count a size-grouped chunk may have (default 8; env 0 = off).
+
+    Measurement knob (2026-09-17): every pass-2 helper compiles once per
+    (chunk image count, bucket size) pair, and the power-of-two rung chunker's
+    remainders (8, 2, 1 images) create ~9-18 new pairs per iteration, ~14
+    programs each.  With a minimum, a remainder chunk smaller than it is not
+    emitted; its images are promoted to the next larger bucket size and chunked
+    there.  Promotion only pads their rotation axis, whose spare rows carry no
+    posterior mass, so the candidate set is unchanged.
+    """
+
+    raw = os.environ.get(_MIN_CHUNK_IMAGES_ENV, "").strip()
+    if not raw:
+        return _DEFAULT_MIN_CHUNK_IMAGES
+    value = int(raw)
+    if value < 0:
+        raise ValueError(f"{_MIN_CHUNK_IMAGES_ENV} must be non-negative, got {value}")
+    return value
+
+
+def _pass2_bucket_rotation_size(count: int, rotation_block_size_for_quantization: int) -> int:
+    """Padded rotation rows for one pass-2 image.
+
+    The shared quantiser pads small supports to powers of two and large ones to
+    multiples of a ~4096 quantum, which at HEALPix order 3 produced 17-31
+    distinct large sizes per half (12288, 20480, 24576, 28672, ..., 217088);
+    each distinct size compiles its own set of bucket programs.  With
+    ``RECOVAR_SPARSE_PASS2_LARGE_BUCKET_POW2=1`` (default off, measurement
+    knob) sizes above the engine cap are rounded up to a power of two instead,
+    bounding the large sizes to about eight and costing at most 2x padding on
+    those rows.  Padded rows carry zero posterior mass, so this changes shape
+    reuse and atomic interleaving, not the candidate set.
+    """
+
+    size = int(_exact_bucket_rotation_size(int(count), rotation_block_size_for_quantization))
+    if size > _LARGE_BUCKET_POW2_THRESHOLD and parse_env_flag(_LARGE_BUCKET_POW2_ENV, default=False):
+        return int(power_of_two_bucket(size))
+    return size
 from recovar.em.scoring.compact_candidates import (
     SparseCandidateMask,
     _candidate_mask_to_dense,
@@ -66,7 +120,7 @@ def _bucket_pass2_inputs(
         return []
 
     bucket_sizes = np.array(
-        [_exact_bucket_rotation_size(int(count), rotation_block_size_for_quantization) for count in rotation_counts],
+        [_pass2_bucket_rotation_size(int(count), rotation_block_size_for_quantization) for count in rotation_counts],
         dtype=np.int64,
     )
     if small_bucket_coalesce_size is not None:
@@ -143,27 +197,39 @@ def _bucket_pass2_inputs(
         processing_order = np.lexsort((rotation_counts, bucket_sizes)).astype(np.int64)
 
     unique_bucket_sizes = np.unique(bucket_sizes[processing_order])
+    min_chunk_images = _min_chunk_images_for_pass() if group_chunk_image_rungs else 0
 
     buckets = []
-    for bucket_size in unique_bucket_sizes:
+    promoted = np.zeros(0, dtype=np.int64)
+    for size_index, bucket_size in enumerate(unique_bucket_sizes):
         bucket_size = int(bucket_size)
         bucket_image_indices = processing_order[bucket_sizes[processing_order] == bucket_size]
+        if promoted.size:
+            # Remainders promoted from smaller sizes lead the run so RELION's
+            # order within each size stays intact after them.
+            bucket_image_indices = np.concatenate([promoted, bucket_image_indices])
+            promoted = np.zeros(0, dtype=np.int64)
         # Chunk by max_hypotheses_per_microbatch and max_images_per_microbatch
         cap_by_hypotheses = max(
             1,
             int(max_hypotheses_per_microbatch) // max(1, bucket_size * int(n_fine_trans)),
         )
         max_per_chunk = max(1, min(int(max_images_per_microbatch), cap_by_hypotheses))
+        last_size = size_index == len(unique_bucket_sizes) - 1
         for chunk in _split_run_into_chunks(
             bucket_image_indices,
             max_per_chunk,
         ):
-            buckets.append(
-                {
-                    "bucket_size": bucket_size,
-                    "image_indices": np.asarray(chunk, dtype=np.int64),
-                }
-            )
+            chunk = np.asarray(chunk, dtype=np.int64)
+            if (
+                min_chunk_images
+                and chunk.size < min_chunk_images
+                and chunk.size < max_per_chunk
+                and not last_size
+            ):
+                promoted = np.concatenate([promoted, chunk])
+                continue
+            buckets.append({"bucket_size": bucket_size, "image_indices": chunk})
     return buckets
 
 

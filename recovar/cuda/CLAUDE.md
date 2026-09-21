@@ -55,8 +55,10 @@ kernels and their launcher; its include retains the original anonymous-namespace
 position. FFI handlers remain in the translation unit.
 `relion_scoring.cuh` owns shared EM/VDAM coarse and fine scoring,
 translation and power-spectrum kernels; its common coarse projector body is
-`relion_coarse_diff2_projector_body.inc`. Keep build, packaging and loader-staleness inputs aligned
-when changing these boundaries.
+`relion_coarse_diff2_projector_body.inc`. `sparse_pass2_posterior.cuh` owns the
+opt-in fused sparse pass-2 posterior handlers (`RECOVAR_SPARSE_PASS2_CUDA_POSTERIOR=1`);
+it is included last because it reuses the pinned Ampere scan helper. Keep build,
+packaging and loader-staleness inputs aligned when changing these boundaries.
 
 ## Runtime and interface
 

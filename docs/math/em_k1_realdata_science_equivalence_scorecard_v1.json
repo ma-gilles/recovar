@@ -1,0 +1,729 @@
+{
+  "schema": "recovar.em_k1_realdata_science_equivalence_scorecard.v1",
+  "suite": {
+    "id": "pr158-k1-realdata-science-equivalence-v1",
+    "subject_pr": 158,
+    "subject_commit": "6e414838463e30e977114f3f5ffe93a2e232766c",
+    "scoring_denominator": 1,
+    "scoring_case_ids": [
+      "empiar-10202-set06-k1-I1"
+    ],
+    "calibration_case_ids": [
+      "empiar-10073-native-c1",
+      "empiar-10345-native-c1",
+      "empiar-10097-native-c1"
+    ]
+  },
+  "metric_policy": {
+    "half_map_quality": "mandatory unmasked unaligned within-engine split-half FSC",
+    "cross_engine_acceptance": "raw canonical FSC gates OR pinned continuous proper-SO(3)+translation FSC gates",
+    "joint_band": "shells 1 through one shell before the earlier first three-shell-sustained within-engine half-map FSC crossing below 1/7",
+    "resolution_formula": "box_size * voxel_size_angstrom / crossing_shell",
+    "proper_alignment_can_rescue_cross_engine_only": true,
+    "masked_fsc_is_supporting_only": true,
+    "mirror_sign_scale_forbidden": true,
+    "strict_full_spectrum_parity_is_separate": true,
+    "target_high_resolution_is_independent": true,
+    "target_overall_requires_equivalence_and_high_resolution": true
+  },
+  "thresholds": {
+    "fsc_threshold": 0.14285714285714285,
+    "crossing_consecutive_shells": 3,
+    "half_resolution_ratio_max": 1.05,
+    "half_curve_rmse_max": 0.02,
+    "half_band_auc_abs_delta_max": 0.02,
+    "merged_cross_engine_band_auc_min": 0.95,
+    "each_half_cross_engine_band_auc_min": 0.9
+  },
+  "target_high_resolution_gate": {
+    "case_id": "empiar-10202-set06-k1-I1",
+    "each_engine_resolution_angstrom_max": 3.0,
+    "reference": {
+      "entry": "EMD-9012",
+      "deposited_validation_resolution_angstrom": 1.86,
+      "emdb_calculated_unmasked_half_map_resolution_angstrom": 1.94
+    }
+  },
+  "collector": {
+    "path": "/home/mg6942/mytigress/RECOVAR_RELION_EM_COMPARISON/scripts/collect_metrics.py",
+    "sha256": "63d1a8f9f0a772ef0db45d7417902f36cbde884b309fa6e94d69bdfe2edf2d88",
+    "schema": "recovar-relion-realdata-metrics-v2"
+  },
+  "diagnostic_producer": {
+    "path": "scripts/collect_em_k1_science_diagnostics.py",
+    "sha256": "498f7219fd87dd4dd49636200b947892492697d6f476623e5cd29fb45f4c06a5",
+    "schema": "recovar.em_k1_science_diagnostics.v1"
+  },
+  "masked_fsc_support": {
+    "role": "supporting_only",
+    "acceptance_metric": false,
+    "can_rescue": false,
+    "dataset_ids": [
+      "10073",
+      "10345",
+      "10097"
+    ],
+    "artifacts": {
+      "aggregate_summary": {
+        "path": "/home/mg6942/mytigress/RECOVAR_RELION_EM_COMPARISON/fsc_exports/relion_masked_fsc_10073_10345_10097_20260831/aggregate_summary.json",
+        "sha256": "0c6930e801b2d4364fdde8d69d3982250b397f20c6bf17caecc9b6862f0f28ad"
+      },
+      "all_fsc_curves": {
+        "path": "/home/mg6942/mytigress/RECOVAR_RELION_EM_COMPARISON/fsc_exports/relion_masked_fsc_10073_10345_10097_20260831/all_fsc_curves.csv",
+        "sha256": "43e3e8bd66247a8eab76ee65f2210b2d7c57c14feefdfb942fd26a0204525e06"
+      },
+      "corrected_masked_fsc_summary": {
+        "path": "/home/mg6942/mytigress/RECOVAR_RELION_EM_COMPARISON/fsc_exports/relion_masked_fsc_10073_10345_10097_20260831/corrected_masked_fsc_summary.csv",
+        "sha256": "acb517e7dd686582588cb78c44c9958db7d531fba808d6199c92c3cc73a103c5"
+      },
+      "provenance": {
+        "path": "/home/mg6942/mytigress/RECOVAR_RELION_EM_COMPARISON/fsc_exports/relion_masked_fsc_10073_10345_10097_20260831/PROVENANCE.json",
+        "sha256": "6d9d4779f06a45c52117eb9e2226c598bcfc923949757792bac80f750634a5a9"
+      },
+      "readme": {
+        "path": "/home/mg6942/mytigress/RECOVAR_RELION_EM_COMPARISON/fsc_exports/relion_masked_fsc_10073_10345_10097_20260831/README.md",
+        "sha256": "9e64edf33afd7edbd5a27c2a22fde8e452bef7bd0194fd76d87a792b286c84e2"
+      }
+    },
+    "producer_jobs": {
+      "13273806": {
+        "datasets": [
+          "10073",
+          "10345"
+        ],
+        "state": "FAILED only on the later 10097 component audit",
+        "ReqTRES": "cpu=4,mem=64G,node=1,billing=5",
+        "AllocTRES": "cpu=4,mem=64G,node=1,billing=5"
+      },
+      "13274377": {
+        "datasets": [
+          "10097"
+        ],
+        "state": "COMPLETED",
+        "ReqTRES": "cpu=4,mem=32G,node=1,billing=4",
+        "AllocTRES": "cpu=4,mem=32G,node=1,billing=4"
+      }
+    },
+    "relion_binaries": {
+      "relion_image_handler": {
+        "path": "/scratch/gpfs/GILLES/mg6942/relion/build_patched/bin/relion_image_handler",
+        "sha256": "b3045272c25e73a22a59d2e8cad116508667a7a084483625530b5a4ae1c0c551"
+      },
+      "relion_mask_create": {
+        "path": "/scratch/gpfs/GILLES/mg6942/relion/build_patched/bin/relion_mask_create",
+        "sha256": "b74db2ff68bda3312d90e27981654bad07bb80e8556f111a684dded7a1a67b80"
+      },
+      "relion_postprocess": {
+        "path": "/scratch/gpfs/GILLES/mg6942/relion/build_patched/bin/relion_postprocess",
+        "sha256": "b47642c9d20b7f8d926ba5f81e877a9cde949d808aff63d18e34095ec2747277"
+      }
+    },
+    "postprocess_policy": {
+      "same_mask_for_both_engines": true,
+      "force_mask": true,
+      "skip_fsc_weighting": true,
+      "low_pass_angstrom": 0,
+      "randomize_at_fsc": 0.8,
+      "random_seed": 42
+    },
+    "mask_policy": {
+      "source": "RELION merged map in native RELION file frame",
+      "lowpass_angstrom": 15,
+      "threshold": "global median + 0.05 * (99.99th percentile - global median) of the RELION 15-A-lowpass merged map",
+      "extend_pixels": 5,
+      "soft_edge_pixels": 8
+    },
+    "mask_header_nondeterminism": {
+      "dataset": "10097",
+      "audited_mask_sha256": "b47439f30167283ad4ef4cbd67140cb484163e5225d70f644ab7b71f5562ec38",
+      "regenerated_file_sha256": "891cafb1bcebe0dba88ec9f1dba5cc7500de2af3ea71712824ecd687f6a49c2c",
+      "identical_voxel_payload_sha256": "80ee44d1dd05718a3544a0e5456068875909757441ea8f2aca67e48debe901ec",
+      "differing_one_based_file_bytes": [
+        249,
+        250,
+        253
+      ],
+      "postprocess_used_literal_audited_mask": true
+    },
+    "expected_corrected_metrics": {
+      "10073": {
+        "recovar_crossing_shell": 128,
+        "recovar_resolution_angstrom": 4.156282488256693,
+        "relion_crossing_shell": 130,
+        "relion_resolution_angstrom": 4.092339680745051,
+        "curve_rmse": 0.004180381008706353,
+        "band_auc_absolute_delta": 0.001600259842519991,
+        "mask_sha256": "49ba576a4c44c655b6ff9eb633866a8ab59833a2d06e9d960939fd69e2ffd9df"
+      },
+      "10345": {
+        "recovar_crossing_shell": 77,
+        "recovar_resolution_angstrom": 5.240259851728167,
+        "relion_crossing_shell": 77,
+        "relion_resolution_angstrom": 5.240259851728167,
+        "curve_rmse": 0.004789530197541076,
+        "band_auc_absolute_delta": 0.0003128289473686152,
+        "mask_sha256": "14f572e495523340fb8902f43baf0e0274e903e333147fb03c5d5984a4065137"
+      },
+      "10097": {
+        "recovar_crossing_shell": 58,
+        "recovar_resolution_angstrom": 5.782060294315733,
+        "relion_crossing_shell": 59,
+        "relion_resolution_angstrom": 5.684059272378178,
+        "curve_rmse": 0.008370045789977243,
+        "band_auc_absolute_delta": 0.002112736842105223,
+        "mask_sha256": "b47439f30167283ad4ef4cbd67140cb484163e5225d70f644ab7b71f5562ec38"
+      }
+    }
+  },
+  "reproduction": {
+    "artifact_replay_command": "pixi run python scripts/summarize_em_k1_realdata_science_equivalence.py --verify-calibrations --verify-masked-support --verify-target-partial --check-markdown",
+    "unmasked": {
+      "10073_10345": {
+        "recorded_submission_commands": [
+          "sbatch --export=ALL,DATASET_ID=10073 /home/mg6942/mytigress/RECOVAR_RELION_EM_COMPARISON/full_dataset_native_resolution/scripts/run_dataset_native.sbatch",
+          "sbatch --export=ALL,DATASET_ID=10345 /home/mg6942/mytigress/RECOVAR_RELION_EM_COMPARISON/full_dataset_native_resolution/scripts/run_dataset_native.sbatch"
+        ],
+        "submission_record": {
+          "path": "/home/mg6942/mytigress/RECOVAR_RELION_EM_COMPARISON/full_dataset_native_resolution/SUBMITTED_JOBS.md",
+          "sha256": "cf984cb270caa7d362bdc89e2797c0b3c521a8b8bc6da4a6142c452c3e00b405"
+        },
+        "launcher": {
+          "path": "/home/mg6942/mytigress/RECOVAR_RELION_EM_COMPARISON/full_dataset_native_resolution/scripts/run_dataset_native.sbatch",
+          "sha256": "f9544ae3eb4efffcd7b245d9a97d9a7d8353db6d012ecc1295473bdbc7c6455b"
+        },
+        "collector": {
+          "path": "/home/mg6942/mytigress/RECOVAR_RELION_EM_COMPARISON/scripts/collect_metrics.py",
+          "sha256": "63d1a8f9f0a772ef0db45d7417902f36cbde884b309fa6e94d69bdfe2edf2d88"
+        }
+      },
+      "10097": {
+        "recorded_submission_commands": [
+          "sbatch --parsable --export=NONE /home/mg6942/mytigress/RECOVAR_RELION_EM_COMPARISON/full_dataset_native_resolution_replacement_10097_20260828T211155EDT/scripts/run_dataset_native_10097.sbatch"
+        ],
+        "submission_record": {
+          "path": "/home/mg6942/mytigress/RECOVAR_RELION_EM_COMPARISON/full_dataset_native_resolution_replacement_10097_20260828T211155EDT/SUBMITTED_JOBS.md",
+          "sha256": "205e3f8ef27efeeb346aec15372721cc9ddf4620167a1b9226b2c1937da93f6d"
+        },
+        "launcher": {
+          "path": "/home/mg6942/mytigress/RECOVAR_RELION_EM_COMPARISON/full_dataset_native_resolution_replacement_10097_20260828T211155EDT/scripts/run_dataset_native_10097.sbatch",
+          "sha256": "b732039b378ec9660e7bd587ec25b767bafb572dbfdabfdf5bcea9352b6ca18e"
+        },
+        "collector": {
+          "path": "/home/mg6942/mytigress/RECOVAR_RELION_EM_COMPARISON/full_dataset_native_resolution_replacement_10097_20260828T211155EDT/scripts/collect_metrics.py",
+          "sha256": "63d1a8f9f0a772ef0db45d7417902f36cbde884b309fa6e94d69bdfe2edf2d88"
+        }
+      }
+    },
+    "masked": {
+      "10073_10345": {
+        "original_submission_command_recorded": false,
+        "launcher": {
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/realdata_relion_masked_fsc_10073_10345_10097_r2_20260831/scripts/run_masked_fsc.sbatch",
+          "sha256": "3ed871acbd6f2aa261c01aefc72911126d1dba5da1c070fd689bd6e6f89fbd34"
+        },
+        "driver": {
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/realdata_relion_masked_fsc_10073_10345_10097_r2_20260831/scripts/run_masked_fsc.py",
+          "sha256": "b8406ed10880736d6a95bb52814c20db7815c8c0be5350fad283485e42cb0a3e"
+        }
+      },
+      "10097": {
+        "original_submission_command_recorded": false,
+        "launcher": {
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/realdata_relion_masked_fsc_10097_exactmask_20260831/scripts/run_exact_mask_postprocess.sbatch",
+          "sha256": "71fbc466963e0764c12a80ff9f991ae41441b40061c5b4b6b1aa4ee43d677dfa"
+        },
+        "driver": {
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/realdata_relion_masked_fsc_10097_exactmask_20260831/scripts/run_exact_mask_postprocess.py",
+          "sha256": "991a5214de7aefa242f15f35f1f8506b594cb66a462adf3dba268b89e2c23783"
+        }
+      },
+      "aggregate": {
+        "builder": {
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/realdata_relion_masked_fsc_final_10073_10345_10097_20260831/scripts/build_aggregate_report.py",
+          "sha256": "36ce5201fe80af4261af0379d9747c8d7e36c48f6ef5e4e86cee542329741ce4"
+        },
+        "durable_provenance": {
+          "path": "/home/mg6942/mytigress/RECOVAR_RELION_EM_COMPARISON/fsc_exports/relion_masked_fsc_10073_10345_10097_20260831/PROVENANCE.json",
+          "sha256": "6d9d4779f06a45c52117eb9e2226c598bcfc923949757792bac80f750634a5a9"
+        }
+      }
+    }
+  },
+  "cases": [
+    {
+      "id": "empiar-10202-set06-k1-I1",
+      "role": "scoring",
+      "dataset": "10202",
+      "requires_execution_binding": true,
+      "expected_subject_commit": "6e414838463e30e977114f3f5ffe93a2e232766c",
+      "status": "relion_complete_recovar_pending",
+      "scope": "06_Final_Stack only; image set 07 is excluded",
+      "rejected_artifacts": [
+        {
+          "path": "/home/mg6942/mytigress/RECOVAR_RELION_EM_COMPARISON/full_dataset_native_resolution/per_dataset/10202/inputs/particles.native.star",
+          "sha256": "c13cb927bb9cdffbd85fc2909a79196e44f5ce1836f8ba74b1d1b33c144edb11",
+          "reason": "drops deposited Euler angles/shifts and rerandomizes the deposited half assignment"
+        }
+      ],
+      "refinement_contract": {
+        "k": 1,
+        "same_particles_and_order": true,
+        "same_metadata": true,
+        "same_initial_reference_canonical_array": true,
+        "same_half_assignment": true,
+        "prepared_star_preserves_source_particle_order": true,
+        "prepared_star_preserves_source_half_assignment": true,
+        "prepared_star_preserves_source_pose_shift_metadata": true,
+        "autonomous_refinement": true,
+        "fixed_poses": false,
+        "local_only": false,
+        "forced_final_after_nonconvergence": false,
+        "same_exact_symmetry_operator_set": true
+      },
+      "input_contract": {
+        "particle_count": 30515,
+        "box_size": 800,
+        "voxel_size_angstrom": 0.788,
+        "source_star": {
+          "path": "/home/mg6942/mytigress/10202/06_Final_Stack/2017-12-27_MagCorrect_Frames05-19_Numbered_adjusted.star",
+          "sha256": "5b89aa3f2f4c66c40820952982f67dd0ba3d46864c65b5eb35e16b1fe4d11cdb"
+        },
+        "prepared_star_sha256": "d66afb3001e6e43463fb699804fe8b50f8cef1f2ccd9730f5275955b6be7b512",
+        "poses_pkl": {
+          "path": "/home/mg6942/mytigress/10202/06_Final_Stack/poses.pkl",
+          "sha256": "f52394a1ea41f442fdcbf37e4808aa878f52ab033f875aa81d623c5bc9a2b238"
+        },
+        "ctf_pkl": {
+          "path": "/home/mg6942/mytigress/10202/06_Final_Stack/ctf.pkl",
+          "sha256": "62ad1941816e33668051230faa30f970630de4e57508a943f3dd962f87e2fcbb"
+        },
+        "particle_stack": {
+          "path": "/home/mg6942/mytigress/10202/06_Final_Stack/2017-12-27_MagCorrect_Frames05-19.mrcs",
+          "size_bytes": 78118401024,
+          "header_1mib_sha256": "9fc0bdfb6369ba423f519d11fb4bfed8f3dce353903fd667ce3fb1a0ff5cbe32",
+          "sha256": "8eecf0fbf8e645ac51feff278a86e43e7e4be117921333dc6d3e22e52a628453"
+        },
+        "half_assignment_sha256": "1a06a8e0fccc553a99ecbdd24b21115b2b20b14cd1ae267310c6d4fe449d054f",
+        "half_assignment_encoding": "bytes(int(rlnRandomSubset)) in source STAR row order; one uint8 byte per particle",
+        "half_assignment_bytes": 30515,
+        "half1_count": 15258,
+        "half2_count": 15257,
+        "initial_reference": {
+          "relion_file_sha256": "4f83710c999276d4f65cff586266ee121f271e8bed382dba329b384860af96bb",
+          "recovar_frame_file_sha256": "d77516a08e5e3ccdef07d9039e36d65b174afe5d56fe20d7775eef188d2e6cc6",
+          "canonical_array_sha256": "b617f90d55ef4b7a637bd495397f2c6f291371263f66b16a7fbc020bf6dbad09",
+          "exact_gate": "numpy.array_equal(load_mrc(recovar_frame_file), load_relion_volume(relion_file))"
+        },
+        "symmetry": {
+          "family": "icosahedral",
+          "requested_label": "I1",
+          "label": "I1",
+          "forbidden_bare_alias": "I (RELION canonicalizes it to I2)",
+          "operator_count": 60,
+          "operator_order": "identity at index 0, then RELION SymList::get_matrices(isym) for isym=0..58",
+          "left_operator_policy": "all left operators are identity and are not applied in BPref reconstruction",
+          "hash_encoding": "float64 rounded to 12 decimals, stacked [left,right], little-endian C-order bytes",
+          "operators_sha256": "093a0876b93610ec141c87840ae3ff4dc4491b27dec87143558358ef556557b8"
+        }
+      },
+      "pending_contract_fields": [],
+      "partial_engine_results": {
+        "relion": {
+          "status": "complete",
+          "unmasked": {
+            "metric": "RELION final unmasked FSC=0.143 estimate; result_manifest.source_final_unmasked_resolution_angstrom",
+            "resolution_angstrom": 2.511554,
+            "high_resolution_gate_pass": true
+          },
+          "corrected_masked": {
+            "role": "supporting_only",
+            "acceptance_metric": false,
+            "can_rescue": false,
+            "resolution_angstrom": 2.122559
+          },
+          "jobs": {
+            "refinement": {
+              "job_id": 13217551,
+              "state": "COMPLETED",
+              "exit_code": "0:0",
+              "ReqTRES": "billing=40,cpu=12,gres/gpu=2,mem=500G,node=1",
+              "AllocTRES": "billing=40,cpu=12,gres/gpu=2,mem=500G,node=1"
+            },
+            "postprocess": {
+              "job_id": 13254149,
+              "state": "COMPLETED",
+              "exit_code": "0:0",
+              "ReqTRES": "cpu=8,mem=250G,node=1,billing=20",
+              "AllocTRES": "cpu=8,mem=250G,node=1,billing=20"
+            }
+          },
+          "artifacts": {
+            "refinement_stdout": {
+              "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/empiar10202_set6_i1_matched_r4_20260830/logs/relion_full-13217551.out",
+              "sha256": "582e90f851b4f389e953113b0cf2b4cb3f46f833567015c34a35e5551c475fea"
+            },
+            "launch_manifest": {
+              "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/empiar10202_set6_i1_matched_r4_20260830/launch_manifest.json",
+              "sha256": "5764c09af9db73ac7523db7cf34e1422449e158fb40e84b0e3aef2ee49a4e279"
+            },
+            "refinement_command": {
+              "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/empiar10202_set6_i1_matched_r4_20260830/provenance/command_13217551.sh",
+              "sha256": "3d199e7a1cab64fab6338be06a3b957cd770a2f097d7d579eafc682351eb4893"
+            },
+            "postprocess_stdout": {
+              "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/empiar10202_set6_relion_postprocess_shell_20260831/logs/postprocess-13254149.out",
+              "sha256": "f5132389d8bc9fc39d91dd7964004559b59f2fcf3f2ab53411233ff039d8054c"
+            },
+            "postprocess_result_manifest": {
+              "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/empiar10202_set6_relion_postprocess_shell_20260831/result_manifest.json",
+              "sha256": "de865eba64a3d8a9c7693af5e356cbece72572630bbb184462841f8517f2899d"
+            },
+            "common_mask": {
+              "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/empiar10202_set6_relion_postprocess_shell_20260831/outputs/mask_publication_shell_r75_r150_soft8.mrc",
+              "sha256": "dcc3fd17e7f728b3164416f695b257fef5fceeca7c2a4ba04ea6d82c9a933b17"
+            }
+          }
+        },
+        "recovar": {
+          "status": "pending"
+        }
+      },
+      "interim_iteration11_diagnostic": {
+        "role": "diagnostic_only",
+        "can_score_case": false,
+        "reported_iteration": 11,
+        "interpretation": "same_iteration_halfmap_resolution_and_resolved_band_fsc_match",
+        "recovar": {
+          "source_commit": "4ea288467debbcba97cfaee6d2742ebc66c637f0",
+          "trajectory_job_id": 13339556,
+          "trajectory_terminal_state": "FAILED_CUDA_OOM_DURING_ITERATION_12",
+          "last_complete_iteration": 11,
+          "postprocess_job_id": 13355910
+        },
+        "relion": {
+          "source_refinement_job_id": 13217551,
+          "postprocess_job_id": 13356820,
+          "state": "COMPLETED",
+          "exit_code": "0:0",
+          "requested_tres": "cpu=4,mem=64G,node=1,billing=16",
+          "allocated_tres": "cpu=4,mem=64G,node=1,billing=16",
+          "maximum_rss_gib": 22.977245330811
+        },
+        "same_iteration_resolutions": {
+          "raw_unmasked": {
+            "acceptance_role": "mandatory_unmasked_diagnostic",
+            "recovar_angstrom": 2.521599769592285,
+            "relion_angstrom": 2.521599769592285,
+            "recovar_crossing_shell": 250,
+            "relion_crossing_shell": 250,
+            "crossing_shell_equal": true,
+            "absolute_delta_angstrom": 0.0
+          },
+          "corrected_masked": {
+            "acceptance_role": "supporting_only",
+            "recovar_angstrom": 2.541935251605126,
+            "relion_angstrom": 2.541935251605126,
+            "recovar_crossing_shell": 248,
+            "relion_crossing_shell": 248,
+            "crossing_shell_equal": true,
+            "absolute_delta_angstrom": 0.0
+          }
+        },
+        "resolved_band_curve_comparison": {
+          "raw_unmasked": {
+            "first_shell": 1,
+            "last_shell": 249,
+            "arrays_elementwise_identical": false,
+            "maximum_absolute_difference": 0.02431899999999998,
+            "rmse": 0.004644811423150191,
+            "recovar_normalized_auc": 0.8732926532258064,
+            "relion_normalized_auc": 0.8735531048387096,
+            "normalized_auc_absolute_delta": 0.00026045161290322305
+          },
+          "corrected_masked": {
+            "first_shell": 1,
+            "last_shell": 247,
+            "arrays_elementwise_identical": false,
+            "maximum_absolute_difference": 0.12517,
+            "rmse": 0.011650834548308753,
+            "recovar_normalized_auc": 0.8783298414634146,
+            "relion_normalized_auc": 0.8793576158536586,
+            "normalized_auc_absolute_delta": 0.0010277743902439296
+          }
+        },
+        "replacement_full_run": {
+          "subject_commit": "6e414838463e30e977114f3f5ffe93a2e232766c",
+          "job_id": 13356985,
+          "status_at_capture": "FAILED",
+          "captured_at_utc": "2026-09-03T04:55:17Z",
+          "terminal_state": "FAILED_CUDA_OOM_DURING_ITERATION_12",
+          "exit_code": "1:0",
+          "elapsed": "08:43:50",
+          "last_complete_numbered_iteration": 11,
+          "failed_numbered_iteration": 12,
+          "failed_current_size": 564,
+          "requested_tres": "billing=40,cpu=4,gres/gpu=1,mem=500G,node=1",
+          "allocated_tres": "billing=40,cpu=4,gres/gpu=1,mem=500G,node=1",
+          "run_root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/empiar10202_set6_i1_full_recovar_release_6e4148384_20260902",
+          "purpose": "attempted uninterrupted final scoring run after releasing wide split bucket buffers",
+          "failure_boundary": {
+            "planner_mode": "historical_full_cube",
+            "persistent_estimated_gb": 81.92,
+            "image_batch_size": 1,
+            "rotation_block_size": 4,
+            "wide_tail_bucket_rotations": 512,
+            "wide_tail_bucket_count": 5,
+            "sampled_peak_hbm_used_mib": 76329,
+            "sampled_minimum_hbm_free_mib": 4744,
+            "failing_operation": "relion_projector_half_texture_f32",
+            "diagnosis": "local planner routing/headroom failure at the size-564 wide-tail shape; not evidence of a generic per-bucket leak"
+          },
+          "artifacts": {
+            "stderr": {
+              "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/empiar10202_set6_i1_full_recovar_release_6e4148384_20260902/logs/recovar_full-13356985.err",
+              "sha256": "1d676dd5c82ecb1616ebf88da737dd82e44c354e731e0c8828daf2c6932a82f8"
+            },
+            "hbm_trace": {
+              "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/empiar10202_set6_i1_full_recovar_release_6e4148384_20260902/logs/recovar_full-13356985-hbm.csv",
+              "sha256": "5d6eec794cae8a215b8c7eb3da00061882ce4b4c25fc8adc06d6399a63b62ec1"
+            },
+            "scontrol": {
+              "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/empiar10202_set6_i1_full_recovar_release_6e4148384_20260902/provenance/scontrol_13356985.txt",
+              "sha256": "c09bdcfb5e44d79bac40f1e8b21b4e7c4476be70e96c6fbebf33c0b69e18d647"
+            },
+            "command": {
+              "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/empiar10202_set6_i1_full_recovar_release_6e4148384_20260902/provenance/command_13356985.sh",
+              "sha256": "0397337bf52d040799c9fb60ceab9ecc3a4b080d4bec221e739853d80087d48f"
+            }
+          },
+          "successor_validation": {
+            "subject_commit": "8069ac01508d57bfd74a7686930ebcea66b6e328",
+            "job_id": 13363818,
+            "status_at_capture": "RUNNING",
+            "last_complete_numbered_iteration": 8,
+            "current_numbered_iteration": 9,
+            "current_size": 516,
+            "last_resolution_angstrom": 3.99,
+            "run_root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/empiar10202_set6_i1_full_recovar_compact_8069ac015_20260902",
+            "required_closure_boundary": "complete numbered iteration 12 at current_size 564, then produce sealed final independent half maps"
+          }
+        },
+        "artifacts": {
+          "recovar_partial_summary": {
+            "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/empiar10202_set6_i1_partial_it011_fsc_4ea288467_20260902/outputs/summary.json",
+            "sha256": "2e388bee498ab1a4f7a0c2369d6e1c4605ab8d63cfc78c66fecd4bbb0ff24355"
+          },
+          "recovar_postprocess_star": {
+            "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/empiar10202_set6_i1_partial_it011_fsc_4ea288467_20260902/outputs/recovar_it009/postprocess.star",
+            "sha256": "c376fd020bd0614c9d7217bba07c67983a493601c23c94fb1be0ef23180a1131"
+          },
+          "matched_relion_summary": {
+            "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/empiar10202_set6_i1_relion_it011_fsc_matched_20260902T195849Z/outputs/summary.json",
+            "sha256": "cb60a01c3e293817c39b745d3e42d8e2c47f440d231001983ccc2e7577250704"
+          },
+          "matched_relion_curve_comparison": {
+            "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/empiar10202_set6_i1_relion_it011_fsc_matched_20260902T195849Z/outputs/curve_comparison.json",
+            "sha256": "1bb1bf853d9e7403a49fa3771017773ff26ef178b22258f4d26ffb420f6ccf2e"
+          },
+          "matched_relion_postprocess_star": {
+            "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/empiar10202_set6_i1_relion_it011_fsc_matched_20260902T195849Z/outputs/relion_it011/postprocess.star",
+            "sha256": "8494a620aba3f96af721851806817a9ce6116f486375ac5887301570b8714f0e"
+          },
+          "matched_relion_job_script": {
+            "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/empiar10202_set6_i1_relion_it011_fsc_matched_20260902T195849Z/jobs/postprocess.sbatch",
+            "sha256": "c5bcb022e58e890ff9d4e1763ac4931fe5ca8102592fe46d4ac51b01c2322c04"
+          },
+          "matched_relion_scontrol": {
+            "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/empiar10202_set6_i1_relion_it011_fsc_matched_20260902T195849Z/provenance/scontrol-13356820.txt",
+            "sha256": "0de97eec8ab7a5b2393b86384338cac889d919e736b0417ce7f51087e91fd1cf"
+          }
+        }
+      }
+    },
+    {
+      "id": "empiar-10073-native-c1",
+      "role": "calibration",
+      "dataset": "10073",
+      "subject_commit": "8502fc50c7f68b8c6f696874f60b6041e9d5d308",
+      "slurm_job_id": 13093155,
+      "input_contract": {
+        "particle_count": 138899,
+        "box_size": 380,
+        "voxel_size_angstrom": 1.4000112000896008,
+        "prepared_star_sha256": "8de0193587c6f8fe9dbed4f5fc1796f991bf160cfddd2374d42464f06afffd9c"
+      },
+      "artifacts": {
+        "metrics_json": {
+          "path": "/home/mg6942/mytigress/RECOVAR_RELION_EM_COMPARISON/full_dataset_native_resolution/per_dataset/10073/metrics/metrics.json",
+          "sha256": "d6e433705e61bddd1dfac27d50d0c3be902151d1f255da76d14ec22ac6a14143"
+        },
+        "fsc_curves_npz": {
+          "path": "/home/mg6942/mytigress/RECOVAR_RELION_EM_COMPARISON/full_dataset_native_resolution/per_dataset/10073/metrics/fsc_curves.npz",
+          "sha256": "fe778f507acdd53801cf5f3b930a73ebbaa57ac882a6667e4ad99f0e52f6bd75"
+        },
+        "benchmark_manifest": {
+          "path": "/home/mg6942/mytigress/RECOVAR_RELION_EM_COMPARISON/full_dataset_native_resolution/benchmark_manifest.json",
+          "sha256": "be256a4ce193dbd746aacd25a49acc98388b3139355cee3390218bad86a4a684"
+        }
+      },
+      "expected_metrics": {
+        "half_resolution_ratio": 1.0,
+        "half_curve_rmse": 0.0026455725424715543,
+        "half_band_auc_abs_delta": 0.001260334145823827,
+        "merged_cross_engine_band_auc": 0.9691362193064661,
+        "half1_cross_engine_band_auc": 0.9408020515354473,
+        "half2_cross_engine_band_auc": 0.9415304729655856
+      },
+      "expected_cross_engine_route": "raw_canonical"
+    },
+    {
+      "id": "empiar-10345-native-c1",
+      "role": "calibration",
+      "dataset": "10345",
+      "subject_commit": "8502fc50c7f68b8c6f696874f60b6041e9d5d308",
+      "slurm_job_id": 13093157,
+      "input_contract": {
+        "particle_count": 84266,
+        "box_size": 300,
+        "voxel_size_angstrom": 1.3450000882656308,
+        "prepared_star_sha256": "a0a31fd6e67f5e7f1a0cd20120d4da11218962e75d127d4ec8690e37a3658dd6"
+      },
+      "artifacts": {
+        "metrics_json": {
+          "path": "/home/mg6942/mytigress/RECOVAR_RELION_EM_COMPARISON/full_dataset_native_resolution/per_dataset/10345/metrics/metrics.json",
+          "sha256": "bcdb907be4c7b63045dffa4209451c693c0f8d0359ab1427a12463347d192177"
+        },
+        "fsc_curves_npz": {
+          "path": "/home/mg6942/mytigress/RECOVAR_RELION_EM_COMPARISON/full_dataset_native_resolution/per_dataset/10345/metrics/fsc_curves.npz",
+          "sha256": "a06566e1dc22503267387428cd33621d207feedcf70441f09be5bca8ed5b9bf5"
+        },
+        "benchmark_manifest": {
+          "path": "/home/mg6942/mytigress/RECOVAR_RELION_EM_COMPARISON/full_dataset_native_resolution/benchmark_manifest.json",
+          "sha256": "be256a4ce193dbd746aacd25a49acc98388b3139355cee3390218bad86a4a684"
+        }
+      },
+      "expected_metrics": {
+        "half_resolution_ratio": 1.0,
+        "half_curve_rmse": 0.0032422560066216687,
+        "half_band_auc_abs_delta": 0.00016541951190840454,
+        "merged_cross_engine_band_auc": 0.9756097026599992,
+        "half1_cross_engine_band_auc": 0.9658667061929587,
+        "half2_cross_engine_band_auc": 0.9650894354317021
+      },
+      "expected_cross_engine_route": "raw_canonical"
+    },
+    {
+      "id": "empiar-10097-native-c1",
+      "role": "calibration",
+      "dataset": "10097",
+      "subject_commit": "8502fc50c7f68b8c6f696874f60b6041e9d5d308",
+      "slurm_job_id": 13124450,
+      "input_contract": {
+        "particle_count": 130000,
+        "box_size": 256,
+        "voxel_size_angstrom": 1.3099979040033536,
+        "prepared_star_sha256": "97a03b3debad6c7b52132d3f560bc8076fc5bc600ca8946cf22f5cda553778a7",
+        "symmetry": {
+          "family": "cyclic",
+          "requested_label": "C1",
+          "label": "C1",
+          "operator_count": 1,
+          "operator_order": "identity only",
+          "left_operator_policy": "identity",
+          "hash_encoding": "float64 rounded to 12 decimals, stacked [left,right], little-endian C-order bytes",
+          "operators_sha256": "08d94fcf4e14c682e988305422e5563f5c7fc2f7dec91824379bd8352a7c7994"
+        }
+      },
+      "artifacts": {
+        "metrics_json": {
+          "path": "/home/mg6942/mytigress/RECOVAR_RELION_EM_COMPARISON/full_dataset_native_resolution_replacement_10097_20260828T211155EDT/per_dataset/10097/metrics/metrics.json",
+          "sha256": "209487bef7bc09e1e647c90761db316053690fa0da7940a4bdd50145877176f6"
+        },
+        "fsc_curves_npz": {
+          "path": "/home/mg6942/mytigress/RECOVAR_RELION_EM_COMPARISON/full_dataset_native_resolution_replacement_10097_20260828T211155EDT/per_dataset/10097/metrics/fsc_curves.npz",
+          "sha256": "ade7183112425335138cad19e6d2ac7b8c1790a9f6f0b4b930c36fa0624dbdc3"
+        },
+        "input_manifest": {
+          "path": "/home/mg6942/mytigress/RECOVAR_RELION_EM_COMPARISON/full_dataset_native_resolution_replacement_10097_20260828T211155EDT/per_dataset/10097/inputs/input_manifest.json",
+          "sha256": "bdb8dd6ae68a509b701a99c153e7af53449370b5f57856c553d3e87019484faa"
+        },
+        "run_readme": {
+          "path": "/home/mg6942/mytigress/RECOVAR_RELION_EM_COMPARISON/full_dataset_native_resolution_replacement_10097_20260828T211155EDT/README.md",
+          "sha256": "a5d816c80e3100496f3ff7eda6911af542489fc072672478879006bf1384c470"
+        }
+      },
+      "expected_metrics": {
+        "half_resolution_ratio": 1.0227272727272727,
+        "half_curve_rmse": 0.00492607016375037,
+        "half_band_auc_abs_delta": 0.0015007730672029762,
+        "merged_cross_engine_band_auc": 0.9357355621429695,
+        "half1_cross_engine_band_auc": 0.8858029562913453,
+        "half2_cross_engine_band_auc": 0.8889382693911168
+      },
+      "proper_so3_diagnostics": {
+        "slurm_job_id": 13276576,
+        "subject_commit": "915470fb5b9b733035b09e44d9c911a4cab9302f",
+        "producer_sha256": "fff385a6ec362679798b588d5a8a4684d47b46b1dfd9be9e5bd2d5c640436428",
+        "launch_script": {
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/realdata_10097_proper_so3_identity_915470fb5_20260831/scripts/run_proper_so3_identity.sbatch",
+          "sha256": "47539fc253d4a9db56b6559e534ddcd37811cba3436ee727acc98449b01c2f92"
+        },
+        "slurm_stdout": {
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/realdata_10097_proper_so3_identity_915470fb5_20260831/logs/slurm-13276576.out",
+          "sha256": "34ce324171ea5eb07aadde2a7fa91c5bd13aae190aedb9915126611d32785425"
+        },
+        "slurm_stderr": {
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/realdata_10097_proper_so3_identity_915470fb5_20260831/logs/slurm-13276576.err",
+          "sha256": "bf45fbff069442f27394a47cd1519ae5c99a1f8d85363eb6d41b404ef7329526"
+        },
+        "resources": {
+          "state": "COMPLETED",
+          "exit_code": "0:0",
+          "elapsed": "00:01:17",
+          "node": "della-h14n18",
+          "ReqTRES": "billing=8,cpu=4,mem=32G,node=1",
+          "AllocTRES": "billing=8,cpu=4,mem=32G,node=1",
+          "batch_MaxRSS_KiB": 2744176
+        },
+        "artifacts": {
+          "science_diagnostics": {
+            "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/realdata_10097_proper_so3_identity_915470fb5_20260831/output/science_diagnostics.json",
+            "sha256": "833e7393a31b9982cdae9025b00f2fcf91dad4eaf79250884194e1666008b98d",
+            "schema": "recovar.em_k1_science_diagnostics.v1"
+          },
+          "curve_archive": {
+            "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/realdata_10097_proper_so3_identity_915470fb5_20260831/output/science_diagnostic_curves.npz",
+            "sha256": "3cf93d3f37c3b92be3bb586ed644f1f619d583db271ed66cf888705bafb2a8ed",
+            "fields": [
+              "final_cross_engine_half1_proper_aligned",
+              "final_cross_engine_half1_proper_aligned_common_masked",
+              "final_cross_engine_half2_proper_aligned",
+              "final_cross_engine_half2_proper_aligned_common_masked",
+              "final_cross_engine_proper_aligned",
+              "final_cross_engine_proper_aligned_common_masked",
+              "recovar_final_half_fsc_common_masked",
+              "relion_final_half_fsc_common_masked"
+            ]
+          },
+          "common_mask": {
+            "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/realdata_10097_proper_so3_identity_915470fb5_20260831/output/common_soft_mask.mrc",
+            "sha256": "9e361194f432851043d52f10b55b33bd381e7e787b4e08e198f4bddc36f874da"
+          }
+        },
+        "expected_metrics": {
+          "merged_cross_engine_band_auc": 0.9354267534361663,
+          "half1_cross_engine_band_auc": 0.8855173152657688,
+          "half2_cross_engine_band_auc": 0.888483075371504
+        },
+        "expected_can_rescue_cross_engine": false,
+        "superseded_diagnostic": {
+          "slurm_job_id": 13275901,
+          "science_diagnostics_sha256": "f8bf64d6be3587389f5ae65a12b59b579f21d4c8675f243fd21aa3c13f9944a5",
+          "curve_archive_sha256": "4e1be40dd8af2c04673e0e18033cb1fa16b600b40575f3b1632188265316ea2a",
+          "reason": "invalid alignment seed search omitted canonical identity; retained for audit and excluded from all scorecard metrics"
+        }
+      },
+      "expected_cross_engine_route": "none_unqualified"
+    }
+  ]
+}

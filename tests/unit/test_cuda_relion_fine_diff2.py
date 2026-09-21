@@ -642,6 +642,8 @@ def test_relion_coarse_prehalf_shared_body_is_built_packaged_and_stale_checked()
         "relion_preprocess.cuh",
         "relion_vdam_mstep.cuh",
         "relion_scoring.cuh",
+        "sparse_pass2_posterior.cuh",
+        "relion_translate_sum.cuh",
     )
     library_rule = next(line for line in makefile.splitlines() if line.startswith("$(LIB):"))
     prerequisites, order_only = library_rule.split(":", 1)[1].split("|", 1)
@@ -658,6 +660,8 @@ def test_relion_coarse_prehalf_shared_body_is_built_packaged_and_stale_checked()
         "relion_preprocess.cuh",
         "relion_vdam_mstep.cuh",
         "relion_scoring.cuh",
+        "sparse_pass2_posterior.cuh",
+        "relion_translate_sum.cuh",
         "cuda_backproject.cu",
         include_name,
         "Makefile",
@@ -1053,7 +1057,11 @@ def test_k1_coarse_gaussian_exact_operand_flags_honor_default_and_opt_out(monkey
     monkeypatch.setenv("RECOVAR_K1_COARSE_FUSED_PROJECTOR", "1")
     assert significance._k1_coarse_fused_projector_enabled()
     assert significance._k1_coarse_fused_projector_supports_padding(1)
-    assert not significance._k1_coarse_fused_projector_supports_padding(2)
+    # The fused kernel now scales rotated coordinates by the Projector padding
+    # factor (RELION project3Dmodel), so RELION --pad 2 no longer falls back to
+    # the materialised-projection rectangular diff2 path.
+    assert significance._k1_coarse_fused_projector_supports_padding(2)
+    assert not significance._k1_coarse_fused_projector_supports_padding(0)
 
     monkeypatch.delenv("RECOVAR_RELION_COARSE_CANONICAL_REDUCTION", raising=False)
     assert not significance._relion_coarse_canonical_reduction_enabled()
@@ -1086,9 +1094,22 @@ def test_k1_coarse_gaussian_exact_operand_flags_honor_default_and_opt_out(monkey
     assembler_start = operands_source.index("def _assemble_relion_exact_coarse_gaussian_operands(")
     assembler = operands_source[assembler_start : operands_source.index("\ndef ", assembler_start + 1)]
     assert "_relion_exact_ctf_half_from_source_star_host(" in assembler
-    assert "processed_score * pixel_correction" in assembler
     assert "pixel_indices=score_indices_np" in assembler
     assert "shifted_corrected = translate_fn(" in assembler
+    # P3-I: the elementwise operand chain that used to sit inline here now
+    # lives in _relion_exact_coarse_operands, which the assembler calls
+    # eagerly or, under RECOVAR_COARSE_OPERAND_PROGRAM, as jax.jit of the same
+    # function. The expression itself is unchanged and still owned by this
+    # module.
+    assert "_relion_exact_coarse_operand_program" in assembler
+    assert "else _relion_exact_coarse_operands" in assembler
+    operands_start = operands_source.index("def _relion_exact_coarse_operands(")
+    exact_operands = operands_source[
+        operands_start : operands_source.index("\ndef ", operands_start + 1)
+    ]
+    assert "processed_score * pixel_correction" in exact_operands
+    assert "_relion_cuda_pixel_correction_from_rfloat_ctf(" in exact_operands
+    assert "_relion_cuda_corr_img_from_native_noise_variance(" in exact_operands
     assert "else cuda_backproject.relion_coarse_diff2_projector_f32" in source
     assert "return coarse_projector(" in source
     assert "rotation_block_size = n_rot" in source

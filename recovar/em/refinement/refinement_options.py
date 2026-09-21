@@ -220,6 +220,21 @@ class RefinementBatching:
 
 
 @dataclass(frozen=True)
+class HalfOverlapOptions:
+    """Whether the two half-sets' E-steps may run concurrently.
+
+    The halves are independent inside the E-step, so one half's host work can
+    be issued while the other's kernels run. Kernels still serialise on JAX's
+    single compute stream, so this trades no device order; it only stops the
+    host from idling. Off by default: it is a performance experiment, not a
+    scientific choice, and it is only engaged when every guard in
+    ``iteration_loop`` holds.
+    """
+
+    overlap_halves: bool = False
+
+
+@dataclass(frozen=True)
 class RefinementOptions:
     """Configuration groups consumed by ``refine_single_volume``.
 
@@ -234,7 +249,16 @@ class RefinementOptions:
     replay: ReplayState = field(default_factory=ReplayState)
     debug: EngineDebugOptions = field(default_factory=EngineDebugOptions)
     batching: RefinementBatching = field(default_factory=RefinementBatching)
+    overlap: HalfOverlapOptions = field(default_factory=HalfOverlapOptions)
     disc_type: str = "linear_interp"
+    # Who computes RELION's padded projector transform. "jax" takes the
+    # device path; "native" calls Projector::computeFourierTransformMap on
+    # the host through the binding, in the same double precision, which
+    # costs 3.6 s per iteration with the GPU idle. Qualified at padding
+    # factor 2 by job 14208524: slab agreement 6.6e-16 relative, end-to-end
+    # quality at control-to-control magnitude, and 65 s of build removed
+    # from a 1240 s run. Keep "native" to reproduce a pre-qualification run.
+    projector_setup_backend: Literal["native", "jax"] = "jax"
 
 
 def _validate_relion_healpix_orders(orders, *, max_iter, init_healpix_order, max_healpix_order):
@@ -291,6 +315,7 @@ __all__ = [
     "KClassOptions",
     "ReplayState",
     "RefinementBatching",
+    "HalfOverlapOptions",
     "RefinementOptions",
     "with_validated_sampling_schedule",
 ]

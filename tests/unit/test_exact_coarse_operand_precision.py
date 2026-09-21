@@ -6,7 +6,7 @@ import pytest
 
 from recovar import cuda_backproject
 from recovar.em.relion import relion_coarse_operands, relion_ctf
-from recovar.em.sparse_pass2 import sparse_pass2_bucket_io, sparse_pass2_bucketed
+from recovar.em.sparse_pass2 import sparse_pass2_bucket_io
 
 pytestmark = pytest.mark.unit
 
@@ -123,7 +123,13 @@ def test_native_noise_variance_corr_img_accepts_the_score_dtype_used_by_bucket_i
 
     import inspect
 
-    call_site = inspect.getsource(sparse_pass2_bucketed._prepare_bucket_io)
+    # The call moved out of ``_prepare_bucket_io`` and into the operand
+    # preparation it delegates to; the contract is the same and is still
+    # inspected at the function that makes the call, plus the delegation that
+    # keeps ``_prepare_bucket_io`` the entry point.
+    entry_source = inspect.getsource(sparse_pass2_bucket_io._prepare_bucket_io)
+    assert "prepare_unshifted_bucket_operands(" in entry_source
+    call_site = inspect.getsource(sparse_pass2_bucket_io.prepare_unshifted_bucket_operands)
     assert "_relion_cuda_corr_img_from_native_noise_variance(" in call_site
     assert "output_dtype=acc_real_dtype" in call_site
     noise_variance = jnp.asarray([[2.0, 3.0, 5.0, 7.0]], dtype=jnp.float64)

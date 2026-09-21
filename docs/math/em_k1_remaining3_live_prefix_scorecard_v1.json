@@ -1,0 +1,78 @@
+{
+  "schema": "em_k1_remaining3_live_prefix_scorecard_v1",
+  "suite_version": 1,
+  "generated_utc": "2026-08-25T16:04:00+00:00",
+  "completion_claim": false,
+  "scope": "latest sealed numbered prefix for the three frozen K=1 terminal failures",
+  "metric_policy": "signed non-DC FSC-AUC, numbered-map topology, and exact current-size/HEALPix controller topology; correlation is not computed",
+  "thresholds": {
+    "merged_cross_engine_fsc_auc_min": 0.995,
+    "recovar_minus_relion_merged_gt_fsc_auc_min": -0.002
+  },
+  "counts": {
+    "pass": 3,
+    "fail": 0,
+    "fixed_denominator": 3
+  },
+  "frozen_terminal_score": {
+    "pass": 31,
+    "fixed_denominator": 34,
+    "changed_by_this_prefix_scorecard": false
+  },
+  "cases": [
+    {
+      "case_id": 4,
+      "fixture": "high_noise_100k_g256_white_noise3_bf80",
+      "latest_audited_relion_iteration": 6,
+      "merged_cross_engine_fsc_auc": 0.9999654387228807,
+      "recovar_minus_relion_merged_gt_fsc_auc": -0.0001388328214467216,
+      "topology_status": "pass",
+      "controller_topology_status": "pass",
+      "controller_latest_audited_relion_iteration": 6,
+      "status": "pass",
+      "known_native_winner_repair_source_row": 82009,
+      "science_job_id": 12931179,
+      "audit_json": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case04_terminal_exactnative_staticattrs_567b22d4ea_20260825T0800ET/analysis_live_prefix_1202ET/fsc.json",
+      "audit_json_sha256": "0ac0a579b7dab621f07cbba4f77f841627b5f595d695d7d9b8c8208160a14081",
+      "controller_audit_json": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case04_terminal_exactnative_staticattrs_567b22d4ea_20260825T0800ET/analysis_live_controller_prefix_1202ET/controller.json",
+      "controller_audit_json_sha256": "95865776cd911d3298ca35992314d743c5a12adb45d696fe3708a17e10ce5644",
+      "frozen_baseline_same_iteration": null
+    },
+    {
+      "case_id": 5,
+      "fixture": "very_high_noise_100k_g256_white_noise10_bf80",
+      "latest_audited_relion_iteration": 7,
+      "merged_cross_engine_fsc_auc": 0.9999920771051426,
+      "recovar_minus_relion_merged_gt_fsc_auc": 5.068869385754793e-7,
+      "topology_status": "pass",
+      "controller_topology_status": "pass",
+      "controller_latest_audited_relion_iteration": 7,
+      "status": "pass",
+      "known_native_winner_repair_source_row": 94083,
+      "science_job_id": 12931180,
+      "audit_json": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case05_terminal_exactnative_staticattrs_567b22d4ea_20260825T0800ET/analysis_live_prefix_1136ET/fsc.json",
+      "audit_json_sha256": "9de12672c489f0fe03cfc4e9cafe236d03609594c71c1a3ae6b005f36e3a2433",
+      "controller_audit_json": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case05_terminal_exactnative_staticattrs_567b22d4ea_20260825T0800ET/analysis_live_controller_prefix_1136ET/controller.json",
+      "controller_audit_json_sha256": "4e868dadc9c75a43eeba3de7bf1801b02a9925ee920cc98f547b29e2a835d650",
+      "frozen_baseline_same_iteration": null
+    },
+    {
+      "case_id": 10,
+      "fixture": "high_res_anisotropic_100k_g384_radial_noise3_bf0",
+      "latest_audited_relion_iteration": 15,
+      "merged_cross_engine_fsc_auc": 0.9999944498660048,
+      "recovar_minus_relion_merged_gt_fsc_auc": -0.000008931805411893645,
+      "topology_status": "pass",
+      "controller_topology_status": "pass",
+      "controller_latest_audited_relion_iteration": 15,
+      "status": "pass",
+      "known_native_winner_repair_source_row": null,
+      "science_job_id": 12931181,
+      "audit_json": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_terminal_exactnative_staticattrs_567b22d4ea_20260825T0800ET/analysis_live_prefix_1055ET/fsc.json",
+      "audit_json_sha256": "4caeaa607f02b58594034128f79cbc7f807c0ffc5d350d6314db5ad793f5b6e8",
+      "controller_audit_json": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_terminal_exactnative_staticattrs_567b22d4ea_20260825T0800ET/analysis_live_controller_prefix_1055ET/controller.json",
+      "controller_audit_json_sha256": "0730c1872acbb0f6a5754008e0550e90d08f6a80a9161176a17b40d5dd3bbc72",
+      "frozen_baseline_same_iteration": null
+    }
+  ]
+}

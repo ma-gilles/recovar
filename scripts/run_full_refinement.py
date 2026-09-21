@@ -31,6 +31,14 @@ from collections.abc import MutableMapping
 from pathlib import Path
 from typing import NamedTuple
 
+# This is an EM entry point, so it opts in to recovar's EM-scoped XLA defaults
+# (currently --xla_gpu_autotune_level=0, worth 6-11 s of compile per matched
+# pair at every measured state with a steady-iteration term of 0 +- 0.5 s; see
+# recovar/jax_config.py for the receipts). It must be set before `import jax`,
+# which recovar.jax_config performs, and `setdefault` so an explicit
+# RECOVAR_EM_XLA_DEFAULTS=0 in the environment still wins.
+os.environ.setdefault("RECOVAR_EM_XLA_DEFAULTS", "1")
+
 import jax
 import jax.numpy as jnp
 import jaxlib
@@ -2811,6 +2819,29 @@ def main():
         help="Rotations per block (larger = faster, less Python overhead)",
     )
     parser.add_argument(
+        "--projector_setup_backend",
+        choices=("native", "jax"),
+        default="jax",
+        help=(
+            "Who computes RELION's padded projector transform. 'jax' takes the "
+            "device path and is the default; 'native' runs "
+            "Projector::computeFourierTransformMap on the host, in the same "
+            "double precision, which costs 3.6 s per iteration with the GPU "
+            "idle. Pass 'native' to reproduce a run from before the device "
+            "path was qualified."
+        ),
+    )
+    parser.add_argument(
+        "--overlap_halves",
+        action="store_true",
+        help=(
+            "Run the two half-sets' E-steps in one thread each. The halves are "
+            "independent inside the E-step and kernels still serialise on one "
+            "stream, so this only stops the host idling. Off by default; it is "
+            "a performance experiment, not a scientific setting."
+        ),
+    )
+    parser.add_argument(
         "--seed",
         type=int,
         default=None,
@@ -4293,6 +4324,7 @@ def main():
         ExpectedAccuracyOptions,
         KClassOptions,
         LocalSearchOptions,
+        HalfOverlapOptions,
         RefinementBatching,
         RefinementOptions,
         RefinementSchedule,
@@ -4732,6 +4764,10 @@ def main():
                 image_batch_size=args.image_batch_size,
                 rotation_block_size=args.rotation_block_size,
             ),
+            overlap=HalfOverlapOptions(
+                overlap_halves=bool(args.overlap_halves),
+            ),
+            projector_setup_backend=args.projector_setup_backend,
             adaptive=AdaptiveOptions(
                 relion_current_sizes=oracle_current_sizes,
                 relion_healpix_orders=oracle_healpix_orders,

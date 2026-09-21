@@ -197,6 +197,28 @@ def _relion_cuda_fine_full_to_compact_lookup(image_shape, current_size, compact_
     return lookup
 
 
+_RELION_FINE_DIFF2_MASKED_ENV = "RECOVAR_RELION_FINE_DIFF2_MASKED"
+_DEFAULT_RELION_FINE_DIFF2_MASKED = True
+
+
+def _fine_diff2_masked_enabled() -> bool:
+    """Skip candidate-mask-excluded cells inside the fused rectangular fine kernel.
+
+    RELION's fine pass evaluates only significant (orientation, translation)
+    pairs; the rectangular K=1 scorer evaluates every cell of the padded bucket
+    (all translations for every row), most of which the candidate mask then
+    discards.  At the matched hp3 regime only 5.7-7.6% of the cells are
+    admitted, and the matched pair (job 14082785) measured warm iteration 2 at
+    67.4/67.4 s masked off versus 65.2/64.6 s masked on, with every numerical
+    delta inside the same-source band, so this is on by default.  A library
+    without the optional target falls back to the unmasked kernel.
+    """
+
+    return parse_env_flag(
+        _RELION_FINE_DIFF2_MASKED_ENV, default=_DEFAULT_RELION_FINE_DIFF2_MASKED
+    )
+
+
 def _relion_cuda_fine_diff2_sum(
     reference,
     shifted_image,
@@ -204,6 +226,7 @@ def _relion_cuda_fine_diff2_sum(
     relion_full_to_compact=None,
     *,
     use_fused_ffi=False,
+    candidate_mask=None,
 ):
     """Accumulate direct Gaussian diff2 without materializing ``(..., N)``.
 
@@ -261,6 +284,20 @@ def _relion_cuda_fine_diff2_sum(
                 raise ValueError(
                     "fused rectangular fine diff2 received unsupported broadcast shapes: "
                     f"{reference.shape}, {shifted_image.shape}, {pixel_weight.shape}"
+                )
+            if (
+                candidate_mask is not None
+                and real_dtype == jnp.float32
+                and cuda_backproject.relion_fine_diff2_rectangular_masked_supported()
+            ):
+                # RELION-style pair pruning: skip (row, translation) cells the
+                # candidate mask excludes.  Valid cells stay bitwise identical.
+                return cuda_backproject.relion_fine_diff2_rectangular_masked_f32(
+                    reference[:, :, 0, :],
+                    shifted_image[:, 0, :, :],
+                    pixel_weight[:, 0, 0, :],
+                    relion_full_to_compact,
+                    jnp.asarray(candidate_mask, dtype=bool),
                 )
             fine_diff2_rectangular = (
                 cuda_backproject.relion_fine_diff2_rectangular_f64
@@ -898,6 +935,53 @@ def _relion_cuda_powerclass_spectrum_norm_units(
     )
 
 
+def relion_powerclass_noise_presence(
+    *,
+    use_exact_relion_gaussian,
+    accumulate_noise,
+    current_size,
+):
+    """Which ``powerClass`` terms a pass-2 batch will produce, from the flags alone.
+
+    :func:`_relion_powerclass_noise_terms` decides this while it has the image
+    array in hand. A caller that has to know before any image exists -- the
+    compile-ahead warm-up, which describes the operand set to lower a program
+    against -- asks here instead, so there is one statement of the rule rather
+    than a copy that can fall out of step with it.
+
+    Returns ``(has_highres_xi2, has_norm_high_shell)``.
+    """
+
+    has_xi2 = bool(use_exact_relion_gaussian or (accumulate_noise and current_size is not None))
+    has_norm = bool(accumulate_noise and current_size is not None and has_xi2)
+    return has_xi2, has_norm
+
+
+def relion_powerclass_noise_dtypes(
+    *,
+    real_dtype,
+    source_faithful_spectrum_norm,
+):
+    """Dtypes of the two ``powerClass`` terms, from the image dtype and the mode.
+
+    ``highres_Xi2`` keeps the image's own real dtype. The norm high-shell term
+    does too, *except* in source-faithful mode, where
+    :func:`_relion_cuda_powerclass_spectrum_highres_norm_units` accumulates the
+    selected shells in float64 to follow RELION's host-side sum. Production runs
+    float32 images with source-faithful normalization on, so in production these
+    two terms have different dtypes; predicting one from the other is wrong, and
+    was, until the resident driver's own after-the-fact check said so on
+    2026-09-20.
+
+    Returns ``(highres_xi2_dtype, norm_high_shell_dtype)``.
+    """
+
+    xi2_dtype = jnp.dtype(real_dtype)
+    if source_faithful_spectrum_norm:
+        return xi2_dtype, jnp.dtype(jnp.float64)
+    return xi2_dtype, xi2_dtype
+
+
 def _relion_powerclass_noise_terms(
     processed_score_half_for_noise,
     *,
@@ -918,8 +1002,13 @@ def _relion_powerclass_noise_terms(
     does not need.
     """
 
+    wants_xi2, _ = relion_powerclass_noise_presence(
+        use_exact_relion_gaussian=use_exact_relion_gaussian,
+        accumulate_noise=accumulate_noise,
+        current_size=current_size,
+    )
     relion_highres_xi2_half = None
-    if use_exact_relion_gaussian or (accumulate_noise and current_size is not None):
+    if wants_xi2:
         relion_highres_xi2_half = _relion_cuda_powerclass_highres_xi2_half(
             processed_score_half_for_noise,
             image_shape=image_shape,
@@ -1078,8 +1167,15 @@ def _score_pass2_bucket_relion_gpu_diff2_raw(
     highres_xi2_half=None,  # (B,) float32 powerClass tail already divided by two
     *,
     use_fused_ffi=False,
+    candidate_mask=None,  # (B, R, T) bool: skip excluded cells in the CUDA kernel
 ):
-    """Return positive float32 RELION fine-pass costs without priors or centering."""
+    """Return positive float32 RELION fine-pass costs without priors or centering.
+
+    ``candidate_mask`` (opt-in via :func:`_fine_diff2_masked_enabled`) makes the
+    fused CUDA path skip excluded (row, translation) cells like RELION's
+    ``makeJobsForDiff2Fine``; those cells return 0, which every consumer
+    already masks (``candidate_mask & isfinite``).
+    """
 
     weights = _relion_cuda_fine_pixel_weights(
         corr_img_score, jnp.asarray(half_weights)[None, :]
@@ -1090,6 +1186,7 @@ def _score_pass2_bucket_relion_gpu_diff2_raw(
         weights[:, None, None, :],
         relion_full_to_compact,
         use_fused_ffi=use_fused_ffi,
+        candidate_mask=candidate_mask,
     )
     if highres_xi2_half is not None:
         diff2 = diff2 + jnp.asarray(highres_xi2_half, dtype=diff2.dtype)[:, None, None]
@@ -1160,6 +1257,7 @@ def _score_pass2_bucket_relion_gpu_diff2(
         relion_full_to_compact,
         highres_xi2_half,
         use_fused_ffi=use_fused_ffi,
+        candidate_mask=candidate_mask if _fine_diff2_masked_enabled() else None,
     )
     return _relion_cuda_fine_diff2_to_scores(
         diff2,

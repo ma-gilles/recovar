@@ -157,11 +157,20 @@ def flatten_bucket_rows(values):
     return values.reshape(values.shape[0] * values.shape[1], values.shape[-1])
 
 
-@jax.jit
 def flatten_bucket_rotations(rotations):
-    """Flatten a bucket's per-image rotations into one row-major batch."""
+    """Flatten a bucket's per-image rotations into one row-major batch.
 
-    return rotations.reshape(rotations.shape[0] * rotations.shape[1], 3, 3)
+    This is a pure reshape and is deliberately not jitted: bucket rotation
+    blocks arrive as host arrays with a different ``(images, rotations)`` shape
+    for almost every bucket chunk, and a jitted reshape paid one compilation
+    cache lookup (key hashing plus a persistent-cache file read of ~85 ms)
+    per new shape, ~30% of a warm hp3 pass 2 (job 14051847 sampler).  Host
+    arrays are reshaped on the host; device arrays use the eager reshape.
+    """
+
+    if isinstance(rotations, np.ndarray):
+        return rotations.reshape(rotations.shape[0] * rotations.shape[1], 3, 3)
+    return jnp.reshape(rotations, (rotations.shape[0] * rotations.shape[1], 3, 3))
 
 
 def enforce_relion_half_volume_x0_hermitian(volume_flat, full_volume_shape):

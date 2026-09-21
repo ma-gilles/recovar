@@ -1,0 +1,110 @@
+{
+  "schema": "recovar.em_k1_exact_initial_noise_counterfactual_scorecard.v1",
+  "suite_id": "k1-case22-exact-relion-initial-noise-counterfactual",
+  "suite_version": 1,
+  "classification": "exact_initial_noise_bootstrap_rejected_under_fixed_score_and_fsc_gates",
+  "metric_policy": "Fixed 24-gate same-A100 counterfactual. Science uses 14 centered score-residual gates plus half1/half2/merged RELION-parity and GT FSC-AUC gates. Four provenance gates require terminal science arms, terminal analysis, byte-identical independent replay, and pinned no-correlation evidence. Correlation is forbidden. This rejected diagnostic cannot change the K=1 quality scorecard.",
+  "correlation_used": false,
+  "scorecard_change_admissible": false,
+  "frozen_denominator": 24,
+  "science_denominator": 20,
+  "provenance_denominator": 4,
+  "acceptance_contract": {
+    "science_owner_job_id": 11853352,
+    "science_owner_state": "FAILED",
+    "science_owner_exit_code": "2:0",
+    "science_owner_elapsed": "02:27:25",
+    "science_arms_exit_status_zero": true,
+    "analysis_job_id": 11856679,
+    "analysis_state": "COMPLETED",
+    "analysis_exit_code": "0:0",
+    "analysis_elapsed": "00:00:56",
+    "gpu_uuid": "GPU-2a189b71-ee86-c95f-7bc0-93e83a0812e4",
+    "candidate_source_commit": "8fc7c4c9c25d78ac7b0ab3ee84fb3774aa6bbcb5",
+    "accepted": false,
+    "grid_correction": "unset/default-off",
+    "forced_final_all_data_after_nonconvergence": false
+  },
+  "evidence": {
+    "primary_report": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_exact_initial_noise_ab_retry1_8fc7c4c_20260731T2324ET/analysis/EXACT_INITIAL_NOISE_AB_RETRY1.json",
+      "sha256": "19855c6cff4a639af1f4c55c59ea9b70107d6de44f3ccf52c2e65e4a90796a26"
+    },
+    "independent_report": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_case22_exact_initial_noise_ab_retry1_8fc7c4c_20260731T2324ET/EXACT_INITIAL_NOISE_AB_RETRY1.independent.json",
+      "sha256": "19855c6cff4a639af1f4c55c59ea9b70107d6de44f3ccf52c2e65e4a90796a26"
+    },
+    "completion_seal": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_exact_initial_noise_ab_retry1_8fc7c4c_20260731T2324ET/provenance/ANALYSIS_RETRY1_COMPLETE.json",
+      "sha256": "19c89bf7ad40206320779a95d22eafee54234dc485b2f1f3075e54466256f868"
+    },
+    "output_manifest": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_exact_initial_noise_ab_retry1_8fc7c4c_20260731T2324ET/provenance/analysis_retry1_outputs_11856679.sha256",
+      "sha256": "863ab6174ce13f531147a115c5919247caa0671281f9a805fbb81f50f8de027a"
+    },
+    "predeclaration": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_exact_initial_noise_ab_retry1_8fc7c4c_20260731T2324ET/provenance/ANALYSIS_RETRY1_PREDECLARATION.md",
+      "sha256": "3b13dd3aff9113aebd3714750b7e2c1cf6f9a4e0619a49ac4e06fd65c7455619"
+    },
+    "analysis_launcher": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_exact_initial_noise_ab_retry1_8fc7c4c_20260731T2324ET/jobs/analysis_only_retry1.sbatch",
+      "sha256": "00f12eab856cbc129f4849c00c1e008e3b07a083560f9dab64812ad863a06b71"
+    },
+    "analyzer": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_exact_initial_noise_ab_retry1_8fc7c4c_20260731T2324ET/jobs/analyze_exact_initial_noise_ab.py",
+      "sha256": "0d1feabca2d0a756226775916a7b2a292043e6aee272f58a878811ce90228f0d"
+    },
+    "science_failure_log": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_exact_initial_noise_ab_retry1_8fc7c4c_20260731T2324ET/logs/science_11853352.err",
+      "sha256": "6717a3905540808fcfb2fdc1457512d85b67a4e6e7d296ef476de107484a5269"
+    },
+    "audit_record": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_exact_initial_noise_ab_retry1_8fc7c4c_20260731T2324ET/provenance/ANALYSIS_RETRY1_AUDIT.md",
+      "sha256": "22a12abe444d7d3a3f604a754edb3194e24308afd88449991e6baa620faddf6e"
+    }
+  },
+  "cases": [
+    {"id": "score-exact-noise-stack-0035", "result": "fail", "checked": false},
+    {"id": "score-exact-noise-stack-0252", "result": "fail", "checked": false},
+    {"id": "score-exact-noise-stack-0348", "result": "fail", "checked": false},
+    {"id": "score-exact-noise-stack-0591", "result": "fail", "checked": false},
+    {"id": "score-exact-noise-stack-0683", "result": "fail", "checked": false},
+    {"id": "score-exact-noise-stack-1100", "result": "fail", "checked": false},
+    {"id": "score-exact-noise-stack-1522", "result": "fail", "checked": false},
+    {"id": "score-exact-noise-stack-1640", "result": "fail", "checked": false},
+    {"id": "score-exact-noise-stack-1767", "result": "fail", "checked": false},
+    {"id": "score-exact-noise-stack-2124", "result": "fail", "checked": false},
+    {"id": "score-exact-noise-stack-2322", "result": "fail", "checked": false},
+    {"id": "score-exact-noise-stack-2330", "result": "fail", "checked": false},
+    {"id": "score-exact-noise-stack-2846", "result": "fail", "checked": false},
+    {"id": "score-exact-noise-stack-2994", "result": "fail", "checked": false},
+    {"id": "map-parity-beyond-floor-half1", "result": "fail", "checked": false},
+    {"id": "map-parity-beyond-floor-half2", "result": "fail", "checked": false},
+    {"id": "map-parity-beyond-floor-merged", "result": "fail", "checked": false},
+    {"id": "map-gt-nondegradation-half1", "result": "fail", "checked": false},
+    {"id": "map-gt-nondegradation-half2", "result": "fail", "checked": false},
+    {"id": "map-gt-nondegradation-merged", "result": "fail", "checked": false},
+    {"id": "provenance-science-arms-zero-same-gpu", "result": "pass", "checked": true},
+    {"id": "provenance-analysis-job-terminal-zero", "result": "pass", "checked": true},
+    {"id": "provenance-independent-report-byte-identical", "result": "pass", "checked": true},
+    {"id": "provenance-pinned-evidence-no-correlation", "result": "pass", "checked": true}
+  ],
+  "summary": {"pass": 4, "evaluated": 24},
+  "science_summary": {"pass": 0, "evaluated": 20},
+  "provenance_summary": {"pass": 4, "evaluated": 4},
+  "key_observations": {
+    "score_gates_passed": "0/14",
+    "map_parity_beyond_control_floor": "0/3",
+    "map_gt_nondegraded": "0/3",
+    "half1_parity_delta": -1.637634472473337e-11,
+    "half2_parity_delta": -1.1989331749617804e-10,
+    "merged_parity_delta": -7.859002337795573e-11,
+    "half1_gt_delta": -2.138331697820739e-08,
+    "half2_gt_delta": -1.9015456542703646e-08,
+    "merged_gt_delta": -1.3069906185103619e-08,
+    "generic_a_wall_s": 2977,
+    "generic_b_wall_s": 2937,
+    "exact_wall_s": 2914,
+    "independent_report_byte_identical": true
+  }
+}

@@ -159,6 +159,7 @@ def reference_to_relion_projector_half_maps(
     padding_factor: int = 1,
     interpolator: int = 1,
     projector_setup_backend: ProjectorSetupBackend = "native",
+    projector_data_dtype=None,
 ) -> tuple[np.ndarray, int]:
     """Convert references to RELION half maps without retaining their spectrum."""
     half_maps, _power, r_max = reference_to_relion_projector_half_maps_and_power(
@@ -166,6 +167,7 @@ def reference_to_relion_projector_half_maps(
         current_size=current_size,
         padding_factor=padding_factor,
         interpolator=interpolator,
+        projector_data_dtype=projector_data_dtype,
         projector_setup_backend=projector_setup_backend,
     )
     return half_maps, r_max
@@ -178,12 +180,21 @@ def reference_to_relion_projector_half_maps_and_power(
     padding_factor: int = 1,
     interpolator: int = 1,
     projector_setup_backend: ProjectorSetupBackend = "native",
+    projector_data_dtype=None,
 ) -> tuple[np.ndarray, np.ndarray, int]:
     """Convert references to native-layout half maps and their corrected spectrum.
 
     The opt-in JAX backend keeps its FP64 FFT at full capacity as current_size
-    changes. Only the logical crop and complex64 consumer conversion vary.
+    changes. Only the logical crop and the consumer conversion vary.
     Unsupported projector geometry retains the native implementation.
+
+    ``projector_data_dtype`` is what the caller wants the slab in. ``None``
+    keeps each backend's own output: complex64 from the JAX path, whose
+    consumer is the InitialModel engine, and complex128 from the native
+    binding, which is what refinement consumes. A caller that needs one
+    precision from either backend must say so, because the two backends do not
+    agree by default and switching backend would otherwise change precision
+    silently.
     """
     from recovar.utils.helpers import recovar_volume_to_relion
 
@@ -225,7 +236,7 @@ def reference_to_relion_projector_half_maps_and_power(
             projector_data = projector_data[
                 start : start + logical_size, start : start + logical_size,
                 : logical_size // 2 + 1,
-            ].astype(jnp.complex64)
+            ].astype(jnp.complex64 if projector_data_dtype is None else projector_data_dtype)
             projector_data, power = jax.device_get((projector_data, power))
         else:
             (
@@ -239,6 +250,10 @@ def reference_to_relion_projector_half_maps_and_power(
                 int(current_size),
                 True,
                 2,
+            )
+        if projector_data_dtype is not None:
+            projector_data = np.asarray(projector_data).astype(
+                np.dtype(projector_data_dtype), copy=False
             )
         halves.append(np.asarray(projector_data))
         power_spectra.append(np.asarray(power, dtype=np.float64))

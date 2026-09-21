@@ -789,6 +789,14 @@ def _collate_batch_to_jax(batch):
     if isinstance(batch[0], (tuple, list)):
         return [_collate_batch_to_jax(list(samples)) for samples in zip(*batch)]
 
+    # ``jnp.asarray`` on a Python list of scalars traces, lowers and compiles a
+    # ``convert_element_type`` program for every distinct list length; the T19
+    # census counted 97 of them in two early-state iterations, one per batch
+    # size the loader produced. Building the host array first yields the same
+    # dtype, shape, weak type and values with no program at all. Lists of JAX
+    # arrays keep the original call so nothing is pulled back to the host.
+    if not isinstance(batch[0], jax.Array):
+        return jnp.asarray(np.asarray(batch))
     return jnp.asarray(batch)
 
 
@@ -798,6 +806,40 @@ def _collate_batch_to_jax(batch):
 
 _SENTINEL = object()
 
+PREFETCH_DEPTH_ENV = "RECOVAR_PREFETCH_BATCH_DEPTH"
+# 4 since the P4-I merge: a counter on the queue found 22 of 63 gets in a steady
+# hp3 iteration blocking on an empty queue, and depth 4 takes a further 0.4 s off
+# that iteration for about 65 MB per extra slot. ``RECOVAR_PREFETCH_BATCH_DEPTH``
+# overrides it, and 2 restores the previous behaviour.
+DEFAULT_PREFETCH_DEPTH = 4
+
+
+def prefetch_depth(default: int = DEFAULT_PREFETCH_DEPTH) -> int:
+    """How many prepared batches the loader may hold ahead of the consumer.
+
+    The default of 2 is only deep enough to cover one production time. A
+    counter on the queue (report root ``em_p4i_preprocess_host_20260920``,
+    job 14189146) found that of 63 gets in a steady hp3 iteration, 41 found
+    the queue already full and blocked for 0.000 s, while 22 found it empty
+    and blocked 25 ms each, 0.56 s per iteration in total: the consumer
+    occasionally takes two batches faster than the producer can make one, and
+    then pays a whole production time. A deeper buffer lets the producer build
+    its cushion during the consumer's long stretches. Each held batch is one
+    image batch of host memory (about 65 MB at 250 images of 256x256 float32),
+    so the depth is a memory decision and stays opt-in.
+    """
+
+    token = os.environ.get(PREFETCH_DEPTH_ENV, "").strip()
+    if not token:
+        return default
+    try:
+        depth = int(token)
+    except ValueError as exc:
+        raise ValueError(f"{PREFETCH_DEPTH_ENV} must be a positive integer, got {token!r}") from exc
+    if depth < 1:
+        raise ValueError(f"{PREFETCH_DEPTH_ENV} must be at least 1, got {token!r}")
+    return depth
+
 
 class _PrefetchIterator:
     """Wraps any iterable with background-thread prefetching.
@@ -806,9 +848,9 @@ class _PrefetchIterator:
     batch N+1 from disk, overlapping I/O with computation.
     """
 
-    def __init__(self, iterable, buffer_size: int = 2):
+    def __init__(self, iterable, buffer_size: int | None = None):
         self._iterable = iterable
-        self._buffer_size = max(buffer_size, 1)
+        self._buffer_size = max(prefetch_depth() if buffer_size is None else buffer_size, 1)
 
     def __iter__(self):
         q = queue.Queue(maxsize=self._buffer_size)
@@ -909,7 +951,7 @@ class _GrainBatchLoader:
     def __iter__(self):
         # Wrap with PrefetchIterator so the next collated batch is prepared
         # in a background thread while the GPU processes the current one.
-        return iter(_PrefetchIterator(self._iter_batches(), buffer_size=2))
+        return iter(_PrefetchIterator(self._iter_batches()))
 
     def __len__(self) -> int:
         return (len(self.dataset) + self.batch_size - 1) // self.batch_size
@@ -1101,7 +1143,7 @@ class _ImageCountBatchLoader:
                 yield batch_images, batch_particle_ids, batch_tilt_ids
 
     def __iter__(self):
-        return iter(_PrefetchIterator(self._generate_batches(), buffer_size=2))
+        return iter(_PrefetchIterator(self._generate_batches()))
 
     def __len__(self) -> int:
         return self._n_batches
