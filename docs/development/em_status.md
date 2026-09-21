@@ -89,7 +89,9 @@ Active conclusion: on the 10k EMPIAR-10097 fixture at 256 px on one H100, the
 device-resident K=1 candidate runs the cold auto-refine in 1087-1249 s against
 RELION's 617-678 s band, **1.68x at matched iteration count and 1.81x at the
 median**, from 3.26x at the program's start; the unchanged compact engine is
-2.9x. Quality is neutral. Regime-matched FSC-AUC against RELION's per-iteration maps
+2.9x. Building RELION's projector on the device, qualified and defaulted after
+those runs, takes a further 2.9 s off every iteration and about 65 s off the
+wall, which brings the matched-iteration figure to roughly 1.58x. Quality is neutral. Regime-matched FSC-AUC against RELION's per-iteration maps
 agrees with the control to 0.0013 at orders 2 and 3. At order 4 the difference
 is explained entirely by how many order-3 iterations preceded the switch, not by
 the engine: across eleven arms of three independent jobs, the spread within one
@@ -115,6 +117,10 @@ The three open levers, largest first:
   expansions of the 515-cubed accumulator about 5 s. Inside the fine loop the
   CUDA texture projector is unavailable, because that path asks for complex128
   and the projector is complex64, so it falls back to a vmapped JAX projection.
+* **The projector build is closed.** It was 3.6 s per iteration of host double
+  transform with the GPU idle; the device path computes the same slab to
+  6.6e-16 in 0.75 s and is now the default.
+
 * **First sight of a new shape.** A warm persistent compilation cache removes the
   whole XLA-compile part of it; whether production runs warm is a user decision,
   and the gate here runs cold. Hiding compile behind pass one was measured and
