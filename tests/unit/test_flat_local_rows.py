@@ -45,8 +45,6 @@ def test_pool_flat_rows_preserve_source_chronology_and_static_tail():
     )
     assert not np.any(plan.present_mask[-7:])
     assert not np.any(plan.valid_mask[-7:])
-    assert plan.physical_image_count == 5
-    assert plan.batch_size == 8
     encoded = encode_flat_local_row_plan(plan)
     assert encoded.dtype == np.int32
     assert encoded.shape == (plan.packed_row_count, 3)
@@ -78,8 +76,8 @@ def test_flat_row_gather_and_scatter_restore_present_dense_rows_exactly():
             plan.image_indices,
             plan.rotation_rows,
             plan.present_mask,
-            batch_size=plan.batch_size,
-            dense_rotation_count=plan.dense_rotation_count,
+            batch_size=dense.shape[0],
+            dense_rotation_count=dense_rotation_count,
             fill_value=-1.0,
         ),
     )
@@ -108,8 +106,8 @@ def test_dense_to_flat_lookup_gathers_final_rows_in_requested_source_order():
     encoded = encode_flat_local_row_plan(plan)
     lookup = build_dense_to_flat_local_row_lookup(
         encoded,
-        batch_size=plan.batch_size,
-        dense_rotation_count=plan.dense_rotation_count,
+        batch_size=3,
+        dense_rotation_count=16,
     )
 
     valid_flat_rows = np.flatnonzero(plan.valid_mask)
@@ -573,8 +571,7 @@ def test_class_flat_rows_pack_far_tighter_than_the_rectangular_layout():
     rectangular = counts.shape[0] * counts.shape[1] * segment
     assert plan.packed_row_count < rectangular / 3
     # and the dense axis it maps into is still the full class-major axis
-    assert plan.dense_rotation_count == segment * counts.shape[1]
-    assert int(plan.rotation_rows[plan.present_mask].max()) < plan.dense_rotation_count
+    assert int(plan.rotation_rows[plan.present_mask].max()) < segment * counts.shape[1]
 
 
 @pytest.mark.unit
@@ -1075,7 +1072,6 @@ def test_pool_flat_rows_follow_the_bucket_planner_quantum_above_the_engine_cap()
         exact_local_bucket_radix=4,
         large_bucket_quantum=quantum,
     )
-    assert plan.dense_rotation_count == dense_rotation_count
     assert int(plan.valid_mask.sum()) == int(counts.sum())
     with pytest.raises(ValueError, match="exceeds the enclosing dense rotation axis"):
         build_pool_flat_local_row_plan(

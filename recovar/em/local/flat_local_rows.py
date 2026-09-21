@@ -137,9 +137,6 @@ class FlatLocalRowPlan:
     rotation_rows: np.ndarray
     present_mask: np.ndarray
     valid_mask: np.ndarray
-    batch_size: int
-    physical_image_count: int
-    dense_rotation_count: int
     packed_row_count: int
     # Class-segmented plans only. Rows are emitted class-major, so class k owns the
     # contiguous block [sum(class_row_counts[:k]), +class_row_counts[k]). Projection
@@ -355,9 +352,6 @@ def build_pool_flat_local_row_plan(
         rotation_rows=rotation_rows,
         present_mask=present_mask,
         valid_mask=valid_mask,
-        batch_size=dense_batch_size,
-        physical_image_count=physical_image_count,
-        dense_rotation_count=dense_rotation_count,
         packed_row_count=packed_row_count,
     )
 
@@ -491,9 +485,6 @@ def build_pool_flat_local_row_plan_for_classes(
         rotation_rows=rotation_rows,
         present_mask=present_mask,
         valid_mask=valid_mask,
-        batch_size=dense_batch_size,
-        physical_image_count=physical_image_count,
-        dense_rotation_count=dense_rotation_count,
         packed_row_count=packed_row_count,
         class_row_counts=tuple(class_row_counts),
     )
