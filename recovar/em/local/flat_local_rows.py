@@ -14,43 +14,20 @@ from recovar.em.local.local_layout import (
     _exact_local_large_bucket_quantum,
 )
 
-# Consecutive images are packed in pools that share one rotation width, so a pool
-# costs ``pool_size`` times its largest member's padded neighborhood. Pooling exists
-# to keep the number of distinct packed shapes down, not for any scientific reason:
-# ``valid_mask`` already marks which rows carry a real hypothesis, so the pool size
-# changes the padded shape and nothing about the result. Larger pools mean fewer
-# shapes and more padded rows; 3 is the historical default.
+# Consecutive images share a padded rotation width. Larger pools produce fewer
+# compiled shapes and more padding; ``valid_mask`` keeps the result unchanged.
 EXACT_LOCAL_FLAT_POOL_SIZE = 3
 EXACT_LOCAL_FLAT_POOL_SIZE_ENV = "RECOVAR_EXACT_LOCAL_FLAT_POOL_SIZE"
 
-# Inside a pool, each image's row block is first rounded up to an ordinary exact-local
-# rotation bucket (powers of two below the engine cap). That rounding predates packed
-# rows, where a row block's length was also a compiled shape; in a packed plan the row
-# block is addressed entirely through ``image_indices``/``rotation_rows`` and only the
-# final ``packed_row_count`` is a shape. So the rounding now costs rows and buys
-# nothing, and switching it off is a padding change, not a semantic one -- but it is
-# left on by default until measured, because the rounded widths do make neighboring
-# pools agree more often and so make the shared capacity a tighter fit.
+# Per-image widths retain the earlier exact-local bucket rounding. Packed rows
+# no longer require it for correctness, but it can make neighboring pools share
+# capacity, so keep the measured default configurable.
 EXACT_LOCAL_FLAT_ROW_ROUNDING = True
 EXACT_LOCAL_FLAT_ROW_ROUNDING_ENV = "RECOVAR_EXACT_LOCAL_FLAT_ROW_ROUNDING"
 
-# The shared packed-row capacity is a running maximum over the current iteration's
-# buckets, so it drifts with the trajectory, and because ``packed_row_count`` is a
-# compiled shape every drift mints a new XLA program. On the shipped 200-mini-batch
-# K=1 schedule that is expensive: compilation is 736 s of a 6284 s host profile
-# (11.7% of wall), and the compile attribution names ``run_local_bucket_big_jit``
-# the largest single contributor at about 2 s per compilation.
-#
-# Rounding the capacity onto a coarse ladder makes neighboring iterations reuse one
-# shape. The extra rows are the same score-inert tail the pool padding already adds
-# -- ``valid_mask`` marks the real hypotheses and validity-aware fine CUDA returns
-# ``+inf`` before doing pixel work -- and padding measures nearly free: across a
-# pool sweep the capacity rose 35% (2 804 736 to 3 784 704 rows) while the big-jit
-# kernel time moved 2% (17.85 to 17.43 s).
-#
-# The value is the number of ladder steps per power of two, so 8 means at most
-# 12.5% padding and at most 8 distinct capacities per octave. 0 disables the ladder
-# and restores the exact running maximum, which is the default until measured.
+# Quantizing the running packed-row capacity lets neighboring iterations reuse
+# compiled shapes. The value is ladder steps per power of two; zero preserves
+# the exact running maximum. Padding stays score-inert through ``valid_mask``.
 EXACT_LOCAL_FLAT_ROW_CAPACITY_STEPS = 0
 EXACT_LOCAL_FLAT_ROW_CAPACITY_STEPS_ENV = "RECOVAR_EXACT_LOCAL_FLAT_ROW_CAPACITY_STEPS"
 
