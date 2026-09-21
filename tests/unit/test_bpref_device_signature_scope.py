@@ -9,7 +9,7 @@ import pytest
 
 from recovar import cuda_backproject
 from recovar.em.classification import k_class
-from recovar.em.dense import half_scoring
+from recovar.em.refinement import half_scoring
 from recovar.em.diagnostics import bpref_diagnostics, local_bpref_capture
 from recovar.em.diagnostics import iteration as debug_dumps
 from recovar.em.local import local_em_engine

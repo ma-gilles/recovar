@@ -49,7 +49,7 @@ from recovar.em.classification.k_class import (
     _use_fused_sparse_k_class_pass2,
 )
 from recovar.em.helpers.fourier_window import make_fourier_window_spec
-from recovar.em.helpers.oversampling import compute_pass2_stats_sparse
+from recovar.em.sparse_pass2.dispatch import compute_pass2_stats_sparse
 from recovar.em.helpers.preprocessing import apply_half_translation_phases, half_translation_phase_table
 from recovar.em.helpers.projection import compute_noise_block
 from recovar.em.local.local_backprojection import (

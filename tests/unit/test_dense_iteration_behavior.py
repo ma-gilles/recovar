@@ -8,10 +8,11 @@ import numpy as np
 import pytest
 
 import recovar.em.refinement.iteration_loop as iteration_loop
-from recovar.em.dense import half_scoring, score_outputs, scoring_policy
+from recovar.em.refinement import half_scoring
+from recovar.em.dense import score_outputs, scoring_policy
 from recovar.em.diagnostics import local_debug
 from recovar.em.helpers.convergence import _native_final_perturbation_healpix_order
-from recovar.em.local.local_search_iteration import _LocalSearchIterationResult
+from recovar.em.refinement.local_search_iteration import _LocalSearchIterationResult
 from recovar.em.relion import relion_worker_scale
 
 pytestmark = pytest.mark.unit

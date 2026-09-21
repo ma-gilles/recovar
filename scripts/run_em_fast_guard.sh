@@ -49,6 +49,7 @@ pixi_env = (repo / ".pixi" / "envs" / "default").resolve()
 assert str(recovar_file).startswith(str(repo) + "/"), recovar_file
 assert str(jax_file).startswith(str(pixi_env) + "/"), (jax_file, pixi_env)
 for helper in (
+    "helpers.oversampling", "helpers.half_volume_mstep", "relion.relion_projector_setup",
     "diagnostics.relion_replay", "relion.relion_normalization", "refinement.projector_preparation",
     "dense.score_outputs", "local.local_batch_planning", "classification.k_class_results", "classification.k_class_inputs", "dense.scoring_policy", "helpers.resolution", "diagnostics.bpref_diagnostics",
     "helpers.expected_accuracy", "scoring.significant_samples", "diagnostics.coarse_score_diagnostics", "scoring.sparse_bucket_arrays", "scoring.compact_candidates", "relion.relion_ctf", "helpers.scale_groups", "helpers.normalization_inputs",
@@ -58,8 +59,9 @@ for helper in (
 for diagnostic in ("iteration", "pass2", "norm_scale", "reconstruction"):
     importlib.import_module(f"recovar.em.diagnostics.{diagnostic}")
 execution_modules = (
-    "refinement.iteration_loop", "dense.half_scoring", "classification.k_class", "dense.em_engine", "local.local_em_engine", "local.local_big_jit",
-    "scoring.significance", "sparse_pass2.sparse_pass2_bucketed",
+    "refinement.iteration_loop", "refinement.half_scoring", "classification.k_class", "dense.em_engine", "local.local_em_engine", "local.local_big_jit",
+    "scoring.significance", "sparse_pass2.sparse_pass2_bucketed", "sparse_pass2.dispatch",
+    "refinement.firstiter_cc", "refinement.local_search_iteration",
 )
 loaded = [name for name in execution_modules
           if f"recovar.em.{name}" in sys.modules]

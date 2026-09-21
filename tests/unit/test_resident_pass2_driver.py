@@ -479,17 +479,17 @@ def test_image_capacity_ladder_is_capped_by_the_translation_tile_budget():
 
 
 def test_driver_is_registered_behind_the_flag_only(monkeypatch):
-    from recovar.em.helpers import oversampling
+    from recovar.em.sparse_pass2 import dispatch as sparse_dispatch
 
     monkeypatch.delenv(rp.RESIDENT_PASS2_ENV, raising=False)
     assert not rp.resident_pass2_requested()
     monkeypatch.setenv(rp.RESIDENT_PASS2_ENV, "1")
     assert rp.resident_pass2_requested()
-    source = oversampling.compute_pass2_stats_sparse.__doc__ or ""
+    source = sparse_dispatch.compute_pass2_stats_sparse.__doc__ or ""
     del source
     import inspect
 
-    dispatch = inspect.getsource(oversampling.compute_pass2_stats_sparse)
+    dispatch = inspect.getsource(sparse_dispatch.compute_pass2_stats_sparse)
     assert "resident_pass2_requested()" in dispatch
     assert "compute_pass2_stats_resident" in dispatch
 
@@ -1039,9 +1039,9 @@ def test_dispatcher_routes_out_of_scope_passes_to_the_compact_engine():
 
     import inspect
 
-    from recovar.em.helpers import oversampling
+    from recovar.em.sparse_pass2 import dispatch as sparse_dispatch
 
-    dispatch = inspect.getsource(oversampling.compute_pass2_stats_sparse)
+    dispatch = inspect.getsource(sparse_dispatch.compute_pass2_stats_sparse)
     assert "resident_pass2_out_of_scope_reason(" in dispatch
     # The default must be the compact engine, with the resident driver chosen
     # only when the pass is both requested and in scope.

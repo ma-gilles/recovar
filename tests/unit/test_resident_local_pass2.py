@@ -29,7 +29,7 @@ from helpers.em_arrays import _hermitian_volume
 from test_sparse_pass2_bucketed_parity import IMAGE_SHAPE, VOLUME_SHAPE, MockDataset
 
 import recovar.core.fourier_transform_utils as ftu
-from recovar.em.local import local_search_iteration
+from recovar.em.refinement import local_search_iteration
 from recovar.em.local.local_layout import (
     build_local_adaptive_pass2_hypothesis_layout,
     build_local_hypothesis_layout,

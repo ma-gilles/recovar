@@ -13,7 +13,7 @@ import inspect
 import numpy as np
 import pytest
 
-from recovar.em.dense import half_scoring
+from recovar.em.refinement import half_scoring
 
 pytestmark = pytest.mark.unit
 

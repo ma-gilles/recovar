@@ -23,8 +23,9 @@ import jax.numpy as jnp
 from helpers.em_arrays import _hermitian_volume, _raw_real_image_2d
 
 import recovar.core.fourier_transform_utils as ftu
-from recovar.em.helpers import oversampling as oversampling_module
-from recovar.em.helpers.oversampling import _compute_pass2_stats_sparse_perimage_reference, compute_pass2_stats_sparse
+from recovar.em.sparse_pass2 import dispatch as sparse_dispatch
+from recovar.em.reference.sparse_pass2 import _compute_pass2_stats_sparse_perimage_reference
+from recovar.em.sparse_pass2.dispatch import compute_pass2_stats_sparse
 from recovar.em.scoring.sparse_bucket_arrays import _build_bucket_arrays, _prepare_per_image_pass2_inputs
 from recovar.em.sparse_pass2 import sparse_pass2_bucketed as sparse_pass2_module
 from recovar.em.sparse_pass2.sparse_pass2_bucket_io import _reorder_to_indices
@@ -922,11 +923,11 @@ class TestSparsePass2Bucketed:
             capture_bucketed,
         )
         monkeypatch.setattr(
-            oversampling_module,
+            sparse_dispatch,
             "_compute_pass2_stats_sparse_perimage_reference",
             fail_legacy,
         )
-        routed = oversampling_module.compute_pass2_stats_sparse(
+        routed = sparse_dispatch.compute_pass2_stats_sparse(
             None,
             None,
             None,

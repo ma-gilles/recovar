@@ -49,7 +49,8 @@ def test_concrete_em_imports_reject_unverified_scoring_owner(
 ):
     """A correct controller path must not mask a stale or unlocated scorer."""
     monkeypatch.setenv("RECOVAR_EXPECTED_REPO_ROOT", str(REPO_ROOT))
-    module_name = f"recovar.em.dense.{owner}"
+    package = "refinement" if owner == "half_scoring" else "dense"
+    module_name = f"recovar.em.{package}.{owner}"
     module = importlib.import_module(module_name)
     source_file = None if missing_source else str(tmp_path / f"{owner}.py")
     monkeypatch.setattr(module, "__file__", source_file)

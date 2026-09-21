@@ -548,7 +548,7 @@ def _run_sparse_k_class_adaptive_pass2(
 ) -> KClassEMResult:
     """Run K-class adaptive pass-2 over RELION significant sparse support."""
 
-    from recovar.em.helpers.oversampling import compute_pass2_stats_sparse
+    from recovar.em.sparse_pass2.dispatch import compute_pass2_stats_sparse
 
     n_classes = int(means_array.shape[0])
     n_rot_coarse = int(coarse_rotations_np.shape[0])
@@ -1558,7 +1558,7 @@ def _run_sparse_firstiter_global_winner_subset_pass2(
 ) -> KClassEMResult:
     """Sparse RELION firstiter_cc fine pass over global-winner image subsets."""
 
-    from recovar.em.helpers.oversampling import compute_pass2_stats_sparse
+    from recovar.em.sparse_pass2.dispatch import compute_pass2_stats_sparse
 
     n_classes = int(means_array.shape[0])
     n_images = int(coarse_class_assignments.shape[0])

@@ -223,7 +223,7 @@ are part of the comparison contract. Preserving only final MAP assignments
 does not establish equivalent soft M-step contributions.
 
 **Exact local search.**
-[`local_search_iteration.py`](../../recovar/em/local/local_search_iteration.py)
+[`local_search_iteration.py`](../../recovar/em/refinement/local_search_iteration.py)
 constructs per-image neighborhoods, applies the batch budget and dispatches
 `local_em_engine.run_local_em_exact` or `k_class.run_local_k_class_em`.
 [`local_layout.py`](../../recovar/em/local/local_layout.py)

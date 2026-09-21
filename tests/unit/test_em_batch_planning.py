@@ -4,7 +4,7 @@ import inspect
 import numpy as np
 import pytest
 import recovar.em.refinement.iteration_loop as iteration_loop_module
-from recovar.em.dense import half_scoring
+from recovar.em.refinement import half_scoring
 from recovar.em.local.local_batch_planning import (
     EXACT_LOCAL_AUTO_MICROBATCH_BOOST_ENV,
     EXACT_LOCAL_BIG_JIT_MATMUL_MAX_GB_ENV,

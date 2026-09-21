@@ -1047,7 +1047,7 @@ def test_stop_after_local_search_score_only_passes_to_refinement_loop():
 
 def test_stop_after_local_search_score_only_is_diagnostic_score_only_path():
     source = ITERATION_LOOP.read_text()
-    half_scoring_source = (ITERATION_LOOP.parent.parent / "dense" / "half_scoring.py").read_text()
+    half_scoring_source = (ITERATION_LOOP.parent / "half_scoring.py").read_text()
     # stop_after_local_search{,_score_only} are read off the EngineDebugOptions
     # bundle (`debug.*`) inside the iteration loop now, rather than being bare
     # locals bound from flat refine_single_volume kwargs.

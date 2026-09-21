@@ -40,7 +40,8 @@ from recovar.em.classification.k_class_results import (
     _resolve_class_mstep_posterior_sums,
     _sum_noise_stats,
 )
-from recovar.em.dense import half_scoring, score_outputs, scoring_policy
+from recovar.em.refinement import half_scoring
+from recovar.em.dense import score_outputs, scoring_policy
 from recovar.em.dense.em_engine import _batch_parameter_rows, run_em
 from recovar.em.diagnostics.local_debug import (
     current_size_matches_request,
@@ -82,7 +83,7 @@ from recovar.em.helpers.resolution import (
     shell_index_to_resolution_angstrom,
 )
 from recovar.em.helpers.types import DenseEMResult, LocalEMResult, NoiseStats, RelionStats
-from recovar.em.local import local_search_iteration
+from recovar.em.refinement import local_search_iteration
 from recovar.em.local.local_backprojection import (
     compute_local_ctf_sums,
     compute_local_weighted_sums,
@@ -143,7 +144,7 @@ from recovar.em.local.local_score_pass import (
     score_local_bucket,
     score_local_bucket_abs2_weighted_on_demand,
 )
-from recovar.em.local.local_search_iteration import _LocalSearchIterationResult
+from recovar.em.refinement.local_search_iteration import _LocalSearchIterationResult
 from recovar.em.refinement import finalization_policy
 from recovar.em.refinement import mean_helpers as mean_helpers_module
 from recovar.em.refinement.iteration_loop import (
@@ -4104,7 +4105,7 @@ def test_local_score_debug_dump_records_attempted_pose_metadata(tmp_path, monkey
 
 
 def test_run_local_search_iteration_exact_engine_uses_model_sigma_for_translation_prior(monkeypatch, rng):
-    from recovar.em.local import local_search_iteration as local_iteration_module
+    from recovar.em.refinement import local_search_iteration as local_iteration_module
 
     mock_dataset = MockDataset(1, rng)
     captured = {}
@@ -4235,7 +4236,7 @@ def test_run_local_search_iteration_exact_engine_uses_model_sigma_for_translatio
 
 @pytest.mark.parametrize("k_class_enabled", [False, True])
 def test_run_local_search_iteration_dispatches_aligned_mstep_grid(monkeypatch, rng, k_class_enabled):
-    from recovar.em.local import local_search_iteration as local_iteration_module
+    from recovar.em.refinement import local_search_iteration as local_iteration_module
 
     dataset = MockDataset(1, rng)
     score_grid = get_relion_rotation_grid(0).astype(np.float32)
@@ -4311,7 +4312,7 @@ def test_run_local_search_iteration_clamps_highres_local_batches(monkeypatch):
     # suite when the queries return stale or inconsistent values. The 42 GB
     # / 0 GB-used pair is the historical isolation reading that this test
     # was originally calibrated against.
-    from recovar.em.local import local_search_iteration as local_iteration_module
+    from recovar.em.refinement import local_search_iteration as local_iteration_module
 
     monkeypatch.setattr(iteration_loop_module.utils, "get_gpu_memory_total", lambda: 42.0)
     monkeypatch.setattr(iteration_loop_module.utils, "get_gpu_memory_used", lambda: 0.0)
@@ -4394,7 +4395,7 @@ def test_run_local_search_iteration_clamps_highres_local_batches(monkeypatch):
 
 
 def test_run_local_search_iteration_relion_xhalf_uses_windowed_batch_guard_by_default(monkeypatch):
-    from recovar.em.local import local_search_iteration as local_iteration_module
+    from recovar.em.refinement import local_search_iteration as local_iteration_module
 
     monkeypatch.setattr(iteration_loop_module.utils, "get_gpu_memory_total", lambda: 42.0)
     monkeypatch.setattr(iteration_loop_module.utils, "get_gpu_memory_used", lambda: 0.0)
@@ -4503,7 +4504,7 @@ def test_run_local_search_iteration_relion_xhalf_uses_windowed_batch_guard_by_de
 
 
 def test_run_local_search_iteration_plumbs_score_only_to_exact_engine(monkeypatch, rng):
-    from recovar.em.local import local_search_iteration as local_iteration_module
+    from recovar.em.refinement import local_search_iteration as local_iteration_module
 
     mock_dataset = MockDataset(2, rng)
     layout = LocalHypothesisLayout(
@@ -4582,7 +4583,7 @@ def test_local_adaptive_parent_support_probe_is_score_only():
 
 
 def test_run_local_search_iteration_plumbs_normalization_log_evidence(monkeypatch, rng):
-    from recovar.em.local import local_search_iteration as local_iteration_module
+    from recovar.em.refinement import local_search_iteration as local_iteration_module
 
     mock_dataset = MockDataset(2, rng)
     layout = LocalHypothesisLayout(
@@ -4650,7 +4651,7 @@ def test_run_local_search_iteration_plumbs_normalization_log_evidence(monkeypatc
 
 
 def test_run_local_search_iteration_plumbs_stats_use_reconstruction_probs(monkeypatch, rng):
-    from recovar.em.local import local_search_iteration as local_iteration_module
+    from recovar.em.refinement import local_search_iteration as local_iteration_module
 
     mock_dataset = MockDataset(2, rng)
     layout = LocalHypothesisLayout(
@@ -4760,7 +4761,7 @@ def test_run_local_search_iteration_exact_engine_uses_factorized_prior_metadata_
     rng,
 ):
     from recovar import utils
-    from recovar.em.local import local_search_iteration as local_iteration_module
+    from recovar.em.refinement import local_search_iteration as local_iteration_module
 
     mock_dataset = MockDataset(1, rng)
     captured = {}
@@ -6250,7 +6251,7 @@ def test_local_search_iteration_k_class_returns_class_details(rng):
 def test_local_search_iteration_k_class_keeps_mstep_and_full_class_mass_separate(monkeypatch, rng):
     from types import SimpleNamespace
 
-    import recovar.em.local.local_search_iteration as local_search_iteration
+    import recovar.em.refinement.local_search_iteration as local_search_iteration
 
     dataset = MockDataset(2, rng)
     mean = _hermitian_volume(VOLUME_SHAPE, seed=171)

@@ -22,7 +22,7 @@ from recovar.em.classification.k_class import (
     run_dense_k_class_em_adaptive,
 )
 from recovar.em.dense.em_engine import run_em
-from recovar.em.dense.firstiter_cc import _score_kclass_firstiter_cc_pass2
+from recovar.em.refinement.firstiter_cc import _score_kclass_firstiter_cc_pass2
 from recovar.em.dense.score_outputs import (
     HalfScoreResult,
     PerHalfOutputs,
@@ -56,7 +56,7 @@ from recovar.em.helpers.dtype_policy import _diagnostic_float64_pass2_matches, _
 from recovar.em.helpers.half_volume_mstep import relion_backprojector_volume_shape
 from recovar.em.helpers.oversampling import build_adaptive_pass2_grids
 from recovar.em.local.local_layout import build_local_adaptive_pass2_hypothesis_layout, build_local_hypothesis_layout
-from recovar.em.local.local_search_iteration import _run_local_search_iteration
+from recovar.em.refinement.local_search_iteration import _run_local_search_iteration
 from recovar.em.sampling import (
     apply_relion_translation_perturbation,
     build_local_search_grid_metadata,
@@ -64,7 +64,7 @@ from recovar.em.sampling import (
     rotation_grid_size,
 )
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("recovar.em.dense.half_scoring")
 
 
 def _expand_significant_samples_to_full_parent_translations(

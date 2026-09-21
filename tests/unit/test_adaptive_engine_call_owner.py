@@ -3,7 +3,7 @@
 import numpy as np
 
 from recovar.em.classification import k_class
-from recovar.em.dense import half_scoring
+from recovar.em.refinement import half_scoring
 
 
 def test_sparse_pass2_switch_reads_only_positive_values(monkeypatch):

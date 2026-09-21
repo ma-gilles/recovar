@@ -247,7 +247,7 @@ def test_coarse_numeric_normalization_rejects_incompatible_modes(kwargs):
 @pytest.mark.parametrize("chunked", [False, True])
 @pytest.mark.parametrize("retain_winner", [False, True])
 def test_sparse_coarse_normalization_reaches_accumulator_inputs(monkeypatch, chunked, retain_winner):
-    from recovar.em.helpers.oversampling import compute_pass2_stats_sparse
+    from recovar.em.sparse_pass2.dispatch import compute_pass2_stats_sparse
     from recovar.em.sparse_pass2 import sparse_pass2_bucketed as bucket
 
     monkeypatch.setattr(bucket, "_projection_rotation_chunk_size", lambda *a, **k: 1 if chunked else None)
@@ -367,7 +367,7 @@ def test_sparse_coarse_normalization_reaches_accumulator_inputs(monkeypatch, chu
     ],
 )
 def test_sparse_coarse_normalization_rejects_incompatible_execution(mode):
-    from recovar.em.helpers.oversampling import compute_pass2_stats_sparse
+    from recovar.em.sparse_pass2.dispatch import compute_pass2_stats_sparse
 
     kwargs = dict(
         oversampling_order=0,
@@ -1030,7 +1030,7 @@ class TestSignificantCountsReasonable:
 
     def test_sparse_pass2_runs_with_full_candidate_lists(self):
         """Sparse pass 2 should handle the ``sig_samples is None`` full-grid case."""
-        from recovar.em.helpers.oversampling import compute_pass2_stats_sparse
+        from recovar.em.sparse_pass2.dispatch import compute_pass2_stats_sparse
 
         n_images = 2
         nside_level = 1

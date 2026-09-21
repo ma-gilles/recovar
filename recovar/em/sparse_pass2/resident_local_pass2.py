@@ -14,7 +14,7 @@ Scope, and how to select it
 for the **fine pass 2** of a K=1 local search, which is also the pass the final
 all-data iteration runs (``iteration_loop.py`` reaches it through the same
 ``local_outputs = _run_local_search_iteration`` call site in
-``recovar/em/dense/half_scoring.py``). Any other configuration raises
+``recovar/em/refinement/half_scoring.py``). Any other configuration raises
 :class:`NotImplementedError` naming the missing piece; this path never falls
 back silently, because a silent fallback would make a measured comparison
 meaningless.

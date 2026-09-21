@@ -26,7 +26,7 @@ from recovar.em.sparse_pass2.resident_local_pass2 import (
     resident_local_search_requested,
 )
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("recovar.em.local.local_search_iteration")
 
 
 # Mirror iteration_loop's constant locally so the helper has a stable home.

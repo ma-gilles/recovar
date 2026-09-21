@@ -96,7 +96,7 @@ scoring grid; the final pass sizes its parent pass with
 ([`test_local_fine_grid_owner.py`](../../tests/unit/test_local_fine_grid_owner.py)).
 Grid tests substitute primitives at their sampling owner; sealed-state replay remains
 at the refinement boundary. The exact local-search stage is implemented in
-[`local_search_iteration`](../../recovar/em/local/local_search_iteration.py).
+[`local_search_iteration`](../../recovar/em/refinement/local_search_iteration.py).
 That module builds local pose neighborhoods, asks
 [`batch_planning`](../../recovar/em/helpers/batch_planning.py) for
 batch sizes, calls the selected kernel and returns `_LocalSearchIterationResult`
@@ -200,7 +200,7 @@ plus K2/exact-K4 pose, noise and class-summary settings. Returned arrays retain
 their layouts, dtypes and identities; saved refinement field names are unchanged.
 
 Per-half dispatch belongs to
-[`half_scoring`](../../recovar/em/dense/half_scoring.py).
+[`half_scoring`](../../recovar/em/refinement/half_scoring.py).
 Its dense and local adapters prepare engine arguments, retain adaptive/first-CC
 routing, and write class/pose fields into the caller-owned `PerHalfOutputs`.
 `_dense_uses_adaptive_engine` states the engine rule for K=1 and K-class scoring:
@@ -364,7 +364,7 @@ posterior arithmetic and normalization kernels remain at their execution sites.
 It preserves input strides and avoids copying already suitable F64 arrays.
 
 Local projector slab normalization has one owner,
-[`projector_preparation.prepare_local_projector_slab`](../../recovar/em/refinement/projector_preparation.py).
+[`relion_projector_setup.prepare_local_projector_slab`](../../recovar/em/relion/relion_projector_setup.py).
 Bucket projection, packed-noise projection and the main BigJIT path accept the
 same three-dimensional slab or singleton class axis. The helper preserves JAX
 dtype conversion and path-specific errors. Radius requirements, pixel selection,

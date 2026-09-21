@@ -6,7 +6,8 @@ import pytest
 
 from recovar.em.classification import k_class_results
 from recovar.em.classification.k_class_results import KClassEMResult
-from recovar.em.dense import firstiter_cc, half_scoring, score_outputs
+from recovar.em.refinement import firstiter_cc, half_scoring
+from recovar.em.dense import score_outputs
 from recovar.em.helpers import batch_planning
 from recovar.em.helpers.batch_planning import (
     _estimate_relion_em_batch_sizes,
