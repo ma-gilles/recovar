@@ -54,6 +54,7 @@ logger = logging.getLogger(__name__)
 _LIB_DIR = pathlib.Path(__file__).resolve().parent / "cuda"
 _PACKAGE_LIB_PATH = _LIB_DIR / "libcuda_backproject.so"
 _CUDA_BUILD_SOURCE_NAMES = (
+    "device_scratch.cuh",
     "noise_residual.cuh",
     "vdam_trace.cuh",
     "relion_preprocess.cuh",

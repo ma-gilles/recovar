@@ -75,7 +75,12 @@ endif
 
 CUDA_ARCH ?= $(CUDA_ARCH_VOLTA_TURING) $(CUDA_ARCH_AMPERE_HOPPER) $(CUDA_ARCH_BLACKWELL)
 
-NVCC_FLAGS := -O3 -std=c++17 -Xcompiler -fPIC -Xcompiler -pthread --shared $(CUDA_ARCH) -I$(XLA_INC) -lcuda
+# Toolkit-only nodes expose the driver API through this link-time stub. The
+# loaded NVIDIA driver still supplies libcuda at runtime.
+CUDA_DRIVER_STUB_DIR := $(CUDA_HOME)/targets/x86_64-linux/lib/stubs
+CUDA_DRIVER_LINK_DIR := $(if $(wildcard $(CUDA_DRIVER_STUB_DIR)/libcuda.so),-L$(CUDA_DRIVER_STUB_DIR))
+
+NVCC_FLAGS := -O3 -std=c++17 -Xcompiler -fPIC -Xcompiler -pthread --shared $(CUDA_ARCH) -I$(XLA_INC) $(CUDA_DRIVER_LINK_DIR) -lcuda
 
 LIB ?= libcuda_backproject.so
 
@@ -89,7 +94,7 @@ check-nvcc:
 		exit 1; \
 	fi
 
-$(LIB): cuda_backproject.cu relion_coarse_diff2_projector_body.inc noise_residual.cuh relion_vdam_mstep.cuh relion_scoring.cuh vdam_trace.cuh relion_preprocess.cuh sparse_pass2_posterior.cuh relion_translate_sum.cuh | check-nvcc
+$(LIB): cuda_backproject.cu device_scratch.cuh relion_coarse_diff2_projector_body.inc noise_residual.cuh relion_vdam_mstep.cuh relion_scoring.cuh vdam_trace.cuh relion_preprocess.cuh sparse_pass2_posterior.cuh relion_translate_sum.cuh | check-nvcc
 	@mkdir -p $(dir $@)
 	$(NVCC) $(NVCC_FLAGS) -o $@ $<
 
