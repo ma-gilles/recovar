@@ -390,6 +390,144 @@ class SparseKClassPass2FusedResult(NamedTuple):
 # ---------------------------------------------------------------------------
 
 
+_CANDIDATE_DENSITY_LOG_ENV = "RECOVAR_SPARSE_PASS2_LOG_CANDIDATE_DENSITY"
+
+
+def _candidate_density_logging_enabled() -> bool:
+    """Log the admitted fraction of pass-2 (row, translation) cells.
+
+    Diagnostic only and default off: it pulls each bucket's candidate mask to
+    the host.  Used to compare our fine-pass candidate set against RELION's
+    coarse-significant set.
+    """
+
+    return parse_env_flag(_CANDIDATE_DENSITY_LOG_ENV, default=False)
+
+
+_PASS2_PROJECTOR_COMPLEX64_ENV = "RECOVAR_SPARSE_PASS2_PROJECTOR_COMPLEX64"
+
+
+def _pass2_projector_complex64_enabled() -> bool:
+    """Narrow the pass-2 Projector::data slab so the texture projector engages.
+
+    RELION uploads ``Projector::data`` to a float32 texture, and our coarse
+    scorer already casts the same slab. Pass 2 did not, so
+    ``_relion_projector_texture_enabled`` rejected it on dtype and the
+    projection fell back to ``jax.vmap`` over per-rotation projections.
+    Opt-in until the matched hp3 pair qualifies it, because narrowing the
+    projector changes float32 projection arithmetic.
+    """
+
+    return parse_env_flag(_PASS2_PROJECTOR_COMPLEX64_ENV, default=False)
+
+
+_PIPELINE_TAIL_ENV = "RECOVAR_SPARSE_PASS2_PIPELINE_TAIL"
+
+_BUCKET_TAIL_SNAPSHOT_NAMES = (
+    "actual_counts",
+    "actual_counts_arr",
+    "batch",
+    "batch_norm",
+    "best_argmax",
+    "best_log_score_bucket",
+    "bucket_group_ids",
+    "bucket_scale_for_stats",
+    "bucket_size",
+    "ctf2_over_nv_recon",
+    "ctf_probs",
+    "direct_ctf_rfloat_recon",
+    "image_indices",
+    "local_score_log_z",
+    "log_Z",
+    "max_posterior_bucket",
+    "min_diff2",
+    "mstep_rotations",
+    "probs",
+    "processed_score_half_for_noise",
+    "proj_abs2_for_noise",
+    "proj_for_noise",
+    "raw_translated_wavg_for_atomic",
+    "raw_translated_wavg_for_norm",
+    "raw_translated_wavg_rectangle",
+    "reconstruction_probs",
+    "relion_norm_high_shell",
+    "relion_wavg_atomic_direct_noise",
+    "relion_wavg_atomic_direct_norm",
+    "relion_wavg_atomic_scale_aa",
+    "relion_wavg_rectangle",
+    "shifted_noise",
+    "shifted_score",
+    "translated_wavg_norm",
+    "translation_sqdist_ang",
+)
+
+
+def _pipeline_tail_enabled() -> bool:
+    """Run each bucket's host finalization on a worker thread.
+
+    Per bucket the loop issues device work, then pulls results and does numpy
+    accumulation on the host; the pull blocks until that bucket's GPU queue
+    drains and the numpy runs with the GPU idle. Handing the tail to a single
+    ordered worker lets the main thread issue the next bucket during that
+    wait and that numpy. The tail's statements and their bucket order are
+    unchanged, so the accumulators see identical arithmetic. On by default:
+    the matched hp3 pair (job 14100290) measured warm iteration 2 at 65.0/65.1 s
+    with the tail inline versus 60.5/61.7 s on the worker, with every numerical
+    delta inside the same-source band. Set the variable to 0 to run inline.
+    """
+
+    return parse_env_flag(_PIPELINE_TAIL_ENV, default=True)
+
+
+class _BucketTailRunner:
+    """Single ordered worker for bucket tails with bounded lookahead.
+
+    ``submit`` blocks while one tail is already pending, so at most two buckets
+    (the running tail and the one being issued) hold device arrays at a time.
+    A failure in the worker is re-raised on the main thread at the next
+    ``submit`` or at ``drain``.
+    """
+
+    _STOP = object()
+
+    def __init__(self, fn):
+        import queue
+        import threading
+
+        self._fn = fn
+        self._queue = queue.Queue(maxsize=1)
+        self._error = None
+        self._thread = threading.Thread(target=self._run, name="pass2-bucket-tail", daemon=True)
+        self._thread.start()
+
+    def _run(self):
+        while True:
+            item = self._queue.get()
+            try:
+                if item is self._STOP:
+                    return
+                if self._error is None:
+                    self._fn(item)
+            except BaseException as exc:  # noqa: BLE001 - re-raised on the main thread
+                self._error = exc
+            finally:
+                self._queue.task_done()
+
+    def _raise_if_failed(self):
+        if self._error is not None:
+            error, self._error = self._error, None
+            raise error
+
+    def submit(self, snapshot):
+        self._raise_if_failed()
+        self._queue.put(snapshot)
+
+    def drain(self):
+        self._queue.put(self._STOP)
+        self._thread.join()
+        self._raise_if_failed()
+
+
 def compute_pass2_stats_sparse_bucketed(
     experiment_dataset,
     volume,

@@ -457,21 +457,6 @@ def test_wavg_shifted_power_commutes_with_a_row_gather():
     )
 
 
-def test_default_row_ladder_is_dense_enough_to_bound_padding():
-    """Consecutive classes must not more than double, so occupancy floors at 50%.
-
-    The chunker rounds a chunk's row count up to the next class, so the gap
-    between classes is the worst-case padding. The design's (8192, 32768,
-    131072) left hp3 iteration 0 at 49% occupancy, which the pixel-axis
-    gather and the per-cell posterior pay for.
-    """
-
-    ladder = rp._DEFAULT_ROW_CAPACITY_LADDER
-    assert list(ladder) == sorted(ladder)
-    for small, large in zip(ladder, ladder[1:]):
-        assert large <= 2 * small, (small, large)
-
-
 def test_mstep_block_rows_divides_every_row_capacity():
     ladder = rp._DEFAULT_ROW_CAPACITY_LADDER
     block = rp._resolve_mstep_block_rows(

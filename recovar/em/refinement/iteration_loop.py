@@ -1891,6 +1891,7 @@ def refine_single_volume(
         # Coarse-grid assignments for local search tracking (always indexed
         # into effective_rotations, even when adaptive oversampling is used).
         coarse_ha = per_half.coarse_ha
+        dense_half_plans: list[DenseHalfScoringPlan | None] = [None, None]
         if use_adaptive:
             # --- TWO-PASS ADAPTIVE OVERSAMPLING (RELION parity) ---
             # Pass 1: coarse E-step at reduced resolution to find

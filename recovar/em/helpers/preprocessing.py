@@ -360,20 +360,16 @@ def relion_half_translation_lattice(image_shape):
     keeps its own convention for its other callers.
     """
 
-    lattice = np.array(
+    lattice = jnp.asarray(
         fourier_transform_utils.get_k_coordinate_of_each_pixel_half(
-            image_shape,
-            voxel_size=1,
-            scaled=True,
-        ),
-        dtype=np.float64,
-        copy=True,
+            image_shape, voxel_size=1, scaled=True
+        )
     )
     image_size = int(image_shape[0])
     if image_size % 2 == 0:
-        ky = np.rint(lattice[:, 1] * image_size).astype(np.int64)
+        ky = jnp.rint(lattice[:, 1] * image_size).astype(jnp.int32)
         nyquist = ky == -(image_size // 2)
-        lattice[nyquist, 1] = -lattice[nyquist, 1]
+        lattice = lattice.at[:, 1].set(jnp.where(nyquist, -lattice[:, 1], lattice[:, 1]))
     return lattice
 
 

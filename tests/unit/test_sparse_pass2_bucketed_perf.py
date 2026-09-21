@@ -6534,7 +6534,7 @@ def test_exact_raw_diff2_cache_budget_admission_and_fallback(monkeypatch):
     assert bucketed_mod._jax_allocator_free_memory_bytes() is None
 
 
-def test_half_translation_phase_table_matches_generic_translate_images():
+def test_half_translation_phase_table_matches_generic_off_relion_nyquist_row():
     rng = np.random.default_rng(13)
     image_shape = (16, 16)
     n_half = image_shape[0] * (image_shape[1] // 2 + 1)
@@ -6559,7 +6559,14 @@ def test_half_translation_phase_table_matches_generic_translate_images():
         half_translation_phase_table(translations, image_shape),
     )
 
-    np.testing.assert_array_equal(np.asarray(phase_table), np.asarray(generic))
+    core_lattice = np.asarray(
+        ftu.get_k_coordinate_of_each_pixel_half(image_shape, voxel_size=1, scaled=True)
+    )
+    ky = np.rint(core_lattice[:, 1] * image_shape[0]).astype(np.int64)
+    non_nyquist = ky != -(image_shape[0] // 2)
+    np.testing.assert_array_equal(
+        np.asarray(phase_table)[:, non_nyquist], np.asarray(generic)[:, non_nyquist]
+    )
 
 
 def test_indexed_half_translation_phase_table_matches_full_slice():
