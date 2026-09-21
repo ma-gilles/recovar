@@ -50,6 +50,8 @@ The fixed K4 iteration-2 raw diagnostic family is preserved in a separate
 [source-pinned snapshot](https://github.com/ma-gilles/recovar-experiments/tree/578890a/snapshots/k4_iter2_fixed_raw_diagnostics_20260921).
 Its now-stranded native-target operand audit is preserved
 [with its exclusive test](https://github.com/ma-gilles/recovar-experiments/tree/673e2ec/snapshots/k4_iter2_native_target_diagnostic_20260921).
+The fixed exact-device class-1 authoritative-score audit and causal router are
+[preserved with their exclusive tests](https://github.com/ma-gilles/recovar-experiments/tree/6e6b4af/snapshots/k4_iter2_authoritative_score_route_20260921).
 The completed single-component frozen-boundary experiment is also
 [source-pinned with its tests](https://github.com/ma-gilles/recovar-experiments/tree/8e2724a/snapshots/frozen_boundary_variant_20260921).
 
