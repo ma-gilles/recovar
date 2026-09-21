@@ -89,10 +89,12 @@ Active conclusion: on the 10k EMPIAR-10097 fixture at 256 px on one H100, the
 device-resident K=1 candidate runs the cold auto-refine in 1087-1249 s against
 RELION's 617-678 s band, **1.68x at matched iteration count and 1.81x at the
 median**, from 3.26x at the program's start; the unchanged compact engine is
-2.9x. Quality is neutral: regime-matched FSC-AUC against RELION's per-iteration
-maps agrees with the control to 0.0011 at orders 2 and 3, and the order-4
-difference is explained entirely by how many order-3 iterations preceded, not by
-the engine. Speed work therefore continues from a quality-accepted checkpoint
+2.9x. Quality is neutral. Regime-matched FSC-AUC against RELION's per-iteration maps
+agrees with the control to 0.0013 at orders 2 and 3. At order 4 the difference
+is explained entirely by how many order-3 iterations preceded the switch, not by
+the engine: across eleven arms of three independent jobs, the spread within one
+iteration count is 0.0004 and the range across counts is 0.018, and at six
+preceding iterations the resident and compact samples interleave. Speed work therefore continues from a quality-accepted checkpoint
 **for this fixture only**; the 100k/256 K=1 and exactly-K=4 completion gates
 above are untouched by this program and remain open.
 
