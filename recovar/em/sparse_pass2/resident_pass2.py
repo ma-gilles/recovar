@@ -2042,7 +2042,6 @@ def compute_pass2_stats_resident(
             translation_prior_centers_np=translation_prior_centers_np,
             fine_translations=fine_translations,
             voxel_size=experiment_dataset.voxel_size,
-            precision_policy=precision_policy,
             use_exact_relion_gaussian=use_exact_relion_gaussian,
             accumulate_noise=accumulate_noise,
             source_faithful_spectrum_norm=resolved_spectrum_norm,
@@ -2722,7 +2721,6 @@ def _prepare_chunk_reconstruction_operands(
     exact_positions_device,
     scale_corrections_np,
     group_ids_np,
-    precision_policy,
 ):
     """Build one chunk's translated reconstruction, noise and Wavg tiles.
 
@@ -4196,7 +4194,6 @@ def _run_resident_chunk(
     translation_prior_centers_np,
     fine_translations,
     voxel_size,
-    precision_policy,
     use_exact_relion_gaussian,
     accumulate_noise,
     source_faithful_spectrum_norm,
@@ -4257,7 +4254,6 @@ def _run_resident_chunk(
             exact_positions_device=exact_positions_device,
             scale_corrections_np=scale_corrections_np,
             group_ids_np=group_ids_np,
-            precision_policy=precision_policy,
         )
     else:
         # The chunk's image slots are the half's images ``image_start`` to
@@ -4298,7 +4294,6 @@ def _run_resident_chunk(
                     exact_positions_device=exact_positions_device,
                     scale_corrections_np=scale_corrections_np,
                     group_ids_np=group_ids_np,
-                    precision_policy=precision_policy,
                 ),
                 translation_angles=translation_angles,
                 recon_pixel_indices=recon_pixel_indices,
