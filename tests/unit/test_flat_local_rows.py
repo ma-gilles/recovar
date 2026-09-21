@@ -980,3 +980,4 @@ def test_score_tile_free_memory_fraction_is_resolvable(monkeypatch):
         monkeypatch.setenv(env, bad)
         with pytest.raises(ValueError, match="must lie in"):
             planning._exact_local_score_tile_free_memory_fraction()
+
