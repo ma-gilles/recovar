@@ -20,6 +20,7 @@ from recovar.em.diagnostics.vdam_mstep_replay import (
 )
 from recovar.em.helpers.batch_planning import maybe_cache_raw_image_loaders
 from recovar.em.relion import initial_model_io, vdam_checkpoint
+from recovar.em.relion.initial_model_io import _experiment_read_order, _particle_state_from_star, _write_model_star
 from recovar.em.vdam import dense_adapter, estep_meta_updates, native_sampling, output, schedules
 from recovar.em.vdam.bootstrap_iref import _initial_state_from_particles
 from recovar.em.vdam.dense_adapter import (
@@ -40,13 +41,12 @@ from recovar.em.vdam.native_sampling import (
     _record_native_sampling_assignment_changes,
     _record_native_sampling_post_iteration,
 )
+from recovar.em.vdam.output import _write_final_outputs, _write_iteration_artifacts
 from recovar.em.vdam.schedules import (
     DEFAULT_SIGMA2_FUDGE,
     default_subset_sizes_for_3d_initial_model,
     phase_lengths_from_effective_fractions,
 )
-from recovar.em.relion.initial_model_io import _experiment_read_order, _particle_state_from_star, _write_model_star
-from recovar.em.vdam.output import _write_final_outputs, _write_iteration_artifacts
 from recovar.em.vdam.state import InitialModelState, NativeOpticsState, NativeParticleState
 from recovar.em.vdam.subset_schedule import restore_subset_order_for_continuation
 

@@ -26,8 +26,7 @@ from recovar.em.helpers.expected_accuracy import (
 )
 from recovar.em.helpers.orientation_priors import make_relion_translation_log_prior
 from recovar.em.vdam.native_options import InitialModelDefaults, NativeInitialModelOptions
-from recovar.em.vdam.state import NativeOpticsState
-from recovar.em.vdam.state import InitialModelState, NativeParticleState
+from recovar.em.vdam.state import InitialModelState, NativeOpticsState, NativeParticleState
 from recovar.utils.helpers import R_to_relion, recovar_volume_to_relion
 
 RELION_INITIALMODEL_LOCAL_SEARCH_HEALPIX_ORDER = 4

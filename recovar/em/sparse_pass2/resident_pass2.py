@@ -74,11 +74,9 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from recovar.em.helpers.env_flags import parse_env_capacity_ladder
-
 from recovar.em.helpers.batch_fetch import fetch_indexed_batch
 from recovar.em.helpers.deterministic_reduce import deterministic_reductions_enabled
-from recovar.em.helpers.env_flags import parse_env_flag
+from recovar.em.helpers.env_flags import parse_env_capacity_ladder, parse_env_flag
 from recovar.em.helpers.half_spectrum import (
     make_relion_noise_shell_indices_half,
     mask_relion_noise_shell_indices_to_current_window,

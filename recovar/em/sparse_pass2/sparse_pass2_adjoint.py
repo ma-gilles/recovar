@@ -8,9 +8,8 @@ projection-gather budget split of compact-pair buckets.
 
 from __future__ import annotations
 
-import logging
-
 import functools
+import logging
 
 import jax
 import jax.numpy as jnp

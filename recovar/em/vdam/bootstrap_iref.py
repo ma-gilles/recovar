@@ -12,13 +12,13 @@ import os
 
 import numpy as np
 
-from recovar.em.relion.initial_noise import _image_sigma2_iter, compute_avg_unaligned_and_sigma2
 from recovar.em.relion import initial_model_io
+from recovar.em.relion.initial_model_io import _experiment_read_order
+from recovar.em.relion.initial_noise import _image_sigma2_iter, compute_avg_unaligned_and_sigma2
 from recovar.em.vdam import output
 from recovar.em.vdam.init import initialise_data_vs_prior_from_references, initialise_denovo_state, seed_noise_from_mavg
 from recovar.em.vdam.native_options import NativeInitialModelOptions
 from recovar.em.vdam.native_sampling import _n_directions_for_healpix_order
-from recovar.em.relion.initial_model_io import _experiment_read_order
 from recovar.em.vdam.state import InitialModelState
 
 

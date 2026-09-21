@@ -11,7 +11,6 @@ import pathlib
 
 import numpy as np
 
-
 _KCLASS_STATS_DUMP_ENV = "RECOVAR_VDAM_KCLASS_STATS_DUMP_DIR"
 
 

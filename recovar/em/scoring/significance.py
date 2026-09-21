@@ -64,7 +64,6 @@ from recovar.em.relion.relion_coarse_operands import (
     _select_relion_coarse_rescore_winner_slots,
     assemble_relion_cc_coarse_operands,
 )
-from recovar.em.scoring.coarse_publication import coarse_square_layout_metadata
 from recovar.em.scoring.coarse_gaussian_gemm import (
     _COARSE_GAUSSIAN_GEMM_COMPACT_POSTERIOR_ENV,
     _COARSE_GAUSSIAN_GEMM_DEVICE_TRANSACTION_ENV,
@@ -108,6 +107,7 @@ from recovar.em.scoring.coarse_gemm_streaming import (
     update_coarse_gemm_streaming_state,
     write_coarse_gemm_streaming_summary,
 )
+from recovar.em.scoring.coarse_publication import coarse_square_layout_metadata
 from recovar.em.scoring.scoring import _e_step_block_scores, _e_step_block_scores_windowed, _update_logsumexp
 from recovar.em.scoring.significant_samples import compact_significant_sample_indices_from_mask
 from recovar.em.sparse_pass2.resident_significance import (

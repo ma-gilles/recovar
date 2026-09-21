@@ -106,13 +106,13 @@ from recovar.em.local.local_backprojection import (
     flatten_bucket_rows,
 )
 from recovar.em.local.local_batch_planning import (
-    prepare_reconstruction_groups,
     _exact_local_effective_max_hypotheses_per_microbatch,
     _exact_local_microbatch_env_overridden,
     _exact_local_xhalf_auto_microbatch_boost,
     _exact_local_xhalf_projection_microbatch_cap,
     _exact_local_xhalf_projection_target_row_pixels,
     _exact_local_xhalf_tail_microbatch_cap,
+    prepare_reconstruction_groups,
 )
 from recovar.em.local.local_big_jit import (
     _LocalBigJitDebug,
@@ -127,9 +127,9 @@ from recovar.em.local.local_big_jit import (
     run_fixed_capacity_segmented_local_scan,
 )
 from recovar.em.local.local_bucket_stages import (
-    FlatLocalRowCapacities,
     LOCAL_BUCKET_CONSTANT_PROGRAM_ENV,
     LOCAL_POSTPROCESS_ROW_PROGRAM_ENV,
+    FlatLocalRowCapacities,
     _accumulate_packed_noise_chunk,
     _adjoint_slice_volume_maybe_windowed_row_chunks,
     _build_flat_local_row_argument,
@@ -214,8 +214,8 @@ from recovar.em.local.local_timing import (
     _new_local_transfer_timer,
     _prefixed_timer_profile,
 )
-from recovar.em.relion.relion_projector_setup import prepare_local_projector_slab
 from recovar.em.relion import relion_ctf
+from recovar.em.relion.relion_projector_setup import prepare_local_projector_slab
 from recovar.em.sparse_pass2 import sparse_pass2_bucketed
 from recovar.em.sparse_pass2.sparse_pass2_wavg import _make_relion_wavg_rectangle, _make_stable_relion_wavg_rectangle
 from recovar.reconstruction import noise as noise_utils

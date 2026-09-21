@@ -23,7 +23,6 @@ from recovar import utils
 from recovar.core import fourier_transform_utils
 from recovar.data_io import cryoem_dataset
 from recovar.em import sampling
-from recovar.em.refinement.half_scoring import _score_half_dense_in_bpref_scope, _score_half_local_in_bpref_scope
 from recovar.em.dense.score_outputs import (
     HalfScoreResult,
     PerHalfOutputs,
@@ -40,8 +39,7 @@ from recovar.em.dense.scoring_policy import (
     _dense_global_scoring_dtype,
     _k1_relion_x_half_mstep_enabled,
 )
-from recovar.em.diagnostics import finite_check
-from recovar.em.diagnostics import bpref_diagnostics
+from recovar.em.diagnostics import bpref_diagnostics, finite_check
 from recovar.em.diagnostics import parity_dump as _parity_dump
 from recovar.em.diagnostics import reconstruction as reconstruction_diagnostics
 from recovar.em.diagnostics import relion_replay as replay_policy
@@ -152,7 +150,6 @@ from recovar.em.helpers.resolution import (
 )
 from recovar.em.helpers.types import make_noise_stats, make_relion_stats
 from recovar.em.local.local_layout import _selected_rotation_matrices
-from recovar.em.refinement.local_search_iteration import _precompute_exact_local_fine_grid_enabled
 from recovar.em.refinement import finalization_policy
 from recovar.em.refinement.half_inputs import (
     HalfInputState,
@@ -160,6 +157,8 @@ from recovar.em.refinement.half_inputs import (
     _mean_sigma_offset_per_half,
     _normalize_sigma_offset_per_half,
 )
+from recovar.em.refinement.half_scoring import _score_half_dense_in_bpref_scope, _score_half_local_in_bpref_scope
+from recovar.em.refinement.local_search_iteration import _precompute_exact_local_fine_grid_enabled
 from recovar.em.refinement.mean_helpers import (
     _class_tau2_from_iref_power_spectrum,
     _class_tau2_update_details,

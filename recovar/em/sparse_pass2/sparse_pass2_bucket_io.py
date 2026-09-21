@@ -23,9 +23,9 @@ from recovar.em.helpers.image_shifts import apply_relion_integer_pre_shifts, hal
 from recovar.em.helpers.preprocessing import (
     apply_half_translation_phases,
     half_translation_phase_table,
-    relion_half_translation_lattice,
     prepare_batch_preprocess_operands,
     process_half_image,
+    relion_half_translation_lattice,
 )
 from recovar.em.relion import relion_ctf
 from recovar.em.sparse_pass2.sparse_pass2_scoring import (

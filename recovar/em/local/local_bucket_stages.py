@@ -41,10 +41,10 @@ from recovar.em.local.flat_local_rows import (
     build_pool_flat_local_row_plan_for_classes,
     encode_flat_local_row_plan,
     map_dense_local_rows_to_flat_rows,
-    resolve_flat_local_pool_size,
-    resolve_flat_local_row_rounding,
-    resolve_flat_local_row_capacity_steps,
     quantize_packed_row_capacity,
+    resolve_flat_local_pool_size,
+    resolve_flat_local_row_capacity_steps,
+    resolve_flat_local_row_rounding,
 )
 from recovar.em.local.local_backprojection import (
     compute_local_ctf_sums,

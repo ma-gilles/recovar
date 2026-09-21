@@ -11,13 +11,13 @@ from pathlib import Path
 
 import numpy as np
 
+from recovar.em.relion.relion_metadata import _relion_star_list_value
 from recovar.em.vdam.native_options import NativeInitialModelOptions
 from recovar.em.vdam.native_sampling import (
     RELION_ORIENTATIONAL_PRIOR_NOPRIOR,
     RELION_ORIENTATIONAL_PRIOR_ROTTILT_PSI,
     NativeSamplingState,
 )
-from recovar.em.relion.relion_metadata import _relion_star_list_value
 from recovar.em.vdam.state import InitialModelState
 
 

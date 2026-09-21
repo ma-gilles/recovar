@@ -7,20 +7,17 @@ are applied; these helpers preserve the captured ordering, units and dtypes.
 
 from __future__ import annotations
 
-from recovar import utils
-from recovar.em.relion import relion_metadata
-from recovar.em.relion.initial_noise import read_relion_single_optics_sigma2_noise, relion_mpi_process_start_scoring_noise_pair
-
 import logging
 import os
 import re
-from pathlib import Path
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import jax.numpy as jnp
 import numpy as np
 
+from recovar import utils
 from recovar.em.helpers.convergence import healpix_angular_step
 from recovar.em.helpers.env_flags import parse_env_flag_or_false
 from recovar.em.helpers.orientation_priors import (
@@ -43,6 +40,11 @@ from recovar.em.refinement.noise_updates import (
     _normalize_noise_variance_per_half,
 )
 from recovar.em.refinement.refinement_options import RefinementOptions
+from recovar.em.relion import relion_metadata
+from recovar.em.relion.initial_noise import (
+    read_relion_single_optics_sigma2_noise,
+    relion_mpi_process_start_scoring_noise_pair,
+)
 from recovar.em.relion.relion_metadata import (
     read_relion_direction_prior,
     read_relion_direction_priors,

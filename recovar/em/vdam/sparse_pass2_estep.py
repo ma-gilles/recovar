@@ -16,7 +16,6 @@ from typing import Any
 import numpy as np
 
 from recovar.em import sampling
-
 from recovar.em.classification.k_class import run_local_k_class_em
 from recovar.em.diagnostics import bpref_diagnostics
 from recovar.em.diagnostics.coarse_gaussian_diagnostics import _initial_model_coarse_gemm_diagnostic_scopes

@@ -11,9 +11,9 @@ from __future__ import annotations
 import numpy as np
 
 from recovar.em.helpers.batch_planning import _plan_consecutive_padded_batches
-from recovar.em.local.local_layout import _exact_bucket_rotation_size
 from recovar.em.helpers.env_flags import parse_env_flag
 from recovar.em.helpers.shape_buckets import power_of_two_bucket
+from recovar.em.local.local_layout import _exact_bucket_rotation_size
 
 _LARGE_BUCKET_POW2_ENV = "RECOVAR_SPARSE_PASS2_LARGE_BUCKET_POW2"
 _LARGE_BUCKET_POW2_THRESHOLD = 1024

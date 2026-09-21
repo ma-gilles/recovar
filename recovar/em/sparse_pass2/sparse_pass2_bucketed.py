@@ -40,8 +40,7 @@ from recovar.em.classification.k_class_results import (
     SparseKClassHostStatistics,
     SparseKClassNoiseStatistics,
 )
-from recovar.em.diagnostics import bpref_diagnostics
-from recovar.em.diagnostics import finite_check
+from recovar.em.diagnostics import bpref_diagnostics, finite_check
 from recovar.em.diagnostics import norm_scale as norm_scale_diagnostics
 from recovar.em.diagnostics import pass2 as pass2_diagnostics
 from recovar.em.diagnostics.compact_candidate_capture import (
@@ -141,7 +140,6 @@ from recovar.em.sparse_pass2.sparse_pass2_bucket_plan import (
 from recovar.em.sparse_pass2.sparse_pass2_budget import (
     _EXACT_RAW_DIFF2_CACHE_MAX_BYTES,
     _compact_pair_dense_mstep_max_bytes_for_pass,
-    _projection_cache_build_max_rotations_per_call,
     _device_free_memory_bytes,
     _dtype_itemsize,
     _exact_raw_diff2_cache_estimated_bytes,
@@ -157,6 +155,7 @@ from recovar.em.sparse_pass2.sparse_pass2_budget import (
     _max_translation_tile_bytes_for_pass,
     _optional_positive_float_env,
     _optional_positive_int_env,
+    _projection_cache_build_max_rotations_per_call,
     _projection_cache_fits_budget,
     _projection_cache_max_bytes_for_pass,
     _projection_cache_transient_bytes,
@@ -182,7 +181,6 @@ from recovar.em.sparse_pass2.sparse_pass2_noise_blocks import (
     _compute_noise_block_chunked,
 )
 from recovar.em.sparse_pass2.sparse_pass2_policy import (
-    _resolve_bpref_execution_modes,
     _BPREF_EXECUTION_GROUP_BY_BUCKET_SIZE_ENV,
     _BPREF_EXECUTION_ORDER_LOCAL_FILE_ENV,
     _BPREF_REVERSE_PHYSICAL_ORDER_ENV,
@@ -213,6 +211,7 @@ from recovar.em.sparse_pass2.sparse_pass2_policy import (
     _relion_powerclass_spectrum_norm_enabled,
     _relion_wavg_direct_modes,
     _resolve_bpref_execution_bucket_policy,
+    _resolve_bpref_execution_modes,
     _resolve_bpref_processing_order,
     _small_bucket_coalesce_size_for_pass,
     _tail_bucket_coalesce_params_for_pass,

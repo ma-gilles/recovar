@@ -4,10 +4,9 @@ Per-iteration trajectory bookkeeping for ``refine_single_volume``.
 
 from __future__ import annotations
 
-from pathlib import Path
 import re
-
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import numpy as np
 

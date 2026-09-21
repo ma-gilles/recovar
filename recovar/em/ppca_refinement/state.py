@@ -7,6 +7,7 @@ from typing import Any
 
 import jax
 
+
 @dataclass(frozen=True)
 class PoseMarginalPPCAEMState:
     """Halfset-aware PPCA refinement state.

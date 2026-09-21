@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from functools import partial
 
@@ -14,7 +15,6 @@ from recovar.cuda_backproject import cuda_available as _cuda_projection_availabl
 from recovar.cuda_backproject import project_indexed
 from recovar.em.helpers.env_flags import parse_env_strict_flag
 from recovar.em.helpers.half_spectrum import bin_shell_values_jax
-import logging
 
 logger = logging.getLogger(__name__)
 
