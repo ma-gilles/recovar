@@ -64,6 +64,7 @@ from recovar.em.relion.relion_coarse_operands import (
     _select_relion_coarse_rescore_winner_slots,
     assemble_relion_cc_coarse_operands,
 )
+from recovar.em.scoring.coarse_publication import coarse_square_layout_metadata
 from recovar.em.scoring.coarse_gaussian_gemm import (
     _COARSE_GAUSSIAN_GEMM_COMPACT_POSTERIOR_ENV,
     _COARSE_GAUSSIAN_GEMM_DEVICE_TRANSACTION_ENV,
@@ -4818,40 +4819,10 @@ def _compute_k_class_significance_batched(
         "coarse_selector_audit": coarse_selector_audit,
     }
     if coarse_gaussian_square_layout is not None:
-        full_stats["coarse_gaussian_square_layout"] = {
-            "stable_fourier_window_shapes_requested": bool(
-                stable_fourier_window_shapes
-            ),
-            "stable_fourier_window_shapes_effective": bool(
-                stable_fourier_window_shapes
-                and coarse_gaussian_square_layout.physical_current_size
-                != coarse_gaussian_square_layout.logical_current_size
-            ),
-            "logical_current_size": int(
-                coarse_gaussian_square_layout.logical_current_size
-            ),
-            "physical_current_size": int(
-                coarse_gaussian_square_layout.physical_current_size
-            ),
-            "logical_square_pixels": int(
-                coarse_gaussian_square_layout.logical_square_count
-            ),
-            "physical_square_pixels": int(
-                coarse_gaussian_square_layout.physical_square_count
-            ),
-            "executed_square_pixels": int(
-                coarse_gaussian_square_layout.logical_square_count
-                if stable_fourier_window_shapes
-                else coarse_gaussian_square_layout.physical_square_count
-            ),
-            "logical_issue_stream_is_prefix": True,
-            "physical_tail_zero_weighted": True,
-            "physical_tail_skipped_by_runtime_count": bool(
-                stable_fourier_window_shapes
-                and coarse_gaussian_square_layout.physical_square_count
-                != coarse_gaussian_square_layout.logical_square_count
-            ),
-        }
+        full_stats["coarse_gaussian_square_layout"] = coarse_square_layout_metadata(
+            coarse_gaussian_square_layout,
+            stable_fourier_window_shapes=stable_fourier_window_shapes,
+        )
     if exact_coarse_assembly_profile_enabled:
         full_stats["exact_coarse_operand_assembly"] = {
             "skip_generic_default_enabled": False,

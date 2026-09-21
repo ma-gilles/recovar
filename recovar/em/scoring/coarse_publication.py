@@ -263,3 +263,41 @@ def publish_coarse_rows(
     arrays["support_offsets"] = np.concatenate((np.zeros(1, np.int64), np.cumsum(lengths)))
     arrays["support_ids"] = np.concatenate(support)
     return arrays
+
+
+def coarse_square_layout_metadata(coarse_gaussian_square_layout, *, stable_fourier_window_shapes):
+    """Describe logical and physical score windows without touching device arrays."""
+    return {
+        "stable_fourier_window_shapes_requested": bool(
+            stable_fourier_window_shapes
+        ),
+        "stable_fourier_window_shapes_effective": bool(
+            stable_fourier_window_shapes
+            and coarse_gaussian_square_layout.physical_current_size
+            != coarse_gaussian_square_layout.logical_current_size
+        ),
+        "logical_current_size": int(
+            coarse_gaussian_square_layout.logical_current_size
+        ),
+        "physical_current_size": int(
+            coarse_gaussian_square_layout.physical_current_size
+        ),
+        "logical_square_pixels": int(
+            coarse_gaussian_square_layout.logical_square_count
+        ),
+        "physical_square_pixels": int(
+            coarse_gaussian_square_layout.physical_square_count
+        ),
+        "executed_square_pixels": int(
+            coarse_gaussian_square_layout.logical_square_count
+            if stable_fourier_window_shapes
+            else coarse_gaussian_square_layout.physical_square_count
+        ),
+        "logical_issue_stream_is_prefix": True,
+        "physical_tail_zero_weighted": True,
+        "physical_tail_skipped_by_runtime_count": bool(
+            stable_fourier_window_shapes
+            and coarse_gaussian_square_layout.physical_square_count
+            != coarse_gaussian_square_layout.logical_square_count
+        ),
+    }
