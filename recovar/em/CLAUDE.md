@@ -111,6 +111,45 @@ GUI excluded**, before new-engine development. Root instructions also apply.
   synthetic K1 trajectory first, then a characterized real-particle confirmation,
   then K4. Small, historical or double-only results cannot satisfy completion.
 
+## Standing metric artifacts — read before running anything, update after
+
+This programme records metrics in tracked artifacts, not only in run reports. A
+result that is not written into one of these is not tracked, and on 2026-09-21
+that is exactly how a fortnight of work came to be measured on a single 10k
+subset while the real-data gate went unread. Find the artifact your change
+touches, read its current value first, and write the new value back.
+
+| Artifact | What it holds | Regenerate / check |
+| --- | --- | --- |
+| `docs/math/em_k1_realdata_science_equivalence_scorecard_v1.json` + `.md` | The EMPIAR real-data gate: per-dataset RECOVAR vs RELION resolution, curve RMSE, half and cross-engine FSC-AUC, with thresholds and pass/fail | `python scripts/summarize_em_k1_realdata_science_equivalence.py --check-markdown` (read-only, CPU, seconds) |
+| `docs/benchmarks/em/diagnostics/k1-realdata-evidence-inventory-*.json` | The read-only audit behind it: per dataset the particle count, box, commit, Slurm jobs, sha256-pinned maps and the exact reproduction commands | read it; do not edit |
+| `docs/math/em_relion_parity_scorecard_v1.json`, `em_k4_class_fsc_auc_scorecard_v1.json`, `vdam_relion_parity_scorecard_v1.json` | The synthetic fixed suites: K=1 34-case, K=4 per-iteration per-class, VDAM 12-case | `python scripts/summarize_*_scorecard.py --check docs/math/<file>.md` |
+| all of the above at once | The consolidated panel a PR body carries | `python scripts/report_em_parity_progress.py --format markdown` |
+| `tests/baselines/em_parity_completion_*.json` | The pinned completion references for K=1 100k/256, K=1 5k/128 and K=4 100k/256 | compared by the completion tests; never edit without an explicit user decision |
+| `em_parity_quality_{fast,long}_ledger_*.json`, written beside each case's outputs | What the parity tiers actually measured in one run | `python scripts/extract_em_parity_tables.py --ledger-root <run> --tier fast\|long` |
+
+The last row is the loop that closes: run a tier, collect its ledgers, extract
+the table, put the table in the PR body. `scripts/extract_em_parity_tables.py`
+exists for EM-scoped PRs precisely so that `scripts/extract_regression_tables.py`,
+which serves the SPA/ET pipeline suite, is not used instead.
+
+Two traps that hid this system for two weeks, both real, both worth checking
+before concluding a tier is broken:
+
+- **The fast tier needs the native RELION binding**, and it is not built in
+  every checkout. Without it three of the seven cases fail at import and never
+  reach a comparison. Point `RECOVAR_RELION_BIND_BUILD_DIR` at a built
+  `_relion_bind_core*.so` before deciding the tier is red for numerical reasons.
+  Ad-hoc harnesses supply their own, which is why they run when the tier does not.
+- **Three K-class cases need a dispatch schedule captured from the same oracle
+  run** and refuse without `--relion-dispatch-schedule`. That refusal is a
+  missing fixture, not a parity failure.
+
+End-to-end runs are the point of the real-data rows, and short tests do not
+substitute for them. A completion or real-data claim needs the full run, its
+ledger, and the artifact above updated, so the next session can see the number
+move.
+
 ## Delivery
 
 Keep current conclusion, evidence links, ownership and next action in EM status;
