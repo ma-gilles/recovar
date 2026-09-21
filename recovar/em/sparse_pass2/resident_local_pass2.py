@@ -116,7 +116,6 @@ from recovar.em.sparse_pass2.sparse_pass2_budget import (
     _max_adjoint_block_bytes_for_pass,
     _max_translation_tile_bytes_for_pass,
     _projection_cache_max_bytes_for_pass,
-    _projection_call_max_bytes_for_pass,
 )
 from recovar.em.sparse_pass2.sparse_pass2_policy import (
     _RELION_WAVG_ATOMIC_SCALE_AA_ENV,
@@ -763,7 +762,6 @@ def compute_local_search_resident(
         )
 
     # ---- chunk loop --------------------------------------------------------
-    best_chunk_row_by_image = np.full(n_images, -1, dtype=np.int64)
     significant_counts = (
         np.zeros(n_images, dtype=np.int32) if return_significant_counts else None
     )

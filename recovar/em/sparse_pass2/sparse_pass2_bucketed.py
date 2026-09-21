@@ -432,7 +432,6 @@ _BUCKET_TAIL_SNAPSHOT_NAMES = (
     "best_log_score_bucket",
     "bucket_group_ids",
     "bucket_scale_for_stats",
-    "bucket_size",
     "ctf2_over_nv_recon",
     "ctf_probs",
     "direct_ctf_rfloat_recon",
@@ -1527,7 +1526,6 @@ def compute_pass2_stats_sparse_bucketed(
         best_log_score_bucket = snap.get("best_log_score_bucket")
         bucket_group_ids = snap.get("bucket_group_ids")
         bucket_scale_for_stats = snap.get("bucket_scale_for_stats")
-        bucket_size = snap.get("bucket_size")
         ctf2_over_nv_recon = snap.get("ctf2_over_nv_recon")
         ctf_probs = snap.get("ctf_probs")
         direct_ctf_rfloat_recon = snap.get("direct_ctf_rfloat_recon")

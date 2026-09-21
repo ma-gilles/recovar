@@ -384,7 +384,6 @@ def build_pool_flat_local_row_plan_for_classes(
     if np.any(class_rotation_counts < 0) or np.any(class_rotation_counts > segment_rotation_count):
         raise ValueError("class rotation counts must lie in [0, segment_rotation_count]")
 
-    dense_rotation_count = segment_rotation_count * n_classes
     # The segment width came from the bucketer's resolved large-bucket quantum, so a
     # class must be quantized with the same one; a different quantum can round a class
     # above its own segment.

@@ -16,7 +16,6 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar.em.diagnostics import finite_check
 from recovar.em.helpers.dtype_policy import DensePrecisionPolicy
 from recovar.em.helpers.half_spectrum import make_half_image_weights, make_shell_indices_half
