@@ -41,6 +41,9 @@ their semantics already match:
 | `reference/` | Independent earlier EM/covariance formulations and deterministic numerical replays |
 | `ppca_refinement/` | Pose-marginal PPCA workflow and its K-class bridge |
 
+The [dense reference formulation](../math/em_dense_reference.md) documents the
+independent algorithmic core under `reference/`.
+
 RELION diagnostic checkpoint restoration lives in [`relion/vdam_checkpoint.py`](../../recovar/em/relion/vdam_checkpoint.py), separate from the VDAM execution driver. Native moment/reference and BPref overrides, including post-M-step reference-map replay, live in [`diagnostics/vdam_mstep_replay.py`](../../recovar/em/diagnostics/vdam_mstep_replay.py); [`vdam/mstep_single_class.py`](../../recovar/em/vdam/mstep_single_class.py) retains the reconstruction transaction and its numerical boundary calls.
 
 Particle bootstrap is owned by [`vdam/bootstrap_iref.py`](../../recovar/em/vdam/bootstrap_iref.py): it loads the bootstrap images and constructs the initial reference/state. [`vdam/init.py`](../../recovar/em/vdam/init.py) contains the state-only initialization formulas, while [`relion/initial_noise.py`](../../recovar/em/relion/initial_noise.py) owns the image iterator, initial noise estimate, single-optics noise input and MPI process-start half-set noise policy. The driver coordinates these stages; sampling geometry stays in [`vdam/native_sampling.py`](../../recovar/em/vdam/native_sampling.py).
