@@ -9,7 +9,9 @@ from recovar.em.refinement.mean_helpers import (
     _apply_relion_initial_lowpass_filter,
     initial_low_pass_filter_references,
 )
-from scripts.run_full_refinement import _read_relion_mrc_model_pixel_size
+from recovar.em.relion.relion_metadata import (
+    _read_relion_mrc_model_pixel_size,
+)
 
 pytestmark = pytest.mark.unit
 

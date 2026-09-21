@@ -54,6 +54,9 @@ adapter. Optics and particle records live in
 [`vdam/state.py`](../../recovar/em/vdam/state.py), so sampling does not import
 serialization. Column lookup is shared in `data_io.starfile.star_column`, while
 strict list-style checkpoint scalars live in `relion.relion_metadata`.
+The refinement CLI also reads RELION initialization metadata there; captured
+iteration overrides belong to `diagnostics.relion_replay`, and pose-history
+restoration to original particle order belongs to `helpers.iteration_history`.
 
 Particle bootstrap is owned by [`vdam/bootstrap_iref.py`](../../recovar/em/vdam/bootstrap_iref.py): it loads the bootstrap images and constructs the initial reference/state. [`vdam/init.py`](../../recovar/em/vdam/init.py) contains the state-only initialization formulas, while [`relion/initial_noise.py`](../../recovar/em/relion/initial_noise.py) owns the image iterator, initial noise estimate, single-optics noise input and MPI process-start half-set noise policy. The driver coordinates these stages; sampling geometry stays in [`vdam/native_sampling.py`](../../recovar/em/vdam/native_sampling.py).
 

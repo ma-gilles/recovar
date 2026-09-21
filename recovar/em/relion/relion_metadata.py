@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import re
+from pathlib import Path
+
 import numpy as np
 
 from recovar.core import fourier_transform_utils
@@ -227,3 +230,175 @@ def _relion_star_list_value(text: str, label: str, cast=str):
     if len(tokens) != 1:
         raise ValueError(f"_{label} must contain exactly one scalar token")
     return cast(tokens[0])
+
+
+def _load_relion_mask_params(optimiser_star_path):
+    """Extract RELION image-mask parameters from an optimiser STAR file."""
+    text = Path(optimiser_star_path).read_text(errors="ignore")
+
+    particle_match = re.search(r"rlnParticleDiameter\s+([0-9]+(?:\.[0-9]+)?)", text)
+    if particle_match is None:
+        particle_match = re.search(r"particle_diameter\s+([0-9]+(?:\.[0-9]+)?)", text)
+
+    width_match = re.search(r"rlnWidthMaskEdge\s+([0-9]+(?:\.[0-9]+)?)", text)
+    if width_match is None:
+        width_match = re.search(r"width_mask_edge\s+([0-9]+(?:\.[0-9]+)?)", text)
+
+    if particle_match is None or width_match is None:
+        return None
+
+    return float(particle_match.group(1)), float(width_match.group(1))
+
+
+
+def _load_relion_max_significants(optimiser_star_path):
+    """Extract RELION's maximum-significant-poses setting from an optimiser STAR."""
+    text = Path(optimiser_star_path).read_text(errors="ignore")
+
+    match = re.search(r"rlnMaximumSignificantPoses\s+(-?[0-9]+)", text)
+    if match is None:
+        match = re.search(r"maximum_significant_poses\s+(-?[0-9]+)", text)
+    if match is None:
+        return None
+    return int(match.group(1))
+
+
+
+def _parse_relion_cli_ini_high(text):
+    """Extract a positive RELION ``--ini_high`` value from an optimiser STAR header."""
+    cli_line = ""
+    for line in str(text).splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#") and "--" in stripped:
+            cli_line = stripped.lstrip("#").strip()
+            break
+    match = re.search(r"(?:^|\s)--ini_high(?:\s+|=)(\S+)", cli_line)
+    if match is None:
+        return None
+    val = float(match.group(1))
+    if val <= 0.0:
+        return None
+    return val
+
+
+
+def _read_relion_mrc_model_pixel_size(path):
+    """Read RELION's binary64 sampling rate from MRC cell length/grid size.
+
+    ``mrcfile.voxel_size`` performs the division in float32.  RELION retains
+    the float32 header cell length and integer grid size, then divides them in
+    ``RFLOAT`` (binary64 in the parity build).  Keeping that division boundary
+    matters for marginal first-iteration normalized-CC winners.
+    """
+
+    import mrcfile
+
+    with mrcfile.open(path, permissive=False, header_only=True) as handle:
+        cell_lengths = np.asarray(
+            [handle.header.cella.x, handle.header.cella.y, handle.header.cella.z],
+            dtype=np.float64,
+        )
+        grid_sizes = np.asarray(
+            [handle.header.mx, handle.header.my, handle.header.mz],
+            dtype=np.int64,
+        )
+    if np.any(grid_sizes <= 0) or not np.all(np.isfinite(cell_lengths)):
+        raise ValueError(f"invalid MRC sampling header: {path}")
+    sampling = cell_lengths / grid_sizes.astype(np.float64)
+    if np.any(sampling <= 0.0) or not np.allclose(sampling, sampling[0], rtol=0.0, atol=1e-12):
+        raise ValueError(f"K=1 RELION model requires isotropic MRC sampling: {path}")
+    return float(sampling[0])
+
+
+
+def _parse_relion_tau2_fudge(text):
+    """Extract RELION's tau2_fudge from a model or optimiser STAR text block.
+
+    ``_rlnTau2FudgeFactor`` (model.star) is the value RELION actually used.
+    ``_rlnTau2FudgeArg`` (optimiser.star) is the user's --tau2_fudge CLI
+    value, or -1 when the user did not pass --tau2_fudge (RELION binary
+    default kicks in: 1.0 for auto-refine, 4.0 for Class3D). Passing -1
+    downstream inverts the Wiener regularization (``inv_tau = 1 /
+    (pf^3 * tau2_fudge * tau)``) — that produces a corrupt iter-1
+    reconstruction and collapses iter-2+ ``ave_Pmax`` even though iter-1
+    Pmax is at RELION parity. Prefer ``Factor`` over ``Arg`` and treat
+    a non-positive ``Arg`` as "unset" so ``_resolve_tau2_fudge`` falls
+    back to the K-class default.
+    """
+    match = re.search(r"_?rlnTau2FudgeFactor\s+(\S+)", text)
+    if match is not None:
+        return float(match.group(1))
+    match = re.search(r"_?rlnTau2FudgeArg\s+(\S+)", text)
+    if match is None:
+        return None
+    val = float(match.group(1))
+    if val <= 0.0:
+        return None
+    return val
+
+
+
+def _load_relion_it000_model_stars(relion_init_dir, n_classes):
+    """Load RELION iter-0 model STARs for strict cold-start replay.
+
+    Class3D writes a shared ``run_it000_model.star``. AutoRefine writes
+    half-specific ``run_it000_half{1,2}_model.star`` files instead; preserve
+    the shared path when present, and fall back to the half pair for K=1.
+    """
+    import starfile as _starfile
+
+    relion_init_dir = Path(relion_init_dir)
+    shared_model_path = relion_init_dir / "run_it000_model.star"
+    if shared_model_path.exists():
+        model = _starfile.read(str(shared_model_path))
+        return {
+            "models": [model],
+            "model_paths": [shared_model_path],
+            "reference_model": model,
+            "reference_model_path": shared_model_path,
+            "source": "shared",
+        }
+
+    half_model_paths = [
+        relion_init_dir / "run_it000_half1_model.star",
+        relion_init_dir / "run_it000_half2_model.star",
+    ]
+    if int(n_classes) == 1 and all(path.exists() for path in half_model_paths):
+        models = [_starfile.read(str(path)) for path in half_model_paths]
+        return {
+            "models": models,
+            "model_paths": half_model_paths,
+            "reference_model": models[0],
+            "reference_model_path": half_model_paths[0],
+            "source": "half-specific",
+        }
+
+    expected = [shared_model_path, *half_model_paths]
+    missing = [str(path) for path in expected if not path.exists()]
+    raise SystemExit(
+        "--relion_init_dir given but no compatible iter-0 model STAR was found; "
+        f"missing candidates: {', '.join(missing)}",
+    )
+
+
+
+def _relion_image_identity(name, *, label: str) -> tuple[int, str]:
+    """Return the exact ``(<1-based index>, <stack>)`` RELION image identity."""
+
+    match = re.fullmatch(r"(\d+)@(.+)", str(name))
+    if match is None:
+        raise ValueError(f"{label} image names must use the '<index>@<stack>' form; got {name!r}")
+    return int(match.group(1)), match.group(2)
+
+
+
+def _particle_identity_rows(particles, *, label: str) -> dict[tuple[int, str], int]:
+    if "rlnImageName" not in particles.columns:
+        raise ValueError(f"{label} is missing rlnImageName")
+    identities = [
+        _relion_image_identity(name, label=label)
+        for name in np.asarray(particles["rlnImageName"]).reshape(-1)
+    ]
+    if len(set(identities)) != len(identities):
+        raise ValueError(f"{label} contains duplicate rlnImageName/stack identities")
+    return {identity: row for row, identity in enumerate(identities)}

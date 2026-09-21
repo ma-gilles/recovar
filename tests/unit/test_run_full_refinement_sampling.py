@@ -16,11 +16,13 @@ from scripts.run_full_refinement import (
     _effective_perturb_seed,
     _explicit_relion_optimiser_for_seed,
     _jsonable_profile_rows,
-    _pose_history_by_image,
     _refine_sampling_kwargs,
     _resolve_effective_max_healpix_order,
     _resolve_optimizer_random_seed,
     _resolve_relion_sampling_orders,
+)
+from recovar.em.helpers.iteration_history import (
+    _pose_history_by_image,
 )
 
 RUN_FULL_REFINEMENT = Path(__file__).resolve().parents[2] / "scripts" / "run_full_refinement.py"

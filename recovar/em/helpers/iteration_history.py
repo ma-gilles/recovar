@@ -251,3 +251,29 @@ class RefinementHistory:
             "local_profile_history": self.local_profile_history,
             "global_profile_history": self.global_profile_history,
         }
+
+
+def _pose_history_half_arrays(iter_entry, *, dtype=np.float32):
+    if iter_entry is None:
+        return None
+    if not isinstance(iter_entry, (list, tuple)):
+        return [np.asarray(iter_entry, dtype=dtype)]
+    return [None if arr is None else np.asarray(arr, dtype=dtype) for arr in iter_entry]
+
+
+
+def _pose_history_by_image(iter_entry, half_indices, n_images, trailing_shape, *, dtype=np.float32):
+    half_arrays = _pose_history_half_arrays(iter_entry, dtype=dtype)
+    if half_arrays is None or all(arr is None for arr in half_arrays):
+        return None
+    out = np.full((int(n_images), *trailing_shape), np.nan, dtype=dtype)
+    for half_idx, arr in zip(half_indices, half_arrays):
+        if arr is None:
+            continue
+        half_idx = np.asarray(half_idx, dtype=np.int64)
+        if arr.shape[0] != half_idx.shape[0]:
+            raise ValueError(
+                f"Pose history length {arr.shape[0]} does not match half-set index length {half_idx.shape[0]}"
+            )
+        out[half_idx] = arr
+    return out

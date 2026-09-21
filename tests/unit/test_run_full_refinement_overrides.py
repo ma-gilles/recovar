@@ -1,4 +1,4 @@
-"""Unit tests for ``scripts/run_full_refinement.py::_build_replay_iteration_overrides``.
+"""Unit tests for ``recovar.em.diagnostics.relion_replay._build_replay_iteration_overrides``.
 
 Locks down the parity-critical contract that the per-iter replay override
 dict always carries ``translation_sigma_angstrom`` sourced from RELION's
@@ -35,21 +35,16 @@ from scripts.run_full_refinement import (
     _assert_frozen_replay_slots_projector_only,
     _attach_relion_projector_capture,
     _build_frozen_replay_slots,
-    _build_replay_iteration_overrides,
     _compute_relion_fresh_k1_initial_sigma2,
     _default_refinement_subsets,
     _fixed_diagnostic_source_paths,
-    _format_replay_mean_for_log,
     _k1_relion_live_initial_noise_enabled,
     _load_init_noise_radial_npz,
     _load_init_previous_best_poses_npz,
     _load_initial_noise_cache,
-    _load_relion_it000_model_stars,
     _load_replay_group_particles,
     _make_frozen_boundary_noise_variance,
     _maybe_apply_relion_image_mask,
-    _parse_relion_cli_ini_high,
-    _parse_relion_tau2_fudge,
     _relion_fresh_initial_noise_layout,
     _relion_halfset_and_accuracy_layout,
     _relion_optimiser_star_for_runtime,
@@ -65,6 +60,15 @@ from scripts.run_full_refinement import (
     _validate_fixed_diagnostic_math_environment,
     _verify_fixed_diagnostic_provenance_manifests,
     _verify_frozen_boundary_source_hashes,
+)
+from recovar.em.diagnostics.relion_replay import (
+    _build_replay_iteration_overrides,
+    _format_replay_mean_for_log,
+)
+from recovar.em.relion.relion_metadata import (
+    _load_relion_it000_model_stars,
+    _parse_relion_cli_ini_high,
+    _parse_relion_tau2_fudge,
 )
 
 FIXTURE = Path("/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0")
@@ -2123,7 +2127,7 @@ def test_replay_overrides_include_max_iter_state_for_final_all_data(tmp_path):
 
 def test_full_refinement_requests_max_iter_replay_state_for_final_all_data():
     source = inspect.getsource(run_full_refinement.main)
-    start = source.index("replay_iteration_overrides = _build_replay_iteration_overrides(")
+    start = source.index('replay_iteration_overrides = relion_replay._build_replay_iteration_overrides(')
     end = source.index("\n        )", start)
     replay_call = source[start:end]
 
