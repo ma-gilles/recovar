@@ -185,7 +185,7 @@ def test_build_recipe_compiles_cuda_source_not_check_target(tmp_path):
     result = _run_make(wrapper, "-n", "all", env=env)
 
     assert result.returncode == 0, result.stderr
-    assert " -o libcuda_backproject.so cuda_backproject.cu" in result.stdout
+    assert " -o libcuda_backproject.so cuda_backproject.cu -lcuda" in result.stdout
     assert "check-nvcc" not in result.stdout.splitlines()[-1]
 
 
