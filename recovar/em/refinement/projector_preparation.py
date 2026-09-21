@@ -99,18 +99,18 @@ def _relion_projector_half_maps_for_scoring(
     n_classes: int,
     real_references=None,
     dump_label: str | None = None,
-    projector_setup_backend: str = "native",
+    projector_setup_backend: str = "jax",
 ) -> tuple[np.ndarray, int]:
     """Build RELION ``Projector::data`` slabs from current Fourier references.
 
     ``projector_setup_backend`` selects who computes the padded transform.
-    ``"native"`` calls RELION's own ``Projector::computeFourierTransformMap``
-    through the binding, on the host and in double; ``"jax"`` takes the
-    device path in the same precision. Refinement has always taken the native
-    default because this argument did not exist here, which is why the two
-    transforms, one per half, cost 3.6 to 3.8 s per iteration with the GPU
-    idle. The default stays native until the device path is qualified against
-    it at padding factor 2, the factor refinement uses.
+    ``"jax"`` takes the device path; ``"native"`` calls RELION's own
+    ``Projector::computeFourierTransformMap`` through the binding, on the host
+    and in double. Refinement took the native default for as long as this
+    argument did not exist here, and its two transforms, one per half, cost
+    3.6 s per iteration with the GPU idle. The device path is now qualified at
+    padding factor 2, the factor refinement uses, and is the default; both
+    compute in double and agree on the slab to 6.6e-16 relative.
     """
 
     from recovar.core import fourier_transform_utils as ftu

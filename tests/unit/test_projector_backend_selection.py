@@ -45,9 +45,23 @@ native_only = pytest.mark.skipif(
 )
 
 
-def test_refinement_defaults_to_the_native_backend():
-    """The device path stays opt-in until it is qualified."""
-    assert RefinementOptions().projector_setup_backend == "native"
+def test_refinement_defaults_to_the_device_backend():
+    """The device path is the default now that it is qualified.
+
+    Job 14208524 on the 10k/256 fixture: three interleaved arms on one H100,
+    the device arm against two host controls. The slabs agree to 6.6e-16
+    relative in double, the device arm's end-to-end FSC against RELION sits at
+    control-to-control magnitude at every regime position (at order 4, where
+    it shares a trajectory with one control, the two agree to 1.2e-5), and it
+    removes 65 s of projector build from a 1240 s run. Pass "native" to
+    reproduce a run from before that.
+    """
+    assert RefinementOptions().projector_setup_backend == "jax"
+
+
+def test_the_host_backend_is_still_reachable():
+    """The qualification is reversible by one name, not by editing source."""
+    assert RefinementOptions(projector_setup_backend="native").projector_setup_backend == "native"
 
 
 def test_the_option_accepts_only_the_two_backends():

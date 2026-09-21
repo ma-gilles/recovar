@@ -2832,13 +2832,14 @@ def main():
     parser.add_argument(
         "--projector_setup_backend",
         choices=("native", "jax"),
-        default="native",
+        default="jax",
         help=(
-            "Who computes RELION's padded projector transform. 'native' runs "
-            "Projector::computeFourierTransformMap on the host in double, "
-            "which costs 3.6-3.8 s per iteration with the GPU idle; 'jax' "
-            "takes the device path in the same precision. Native until the "
-            "device path is qualified at padding factor 2."
+            "Who computes RELION's padded projector transform. 'jax' takes the "
+            "device path and is the default; 'native' runs "
+            "Projector::computeFourierTransformMap on the host, in the same "
+            "double precision, which costs 3.6 s per iteration with the GPU "
+            "idle. Pass 'native' to reproduce a run from before the device "
+            "path was qualified."
         ),
     )
     parser.add_argument(
