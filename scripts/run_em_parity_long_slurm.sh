@@ -81,6 +81,15 @@ make_test_script() {
 set -euo pipefail
 cd "${REPO_ROOT}"
 unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV
+# PATH is a contaminating variable too. A run of this tier picked up the conda
+# toolchain of an unrelated checkout's pixi environment, whose linker could not find
+# the CUDA driver stub, and the custom CUDA build failed with "ld: cannot find -lcuda"
+# inside the GPU allocation. Drop every pixi environment that is not this checkout's
+# so the toolchain comes from here or from the system, never from someone else's tree.
+PATH="\$(printf '%s' "\${PATH}" | tr ':' '\\n' \\
+  | grep -v '/\\.pixi/envs/' \\
+  | paste -sd: -)"
+export PATH="${REPO_ROOT}/.pixi/envs/default/bin:\${PATH}"
 export PYTHONNOUSERSITE=1
 export TMPDIR="${SCRATCH_DIR}/tmp/${job_name}_\${SLURM_JOB_ID}"
 export PIXI_HOME="${SCRATCH_DIR}/pixi_home/${job_name}_\${SLURM_JOB_ID}"
