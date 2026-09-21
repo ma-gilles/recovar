@@ -47,6 +47,28 @@ touch "${SCRATCH_DIR}/SAFE_TO_DELETE"
 # each job log.
 export RECOVAR_CUDA_CACHE_DIR="${SCRATCH_DIR}/cuda_cache"
 mkdir -p "${RECOVAR_CUDA_CACHE_DIR}"
+RELION_SRC_DIR="${RELION_SRC_DIR:-/scratch/gpfs/GILLES/mg6942/relion/src}"
+if [[ ! -f "${RELION_SRC_DIR}/projector.h" ]]; then
+  echo "RELION_SRC_DIR must name a RELION src directory containing projector.h" >&2
+  echo "  got: ${RELION_SRC_DIR}" >&2
+  exit 2
+fi
+export RELION_SRC_DIR
+
+# run_full_refinement.py imports recovar.relion_bind._relion_bind_core for the RELION
+# half-set ordering, and a fresh checkout has no built extension, so every K=1 rung
+# dies in seconds with an ImportError. Build it once here, into this tier's own scratch
+# directory, and let the jobs load it through RECOVAR_RELION_BIND_BUILD_DIR -- the same
+# arrangement the robustness matrix uses, and for the same reason the CUDA library is
+# built here: a login-node build keeps a foreign toolchain and a per-job rebuild out of
+# the GPU allocations.
+export RECOVAR_RELION_BIND_BUILD_DIR="${SCRATCH_DIR}/relion_bind_build"
+mkdir -p "${RECOVAR_RELION_BIND_BUILD_DIR}"
+echo "Building the RELION binding into ${RECOVAR_RELION_BIND_BUILD_DIR} ..."
+"${REPO_ROOT}/.pixi/envs/default/bin/python" "${REPO_ROOT}/recovar/relion_bind/build.py"
+ls -1 "${RECOVAR_RELION_BIND_BUILD_DIR}"/_relion_bind_core*.so \
+  || { echo "RELION binding build produced no extension" >&2; exit 2; }
+
 echo "Building the custom CUDA library into ${RECOVAR_CUDA_CACHE_DIR} ..."
 "${REPO_ROOT}/.pixi/envs/default/bin/python" -m recovar.commands.build_custom_cuda \
   --output "${RECOVAR_CUDA_CACHE_DIR}/libcuda_backproject.so"
@@ -111,6 +133,8 @@ export RECOVAR_CUDA_CACHE_DIR="${SCRATCH_DIR}/cuda_cache"
 # at the one library the launcher already built removes the race, avoids an nvcc build
 # inside each GPU allocation, and gives the tier a single binary identity.
 export RECOVAR_CUDA_LIB="${SCRATCH_DIR}/cuda_cache/libcuda_backproject.so"
+export RECOVAR_RELION_BIND_BUILD_DIR="${SCRATCH_DIR}/relion_bind_build"
+export RELION_SRC_DIR="${RELION_SRC_DIR}"
 mkdir -p "\${TMPDIR}" "\${PIXI_HOME}" "\${RATTLER_CACHE_DIR}" "\${RECOVAR_CUDA_CACHE_DIR}"
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
 
