@@ -485,7 +485,7 @@ def _exact_local_xhalf_projection_microbatch_cap(
 
 
 def prepare_reconstruction_groups(
-    reconstruction_group_ids, reconstruction_group_count, *, n_images, score_only, source_faithful_bpref,
+    reconstruction_group_ids, reconstruction_group_count, *, local_layout, score_only, source_faithful_bpref,
 ):
     """Validate host particle-to-accumulator groups without copying valid int32 IDs."""
     reconstruction_group_ids_np = None
@@ -494,7 +494,7 @@ def prepare_reconstruction_groups(
         reconstruction_group_ids_np = np.asarray(reconstruction_group_ids)
         if reconstruction_group_ids_np.dtype != np.int32:
             raise TypeError("reconstruction_group_ids must be int32")
-        if reconstruction_group_ids_np.shape != (int(n_images),):
+        if reconstruction_group_ids_np.shape != (int(local_layout.n_images),):
             raise ValueError(
                 "reconstruction_group_ids must match the local-layout image axis"
             )

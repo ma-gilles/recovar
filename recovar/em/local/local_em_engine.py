@@ -653,7 +653,7 @@ def run_local_em_exact(
     reconstruction_group_ids_np, resolved_reconstruction_group_count = prepare_reconstruction_groups(
         reconstruction_group_ids,
         reconstruction_group_count,
-        n_images=local_layout.n_images,
+        local_layout=local_layout,
         score_only=score_only,
         source_faithful_bpref=source_faithful_bpref,
     )

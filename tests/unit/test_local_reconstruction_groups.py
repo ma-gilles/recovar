@@ -1,5 +1,7 @@
 """Particle group admission preserves host IDs and fails before execution."""
 
+from types import SimpleNamespace
+
 import numpy as np
 import pytest
 
@@ -11,7 +13,7 @@ pytestmark = pytest.mark.unit
 def test_group_ids_are_retained_without_a_copy():
     ids = np.array([0, 1, 0], dtype=np.int32)
     result, count = prepare_reconstruction_groups(
-        ids, 2, n_images=3, score_only=False, source_faithful_bpref=True,
+        ids, 2, local_layout=SimpleNamespace(n_images=3), score_only=False, source_faithful_bpref=True,
     )
     assert result is ids
     assert count == 2
@@ -19,7 +21,7 @@ def test_group_ids_are_retained_without_a_copy():
 
 def test_ungrouped_reconstruction_needs_no_source_faithful_mode():
     assert prepare_reconstruction_groups(
-        None, None, n_images=0, score_only=True, source_faithful_bpref=False,
+        None, None, local_layout=(), score_only=True, source_faithful_bpref=False,
     ) == (None, 1)
 
 
@@ -37,5 +39,5 @@ def test_ungrouped_reconstruction_needs_no_source_faithful_mode():
 def test_invalid_group_contract_rejected(ids, count, n_images, score_only, faithful, error, match):
     with pytest.raises(error, match=match):
         prepare_reconstruction_groups(
-            ids, count, n_images=n_images, score_only=score_only, source_faithful_bpref=faithful,
+            ids, count, local_layout=SimpleNamespace(n_images=n_images), score_only=score_only, source_faithful_bpref=faithful,
         )
