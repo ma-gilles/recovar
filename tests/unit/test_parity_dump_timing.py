@@ -168,7 +168,7 @@ def test_timing_only_dump_does_not_require_full_parity_env(tmp_path, monkeypatch
 
 
 def test_run_full_refinement_timing_summary_deltas(tmp_path):
-    from scripts.run_full_refinement import _collect_timing_rows, _summarize_timing_rows
+    from recovar.em.diagnostics.parity_dump import _collect_timing_rows, _summarize_timing_rows
 
     timing = tmp_path / "timing"
     timing.mkdir()

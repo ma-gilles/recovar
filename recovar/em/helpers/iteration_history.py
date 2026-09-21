@@ -4,6 +4,9 @@ Per-iteration trajectory bookkeeping for ``refine_single_volume``.
 
 from __future__ import annotations
 
+from pathlib import Path
+import re
+
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -277,3 +280,284 @@ def _pose_history_by_image(iter_entry, half_indices, n_images, trailing_shape, *
             )
         out[half_idx] = arr
     return out
+
+
+def add_class_history_artifacts(save_dict, result, half1_idx, half2_idx, n_images):
+    """Append refinement history in its existing NPZ layout and precision."""
+    # Save K-class metadata when available (n_classes>1).
+    for key in (
+        "class_weights",
+        "class_mstep_weight_trajectory",
+        "class_full_posterior_weight_trajectory",
+    ):
+        if result.get(key) is not None:
+            save_dict[key] = np.asarray(result[key], dtype=np.float64)
+    if result.get("class_assignments") is not None and any(c is not None for c in result["class_assignments"]):
+        for k, ca in enumerate(result["class_assignments"]):
+            if ca is not None:
+                save_dict[f"class_assignments_half{k}"] = np.asarray(ca, dtype=np.int32)
+    if result.get("class_assignment_history") is not None:
+        class_half_order_indices = np.concatenate(
+            [np.asarray(half1_idx, dtype=np.int64), np.asarray(half2_idx, dtype=np.int64)],
+        )
+        for i, classes in enumerate(result["class_assignment_history"]):
+            classes_half_order = np.asarray(classes, dtype=np.int32).reshape(-1)
+            save_dict[f"class_assignments_iter_{i:03d}"] = classes_half_order
+            save_dict[f"class_assignments_half_order_iter_{i:03d}"] = classes_half_order
+            if classes_half_order.shape[0] == class_half_order_indices.shape[0]:
+                classes_by_image = np.full(int(n_images), -1, dtype=np.int32)
+                classes_by_image[class_half_order_indices] = classes_half_order
+                save_dict[f"class_assignments_by_image_iter_{i:03d}"] = classes_by_image
+    if result.get("per_class_sigma_offset_trajectory") is not None:
+        # Per-iter K-vector or None; serialize as object array via dtype=object.
+        save_dict["per_class_sigma_offset_trajectory"] = np.asarray(
+            result["per_class_sigma_offset_trajectory"], dtype=object
+        )
+
+
+def add_refinement_history_artifacts(save_dict, result, half1_idx, half2_idx, n_images):
+    """Append refinement history in its existing NPZ layout and precision."""
+    # Save FSC curves per iteration
+    for i, fsc in enumerate(result["fsc_history"]):
+        save_dict[f"fsc_iter_{i:03d}"] = np.asarray(fsc)
+
+    # Save significant counts per iteration (if available). The refinement
+    # loop concatenates half 1 then half 2, which is not generally image order.
+    add_significant_count_artifacts(
+        save_dict,
+        result["significant_counts"],
+        [half1_idx, half2_idx],
+        n_images,
+    )
+
+    if "data_vs_prior_trajectory" in result:
+        for i, dvp in enumerate(result["data_vs_prior_trajectory"]):
+            save_dict[f"data_vs_prior_iter_{i:03d}"] = np.asarray(dvp)
+
+    # Per-iteration shell profiles share the same float64 artifact format.
+    for result_key, prefix in [
+        ("noise_radial_trajectory", "noise_radial_iter"),
+        ("noise_radial_per_half_trajectory", "noise_radial_per_half_iter"),
+        ("tau2_radial_trajectory", "tau2_radial_iter"),
+        ("tau2_sigma2_trajectory", "tau2_sigma2_iter"),
+        ("tau2_avg_weight_trajectory", "tau2_avg_weight_iter"),
+        ("tau2_shell_sum_trajectory", "tau2_shell_sum_iter"),
+        ("tau2_shell_count_trajectory", "tau2_shell_count_iter"),
+        ("tau2_fsc_used_trajectory", "tau2_fsc_used_iter"),
+        ("tau2_ssnr_trajectory", "tau2_ssnr_iter"),
+    ]:
+        if result_key in result:
+            for i, arr in enumerate(result[result_key]):
+                if arr is not None:
+                    save_dict[f"{prefix}_{i:03d}"] = np.asarray(arr, dtype=np.float64)
+
+    # Save per-image Pmax per iteration (if available)
+    if "pmax_per_image_history" in result:
+        pmax_half_order_indices = np.concatenate(
+            [np.asarray(half1_idx, dtype=np.int64), np.asarray(half2_idx, dtype=np.int64)],
+        )
+        for i, pmax in enumerate(result["pmax_per_image_history"]):
+            pmax_half_order = np.asarray(pmax, dtype=np.float32).reshape(-1)
+            save_dict[f"pmax_per_image_iter_{i:03d}"] = pmax_half_order
+            save_dict[f"pmax_per_half_order_iter_{i:03d}"] = pmax_half_order
+            if pmax_half_order.shape[0] == pmax_half_order_indices.shape[0]:
+                pmax_by_image = np.full(int(n_images), np.nan, dtype=np.float32)
+                pmax_by_image[pmax_half_order_indices] = pmax_half_order
+                save_dict[f"pmax_per_image_by_image_iter_{i:03d}"] = pmax_by_image
+    if "ave_Pmax_denominator_trajectory" in result:
+        save_dict["ave_Pmax_denominator_trajectory"] = np.asarray(
+            result["ave_Pmax_denominator_trajectory"],
+            dtype=np.float64,
+        )
+    if result.get("final_all_data_fsc") is not None:
+        save_dict["fsc_final_all_data"] = np.asarray(result["final_all_data_fsc"], dtype=np.float32)
+    if "final_all_data_ran" in result:
+        save_dict["final_all_data_ran"] = np.asarray(result["final_all_data_ran"], dtype=np.bool_)
+    for key in (
+        "tau2_radial_final_all_data",
+        "tau2_fsc_used_final_all_data",
+        "tau2_ssnr_final_all_data",
+    ):
+        if result.get(key) is not None:
+            save_dict[key] = np.asarray(result[key], dtype=np.float64)
+    for key, dtype in (
+        ("final_all_data_sampling_perturbation", np.float32),
+        ("final_all_data_sampling_perturbation_applied", np.bool_),
+        ("final_all_data_sampling_relion_iteration", np.int32),
+    ):
+        if key in result:
+            save_dict[key] = np.asarray(result[key], dtype=dtype)
+    if result.get("final_all_data_sampling_star") is not None:
+        save_dict["final_all_data_sampling_star"] = np.asarray(str(result["final_all_data_sampling_star"]))
+    if result.get("final_all_data_sampling_star_source") is not None:
+        save_dict["final_all_data_sampling_star_source"] = np.asarray(
+            str(result["final_all_data_sampling_star_source"])
+        )
+    for key, dtype in (
+        ("final_all_data_sampling_offset_range", np.float32),
+        ("final_all_data_sampling_offset_step", np.float32),
+        ("final_all_data_grid_correct", np.bool_),
+    ):
+        if key in result:
+            save_dict[key] = np.asarray(result[key], dtype=dtype)
+    if result.get("final_all_data_gridding_correct") is not None:
+        save_dict["final_all_data_gridding_correct"] = np.asarray(
+            str(result["final_all_data_gridding_correct"])
+        )
+    if result.get("tau2_weight_combination_final_all_data") is not None:
+        save_dict["tau2_weight_combination_final_all_data"] = np.asarray(
+            str(result["tau2_weight_combination_final_all_data"])
+        )
+
+    half_indices = [
+        np.asarray(half1_idx, dtype=np.int64),
+        np.asarray(half2_idx, dtype=np.int64),
+    ]
+    for prefix, trailing_shape in (
+        ("best_rotation_eulers", (3,)),
+        ("best_translations", (2,)),
+    ):
+        for i, iter_poses in enumerate(result.get(f"{prefix}_history", [])):
+            half_arrays = _pose_history_half_arrays(iter_poses, dtype=np.float32)
+            if half_arrays is None or all(arr is None for arr in half_arrays):
+                continue
+            compact = []
+            for k, arr in enumerate(half_arrays):
+                if arr is None:
+                    continue
+                save_dict[f"{prefix}_iter_{i:03d}_half{k}"] = arr
+                compact.append(arr)
+            if compact:
+                save_dict[f"{prefix}_iter_{i:03d}"] = np.concatenate(compact, axis=0)
+            by_image = _pose_history_by_image(iter_poses, half_indices, n_images, trailing_shape, dtype=np.float32)
+            if by_image is not None:
+                save_dict[f"{prefix}_by_image_iter_{i:03d}"] = by_image
+                save_dict[f"{prefix}_final_by_image"] = by_image
+
+    for result_key, prefix, trailing_shape in (
+        ("final_all_data_best_rotation_eulers", "best_rotation_eulers", (3,)),
+        ("final_all_data_best_translations", "best_translations", (2,)),
+        ("final_all_data_max_posterior", "pmax", ()),
+    ):
+        final_values = result.get(result_key)
+        half_arrays = _pose_history_half_arrays(final_values, dtype=np.float32)
+        if half_arrays is None or all(arr is None for arr in half_arrays):
+            continue
+        compact = []
+        for k, arr in enumerate(half_arrays):
+            if arr is None:
+                continue
+            save_dict[f"{prefix}_final_all_data_half{k}"] = arr
+            compact.append(arr)
+        if compact:
+            save_dict[f"{prefix}_final_all_data"] = np.concatenate(compact, axis=0)
+        by_image = _pose_history_by_image(final_values, half_indices, n_images, trailing_shape, dtype=np.float32)
+        if by_image is not None:
+            save_dict[f"{prefix}_final_all_data_by_image"] = by_image
+
+
+def _load_init_previous_best_poses_npz(path, pose_iter="last"):
+    """Load previous best poses from a RECOVAR refinement_results.npz file.
+
+    This is a diagnostic/debugging hook for starting directly in the local
+    search branch. It does not affect the default GUI/CLI path.
+    """
+
+    pose_path = Path(path)
+    with np.load(pose_path, allow_pickle=False) as npz:
+        if str(pose_iter).lower() in {"last", "latest"}:
+            pattern = re.compile(r"^best_rotation_eulers_iter_(\d{3})_half0$")
+            available = sorted(
+                int(match.group(1))
+                for key in npz.files
+                if (match := pattern.match(key)) is not None
+                and f"best_rotation_eulers_iter_{match.group(1)}_half1" in npz.files
+                and f"best_translations_iter_{match.group(1)}_half0" in npz.files
+                and f"best_translations_iter_{match.group(1)}_half1" in npz.files
+            )
+            if not available:
+                raise ValueError(f"No numbered per-half best-pose arrays found in {pose_path}")
+            iter_label = f"{available[-1]:03d}"
+        elif str(pose_iter).lower() in {"final_all_data", "final-all-data"}:
+            euler_keys = [
+                "best_rotation_eulers_final_all_data_half0",
+                "best_rotation_eulers_final_all_data_half1",
+            ]
+            trans_keys = [
+                "best_translations_final_all_data_half0",
+                "best_translations_final_all_data_half1",
+            ]
+            missing = [key for key in euler_keys + trans_keys if key not in npz.files]
+            if missing:
+                raise ValueError(f"Missing final-all-data pose arrays in {pose_path}: {missing}")
+            eulers = [np.asarray(npz[key], dtype=np.float32) for key in euler_keys]
+            translations = [np.asarray(npz[key], dtype=np.float32) for key in trans_keys]
+            return {
+                "iteration": "final_all_data",
+                "previous_best_rotation_eulers": eulers,
+                "previous_best_translations": translations,
+            }
+        else:
+            iter_label = f"{int(pose_iter):03d}"
+
+        euler_keys = [
+            f"best_rotation_eulers_iter_{iter_label}_half0",
+            f"best_rotation_eulers_iter_{iter_label}_half1",
+        ]
+        trans_keys = [
+            f"best_translations_iter_{iter_label}_half0",
+            f"best_translations_iter_{iter_label}_half1",
+        ]
+        missing = [key for key in euler_keys + trans_keys if key not in npz.files]
+        if missing:
+            raise ValueError(f"Missing pose arrays for iter {iter_label} in {pose_path}: {missing}")
+        eulers = [np.asarray(npz[key], dtype=np.float32) for key in euler_keys]
+        translations = [np.asarray(npz[key], dtype=np.float32) for key in trans_keys]
+
+    for half, (euler, translation) in enumerate(zip(eulers, translations), start=1):
+        if euler.ndim != 2 or euler.shape[1] != 3:
+            raise ValueError(f"half-{half} Euler array must have shape (N, 3), got {euler.shape}")
+        if translation.ndim != 2 or translation.shape[1] != 2:
+            raise ValueError(f"half-{half} translation array must have shape (N, 2), got {translation.shape}")
+        if euler.shape[0] != translation.shape[0]:
+            raise ValueError(
+                f"half-{half} Euler/translation row mismatch: {euler.shape[0]} vs {translation.shape[0]}",
+            )
+
+    return {
+        "iteration": iter_label,
+        "previous_best_rotation_eulers": eulers,
+        "previous_best_translations": translations,
+    }
+
+
+def _load_init_noise_radial_npz(path, noise_iter="last"):
+    """Load a diagnostic initial noise spectrum from refinement_results.npz."""
+
+    noise_path = Path(path)
+    with np.load(noise_path, allow_pickle=False) as npz:
+        if str(noise_iter).lower() in {"last", "latest"}:
+            pattern = re.compile(r"^noise_radial_iter_(\d{3})$")
+            available = sorted(
+                int(match.group(1)) for key in npz.files if (match := pattern.match(key)) is not None
+            )
+            if not available:
+                raise ValueError(f"No numbered noise_radial_iter arrays found in {noise_path}")
+            iter_label = f"{available[-1]:03d}"
+        else:
+            iter_label = f"{int(noise_iter):03d}"
+        key = f"noise_radial_iter_{iter_label}"
+        if key not in npz.files:
+            raise ValueError(f"Missing {key} in {noise_path}")
+        noise_radial = np.asarray(npz[key], dtype=np.float64)
+
+    if noise_radial.ndim != 1:
+        raise ValueError(f"{key} must be a 1D radial spectrum, got shape {noise_radial.shape}")
+    if not np.all(np.isfinite(noise_radial)):
+        raise ValueError(f"{key} contains non-finite values")
+    if np.any(noise_radial <= 0.0):
+        raise ValueError(f"{key} must be strictly positive")
+    return {
+        "iteration": iter_label,
+        "noise_radial": noise_radial,
+    }

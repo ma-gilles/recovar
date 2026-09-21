@@ -39,8 +39,6 @@ from scripts.run_full_refinement import (
     _default_refinement_subsets,
     _fixed_diagnostic_source_paths,
     _k1_relion_live_initial_noise_enabled,
-    _load_init_noise_radial_npz,
-    _load_init_previous_best_poses_npz,
     _load_initial_noise_cache,
     _load_replay_group_particles,
     _make_frozen_boundary_noise_variance,
@@ -60,6 +58,10 @@ from scripts.run_full_refinement import (
     _validate_fixed_diagnostic_math_environment,
     _verify_fixed_diagnostic_provenance_manifests,
     _verify_frozen_boundary_source_hashes,
+)
+from recovar.em.helpers.iteration_history import (
+    _load_init_noise_radial_npz,
+    _load_init_previous_best_poses_npz,
 )
 from recovar.em.diagnostics.relion_replay import (
     _build_replay_iteration_overrides,
@@ -953,10 +955,18 @@ def test_firstiter_cc_passes_relion_cli_ini_high_to_refinement_loop():
 
 
 def test_refinement_results_persist_final_tau2_weight_combination():
-    source = RUN_FULL_REFINEMENT.read_text()
+    from recovar.em.helpers.iteration_history import add_refinement_history_artifacts
 
-    assert '"tau2_weight_combination_final_all_data"' in source
-    assert 'save_dict["tau2_weight_combination_final_all_data"]' in source
+    result = {
+        "fsc_history": [],
+        "significant_counts": [],
+        "tau2_weight_combination_final_all_data": "sum",
+    }
+    saved = {}
+    add_refinement_history_artifacts(saved, result, [1], [0], 2)
+    assert saved["tau2_weight_combination_final_all_data"].item() == "sum"
+    assert saved["tau2_weight_combination_final_all_data"].dtype.kind == "U"
+    assert "iteration_history.add_refinement_history_artifacts(" in RUN_FULL_REFINEMENT.read_text()
 
 
 def test_final_all_data_writes_matched_unfiltered_half_products():
@@ -967,11 +977,21 @@ def test_final_all_data_writes_matched_unfiltered_half_products():
 
 
 def test_refinement_results_persist_class_assignment_history():
-    source = RUN_FULL_REFINEMENT.read_text()
+    from recovar.em.helpers.iteration_history import add_class_history_artifacts
 
-    assert '"class_assignment_history"' in source
-    assert "class_assignments_iter_" in source
-    assert "class_assignments_by_image_iter_" in source
+    result = {
+        "class_assignment_history": [np.array([3, 0, 2, 1], dtype=np.int64)],
+        "class_weights": np.array([0.1, 0.2, 0.3, 0.4], dtype=np.float64),
+    }
+    saved = {}
+    add_class_history_artifacts(saved, result, [2, 0], [3, 1], 5)
+    np.testing.assert_array_equal(saved["class_assignments_iter_000"], [3, 0, 2, 1])
+    np.testing.assert_array_equal(saved["class_assignments_half_order_iter_000"], [3, 0, 2, 1])
+    np.testing.assert_array_equal(saved["class_assignments_by_image_iter_000"], [0, 1, 3, 2, -1])
+    assert saved["class_assignments_by_image_iter_000"].dtype == np.int32
+    assert saved["class_weights"].dtype == np.float64
+    np.testing.assert_array_equal(saved["class_weights"], result["class_weights"])
+    assert "iteration_history.add_class_history_artifacts(" in RUN_FULL_REFINEMENT.read_text()
 
 
 def test_refinement_results_persist_numbered_follower_scale_boundaries():
@@ -1094,7 +1114,7 @@ def test_init_noise_from_npz_is_diagnostic_cli_path():
     source = RUN_FULL_REFINEMENT.read_text()
     assert "--init_noise_from_npz" in source
     assert "--init_noise_iter" in source
-    assert "_load_init_noise_radial_npz(args.init_noise_from_npz, args.init_noise_iter)" in source
+    assert "iteration_history._load_init_noise_radial_npz(args.init_noise_from_npz, args.init_noise_iter)" in source
     assert "estimate_initial_noise_spectrum_from_unaligned_images" in source
 
 

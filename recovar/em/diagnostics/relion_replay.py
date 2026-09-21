@@ -14,6 +14,7 @@ from recovar.em.relion.initial_noise import read_relion_single_optics_sigma2_noi
 import logging
 import os
 import re
+from pathlib import Path
 from dataclasses import dataclass
 from typing import Any
 
@@ -1914,3 +1915,87 @@ def _format_replay_mean_for_log(values) -> str:
     if arr.size == 0:
         return "empty"
     return f"{float(arr.mean()):.4f}"
+
+
+def _load_final_replay_reference_maps(relion_dir, source_iteration, volume_shape):
+    """Load the exact K=1 half references consumed by RELION finalization."""
+    from recovar.core import fourier_transform_utils
+    from recovar.utils.helpers import load_relion_volume
+
+    relion_dir = Path(relion_dir)
+    references = []
+    for half_number in (1, 2):
+        map_path = relion_dir / (
+            f"run_it{int(source_iteration):03d}_half{half_number}_class001.mrc"
+        )
+        if not map_path.is_file():
+            raise ValueError(
+                "diagnostic final-only reference substitution is missing "
+                f"{map_path}"
+            )
+        reference_real = np.asarray(load_relion_volume(str(map_path)), dtype=np.float32)
+        if tuple(reference_real.shape) != tuple(volume_shape):
+            raise ValueError(
+                f"diagnostic final-only reference {map_path} has shape "
+                f"{reference_real.shape}, expected {tuple(volume_shape)}"
+            )
+        references.append(
+            jnp.asarray(fourier_transform_utils.get_dft3(reference_real).reshape(-1))
+        )
+        logger.info(
+            "Diagnostic final-only reference half %d <- %s",
+            half_number,
+            map_path,
+        )
+    return references
+
+
+def _resolve_final_replay_source_iteration(
+    *, configured_max_iter, explicit_source_iteration, complete_iterations
+):
+    """Bind a finite RELION oracle to one exact last-numbered boundary."""
+    complete = sorted({int(value) for value in complete_iterations})
+    if not complete:
+        raise ValueError("final replay oracle has no complete numbered RELION states")
+    source_iteration = (
+        max(complete)
+        if explicit_source_iteration is None
+        else int(explicit_source_iteration)
+    )
+    if source_iteration not in complete:
+        raise ValueError(
+            f"requested final replay source iteration {source_iteration} is not a complete oracle state; "
+            f"available={complete}"
+        )
+    if source_iteration > int(configured_max_iter):
+        raise ValueError(
+            f"final replay source iteration {source_iteration} exceeds configured max_iter={configured_max_iter}"
+        )
+    missing_prefix = sorted(set(range(0, source_iteration + 1)) - set(complete))
+    if missing_prefix:
+        raise ValueError(
+            f"final replay oracle is not contiguous through iteration {source_iteration}; missing={missing_prefix}"
+        )
+    return source_iteration
+
+
+def _complete_relion_numbered_state_iterations(relion_dir):
+    """Return iterations with data, sampling, and half/shared model state."""
+    import re
+
+    relion_dir = Path(relion_dir).resolve()
+    complete = []
+    for data_path in relion_dir.glob("run_it[0-9][0-9][0-9]_data.star"):
+        match = re.fullmatch(r"run_it([0-9]{3})_data\.star", data_path.name)
+        if match is None:
+            continue
+        iteration = int(match.group(1))
+        sampling = relion_dir / f"run_it{iteration:03d}_sampling.star"
+        half_models = (
+            relion_dir / f"run_it{iteration:03d}_half1_model.star",
+            relion_dir / f"run_it{iteration:03d}_half2_model.star",
+        )
+        shared_model = relion_dir / f"run_it{iteration:03d}_model.star"
+        if sampling.is_file() and (all(path.is_file() for path in half_models) or shared_model.is_file()):
+            complete.append(iteration)
+    return sorted(complete)

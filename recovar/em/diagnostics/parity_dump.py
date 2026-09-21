@@ -377,3 +377,77 @@ def _downsample_volume_real(volume_ft_flat, volume_shape) -> np.ndarray:
     start = (nz - crop) // 2
     end = start + crop
     return real[start:end, start:end, start:end].reshape(-1)
+
+
+def _npz_scalar_to_float(npz, key):
+    if key not in npz.files:
+        return None
+    return float(np.asarray(npz[key]))
+
+
+def _read_timing_npz(npz_path: Path) -> dict:
+    with np.load(npz_path, allow_pickle=False) as npz:
+        row = {
+            "path": str(npz_path),
+            "iteration": int(np.asarray(npz["iteration"])) if "iteration" in npz.files else None,
+            "relion_iteration": int(np.asarray(npz["relion_iteration"])) if "relion_iteration" in npz.files else None,
+            "wall_time_s": _npz_scalar_to_float(npz, "wall_time_s"),
+            "stages": {},
+        }
+        for name in npz.files:
+            if name.startswith("stage_seconds_"):
+                row["stages"][name[len("stage_seconds_") :]] = float(np.asarray(npz[name]))
+    return row
+
+
+def _collect_timing_rows(timing_dir):
+    if timing_dir is None:
+        return []
+    timing_path = Path(timing_dir)
+    if not timing_path.exists():
+        return []
+    return [_read_timing_npz(path) for path in sorted(timing_path.glob("iter_*.npz"))]
+
+
+def _stage_deltas_from_cumulative(stages: dict[str, float]) -> dict[str, float]:
+    if not stages:
+        return {}
+    ordered_names = ["e_step", "recon", "fsc", "noise_update", "convergence"]
+    deltas: dict[str, float] = {}
+    prev = 0.0
+    for name in ordered_names:
+        value = stages.get(name)
+        if value is None:
+            continue
+        deltas[name] = max(0.0, float(value) - prev)
+        prev = float(value)
+    for name, value in sorted(stages.items()):
+        if name in deltas:
+            continue
+        deltas[name] = float(value)
+    return deltas
+
+
+def _summarize_timing_rows(rows):
+    summary = {
+        "n_rows": len(rows),
+        "sum_wall_time_s": float(
+            np.sum([row["wall_time_s"] for row in rows if row.get("wall_time_s") is not None], dtype=np.float64)
+        )
+        if rows
+        else 0.0,
+        "stage_cumulative_by_relion_iter": {},
+        "stage_delta_by_relion_iter": {},
+        "sum_stage_delta_s": {},
+    }
+    for row in rows:
+        relion_iter = row.get("relion_iteration")
+        if relion_iter is None:
+            continue
+        stages = {key: float(value) for key, value in row.get("stages", {}).items()}
+        deltas = _stage_deltas_from_cumulative(stages)
+        summary["stage_cumulative_by_relion_iter"][str(relion_iter)] = stages
+        summary["stage_delta_by_relion_iter"][str(relion_iter)] = deltas
+        for key, value in deltas.items():
+            summary["sum_stage_delta_s"][key] = float(summary["sum_stage_delta_s"].get(key, 0.0) + value)
+    return summary

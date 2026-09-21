@@ -5,9 +5,11 @@ import pytest
 
 from recovar.em.refinement.iteration_loop import refine_single_volume
 from recovar.em.refinement.refinement_options import RelionParityOptions, ReplayState
-from scripts.run_full_refinement import (
+from recovar.em.diagnostics.relion_replay import (
     _complete_relion_numbered_state_iterations,
     _resolve_final_replay_source_iteration,
+)
+from scripts.run_full_refinement import (
     _select_final_replay_override,
 )
 
