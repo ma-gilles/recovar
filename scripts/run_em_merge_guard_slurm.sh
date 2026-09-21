@@ -120,6 +120,8 @@ KCLASS_SCRIPT="${SCRATCH_DIR}/em_merge_guard_kclass_fast.sh"
   write_common_header "em_merge_guard_kclass_fast"
   cat <<EOF
 
+mkdir -p "${SCRATCH_DIR}/parity_results"
+
 pixi run python -m pytest -v -s --run-slow --run-integration --run-gpu \\
   --basetemp "${SCRATCH_DIR}/parity_results/kclass_\${SLURM_JOB_ID}" \\
   tests/integration/test_em_parity_fast.py::test_em_parity_fast_kclass_replay \\
