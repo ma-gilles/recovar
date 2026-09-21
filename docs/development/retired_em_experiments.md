@@ -12,6 +12,7 @@ waive a scientific gate.
 | Fixed case-7/case-26 report classification | Four report builders and three exclusive harness-test files | Generic FSC/trajectory/particle-state auditors and independent numerical tests |
 | Historical K1 case captures | 88 shell launchers bound to dated external checkouts and fixed experiments | Configurable launchers, reusable capture tools and independent analyzers |
 | K4 iteration-10 panel12 decomposition | Three-way, cohort, posterior and numerator analyzers with their exclusive tests | Current K4 scorecards, capture validators and production numerical tests |
+| K4 iteration-2 fixed raw diagnostics | Raw-diff2 strata, target-pair and operand-repeatability analyzers with their exclusive tests | Current K4 parity routing, operand validators and production numerical tests |
 
 The 19 GF46/raw-cache files are available at [the last retained source](https://github.com/ma-gilles/recovar/tree/4e3e5396d8c5fee4e207b9df3acb7f9987e17473/scripts),
 with [exact paths, hashes, test inventory and caller audit](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_retired_experiments_20260912/result.json).
@@ -44,6 +45,8 @@ scientific scorecards.
 
 The completed K4 iteration-10 panel12 diagnostic family is preserved
 [with its exclusive tests](https://github.com/ma-gilles/recovar-experiments/tree/13f3163/snapshots/k4_iter10_panel12_diagnostics_20260921).
+The fixed K4 iteration-2 raw diagnostic family is preserved in a separate
+[source-pinned snapshot](https://github.com/ma-gilles/recovar-experiments/tree/578890a/snapshots/k4_iter2_fixed_raw_diagnostics_20260921).
 
 The first-iteration M-step repeatability launcher/analyzer and its recorded result
 are [archived](https://github.com/ma-gilles/recovar-experiments/tree/cce8ed8b61bdc754414195f5640608fb9d64e28d/experiments/vdam_mstep_repeatability_20260821).
