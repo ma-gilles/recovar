@@ -13,11 +13,12 @@ import os
 import numpy as np
 
 from recovar.em.relion.initial_noise import _image_sigma2_iter, compute_avg_unaligned_and_sigma2
-from recovar.em.vdam import star_io
+from recovar.em.relion import initial_model_io
+from recovar.em.vdam import output
 from recovar.em.vdam.init import initialise_data_vs_prior_from_references, initialise_denovo_state, seed_noise_from_mavg
 from recovar.em.vdam.native_options import NativeInitialModelOptions
 from recovar.em.vdam.native_sampling import _n_directions_for_healpix_order
-from recovar.em.vdam.star_io import _experiment_read_order
+from recovar.em.relion.initial_model_io import _experiment_read_order
 from recovar.em.vdam.state import InitialModelState
 
 
@@ -140,12 +141,12 @@ def _initial_state_from_particles(
     optics_star,
     opts: NativeInitialModelOptions,
 ) -> tuple[InitialModelState, np.ndarray]:
-    profile = star_io._StageProfile()
+    profile = output._StageProfile()
 
     ori_size = int(dataset.grid_size)
     pixel_size = float(dataset.voxel_size)
     order = _experiment_read_order(main_star)
-    optics_group_by_particle = star_io._optics_group_indices(main_star)
+    optics_group_by_particle = initial_model_io._optics_group_indices(main_star)
     nr_optics_groups = int(np.unique(optics_group_by_particle).size)
     if nr_optics_groups != 1:
         raise NotImplementedError("native InitialModel currently supports one optics group")
@@ -173,7 +174,7 @@ def _initial_state_from_particles(
     images = _load_raw_images(dataset, bootstrap_order, batch_size=max(1, int(opts.image_batch_size)))
     profile.record("raw_images")
     sorted_star = main_star.iloc[bootstrap_order]
-    voltage, Cs, Q0, pixel_size = star_io._single_optics_scalars(sorted_star, optics_star, dataset)
+    voltage, Cs, Q0, pixel_size = initial_model_io._single_optics_scalars(sorted_star, optics_star, dataset)
     profile.record("optics_metadata")
 
     iref = compute_bootstrap_iref_via_cpp(
@@ -181,7 +182,7 @@ def _initial_state_from_particles(
         defU=np.asarray(sorted_star["_rlnDefocusU"].astype(float).to_numpy(), dtype=np.float64),
         defV=np.asarray(sorted_star["_rlnDefocusV"].astype(float).to_numpy(), dtype=np.float64),
         defAngle=np.asarray(sorted_star["_rlnDefocusAngle"].astype(float).to_numpy(), dtype=np.float64),
-        phase_shift=star_io._phase_shift(sorted_star),
+        phase_shift=initial_model_io._phase_shift(sorted_star),
         voltage=voltage,
         Cs=Cs,
         Q0=Q0,

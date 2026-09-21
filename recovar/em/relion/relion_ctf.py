@@ -15,6 +15,7 @@ from pathlib import Path
 import jax.numpy as jnp
 import numpy as np
 
+from recovar.data_io.starfile import star_column
 from recovar.em.helpers.batch_fetch import original_image_indices
 
 _RELION_EXACT_CTF_SOURCE_CACHE: dict[tuple[str, tuple[int, int]], dict] = {}
@@ -128,15 +129,6 @@ def clear_exact_ctf_result_cache() -> None:
     _EXACT_CTF_RESULT_BYTES = 0
 
 
-def _star_column(table, name: str):
-    """Return a RELION STAR column with or without its legacy underscore."""
-
-    for candidate in (name, f"_{name}"):
-        if candidate in table.columns:
-            return table[candidate]
-    raise ValueError(f"RELION source STAR column {name} is missing")
-
-
 def _relion_exact_ctf_source_star(experiment_dataset) -> Path:
     """Resolve the immutable source STAR for exact RELION CTF evaluation."""
 
@@ -181,7 +173,7 @@ def _relion_exact_ctf_half_from_source_star_host(
         particles, optics = read_star(str(source_path))
         if optics is None:
             raise ValueError(f"RELION source STAR has no optics table: {source_path}")
-        optics_ids = np.asarray(_star_column(optics, "rlnOpticsGroup"), dtype=np.int64)
+        optics_ids = np.asarray(star_column(optics, "rlnOpticsGroup", required=True), dtype=np.int64)
         if np.unique(optics_ids).size != optics_ids.size:
             raise ValueError(f"RELION source STAR has duplicate optics groups: {source_path}")
         # Cached CTF rows live in one 2-D block rather than a dict of rows, so a

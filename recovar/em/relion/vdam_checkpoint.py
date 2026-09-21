@@ -17,7 +17,7 @@ from recovar.em.vdam.native_sampling import (
     RELION_ORIENTATIONAL_PRIOR_ROTTILT_PSI,
     NativeSamplingState,
 )
-from recovar.em.vdam.star_io import _relion_star_list_value
+from recovar.em.relion.relion_metadata import _relion_star_list_value
 from recovar.em.vdam.state import InitialModelState
 
 

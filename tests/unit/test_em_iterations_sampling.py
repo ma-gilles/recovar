@@ -905,3 +905,48 @@ def test_run_halfset_em_iteration_heterogeneous_branch_updates_covariance_prior_
     assert np.allclose(out_states[0].u[:, 3:], 0.0)
     assert np.allclose(out_states[1].u[:, :3], 1.0)
     assert np.allclose(out_states[1].u[:, 3:], 0.0)
+
+
+@pytest.mark.parametrize("value", ["'path with spaces.star'", '"path with spaces.star"'])
+def test_strict_relion_scalar_preserves_quoted_paths(value):
+    assert relion_metadata._relion_star_list_value(f"_rlnPath {value}\n", "rlnPath") == "path with spaces.star"
+
+
+@pytest.mark.parametrize("text, message", [
+    ("", "expected exactly one _rlnValue field, found 0"),
+    ("_rlnValue 1\n_rlnValue 2\n", "expected exactly one _rlnValue field, found 2"),
+    ("_rlnValue 1 2\n", "_rlnValue must contain exactly one scalar token"),
+    ("prefix_rlnValue 1\n", "expected exactly one _rlnValue field, found 0"),
+])
+def test_strict_relion_scalar_rejects_missing_duplicate_and_multi_token(text, message):
+    with pytest.raises(ValueError) as error:
+        relion_metadata._relion_star_list_value(text, "rlnValue")
+    assert str(error.value) == message
+
+
+def test_strict_relion_scalar_cast_and_literal_hash():
+    assert relion_metadata._relion_star_list_value("_rlnValue 7\n", "rlnValue", int) == 7
+    assert relion_metadata._relion_star_list_value("_rlnValue 'file#1.star'\n", "rlnValue") == "file#1.star"
+    with pytest.raises(ValueError):
+        relion_metadata._relion_star_list_value("_rlnValue invalid\n", "rlnValue", int)
+
+
+@pytest.mark.parametrize("reader, missing", [
+    (relion_metadata.read_relion_sampling_metadata, "rlnSamplingPerturbInstance"),
+    (relion_metadata.read_relion_model_metadata, "rlnCurrentImageSize"),
+])
+def test_required_replay_scalar_missing_error_keeps_path(tmp_path, reader, missing):
+    path = tmp_path / "missing.star"
+    path.write_text("")
+    with pytest.raises(ValueError) as error:
+        reader(path)
+    assert str(error.value) == f"Missing {missing} in {path}"
+
+
+def test_model_replay_scalar_keeps_first_match_and_optional_fields(tmp_path):
+    path = tmp_path / "model.star"
+    path.write_text("prefix_rlnCurrentImageSize 64 extra\n_rlnCurrentImageSize 128\n_rlnCurrentResolution 3.5\n")
+    result = relion_metadata.read_relion_model_metadata(path)
+    assert result == dict(current_image_size=64, current_resolution=3.5,
+                          orientational_prior_mode=None, sigma_prior_rot_angle=None,
+                          sigma_prior_tilt_angle=None, sigma_prior_psi_angle=None)

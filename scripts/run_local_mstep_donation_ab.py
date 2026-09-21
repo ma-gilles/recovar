@@ -353,7 +353,7 @@ def _resolve_gf46_consumed_inputs(
         _resolve_relion_checkpoint_path,
         _second_pseudo_half_moment_path,
     )
-    from recovar.em.vdam.star_io import _relion_star_list_value
+    from recovar.em.relion.relion_metadata import _relion_star_list_value
 
     checkpoint_optimiser = checkpoint_optimiser.resolve(strict=True)
     input_star = input_star.resolve(strict=True)

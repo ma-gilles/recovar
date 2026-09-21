@@ -35,10 +35,11 @@ from recovar.em.vdam import (
     native_options,
     native_sampling,
     sparse_pass2_estep,
-    star_io,
     state,
     subset_schedule,
 )
+from recovar.em.relion import initial_model_io
+from recovar.em.vdam import output
 from recovar.em.vdam.init import compute_current_size_for_denovo, compute_ini_high_angstrom, compute_ini_high_shell
 from recovar.em.vdam.layout import relion_bpref_frame_scales
 from recovar.em.vdam.schedules import (
@@ -317,9 +318,11 @@ class TestLayoutGoldenValues:
 # ---------------------------------------------------------------------------
 
 
+# NativeOpticsState is counted with state; both serialization owners and shared
+# STAR/scalar definitions remain counted in I/O. Existing ceilings are unchanged.
 # User-approved revision after auditing fbdf23f9 (5014 lines) against afa3d6d46
 # (8626). See docs/development/codebase.md#vdam-code-budgets for retained growth
-# and the accounting contract. Budgets allow 224 total lines of headroom.
+# and the accounting contract. Current audited counts are documented there.
 LOC_BUDGETS = {
     "controller": (1655, (
         "__init__.py", "driver.py", "iteration_loop.py", "native_options.py",
@@ -332,7 +335,8 @@ LOC_BUDGETS = {
     )),
     "reconstruction_state": (790, ("m_step.py", "mstep_single_class.py", "state.py")),
     "input_output": (1270, (
-        "star_io.py", "../relion/vdam_checkpoint.py", "../relion/initial_noise.py",
+        "output.py", "../relion/initial_model_io.py",
+        "../relion/vdam_checkpoint.py", "../relion/initial_noise.py",
     )),
     # diagnostics/initial_model_capture.py is 87 lines of added ownership for this
     # responsibility. 61 of them are the two InitialModel K-class captures relocated
@@ -360,6 +364,8 @@ def test_loc_budget_inventory_covers_every_vdam_module():
 @pytest.mark.parametrize("responsibility", LOC_BUDGETS)
 def test_responsibility_loc_budget(responsibility):
     """Moving code must preserve its accounting; review growth before revising a cap."""
+    from recovar.data_io.starfile import star_column
+    from recovar.em.relion.relion_metadata import _relion_star_list_value
     from recovar.em.diagnostics.coarse_gaussian_diagnostics import _initial_model_coarse_gemm_diagnostic_scopes
     from recovar.em.diagnostics.coarse_score_diagnostics import _with_initial_model_coarse_diagnostics
 
@@ -369,6 +375,7 @@ def test_responsibility_loc_budget(responsibility):
     # Preserve the previous accounting for functions moved into shared modules,
     # including their spacing, owner imports, projector alias and filter constant.
     shared = {
+        "input_output": source_lines(star_column) + source_lines(_relion_star_list_value) + 4,
         "controller": source_lines(GuiInitialModelDefaults) + 2,
         "initialization": source_lines(initial_low_pass_filter_references) + 3,
         "estep": 1 + sum(source_lines(getattr(relion_projector_setup, name)) + 2 for name in (
@@ -432,7 +439,7 @@ print(parent_elapsed, initial_model_elapsed)
 
 # Module ownership and adapter routing.
 
-MOVED = ("NativeOpticsState", "_optics_group_indices", "_single_optics_scalars", "_phase_shift", "_native_optics_state", "_particle_state_from_star", "_write_model_star", "_write_data_star", "_write_iteration_artifacts", "_write_final_outputs", "_star_column", "_stack_star_pair", "_experiment_read_order")
+STAR_ADAPTER = ("_optics_group_indices", "_single_optics_scalars", "_phase_shift", "_native_optics_state", "_particle_state_from_star", "_write_model_star", "_write_data_star", "_stack_star_pair", "_experiment_read_order")
 SAMPLING = ("NativeSamplingPlan", "NativeSamplingState", "_build_sampling_plan", "_initial_sampling_state", "_estimate_native_sampling_accuracy", "_relion_update_native_sampling_state", "_prepare_native_sampling_for_iteration", "_random_perturbation_for_iteration")
 
 
@@ -460,18 +467,34 @@ def test_mstep_single_class_definition_ownership():
     assert "vdam.m_step import" not in inspect.getsource(mstep_single_class)
 
 
-def test_star_io_owns_the_cluster_and_driver_only_imports_it():
+def test_initial_model_serialization_owners_and_driver_imports():
+    from recovar.data_io.starfile import star_column
+    from recovar.em.relion import relion_ctf, relion_metadata, vdam_checkpoint
+
     driver_src = inspect.getsource(driver)
-    for name in MOVED:
-        assert hasattr(star_io, name) and inspect.getmodule(getattr(star_io, name)) is star_io
-        assert f"\ndef {name}(" not in driver_src and f"\nclass {name}(" not in driver_src
-    assert "from recovar.em.vdam.star_io import (" in driver_src
-    assert driver._write_iteration_artifacts is star_io._write_iteration_artifacts
+    for owner, names in (
+        (initial_model_io, STAR_ADAPTER),
+        (output, ("_write_iteration_artifacts", "_write_final_outputs", "_StageProfile")),
+        (state, ("NativeOpticsState", "NativeParticleState")),
+    ):
+        for name in names:
+            assert inspect.getmodule(getattr(owner, name)) is owner
+            assert f"\ndef {name}(" not in driver_src and f"\nclass {name}(" not in driver_src
+    assert driver._write_iteration_artifacts is output._write_iteration_artifacts
+    assert output._write_data_star is initial_model_io._write_data_star
+    assert output._write_model_star is initial_model_io._write_model_star
+    assert initial_model_io.star_column is relion_ctf.star_column is star_column
+    assert vdam_checkpoint._relion_star_list_value is relion_metadata._relion_star_list_value
+    assert not (PACKAGE_DIR / "star_io.py").exists()
 
 
-def test_particle_record_is_owned_by_state_and_shared_with_star_io():
-    assert inspect.getmodule(state.NativeParticleState) is state
-    assert star_io.NativeParticleState is state.NativeParticleState
+def test_particle_and_optics_records_are_owned_by_state():
+    assert initial_model_io.NativeParticleState is state.NativeParticleState
+    assert initial_model_io.NativeOpticsState is state.NativeOpticsState
+    assert native_sampling.NativeOpticsState is state.NativeOpticsState
+    sampling_src = inspect.getsource(native_sampling)
+    assert "initial_model_io" not in sampling_src
+    assert "vdam.output" not in sampling_src
 
 
 def test_native_sampling_definition_ownership():

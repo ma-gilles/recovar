@@ -13,7 +13,7 @@ import starfile
 
 from recovar.data_io.cryoem_dataset import load_dataset
 from recovar.data_io.starfile import read_star
-from recovar.em.vdam.star_io import _experiment_read_order, _native_optics_state
+from recovar.em.relion.initial_model_io import _experiment_read_order, _native_optics_state
 from recovar.relion_bind import _relion_bind_core as bind
 
 

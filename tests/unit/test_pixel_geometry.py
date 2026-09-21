@@ -176,7 +176,8 @@ def test_cs_scaling_preserves_serialized_pixel_value(tmp_path):
 
 def test_initial_model_consumers_receive_one_loaded_scalar(tmp_path, monkeypatch):
     from recovar.em.helpers.resolution import shell_index_to_resolution_angstrom
-    from recovar.em.vdam import bootstrap_iref, dense_adapter, native_options, native_sampling, star_io
+    from recovar.em.vdam import bootstrap_iref, dense_adapter, native_options, native_sampling
+    from recovar.em.relion import initial_model_io
 
     path = _star(tmp_path)
     sf = StarFile.load(path)
@@ -187,7 +188,7 @@ def test_initial_model_consumers_receive_one_loaded_scalar(tmp_path, monkeypatch
     monkeypatch.setattr(backend, "set_relion_image_mask", lambda **kwargs: seen.update(mask=kwargs))
     dense_adapter._configure_relion_image_mask(ds, opts)
     assert seen["mask"]["pixel_size"] == PIXEL
-    assert star_io._single_optics_scalars(sf.df, sf.data_optics, ds)[-1] == PIXEL
+    assert initial_model_io._single_optics_scalars(sf.df, sf.data_optics, ds)[-1] == PIXEL
     sampling = native_sampling._initial_sampling_state(opts, pixel_size=ds.voxel_size)
     assert sampling.offset_range_angstrom == 6 * PIXEL
     assert sampling.offset_step_angstrom == 2 * PIXEL

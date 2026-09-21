@@ -74,6 +74,16 @@ def _radial_profile_from_noise_variance(noise_variance, image_shape):
     return radial / np.maximum(counts, 1.0)
 
 
+def _required_relion_scalar(text, path, name, cast=float):
+    """Read the first matching replay scalar, preserving legacy regex semantics."""
+    import re
+
+    m = re.search(rf"_{name}\s+(\S+)", text)
+    if not m:
+        raise ValueError(f"Missing {name} in {path}")
+    return cast(m.group(1))
+
+
 def read_relion_sampling_metadata(sampling_star_path):
     """Read the full set of RELION sampling metadata needed for replay:
     ``(random_perturbation, perturbation_factor, healpix_order, offset_range, offset_step)``.
@@ -82,23 +92,15 @@ def read_relion_sampling_metadata(sampling_star_path):
     (Angstroms at scale-0, or as configured). ``healpix_order`` is the order
     RELION actually used at that iter.
     """
-    import re
-
     text = open(sampling_star_path).read()
 
-    def _grab(name, cast=float):
-        m = re.search(rf"_{name}\s+(\S+)", text)
-        if not m:
-            raise ValueError(f"Missing {name} in {sampling_star_path}")
-        return cast(m.group(1))
-
     return dict(
-        random_perturbation=_grab("rlnSamplingPerturbInstance"),
-        perturbation_factor=_grab("rlnSamplingPerturbFactor"),
-        healpix_order=_grab("rlnHealpixOrder", int),
-        psi_step=_grab("rlnPsiStep"),
-        offset_range=_grab("rlnOffsetRange"),
-        offset_step=_grab("rlnOffsetStep"),
+        random_perturbation=_required_relion_scalar(text, sampling_star_path, "rlnSamplingPerturbInstance"),
+        perturbation_factor=_required_relion_scalar(text, sampling_star_path, "rlnSamplingPerturbFactor"),
+        healpix_order=_required_relion_scalar(text, sampling_star_path, "rlnHealpixOrder", int),
+        psi_step=_required_relion_scalar(text, sampling_star_path, "rlnPsiStep"),
+        offset_range=_required_relion_scalar(text, sampling_star_path, "rlnOffsetRange"),
+        offset_step=_required_relion_scalar(text, sampling_star_path, "rlnOffsetStep"),
     )
 
 
@@ -118,12 +120,6 @@ def read_relion_model_metadata(model_star_path):
 
     text = open(model_star_path).read()
 
-    def _grab(name, cast=float):
-        m = re.search(rf"_{name}\s+(\S+)", text)
-        if not m:
-            raise ValueError(f"Missing {name} in {model_star_path}")
-        return cast(m.group(1))
-
     def _grab_optional(name, cast=float):
         m = re.search(rf"_{name}\s+(\S+)", text)
         if not m:
@@ -131,8 +127,8 @@ def read_relion_model_metadata(model_star_path):
         return cast(m.group(1))
 
     return dict(
-        current_image_size=_grab("rlnCurrentImageSize", int),
-        current_resolution=_grab("rlnCurrentResolution"),
+        current_image_size=_required_relion_scalar(text, model_star_path, "rlnCurrentImageSize", int),
+        current_resolution=_required_relion_scalar(text, model_star_path, "rlnCurrentResolution"),
         orientational_prior_mode=_grab_optional("rlnOrientationalPriorMode", int),
         sigma_prior_rot_angle=_grab_optional("rlnSigmaPriorRotAngle"),
         sigma_prior_tilt_angle=_grab_optional("rlnSigmaPriorTiltAngle"),
@@ -216,3 +212,18 @@ def read_relion_direction_priors(model_star_path, n_classes=None, *, dtype=np.fl
             raise ValueError(f"Missing rlnOrientationDistribution in {key} of {model_star_path}")
         priors.append(np.asarray(df["rlnOrientationDistribution"], dtype=dtype))
     return np.stack(priors, axis=0)
+
+
+def _relion_star_list_value(text: str, label: str, cast=str):
+    """Read one required scalar from a RELION list-style STAR block."""
+
+    import re
+    import shlex
+
+    matches = re.findall(rf"(?m)^_{re.escape(label)}\s+(.+?)\s*$", text)
+    if len(matches) != 1:
+        raise ValueError(f"expected exactly one _{label} field, found {len(matches)}")
+    tokens = shlex.split(matches[0], comments=False, posix=True)
+    if len(tokens) != 1:
+        raise ValueError(f"_{label} must contain exactly one scalar token")
+    return cast(tokens[0])

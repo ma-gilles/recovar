@@ -25,10 +25,11 @@ from recovar.em.vdam import (
     native_options,
     native_sampling,
     schedules,
-    star_io,
 )
+from recovar.em.relion import initial_model_io
+from recovar.em.vdam import output
 from recovar.em.vdam.init import initialise_denovo_state
-from recovar.em.vdam.state import NativeParticleState
+from recovar.em.vdam.state import NativeOpticsState, NativeParticleState
 from recovar.em.vdam.subset_schedule import select_subset_for_iter
 from recovar.utils.helpers import R_from_relion, write_relion_mrc
 
@@ -378,7 +379,7 @@ def test_experiment_read_order_uses_micrograph_lexicographic_order():
         }
     )
 
-    assert star_io._experiment_read_order(main).tolist() == [0, 2, 3, 4, 1]
+    assert initial_model_io._experiment_read_order(main).tolist() == [0, 2, 3, 4, 1]
 
 
 def test_seed_zero_halfsets_use_relion_experiment_position_parity(monkeypatch):
@@ -412,7 +413,7 @@ def test_seed_zero_halfsets_use_relion_experiment_position_parity(monkeypatch):
         optics_group_by_particle=np.zeros(len(main), dtype=np.int64),
         random_seed=0,
         do_grad=True,
-        particle_order=star_io._experiment_read_order(main),
+        particle_order=initial_model_io._experiment_read_order(main),
     )
 
     np.testing.assert_array_equal(out.subset_particle_ids, [0, 2, 3, 4, 1])
@@ -447,9 +448,9 @@ def test_image_pre_shifts_from_star_converts_angstrom_origins_to_rounded_pixels(
         }
     )
 
-    raw = star_io._image_origin_offsets_pixels_from_star(main, SimpleNamespace(voxel_size=2.0))
+    raw = initial_model_io._image_origin_offsets_pixels_from_star(main, SimpleNamespace(voxel_size=2.0))
     shifts = relion_round_away_from_zero(
-        star_io._image_origin_offsets_pixels_from_star(main, SimpleNamespace(voxel_size=2.0))
+        initial_model_io._image_origin_offsets_pixels_from_star(main, SimpleNamespace(voxel_size=2.0))
     )
 
     np.testing.assert_allclose(
@@ -468,7 +469,7 @@ def test_image_pre_shifts_from_star_uses_legacy_pixel_origins():
     main = pd.DataFrame({"_rlnOriginX": ["0.5", "-1.5"], "_rlnOriginY": ["1.6", "-0.49"]})
 
     shifts = relion_round_away_from_zero(
-        star_io._image_origin_offsets_pixels_from_star(main, SimpleNamespace(voxel_size=2.0))
+        initial_model_io._image_origin_offsets_pixels_from_star(main, SimpleNamespace(voxel_size=2.0))
     )
 
     np.testing.assert_array_equal(shifts, np.asarray([[1.0, 2.0], [-2.0, 0.0]], dtype=np.float32))
@@ -483,7 +484,7 @@ def test_image_pre_shifts_from_star_rounds_before_float32_downcast():
     )
 
     shifts = relion_round_away_from_zero(
-        star_io._image_origin_offsets_pixels_from_star(main, SimpleNamespace(voxel_size=2.0))
+        initial_model_io._image_origin_offsets_pixels_from_star(main, SimpleNamespace(voxel_size=2.0))
     )
 
     np.testing.assert_array_equal(shifts, np.asarray([[0.0, 0.0], [1.0, -1.0]], dtype=np.float32))
@@ -493,7 +494,7 @@ def test_image_pre_shifts_from_star_defaults_to_zero_without_origins():
     main = pd.DataFrame({"_rlnImageName": ["1@stack.mrcs", "2@stack.mrcs"]})
 
     shifts = relion_round_away_from_zero(
-        star_io._image_origin_offsets_pixels_from_star(main, SimpleNamespace(voxel_size=2.0))
+        initial_model_io._image_origin_offsets_pixels_from_star(main, SimpleNamespace(voxel_size=2.0))
     )
 
     np.testing.assert_array_equal(shifts, np.zeros((2, 2), dtype=np.float32))
@@ -508,7 +509,7 @@ def test_particle_state_from_star_preserves_class_and_pmax_columns():
         }
     )
 
-    state = star_io._particle_state_from_star(main, SimpleNamespace(voxel_size=1.0, n_images=2))
+    state = initial_model_io._particle_state_from_star(main, SimpleNamespace(voxel_size=1.0, n_images=2))
 
     np.testing.assert_array_equal(state.translation_offsets, np.zeros((2, 2), dtype=np.float32))
     np.testing.assert_array_equal(state.class_assignments, [1, 0])
@@ -528,7 +529,7 @@ def test_particle_state_from_star_keeps_class_zero_strict_for_fresh_inputs():
     )
 
     with pytest.raises(ValueError, match="one-indexed positive class ids"):
-        star_io._particle_state_from_star(
+        initial_model_io._particle_state_from_star(
             main,
             SimpleNamespace(voxel_size=1.0, n_images=2),
         )
@@ -544,7 +545,7 @@ def test_particle_state_from_star_normalizes_verified_k1_restart_sentinels():
         }
     )
 
-    state = star_io._particle_state_from_star(
+    state = initial_model_io._particle_state_from_star(
         main,
         SimpleNamespace(voxel_size=1.0, n_images=3),
         allow_unvisited_class_zero=True,
@@ -577,7 +578,7 @@ def test_particle_state_from_star_rejects_visited_class_zero_restart_rows(
     )
 
     with pytest.raises(ValueError, match="sentinels disagree with unvisited particle state"):
-        star_io._particle_state_from_star(
+        initial_model_io._particle_state_from_star(
             main,
             SimpleNamespace(voxel_size=1.0, n_images=2),
             allow_unvisited_class_zero=True,
@@ -596,7 +597,7 @@ def test_particle_state_from_star_rejects_positive_class_for_unvisited_restart_r
     )
 
     with pytest.raises(ValueError, match="sentinels disagree with unvisited particle state"):
-        star_io._particle_state_from_star(
+        initial_model_io._particle_state_from_star(
             main,
             SimpleNamespace(voxel_size=1.0, n_images=2),
             allow_unvisited_class_zero=True,
@@ -615,7 +616,7 @@ def test_particle_state_from_star_rejects_class_zero_for_k_greater_than_one():
     )
 
     with pytest.raises(ValueError, match="only for a verified K=1"):
-        star_io._particle_state_from_star(
+        initial_model_io._particle_state_from_star(
             main,
             SimpleNamespace(voxel_size=1.0, n_images=2),
             allow_unvisited_class_zero=True,
@@ -633,7 +634,7 @@ def test_particle_state_from_star_seeds_input_euler_orientations_for_all_particl
         }
     )
 
-    state = star_io._particle_state_from_star(main, SimpleNamespace(voxel_size=1.0, n_images=3))
+    state = initial_model_io._particle_state_from_star(main, SimpleNamespace(voxel_size=1.0, n_images=3))
 
     expected_eulers = main[["_rlnAngleRot", "_rlnAngleTilt", "_rlnAnglePsi"]].to_numpy(dtype=np.float64)
     np.testing.assert_array_equal(
@@ -678,10 +679,10 @@ def test_sampling_accuracy_uses_seeded_star_eulers_before_particles_are_visited(
             "_rlnAnglePsi": [-20.0, 45.0, 91.0],
         }
     )
-    particle_state = star_io._particle_state_from_star(main, SimpleNamespace(voxel_size=2.0, n_images=3))
+    particle_state = initial_model_io._particle_state_from_star(main, SimpleNamespace(voxel_size=2.0, n_images=3))
     state = initialise_denovo_state(ori_size=8, pixel_size=2.0, K=1, nr_iter=200, n_directions=1)
     state.Iref[:] = 1.0
-    optics_state = star_io.NativeOpticsState(
+    optics_state = NativeOpticsState(
         voltage=300.0,
         Cs=2.7,
         Q0=0.07,
@@ -725,7 +726,7 @@ def test_particle_state_from_star_rejects_partial_euler_triplet(missing_name):
     ).drop(columns=missing_name)
 
     with pytest.raises(ValueError, match="all Euler-angle columns"):
-        star_io._particle_state_from_star(main, SimpleNamespace(voxel_size=1.0, n_images=1))
+        initial_model_io._particle_state_from_star(main, SimpleNamespace(voxel_size=1.0, n_images=1))
 
 
 @pytest.mark.parametrize("angle_name", ["_rlnAngleRot", "_rlnAngleTilt", "_rlnAnglePsi"])
@@ -741,7 +742,7 @@ def test_particle_state_from_star_rejects_nonfinite_euler_angles(angle_name):
     main.loc[0, angle_name] = np.nan
 
     with pytest.raises(ValueError, match="Euler angles must be finite"):
-        star_io._particle_state_from_star(main, SimpleNamespace(voxel_size=1.0, n_images=1))
+        initial_model_io._particle_state_from_star(main, SimpleNamespace(voxel_size=1.0, n_images=1))
 
 
 def test_sampling_plan_oversamples_relion_grid():
@@ -1916,7 +1917,7 @@ def test_native_expectation_step_estimates_sampling_accuracy_before_update(monke
     sampling_state.nr_iter_wo_resol_gain = 1
     sampling_state.nr_iter_wo_large_hidden_variable_changes = 1
 
-    optics_state = star_io.NativeOpticsState(
+    optics_state = NativeOpticsState(
         voltage=300.0,
         Cs=2.7,
         Q0=0.07,
@@ -2021,7 +2022,7 @@ def test_sampling_accuracy_binding_uses_sigma2_fudge_not_dynamic_tau2(monkeypatc
         max_posterior=np.ones(2, dtype=np.float32),
         best_pose_rotations=best_rotations,
     )
-    optics_state = star_io.NativeOpticsState(
+    optics_state = NativeOpticsState(
         voltage=300.0,
         Cs=2.7,
         Q0=0.07,
@@ -2333,7 +2334,7 @@ def test_dense_estep_config_keeps_zero_oversampling_on_exact_adaptive_route():
 
 
 def test_driver_output_mrc_path_matches_relion_snapshot():
-    assert star_io._initial_model_mrc_from_prefix("ab_initio/run") == "ab_initio/initial_model.mrc"
+    assert output._initial_model_mrc_from_prefix("ab_initio/run") == "ab_initio/initial_model.mrc"
 
 
 def test_model_star_uses_relion_model_blocks(tmp_path):
@@ -2353,7 +2354,7 @@ def test_model_star_uses_relion_model_blocks(tmp_path):
     )
     out = tmp_path / "run_it001_model.star"
 
-    star_io._write_model_star(str(out), state, ("run_it001_class001.mrc", "run_it001_class002.mrc"))
+    initial_model_io._write_model_star(str(out), state, ("run_it001_class001.mrc", "run_it001_class002.mrc"))
 
     text = out.read_text()
     assert "data_model_general" in text
@@ -2401,10 +2402,10 @@ def test_iteration_zero_artifacts_use_the_normal_iteration_writer(monkeypatch, t
         assert voxel_size == 1.5
         Path(path).write_bytes(b"iteration-zero-map")
 
-    monkeypatch.setattr(star_io, "write_relion_mrc", fake_write_mrc)  # the artifact writer resolves the name in star_io
+    monkeypatch.setattr(output, "write_relion_mrc", fake_write_mrc)  # the artifact writer resolves the name in output
     monkeypatch.setenv("RECOVAR_INITIAL_MODEL_PROFILE", "1")
     prefix = str(tmp_path / "run")
-    star_io._write_iteration_artifacts(
+    output._write_iteration_artifacts(
         prefix,
         state,
         0,
@@ -2462,7 +2463,7 @@ def test_data_star_preserves_optics_and_updates_particle_metadata(tmp_path, monk
     )
     out = tmp_path / "run_it001_data.star"
 
-    star_io._write_data_star(
+    initial_model_io._write_data_star(
         str(out),
         main,
         optics,
@@ -2510,7 +2511,7 @@ def test_data_star_zeros_unvisited_rows_and_writes_best_pose_eulers(tmp_path, mo
     )
     out = tmp_path / "run_it010_data.star"
 
-    star_io._write_data_star(
+    initial_model_io._write_data_star(
         str(out),
         main,
         None,

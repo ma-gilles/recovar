@@ -7,7 +7,8 @@ import pandas as pd
 import pytest
 
 from recovar.em.classification import k_class_results
-from recovar.em.vdam import estep_meta_updates, native_sampling, sparse_pass2_estep, star_io
+from recovar.em.vdam import estep_meta_updates, native_sampling, sparse_pass2_estep
+from recovar.em.relion import initial_model_io
 from recovar.em.vdam.state import NativeParticleState
 from recovar.utils.helpers import R_from_relion, R_to_relion
 
@@ -64,7 +65,7 @@ def test_input_star_source_is_valid_before_first_visit():
             _rlnAnglePsi=eulers[:, 2],
         )
     )
-    value = star_io._particle_state_from_star(frame, SimpleNamespace(voxel_size=1.0, n_images=1))
+    value = initial_model_io._particle_state_from_star(frame, SimpleNamespace(voxel_size=1.0, n_images=1))
     assert not value.visited[0] and value.best_pose_eulers_valid[0]
     np.testing.assert_array_equal(native_sampling._best_eulers_from_particle_state(value, [0], rotation_grid_order=0), eulers)
     assert value.best_pose_rotations.dtype == np.float32

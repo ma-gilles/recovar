@@ -117,3 +117,17 @@ class NativeParticleState:
     visited: np.ndarray | None = None
     best_pose_eulers_deg: np.ndarray | None = None
     best_pose_eulers_valid: np.ndarray | None = None
+
+
+@dataclass(frozen=True)
+class NativeOpticsState:
+    """Scalar optics plus per-particle CTF parameters for the SPA InitialModel path."""
+
+    voltage: float
+    Cs: float
+    Q0: float
+    pixel_size: float
+    defU: np.ndarray
+    defV: np.ndarray
+    defAngle: np.ndarray
+    phase_shift: np.ndarray

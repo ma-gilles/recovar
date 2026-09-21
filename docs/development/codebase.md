@@ -46,6 +46,15 @@ independent algorithmic core under `reference/`.
 
 RELION diagnostic checkpoint restoration lives in [`relion/vdam_checkpoint.py`](../../recovar/em/relion/vdam_checkpoint.py), separate from the VDAM execution driver. Native moment/reference and BPref overrides, including post-M-step reference-map replay, live in [`diagnostics/vdam_mstep_replay.py`](../../recovar/em/diagnostics/vdam_mstep_replay.py); [`vdam/mstep_single_class.py`](../../recovar/em/vdam/mstep_single_class.py) retains the reconstruction transaction and its numerical boundary calls.
 
+InitialModel STAR import/export is owned by
+[`relion/initial_model_io.py`](../../recovar/em/relion/initial_model_io.py).
+[`vdam/output.py`](../../recovar/em/vdam/output.py) handles artifact paths,
+startup metadata and write cadence; it delegates STAR serialization to that
+adapter. Optics and particle records live in
+[`vdam/state.py`](../../recovar/em/vdam/state.py), so sampling does not import
+serialization. Column lookup is shared in `data_io.starfile.star_column`, while
+strict list-style checkpoint scalars live in `relion.relion_metadata`.
+
 Particle bootstrap is owned by [`vdam/bootstrap_iref.py`](../../recovar/em/vdam/bootstrap_iref.py): it loads the bootstrap images and constructs the initial reference/state. [`vdam/init.py`](../../recovar/em/vdam/init.py) contains the state-only initialization formulas, while [`relion/initial_noise.py`](../../recovar/em/relion/initial_noise.py) owns the image iterator, initial noise estimate, single-optics noise input and MPI process-start half-set noise policy. The driver coordinates these stages; sampling geometry stays in [`vdam/native_sampling.py`](../../recovar/em/vdam/native_sampling.py).
 
 VDAM coarse-call naming and result diagnostic packaging live with the shared [`coarse_gaussian_diagnostics.py`](../../recovar/em/diagnostics/coarse_gaussian_diagnostics.py) and [`coarse_score_diagnostics.py`](../../recovar/em/diagnostics/coarse_score_diagnostics.py) owners. The sparse E-step invokes them but does not implement report bookkeeping. These extracted helpers remain counted in the VDAM size budget.
@@ -151,19 +160,22 @@ construct projectors.
 The original `fbdf23f9` InitialModel snapshot contains 5,014 Python lines.
 At `afa3d6d46`, the same accounting scope contains 8,626, including code moved
 into shared owners. The user approved replacing the inherited 6,100-line cap
-with audited responsibility budgets on September 13, 2026. This revises a
-structural guard; numerical tolerances, baselines and scientific gates are unchanged.
+with audited responsibility budgets on September 13, 2026. The table below
+reflects the September 21 package-A ownership split, including the later
+diagnostic allowance already present at its execution base. All package-A
+ceilings are unchanged; numerical tolerances, baselines and scientific gates
+are unchanged.
 
 | Responsibility | Audited lines | Budget | Retained scope |
 | --- | ---: | ---: | --- |
-| Controller and schedules | 2,053 | 1,655 | Driver, iteration/subset schedules, options and launcher defaults |
-| Initialization | 467 | 500 | Bootstrap, initial state and shared initial-reference filter |
-| Sampling and layout | 818 | 950 | Native sampling updates, canonical pose metadata and frame conversions |
-| E-step | 2,370 | 2,525 | E-step configuration, batching, dense/local/compact routing, statistics, support and projector setup |
-| Reconstruction and state | 684 | 790 | Single-class M-step transaction, precision checks, state and class dispatch |
-| Input/output | 1,218 | 1,270 | STAR metadata, startup artifacts, RELION checkpoint import and initial noise |
-| Diagnostics | 1,016 | 1,160 | GT registration, native moment/reference replay and coarse report bookkeeping |
-| **Total** | **8,626** | **8,850** | **224 lines of total headroom (2.6%)** |
+| Controller and schedules | 1,618 | 1,655 | Driver, iteration/subset schedules, options and launcher defaults |
+| Initialization | 468 | 500 | Bootstrap, initial state and shared initial-reference filter |
+| Sampling and layout | 910 | 950 | Native sampling updates, canonical pose metadata and frame conversions |
+| E-step | 2,415 | 2,525 | E-step configuration, batching, dense/local/compact routing, statistics, support and projector setup |
+| Reconstruction and state | 782 | 790 | Single-class M-step transaction, precision checks, state and class dispatch |
+| Input/output | 1,269 | 1,270 | STAR metadata, startup artifacts, RELION checkpoint import and initial noise |
+| Diagnostics | 1,218 | 1,240 | GT registration, native moment/reference replay and coarse report bookkeeping |
+| **Total** | **8,680** | **8,930** | **250 lines of total headroom** |
 
 Noise failure reports and optional noise-boundary captures now live in
 [`diagnostics/vdam_noise.py`](../../recovar/em/diagnostics/vdam_noise.py);
@@ -184,7 +196,10 @@ Projector refresh/consume lifecycle now lives beside its builders in
 transfer 40 budget lines from controllers to E-step, preserving the total.
 Image-mask setup and normalized-spectrum conversion also live in the E-step
 adapter; this transfers another 35 budget lines from controllers to E-step.
-The audited counts and headroom above describe the original snapshot, not the current tip.
+These historical transfers predate the current table. Package A counts both
+serialization modules in full, the shared column/scalar definitions with their
+spacing allowance, and `NativeOpticsState` once in reconstruction/state. Its
+net accounting change is +9 lines (module/import overhead); no ceiling increased.
 
 The largest retained routine grew from 228 to 733 lines before the recent
 11-line dead-prior cleanup: sparse pass-2 orchestration now covers additional

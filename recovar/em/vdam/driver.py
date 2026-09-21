@@ -19,8 +19,8 @@ from recovar.em.diagnostics.vdam_mstep_replay import (
     _maybe_replay_iteration_references,
 )
 from recovar.em.helpers.batch_planning import maybe_cache_raw_image_loaders
-from recovar.em.relion import vdam_checkpoint
-from recovar.em.vdam import dense_adapter, estep_meta_updates, native_sampling, schedules, star_io
+from recovar.em.relion import initial_model_io, vdam_checkpoint
+from recovar.em.vdam import dense_adapter, estep_meta_updates, native_sampling, output, schedules
 from recovar.em.vdam.bootstrap_iref import _initial_state_from_particles
 from recovar.em.vdam.dense_adapter import (
     prepare_relion_projector_class_inputs,
@@ -45,15 +45,9 @@ from recovar.em.vdam.schedules import (
     default_subset_sizes_for_3d_initial_model,
     phase_lengths_from_effective_fractions,
 )
-from recovar.em.vdam.star_io import (
-    NativeOpticsState,
-    _experiment_read_order,
-    _particle_state_from_star,
-    _write_final_outputs,
-    _write_iteration_artifacts,
-    _write_model_star,
-)
-from recovar.em.vdam.state import InitialModelState, NativeParticleState
+from recovar.em.relion.initial_model_io import _experiment_read_order, _particle_state_from_star, _write_model_star
+from recovar.em.vdam.output import _write_final_outputs, _write_iteration_artifacts
+from recovar.em.vdam.state import InitialModelState, NativeOpticsState, NativeParticleState
 from recovar.em.vdam.subset_schedule import restore_subset_order_for_continuation
 
 INITIAL_MODEL_SKIP_EXPECTED_ACCURACY_ENV = "RECOVAR_INITIALMODEL_SKIP_EXPECTED_ACCURACY"
@@ -291,7 +285,7 @@ def _should_write_iteration_artifacts(iteration: int, nr_iter: int, grad_write_i
 def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialModelResult:
     """Run native recovar InitialModel refinement."""
 
-    profile = star_io._StageProfile()
+    profile = output._StageProfile()
 
     from recovar.em.vdam.mstep_single_class import _validate_mstep_precision_route
 
@@ -319,7 +313,7 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
     profile.record("raw_cache_setup")
 
     dense_adapter._configure_relion_image_mask(dataset, opts)
-    optics_state = star_io._native_optics_state(main_star, optics_star, dataset)
+    optics_state = initial_model_io._native_optics_state(main_star, optics_star, dataset)
     continuation = None
     if opts.diagnostic_continue_optimiser is not None:
         continuation = vdam_checkpoint._load_native_vdam_continuation(
@@ -366,7 +360,7 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
             grad_ini_frac,
             grad_fin_frac,
         )
-        optics_group_by_particle = star_io._optics_group_indices(main_star)
+        optics_group_by_particle = initial_model_io._optics_group_indices(main_star)
         if int(np.unique(optics_group_by_particle).size) != 1:
             raise NotImplementedError(
                 "diagnostic native VDAM continuation currently supports one optics group"
@@ -406,7 +400,7 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
     profile.record("expectation_setup")
 
     if opts.write_iter_artifacts:
-        star_io._write_initial_run_metadata(opts, continuation)
+        output._write_initial_run_metadata(opts, continuation)
         if continuation is None:
             _write_iteration_artifacts(
                 opts.outputname,

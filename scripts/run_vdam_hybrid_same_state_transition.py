@@ -2694,7 +2694,8 @@ def _run_transition_arm(
 ) -> dict[str, Any]:
     import recovar.em.vdam.driver as driver
     from recovar.data_io.starfile import read_star
-    from recovar.em.vdam import m_step, native_sampling, star_io
+    from recovar.em.vdam import m_step, native_sampling
+    from recovar.em.relion import initial_model_io
     from recovar.em.vdam.schedules import (
         default_subset_sizes_for_3d_initial_model,
         phase_lengths_from_effective_fractions,
@@ -2772,8 +2773,8 @@ def _run_transition_arm(
             return driver._maybe_replay_iteration_references(current, iteration=iteration, meta=meta)
 
     main_star, _optics_star = read_star(opts.fn_img)
-    optics_group_by_particle = star_io._optics_group_indices(main_star)
-    particle_order = star_io._experiment_read_order(main_star)
+    optics_group_by_particle = initial_model_io._optics_group_indices(main_star)
+    particle_order = initial_model_io._experiment_read_order(main_star)
     grad_ini_subset_size, grad_fin_subset_size = default_subset_sizes_for_3d_initial_model(
         int(dataset.n_images)
     )

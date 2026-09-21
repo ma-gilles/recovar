@@ -18,6 +18,21 @@ from typing_extensions import Self
 logger = logging.getLogger(__name__)
 
 
+def star_column(table, name: str, *, required: bool = False):
+    """Return the original Series, preferring the exact STAR column spelling.
+
+    Accept the spelling with one leading underscore added or removed. Missing
+    optional columns return None; required RELION source columns raise.
+    """
+    alternate = name[1:] if name.startswith("_") else f"_{name}"
+    for candidate in (name, alternate):
+        if candidate in table.columns:
+            return table[candidate]
+    if required:
+        raise ValueError(f"RELION source STAR column {name} is missing")
+    return None
+
+
 @functools.lru_cache(maxsize=8)
 def _read_star_cached(filepath: str, mtime: float) -> Tuple[pd.DataFrame, Optional[pd.DataFrame]]:
     """Cached implementation — filepath + mtime together are the cache key.

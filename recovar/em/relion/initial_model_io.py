@@ -1,38 +1,16 @@
-"""STAR-file and artifact I/O of the native InitialModel driver.
-
-Optics and particle state read from the data STAR, the model and data STAR writers, the
-per-iteration artifact bundle and the final outputs live here; ``driver``
-orchestrates and imports what it publishes.
-"""
+"""RELION InitialModel optics, particle-state conversion and STAR serialization."""
 
 from __future__ import annotations
 
-import json
 import os
-import time
-from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import numpy as np
 
-from recovar.data_io.starfile import write_star
+from recovar.data_io.starfile import star_column, write_star
 from recovar.em import sampling
-from recovar.em.vdam.state import InitialModelState, NativeParticleState
-from recovar.utils.helpers import R_from_relion, R_to_relion, write_relion_mrc
-
-
-@dataclass(frozen=True)
-class NativeOpticsState:
-    """Scalar optics plus per-particle CTF parameters for the SPA InitialModel path."""
-
-    voltage: float
-    Cs: float
-    Q0: float
-    pixel_size: float
-    defU: np.ndarray
-    defV: np.ndarray
-    defAngle: np.ndarray
-    phase_shift: np.ndarray
+from recovar.em.vdam.state import InitialModelState, NativeOpticsState, NativeParticleState
+from recovar.utils.helpers import R_from_relion, R_to_relion
 
 
 def _optics_group_indices(main_star) -> np.ndarray:
@@ -105,49 +83,20 @@ def _native_optics_state(main_star, optics_star, dataset) -> NativeOpticsState:
         phase_shift=_phase_shift(main_star),
     )
 
-def _relion_star_list_value(text: str, label: str, cast=str):
-    """Read one required scalar from a RELION list-style STAR block."""
-
-    import re
-    import shlex
-
-    matches = re.findall(rf"(?m)^_{re.escape(label)}\s+(.+?)\s*$", text)
-    if len(matches) != 1:
-        raise ValueError(f"expected exactly one _{label} field, found {len(matches)}")
-    tokens = shlex.split(matches[0], comments=False, posix=True)
-    if len(tokens) != 1:
-        raise ValueError(f"_{label} must contain exactly one scalar token")
-    return cast(tokens[0])
-
-
-def _initial_model_mrc_from_prefix(outputname: str) -> str:
-    """Mirror RELION's GUI ``outputname.rstrip("run") + initial_model.mrc``."""
-
-    return outputname.rstrip("run") + "initial_model.mrc"
-
 
 def _experiment_read_order(main_star) -> np.ndarray:
     """RELION Experiment::read order for bootstrap, noise and subset scheduling."""
 
-    mic_col = _star_column(main_star, "_rlnMicrographName")
+    mic_col = star_column(main_star, "_rlnMicrographName")
     if mic_col is None:
         return np.arange(len(main_star), dtype=np.int64)
     mic_names = mic_col.astype(str).to_numpy()
     return np.asarray(sorted(range(len(mic_names)), key=lambda i: mic_names[i]), dtype=np.int64)
 
 
-def _star_column(main_star, name: str):
-    if name in main_star.columns:
-        return main_star[name]
-    no_prefix = name[1:] if name.startswith("_") else name
-    if no_prefix in main_star.columns:
-        return main_star[no_prefix]
-    return None
-
-
 def _stack_star_pair(main_star, x_name: str, y_name: str) -> np.ndarray | None:
-    x = _star_column(main_star, x_name)
-    y = _star_column(main_star, y_name)
+    x = star_column(main_star, x_name)
+    y = star_column(main_star, y_name)
     if (x is None) != (y is None):
         raise ValueError(f"STAR file must provide both {x_name} and {y_name}")
     if x is None:
@@ -201,7 +150,7 @@ def _particle_state_from_star(
     n_images = int(getattr(dataset, "n_images", len(main_star)))
     if len(main_star) != n_images:
         raise ValueError(f"STAR table has {len(main_star)} particles but dataset has {n_images} images")
-    class_col = _star_column(main_star, "_rlnClassNumber")
+    class_col = star_column(main_star, "_rlnClassNumber")
     if class_col is None:
         if allow_unvisited_class_zero:
             raise ValueError(
@@ -222,7 +171,7 @@ def _particle_state_from_star(
         if not allow_unvisited_class_zero and np.any(class_assignments < 0):
             raise ValueError("_rlnClassNumber values must be one-indexed positive class ids")
 
-    pmax_col = _star_column(main_star, "_rlnMaxValueProbDistribution")
+    pmax_col = star_column(main_star, "_rlnMaxValueProbDistribution")
     if pmax_col is None:
         max_posterior = np.zeros(n_images, dtype=np.float32)
         max_posterior_values = None
@@ -244,7 +193,7 @@ def _particle_state_from_star(
                     "diagnostic continuation probability values must be non-negative",
                 )
             zero_state_evidence.append(max_posterior_values == 0.0)
-        significant_col = _star_column(main_star, "_rlnNrOfSignificantSamples")
+        significant_col = star_column(main_star, "_rlnNrOfSignificantSamples")
         if significant_col is not None:
             significant_samples = np.asarray(
                 significant_col.astype(float).to_numpy(),
@@ -278,7 +227,7 @@ def _particle_state_from_star(
         visited = max_posterior > 0.0
 
     angle_names = ("_rlnAngleRot", "_rlnAngleTilt", "_rlnAnglePsi")
-    angle_columns = tuple(_star_column(main_star, name) for name in angle_names)
+    angle_columns = tuple(star_column(main_star, name) for name in angle_names)
     if any(column is not None for column in angle_columns) and not all(column is not None for column in angle_columns):
         missing = [name for name, column in zip(angle_names, angle_columns) if column is None]
         raise ValueError(f"STAR file must provide all Euler-angle columns; missing {', '.join(missing)}")
@@ -306,10 +255,6 @@ def _particle_state_from_star(
         best_pose_eulers_valid=(None if source_eulers is None else np.ones(n_images, dtype=bool)),
         visited=visited,
     )
-
-
-def _class_mrc_paths(output_prefix: str, iteration: int, K: int) -> tuple[str, ...]:
-    return tuple(f"{output_prefix}_it{iteration:03d}_class{k + 1:03d}.mrc" for k in range(K))
 
 
 def _write_model_star(path: str, state: InitialModelState, class_mrcs: tuple[str, ...]) -> None:
@@ -428,7 +373,7 @@ def _write_data_star(path: str, main_star, optics_star, dataset, particle_state:
     offsets_angstrom = np.asarray(particle_state.translation_offsets, dtype=np.float64) * float(dataset.voxel_size)
     _set_star_column(table, "_rlnOriginXAngst", _format_float_column(offsets_angstrom[:, 0]))
     _set_star_column(table, "_rlnOriginYAngst", _format_float_column(offsets_angstrom[:, 1]))
-    if _star_column(table, "_rlnOriginX") is not None or _star_column(table, "_rlnOriginY") is not None:
+    if star_column(table, "_rlnOriginX") is not None or star_column(table, "_rlnOriginY") is not None:
         offsets_pixels = np.asarray(particle_state.translation_offsets, dtype=np.float64)
         _set_star_column(table, "_rlnOriginX", _format_float_column(offsets_pixels[:, 0]))
         _set_star_column(table, "_rlnOriginY", _format_float_column(offsets_pixels[:, 1]))
@@ -503,129 +448,3 @@ def _write_data_star(path: str, main_star, optics_star, dataset, particle_state:
         out_path.parent.mkdir(parents=True, exist_ok=True)
     writer_kwargs = {"array_rows": True} if array_rows_token == "1" else {}
     write_star(str(out_path), table, optics_star.copy() if optics_star is not None else None, **writer_kwargs)
-
-
-class _StageProfile:
-    """Optional elapsed-stage report for InitialModel startup and artifact I/O."""
-
-    def __init__(self):
-        self.enabled = bool(os.environ.get("RECOVAR_INITIAL_MODEL_PROFILE"))
-        self.started = self.stage_started = time.perf_counter()
-        self.values = {}
-
-    def record(self, name):
-        if self.enabled:
-            now = time.perf_counter()
-            self.values[f"{name}_time_s"] = float(now - self.stage_started)
-            self.stage_started = now
-
-    def report(self, label):
-        if self.enabled:
-            self.values["total_time_s"] = float(time.perf_counter() - self.started)
-            print(f"VDAM {label} profile: {json.dumps(self.values, sort_keys=True)}", flush=True)
-
-
-def _write_initial_run_metadata(opts, continuation) -> None:
-    """Write startup options and the optional native continuation provenance."""
-
-    Path(opts.outputname).parent.mkdir(parents=True, exist_ok=True)
-    config_path = f"{opts.outputname}_native_options.json"
-    native_options = asdict(opts)
-    native_options["resolved_cuda_allocator"] = os.environ.get(
-        "TF_GPU_ALLOCATOR",
-        "default",
-    )
-    native_options["jax_compilation_cache_enabled"] = bool(
-        os.environ.get("JAX_COMPILATION_CACHE_DIR")
-    )
-    native_options["jax_compilation_cache_dir"] = os.environ.get(
-        "JAX_COMPILATION_CACHE_DIR"
-    )
-    native_options["jax_persistent_cache_min_compile_time_secs"] = os.environ.get(
-        "JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS"
-    )
-    with open(config_path, "w") as f:
-        json.dump(native_options, f, indent=2, sort_keys=True)
-    if continuation is not None:
-        continuation_path = f"{opts.outputname}_diagnostic_continuation.json"
-        with open(continuation_path, "w") as f:
-            json.dump(
-                {
-                    "classification": "diagnostic_performance_only",
-                    "exactly_one_next_iteration": True,
-                    "iteration": int(continuation.iteration),
-                    "optimiser_star": str(continuation.optimiser_star),
-                    "model_star": str(continuation.model_star),
-                    "data_star": str(continuation.data_star),
-                    "sampling_star": str(continuation.sampling_star),
-                },
-                f,
-                indent=2,
-                sort_keys=True,
-            )
-            f.write("\n")
-
-
-def _write_iteration_artifacts(
-    output_prefix: str,
-    state: InitialModelState,
-    iteration: int,
-    meta: dict,
-    *,
-    main_star=None,
-    optics_star=None,
-    dataset=None,
-    particle_state: NativeParticleState | None = None,
-) -> None:
-    profile = _StageProfile()
-
-    out_dir = Path(output_prefix).parent
-    out_dir.mkdir(parents=True, exist_ok=True)
-    class_mrcs = _class_mrc_paths(output_prefix, iteration, int(state.K))
-    profile.record("setup")
-    for k, class_mrc in enumerate(class_mrcs):
-        write_relion_mrc(class_mrc, np.asarray(state.Iref[k]), voxel_size=float(state.pixel_size))
-    profile.record("class_mrc")
-    model_star = f"{output_prefix}_it{iteration:03d}_model.star"
-    _write_model_star(model_star, state, class_mrcs)
-    profile.record("model_star")
-    meta_path = f"{output_prefix}_it{iteration:03d}_recovar_meta.json"
-    with open(meta_path, "w") as f:
-        json.dump(_json_ready(meta), f, indent=2, sort_keys=True)
-    profile.record("meta_json")
-    if main_star is not None and dataset is not None and particle_state is not None:
-        _write_data_star(
-            f"{output_prefix}_it{iteration:03d}_data.star",
-            main_star,
-            optics_star,
-            dataset,
-            particle_state,
-        )
-    profile.record("data_star")
-    profile.report(f"iteration {iteration} artifact")
-
-
-def _json_ready(value):
-    if isinstance(value, np.ndarray):
-        return value.tolist()
-    if isinstance(value, np.generic):
-        return value.item()
-    if isinstance(value, dict):
-        return {str(k): _json_ready(v) for k, v in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_json_ready(v) for v in value]
-    return value
-
-
-def _write_final_outputs(output_prefix: str, state: InitialModelState) -> tuple[str, tuple[str, ...]]:
-    iteration = int(state.iter)
-    class_mrcs = _class_mrc_paths(output_prefix, iteration, int(state.K))
-    out_dir = Path(output_prefix).parent
-    out_dir.mkdir(parents=True, exist_ok=True)
-    for k, class_mrc in enumerate(class_mrcs):
-        if not os.path.exists(class_mrc):
-            write_relion_mrc(class_mrc, np.asarray(state.Iref[k]), voxel_size=float(state.pixel_size))
-    final_mrc = _initial_model_mrc_from_prefix(output_prefix)
-    best_class = int(np.argmax(np.asarray(state.pdf_class)))
-    write_relion_mrc(final_mrc, np.asarray(state.Iref[best_class]), voxel_size=float(state.pixel_size))
-    return final_mrc, class_mrcs
