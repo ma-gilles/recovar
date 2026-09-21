@@ -439,6 +439,13 @@ def test_em_parity_long_k1_native_initialmodel_quality(tmp_path):
         str(output_dir / "run"),
         "--nr_iter",
         "8",
+        # This test reads the maps from iterations 1, 2 and 8 to see the quality
+        # trajectory, not just its endpoint. grad_write_iter defaults to 10 and
+        # artifacts are written when iteration % grad_write_iter == 0 or iteration ==
+        # nr_iter, so at nr_iter=8 only iterations 0 and 8 reach disk and the
+        # intermediate maps this test names have never existed.
+        "--grad_write_iter",
+        "1",
         "--K",
         "1",
         "--sym",
