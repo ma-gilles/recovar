@@ -559,6 +559,7 @@ def _project_packed_noise_rows(
     else:
         ordinary_projection_kwargs = dict(projection_kwargs)
         ordinary_projection_kwargs.pop("mask_current_image_disk", None)
+        ordinary_projection_kwargs.pop("relion_acc_double_floorf_quirk", None)
         proj_half_flat, _ = _compute_projections_block(
             mean_for_proj,
             packed_flat_rotations,
