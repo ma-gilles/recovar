@@ -54,9 +54,17 @@ unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV
 export PYTHONNOUSERSITE=1
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
 export RELION_SRC_DIR="${RELION_SRC_DIR}"
+if [[ -f /etc/profile.d/modules.sh ]]; then
+  source /etc/profile.d/modules.sh
+fi
+module load cudatoolkit/12.8
 export CUDA_HOME="\${CUDA_HOME:-/usr/local/cuda-12.8}"
 export PATH="\${CUDA_HOME}/bin:\${PATH}"
-export LD_LIBRARY_PATH="\${CUDA_HOME}/targets/x86_64-linux/lib:\${CUDA_HOME}/lib64:\${LD_LIBRARY_PATH:-}"
+CUDA_TARGET_LIB_DIR="\${CUDA_HOME}/targets/x86_64-linux/lib"
+PIXI_NVIDIA_ROOT="\$(find "${REPO_ROOT}/.pixi/envs/default/lib" -maxdepth 4 -type d -path '*/site-packages/nvidia' -print -quit 2>/dev/null || true)"
+PIXI_NVIDIA_LIB_DIRS="\$(find "\${PIXI_NVIDIA_ROOT}" -type d -name lib 2>/dev/null | paste -sd: -)"
+export LD_LIBRARY_PATH="\${PIXI_NVIDIA_LIB_DIRS:+\${PIXI_NVIDIA_LIB_DIRS}:}\${CUDA_TARGET_LIB_DIR}:\${LD_LIBRARY_PATH:-}"
+export LIBRARY_PATH="\${CUDA_TARGET_LIB_DIR}/stubs:\${CUDA_TARGET_LIB_DIR}:\${LIBRARY_PATH:-}"
 export TMPDIR="${SCRATCH_DIR}/tmp/${job_name}_\${SLURM_JOB_ID}"
 export PIXI_HOME="${SCRATCH_DIR}/pixi_home/${job_name}_\${SLURM_JOB_ID}"
 export RATTLER_CACHE_DIR="${SCRATCH_DIR}/rattler_cache/${job_name}_\${SLURM_JOB_ID}"
