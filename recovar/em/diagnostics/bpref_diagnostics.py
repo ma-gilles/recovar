@@ -1419,30 +1419,6 @@ def _scoped_bpref_diagnostic_flags(*, active: bool) -> dict[str, bool]:
     }
 
 
-def _resolve_bpref_execution_modes(
-    scoped_diagnostic_flags: dict[str, bool],
-    *,
-    device_signature_requested: bool,
-    production_firstiter_xhalf_topology: bool = False,
-) -> dict[str, bool]:
-    """Separate requested diagnostic shadows from authoritative live modes."""
-
-    shadow_only = bool(device_signature_requested)
-    diagnostic_sequential = bool(scoped_diagnostic_flags["sequential_translation_reduction"])
-    diagnostic_per_particle = bool(scoped_diagnostic_flags["per_particle_launches"])
-    return {
-        "shadow_only": shadow_only,
-        "diagnostic_sequential_translation_reduction": diagnostic_sequential,
-        "diagnostic_per_particle_launches": diagnostic_per_particle,
-        "live_sequential_translation_reduction": bool(
-            production_firstiter_xhalf_topology or (diagnostic_sequential and not shadow_only)
-        ),
-        "live_per_particle_launches": bool(
-            production_firstiter_xhalf_topology or (diagnostic_per_particle and not shadow_only)
-        ),
-    }
-
-
 def _require_bpref_shadow_exact(label: str, authoritative, shadow) -> None:
     """Fail closed unless a target-only shadow exactly matches live output."""
 

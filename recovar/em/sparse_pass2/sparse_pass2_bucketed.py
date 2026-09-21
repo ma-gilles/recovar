@@ -182,6 +182,7 @@ from recovar.em.sparse_pass2.sparse_pass2_noise_blocks import (
     _compute_noise_block_chunked,
 )
 from recovar.em.sparse_pass2.sparse_pass2_policy import (
+    _resolve_bpref_execution_modes,
     _BPREF_EXECUTION_GROUP_BY_BUCKET_SIZE_ENV,
     _BPREF_EXECUTION_ORDER_LOCAL_FILE_ENV,
     _BPREF_REVERSE_PHYSICAL_ORDER_ENV,
@@ -621,7 +622,7 @@ def compute_pass2_stats_sparse_bucketed(
     production_firstiter_xhalf_topology = bool(
         relion_x_half_mstep and relion_firstiter_winner_take_all
     )
-    execution_modes = bpref_diagnostics._resolve_bpref_execution_modes(
+    execution_modes = _resolve_bpref_execution_modes(
         scoped_diagnostic_flags,
         device_signature_requested=device_signature_requested,
         production_firstiter_xhalf_topology=production_firstiter_xhalf_topology,
@@ -4880,7 +4881,7 @@ def compute_k_class_pass2_stats_sparse_fused(
     scoped_diagnostic_flags = bpref_diagnostics._scoped_bpref_diagnostic_flags(
         active=bpref_device_signature_active
     )
-    execution_modes = bpref_diagnostics._resolve_bpref_execution_modes(
+    execution_modes = _resolve_bpref_execution_modes(
         scoped_diagnostic_flags,
         device_signature_requested=device_signature_requested,
     )

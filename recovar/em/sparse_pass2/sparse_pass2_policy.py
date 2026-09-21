@@ -713,3 +713,27 @@ def _compact_pair_tail_bucket_coalesce_params_for_pass(
     if int(min_bucket_size) <= 0:
         raise ValueError("compact-pair tail coalescing minimum bucket size must be positive")
     return int(max_images), float(max_inflation), int(min_bucket_size)
+
+
+def _resolve_bpref_execution_modes(
+    scoped_diagnostic_flags: dict[str, bool],
+    *,
+    device_signature_requested: bool,
+    production_firstiter_xhalf_topology: bool = False,
+) -> dict[str, bool]:
+    """Separate requested diagnostic shadows from authoritative live modes."""
+
+    shadow_only = bool(device_signature_requested)
+    diagnostic_sequential = bool(scoped_diagnostic_flags["sequential_translation_reduction"])
+    diagnostic_per_particle = bool(scoped_diagnostic_flags["per_particle_launches"])
+    return {
+        "shadow_only": shadow_only,
+        "diagnostic_sequential_translation_reduction": diagnostic_sequential,
+        "diagnostic_per_particle_launches": diagnostic_per_particle,
+        "live_sequential_translation_reduction": bool(
+            production_firstiter_xhalf_topology or (diagnostic_sequential and not shadow_only)
+        ),
+        "live_per_particle_launches": bool(
+            production_firstiter_xhalf_topology or (diagnostic_per_particle and not shadow_only)
+        ),
+    }

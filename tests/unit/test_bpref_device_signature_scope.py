@@ -15,7 +15,7 @@ from recovar.em.diagnostics import iteration as debug_dumps
 from recovar.em.local import local_em_engine
 from recovar.em.local.local_backprojection import compute_local_mstep_sums
 from recovar.em.refinement import iteration_loop
-from recovar.em.sparse_pass2 import sparse_pass2_bucketed
+from recovar.em.sparse_pass2 import sparse_pass2_bucketed, sparse_pass2_policy
 
 pytestmark = pytest.mark.unit
 
@@ -121,7 +121,7 @@ def test_scoped_device_capture_keeps_live_reduction_and_adjoint_modes_ordinary(m
     monkeypatch.setenv("RECOVAR_RELION_X_HALF_BP_PER_PARTICLE_LAUNCH", "1")
     flags = bpref_diagnostics._scoped_bpref_diagnostic_flags(active=True)
 
-    modes = bpref_diagnostics._resolve_bpref_execution_modes(
+    modes = sparse_pass2_policy._resolve_bpref_execution_modes(
         flags,
         device_signature_requested=True,
     )
@@ -134,7 +134,7 @@ def test_scoped_device_capture_keeps_live_reduction_and_adjoint_modes_ordinary(m
 
 
 def test_firstiter_xhalf_topology_is_production_even_without_diagnostic_flags():
-    modes = bpref_diagnostics._resolve_bpref_execution_modes(
+    modes = sparse_pass2_policy._resolve_bpref_execution_modes(
         {
             "sequential_translation_reduction": False,
             "per_particle_launches": False,
