@@ -1197,7 +1197,9 @@ def test_exact_relion_ctf_source_exposes_host_and_shared_device_boundaries(
             "particles": Rows([particle]),
             "optics": {1: optics},
             "relion_bind": RelionBinding(),
-            "images": {},
+            "slots": np.asarray([-1], dtype=np.int64),
+            "rows": None,
+            "n_cached": 0,
         },
     )
     dataset = SimpleNamespace(
@@ -1234,8 +1236,9 @@ def test_exact_relion_ctf_source_exposes_host_and_shared_device_boundaries(
 
     assert compact_result.dtype == np.float64
     np.testing.assert_array_equal(compact_result, host_result[[0, 0]][:, pixel_indices])
-    # A compact result must not expose writable aliases of the cached full CTF.
-    compact_result[:] = 99.0
+    # Memoized operands are shared, so callers must not be able to corrupt them.
+    with pytest.raises(ValueError, match="read-only"):
+        compact_result[:] = 99.0
     np.testing.assert_array_equal(
         relion_ctf._relion_exact_ctf_half_from_source_star_host(
             dataset,
@@ -3583,7 +3586,13 @@ def test_exact_ctf_compact_indices_reject_invalid_host_geometry(monkeypatch, tmp
     source = (tmp_path / "particles.star").resolve()
     monkeypatch.setattr(relion_ctf, "_relion_exact_ctf_source_star", lambda _: source)
     monkeypatch.setitem(
-        relion_ctf._RELION_EXACT_CTF_SOURCE_CACHE, (str(source), (4, 4)), {"images": {0: np.ones(12, dtype=np.float64)}}
+        relion_ctf._RELION_EXACT_CTF_SOURCE_CACHE,
+        (str(source), (4, 4)),
+        {
+            "slots": np.asarray([0], dtype=np.int64),
+            "rows": np.ones((1, 12), dtype=np.float64),
+            "n_cached": 1,
+        },
     )
     dataset = SimpleNamespace(original_image_indices_from_local=lambda indices: indices)
     with pytest.raises(ValueError):
@@ -3605,7 +3614,13 @@ def test_exact_ctf_compact_indices_never_materialize_device_inputs(monkeypatch, 
     source = (tmp_path / "particles.star").resolve()
     monkeypatch.setattr(relion_ctf, "_relion_exact_ctf_source_star", lambda _: source)
     monkeypatch.setitem(
-        relion_ctf._RELION_EXACT_CTF_SOURCE_CACHE, (str(source), (4, 4)), {"images": {0: np.ones(12, dtype=np.float64)}}
+        relion_ctf._RELION_EXACT_CTF_SOURCE_CACHE,
+        (str(source), (4, 4)),
+        {
+            "slots": np.asarray([0], dtype=np.int64),
+            "rows": np.ones((1, 12), dtype=np.float64),
+            "n_cached": 1,
+        },
     )
     dataset = SimpleNamespace(original_image_indices_from_local=lambda indices: indices)
     for indices in (DeviceOnly(), jnp.asarray([0], dtype=jnp.int32)):

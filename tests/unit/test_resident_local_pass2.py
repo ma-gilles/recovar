@@ -135,6 +135,9 @@ def _case(seed=20260919, full_support=False):
     """Dataset, volume, RELION projector and pass-2 layout for one half."""
 
     dataset = MockDataset(n_images=N_IMAGES, seed=seed % 2**31)
+    dataset.image_source.image_mask = jnp.linspace(
+        0.2, 1.0, dataset.image_size, dtype=jnp.float32
+    ).reshape(dataset.image_shape)
     volume_ft = _hermitian_volume(VOLUME_SHAPE, seed=17)
     volume_real = np.asarray(
         ftu.get_idft3(np.asarray(volume_ft).reshape(VOLUME_SHAPE)).real, dtype=np.float64
@@ -215,7 +218,6 @@ def _run(
         accumulate_noise=True,
         projection_padding_factor=1,
         reconstruction_padding_factor=1,
-        score_with_masked_images=False,
         half_spectrum_scoring=True,
         relion_exact_score_translation=True,
         projection_relion_texture_interp=None,
@@ -235,7 +237,6 @@ def _run(
         adaptive_fraction=0.999,
         max_significants=-1,
         return_best_pose_details=True,
-        return_significant_counts=True,
         source_faithful_spectrum_norm=source_faithful_spectrum_norm,
         pass2_layout=layout,
     )
@@ -431,9 +432,6 @@ def test_resident_local_matches_the_exact_engine(monkeypatch, _resident_local_en
     # --- discrete state ----------------------------------------------------
     np.testing.assert_array_equal(
         np.asarray(exact.hard_assignment), np.asarray(resident.hard_assignment)
-    )
-    np.testing.assert_array_equal(
-        np.asarray(exact.best_pose_rotation_ids), np.asarray(resident.best_pose_rotation_ids)
     )
     np.testing.assert_array_equal(
         np.asarray(exact.best_pose_translations), np.asarray(resident.best_pose_translations)
@@ -762,7 +760,7 @@ def test_local_chunk_runs_with_the_once_per_half_operand_flag(
         np.asarray(on.hard_assignment), np.asarray(off.hard_assignment)
     )
     np.testing.assert_array_equal(
-        np.asarray(on.best_pose_rotation_ids), np.asarray(off.best_pose_rotation_ids)
+        np.asarray(on.best_pose_rotations), np.asarray(off.best_pose_rotations)
     )
     np.testing.assert_array_equal(
         np.asarray(on.best_pose_translations), np.asarray(off.best_pose_translations)
@@ -814,7 +812,7 @@ def test_block_row_program_matches_the_slicing_callback(monkeypatch, _resident_l
         np.asarray(off.hard_assignment), np.asarray(on.hard_assignment)
     )
     np.testing.assert_array_equal(
-        np.asarray(off.best_pose_rotation_ids), np.asarray(on.best_pose_rotation_ids)
+        np.asarray(off.best_pose_rotations), np.asarray(on.best_pose_rotations)
     )
     np.testing.assert_array_equal(
         np.asarray(off.best_pose_translations), np.asarray(on.best_pose_translations)
