@@ -981,3 +981,67 @@ def test_score_tile_free_memory_fraction_is_resolvable(monkeypatch):
         with pytest.raises(ValueError, match="must lie in"):
             planning._exact_local_score_tile_free_memory_fraction()
 
+
+
+@pytest.mark.unit
+def test_packed_row_capacity_ladder_only_ever_rounds_up():
+    """The capacity ladder must never hand back less room than was required.
+
+    ``packed_row_count`` is a compiled shape and the shared capacity is a running
+    maximum over the iteration's buckets, so it drifts and mints new XLA programs.
+    The ladder exists to absorb that drift, but a capacity that rounded *down*
+    would silently lose hypothesis rows, so the direction is the property that
+    matters most here.
+    """
+
+    from recovar.em.local.flat_local_rows import quantize_packed_row_capacity
+
+    for steps in (1, 2, 8, 64):
+        for capacity in (1, 2, 3, 7, 8, 9, 127, 128, 1000, 65_537, 2_804_736, 3_784_704):
+            rounded = quantize_packed_row_capacity(capacity, steps)
+            assert rounded >= capacity, (capacity, steps, rounded)
+            # At most one octave/steps of padding, so the ladder cannot run away.
+            octave = 1 << (capacity.bit_length() - 1)
+            assert rounded - capacity <= max(1, octave // steps), (capacity, steps, rounded)
+            # Idempotent: a value already on the ladder stays put.
+            assert quantize_packed_row_capacity(rounded, steps) == rounded
+
+
+@pytest.mark.unit
+def test_packed_row_capacity_ladder_is_off_and_inert_by_default():
+    """Disabled, and for degenerate inputs, the ladder must be the identity."""
+
+    from recovar.em.local.flat_local_rows import (
+        EXACT_LOCAL_FLAT_ROW_CAPACITY_STEPS,
+        quantize_packed_row_capacity,
+        resolve_flat_local_row_capacity_steps,
+    )
+
+    assert EXACT_LOCAL_FLAT_ROW_CAPACITY_STEPS == 0, "the ladder ships off until measured"
+    assert resolve_flat_local_row_capacity_steps() == 0
+    for capacity in (0, -5, 1, 12_345, 2_804_736):
+        assert quantize_packed_row_capacity(capacity, 0) == capacity
+    # A non-positive capacity has no ladder to sit on, whatever the granularity.
+    assert quantize_packed_row_capacity(0, 8) == 0
+    assert quantize_packed_row_capacity(-3, 8) == -3
+    assert resolve_flat_local_row_capacity_steps(8) == 8
+    with pytest.raises(ValueError, match="non-negative"):
+        resolve_flat_local_row_capacity_steps(-1)
+
+
+@pytest.mark.unit
+def test_packed_row_capacity_ladder_collapses_drifting_capacities():
+    """A drifting maximum must land on few shapes once the ladder is on.
+
+    This is the whole point of the knob: without it, each distinct capacity is a
+    distinct compiled program.
+    """
+
+    from recovar.em.local.flat_local_rows import quantize_packed_row_capacity
+
+    drifting = range(2_800_000, 2_900_000, 137)          # 730 distinct capacities
+    assert len({quantize_packed_row_capacity(c, 0) for c in drifting}) == len(set(drifting))
+    collapsed = {quantize_packed_row_capacity(c, 8) for c in drifting}
+    assert len(collapsed) <= 2, collapsed
+    assert all(r >= max(drifting) or r >= c for c, r in
+               ((c, quantize_packed_row_capacity(c, 8)) for c in drifting))

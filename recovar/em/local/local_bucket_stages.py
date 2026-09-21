@@ -41,6 +41,8 @@ from recovar.em.local.flat_local_rows import (
     map_dense_local_rows_to_flat_rows,
     resolve_flat_local_pool_size,
     resolve_flat_local_row_rounding,
+    resolve_flat_local_row_capacity_steps,
+    quantize_packed_row_capacity,
 )
 from recovar.em.local.local_backprojection import (
     compute_local_ctf_sums,
@@ -999,6 +1001,7 @@ def _plan_flat_local_row_capacities(
     stable_rectangular_capacity: bool = False,
     pool_size: int | None = None,
     round_row_widths: bool | None = None,
+    capacity_steps: int | None = None,
 ) -> FlatLocalRowCapacities:
     """Choose one packed-row shape for every existing dense bucket ABI.
 
@@ -1011,6 +1014,7 @@ def _plan_flat_local_row_capacities(
 
     resolved_pool_size = resolve_flat_local_pool_size(pool_size)
     resolved_round_row_widths = resolve_flat_local_row_rounding(round_row_widths)
+    resolved_capacity_steps = resolve_flat_local_row_capacity_steps(capacity_steps)
     capacities: dict[tuple[int, int], int] = {}
     required_rows = 0
     for bucket in bucket_specs:
@@ -1034,6 +1038,12 @@ def _plan_flat_local_row_capacities(
         required_rows += required_capacity
         if stable_rectangular_capacity:
             required_capacity = dense_batch_size * dense_rotation_count
+        # The ladder only ever rounds up, so the shared capacity still holds every
+        # row this iteration's buckets require; it just stops a one-row drift in the
+        # maximum from minting a new compiled shape.
+        required_capacity = quantize_packed_row_capacity(
+            required_capacity, resolved_capacity_steps,
+        )
         capacities[key] = max(capacities.get(key, 0), required_capacity)
     return FlatLocalRowCapacities(
         capacities=capacities,

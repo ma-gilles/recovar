@@ -34,6 +34,64 @@ EXACT_LOCAL_FLAT_POOL_SIZE_ENV = "RECOVAR_EXACT_LOCAL_FLAT_POOL_SIZE"
 EXACT_LOCAL_FLAT_ROW_ROUNDING = True
 EXACT_LOCAL_FLAT_ROW_ROUNDING_ENV = "RECOVAR_EXACT_LOCAL_FLAT_ROW_ROUNDING"
 
+# The shared packed-row capacity is a running maximum over the current iteration's
+# buckets, so it drifts with the trajectory, and because ``packed_row_count`` is a
+# compiled shape every drift mints a new XLA program. On the shipped 200-mini-batch
+# K=1 schedule that is expensive: compilation is 736 s of a 6284 s host profile
+# (11.7% of wall), and the compile attribution names ``run_local_bucket_big_jit``
+# the largest single contributor at about 2 s per compilation.
+#
+# Rounding the capacity onto a coarse ladder makes neighboring iterations reuse one
+# shape. The extra rows are the same score-inert tail the pool padding already adds
+# -- ``valid_mask`` marks the real hypotheses and validity-aware fine CUDA returns
+# ``+inf`` before doing pixel work -- and padding measures nearly free: across a
+# pool sweep the capacity rose 35% (2 804 736 to 3 784 704 rows) while the big-jit
+# kernel time moved 2% (17.85 to 17.43 s).
+#
+# The value is the number of ladder steps per power of two, so 8 means at most
+# 12.5% padding and at most 8 distinct capacities per octave. 0 disables the ladder
+# and restores the exact running maximum, which is the default until measured.
+EXACT_LOCAL_FLAT_ROW_CAPACITY_STEPS = 0
+EXACT_LOCAL_FLAT_ROW_CAPACITY_STEPS_ENV = "RECOVAR_EXACT_LOCAL_FLAT_ROW_CAPACITY_STEPS"
+
+
+def resolve_flat_local_row_capacity_steps(explicit: int | None = None) -> int:
+    """Resolve the packed-row capacity ladder granularity, in steps per octave."""
+
+    source = "flat_local_row_capacity_steps"
+    raw_value = explicit
+    if raw_value is None:
+        source = EXACT_LOCAL_FLAT_ROW_CAPACITY_STEPS_ENV
+        raw_value = os.environ.get(
+            EXACT_LOCAL_FLAT_ROW_CAPACITY_STEPS_ENV,
+            str(EXACT_LOCAL_FLAT_ROW_CAPACITY_STEPS),
+        ).strip()
+        if not raw_value:
+            raw_value = EXACT_LOCAL_FLAT_ROW_CAPACITY_STEPS
+    try:
+        steps = int(raw_value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{source} must be a non-negative integer") from exc
+    if steps < 0:
+        raise ValueError(f"{source} must be a non-negative integer")
+    return steps
+
+
+def quantize_packed_row_capacity(capacity: int, steps: int) -> int:
+    """Round a packed-row capacity up onto a ladder of ``steps`` values per octave.
+
+    Returns ``capacity`` unchanged when the ladder is disabled or the capacity is
+    not positive. The result is never smaller than ``capacity``, so a quantized
+    plan always has room for every row the unquantized plan required.
+    """
+
+    capacity = int(capacity)
+    if steps <= 0 or capacity <= 0:
+        return capacity
+    octave = 1 << (capacity.bit_length() - 1)
+    stride = max(1, octave // steps)
+    return -(-capacity // stride) * stride
+
 
 def resolve_flat_local_pool_size(explicit: int | None = None) -> int:
     """Resolve the packed-row pool size from an explicit value or the environment."""
