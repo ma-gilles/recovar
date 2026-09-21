@@ -948,3 +948,35 @@ def test_xhalf_projection_budget_follows_device_memory(monkeypatch):
     assert planning._exact_local_xhalf_projection_target_row_pixels(
         runtime_free_memory_bytes=free,
     ) == floor
+
+
+@pytest.mark.unit
+def test_score_tile_free_memory_fraction_is_resolvable(monkeypatch):
+    """The cap that actually binds max_hypotheses must be sweepable.
+
+    On the K=1 100k/256 production schedule the score-tile cap, not the projection
+    row budget, is what sets `max_hypotheses_per_microbatch`: forcing the budget to
+    320 M row-pixels leaves it at 4312 with 667 buckets, and neither the tail nor
+    the projection cap logs a reduction. It was a hardcoded constant, so it could
+    not be measured without editing the source.
+    """
+
+    from recovar.em.local import local_batch_planning as planning
+
+    default = planning.EXACT_LOCAL_SCORE_TILE_FREE_MEMORY_FRACTION
+    env = planning.EXACT_LOCAL_SCORE_TILE_FREE_MEMORY_FRACTION_ENV
+
+    assert planning._exact_local_score_tile_free_memory_fraction() == default
+
+    monkeypatch.setenv(env, "0.45")
+    assert planning._exact_local_score_tile_free_memory_fraction() == 0.45
+
+    # An unparsable value warns and keeps the default rather than failing a long run.
+    monkeypatch.setenv(env, "not-a-number")
+    assert planning._exact_local_score_tile_free_memory_fraction() == default
+
+    # An out-of-range value is a mistake worth stopping for.
+    for bad in ("0", "-0.1", "1.5"):
+        monkeypatch.setenv(env, bad)
+        with pytest.raises(ValueError, match="must lie in"):
+            planning._exact_local_score_tile_free_memory_fraction()

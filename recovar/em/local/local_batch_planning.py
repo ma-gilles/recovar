@@ -74,6 +74,15 @@ EXACT_LOCAL_XHALF_PROJECTION_FREE_MEMORY_FRACTION_ENV = (
 # the remaining memory is needed by projections, inputs, outputs, and XLA.
 EXACT_LOCAL_SCORE_TILE_FREE_MEMORY_FRACTION = 0.20
 EXACT_LOCAL_SCORE_TILE_LIVE_FACTOR = 1.25
+# This fraction, not the projection row budget, is what actually bounds
+# `max_hypotheses_per_microbatch` on the K=1 100k/256 production schedule. Measured:
+# forcing the projection budget from its derived value to 320 M row-pixels leaves
+# max_hyp at 4312 and the engine at 667 buckets, and neither the tail nor the
+# projection cap logs a reduction, so the value arrives from the score tile
+# unreduced. Making it a knob is what lets that be swept instead of argued about.
+EXACT_LOCAL_SCORE_TILE_FREE_MEMORY_FRACTION_ENV = (
+    "RECOVAR_EXACT_LOCAL_SCORE_TILE_FREE_MEMORY_FRACTION"
+)
 
 _VISIBLE_GPU_MEMORY_BYTES_CACHE: int | None = None
 
@@ -349,7 +358,7 @@ def _exact_local_effective_max_hypotheses_per_microbatch(
     )
     score_tile_cap = int(
         int(runtime_free_memory_bytes)
-        * EXACT_LOCAL_SCORE_TILE_FREE_MEMORY_FRACTION
+        * _exact_local_score_tile_free_memory_fraction()
         // score_tile_bytes_per_hypothesis
     )
     return int(max(1, min(effective_cap, score_tile_cap)))
@@ -380,6 +389,29 @@ def _exact_local_xhalf_tail_microbatch_cap(
         return cap
     planned_row_cap = max(1, int(image_batch_size)) * rotation_block_size
     return min(cap, planned_row_cap)
+
+
+def _exact_local_score_tile_free_memory_fraction() -> float:
+    """Share of free device memory the score residual tile may occupy."""
+
+    raw = os.environ.get(EXACT_LOCAL_SCORE_TILE_FREE_MEMORY_FRACTION_ENV, "").strip()
+    if not raw:
+        return float(EXACT_LOCAL_SCORE_TILE_FREE_MEMORY_FRACTION)
+    try:
+        fraction = float(raw)
+    except ValueError:
+        logger.warning(
+            "Ignoring invalid %s=%r; using default %.2f",
+            EXACT_LOCAL_SCORE_TILE_FREE_MEMORY_FRACTION_ENV,
+            raw,
+            EXACT_LOCAL_SCORE_TILE_FREE_MEMORY_FRACTION,
+        )
+        return float(EXACT_LOCAL_SCORE_TILE_FREE_MEMORY_FRACTION)
+    if not (0.0 < fraction <= 1.0):
+        raise ValueError(
+            f"{EXACT_LOCAL_SCORE_TILE_FREE_MEMORY_FRACTION_ENV} must lie in (0, 1]"
+        )
+    return fraction
 
 
 def _exact_local_xhalf_projection_free_memory_fraction() -> float:
