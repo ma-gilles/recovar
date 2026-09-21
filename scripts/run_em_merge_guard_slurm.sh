@@ -22,6 +22,7 @@ TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
 RUN_ID="em_merge_guard_${TIMESTAMP}_${RANDOM}"
 SCRATCH_DIR="${EM_MERGE_GUARD_SCRATCH_DIR:-/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/${RUN_ID}}"
 ACCOUNT="${SBATCH_ACCOUNT:-gilles}"
+RELION_SRC_DIR="${RELION_SRC_DIR:-/scratch/gpfs/GILLES/mg6942/relion/src}"
 mkdir -p "${SCRATCH_DIR}"
 touch "${SCRATCH_DIR}/SAFE_TO_DELETE"
 
@@ -52,6 +53,7 @@ cd "${REPO_ROOT}"
 unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV
 export PYTHONNOUSERSITE=1
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
+export RELION_SRC_DIR="${RELION_SRC_DIR}"
 export TMPDIR="${SCRATCH_DIR}/tmp/${job_name}_\${SLURM_JOB_ID}"
 export PIXI_HOME="${SCRATCH_DIR}/pixi_home/${job_name}_\${SLURM_JOB_ID}"
 export RATTLER_CACHE_DIR="${SCRATCH_DIR}/rattler_cache/${job_name}_\${SLURM_JOB_ID}"
