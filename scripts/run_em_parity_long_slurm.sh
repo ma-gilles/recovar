@@ -40,6 +40,18 @@ mkdir -p "${SCRATCH_DIR}"
 mkdir -p "${SCRATCH_DIR}/results"
 touch "${SCRATCH_DIR}/SAFE_TO_DELETE"
 
+# Build the custom CUDA library once, here, into the cache root the jobs will use.
+# The builder serializes on a lock file, so without this the four GPU jobs would each
+# hold an allocation while waiting for whichever of them won the build. Building up
+# front also means every job in this tier loads one binary whose digest is printed in
+# each job log.
+export RECOVAR_CUDA_CACHE_DIR="${SCRATCH_DIR}/cuda_cache"
+mkdir -p "${RECOVAR_CUDA_CACHE_DIR}"
+echo "Building the custom CUDA library into ${RECOVAR_CUDA_CACHE_DIR} ..."
+"${REPO_ROOT}/.pixi/envs/default/bin/python" -m recovar.commands.build_custom_cuda \
+  --output "${RECOVAR_CUDA_CACHE_DIR}/libcuda_backproject.so"
+sha256sum "${RECOVAR_CUDA_CACHE_DIR}/libcuda_backproject.so"
+
 WATCH=0
 for arg in "$@"; do
   case "$arg" in
@@ -73,7 +85,15 @@ export PYTHONNOUSERSITE=1
 export TMPDIR="${SCRATCH_DIR}/tmp/${job_name}_\${SLURM_JOB_ID}"
 export PIXI_HOME="${SCRATCH_DIR}/pixi_home/${job_name}_\${SLURM_JOB_ID}"
 export RATTLER_CACHE_DIR="${SCRATCH_DIR}/rattler_cache/${job_name}_\${SLURM_JOB_ID}"
-mkdir -p "\${TMPDIR}" "\${PIXI_HOME}" "\${RATTLER_CACHE_DIR}"
+# The custom CUDA library cache is keyed on the home directory alone, not on the
+# CUDA sources, so every checkout on this machine shares one libcuda_backproject.so.
+# The staleness test compares source mtimes against that one file, which means a
+# rebuild triggered here would rewrite the binary underneath any other job already
+# running against it, and a checkout whose sources are older than someone else's
+# build silently loads someone else's binary. Giving the tier its own cache root
+# makes the library this tier builds and loads private to this tier.
+export RECOVAR_CUDA_CACHE_DIR="${SCRATCH_DIR}/cuda_cache"
+mkdir -p "\${TMPDIR}" "\${PIXI_HOME}" "\${RATTLER_CACHE_DIR}" "\${RECOVAR_CUDA_CACHE_DIR}"
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
 
 echo "=== EM-long parity Slurm job ${job_name} ==="
@@ -87,6 +107,10 @@ echo
 # Provenance gate runs inside the test, but print a short banner for the log.
 git -C "${REPO_ROOT}" rev-parse HEAD
 git -C "${REPO_ROOT}" symbolic-ref --short HEAD || echo '<detached>'
+# A configured path is not a loaded-binary identity; print the digest of the file
+# that will actually be loaded so a result can be tied to one binary after the fact.
+sha256sum "\${RECOVAR_CUDA_CACHE_DIR}/libcuda_backproject.so" 2>/dev/null \
+  || echo "custom CUDA library not yet built in \${RECOVAR_CUDA_CACHE_DIR}"
 
 pixi run python -m pytest --em-parity-long -v -s \
   --basetemp "${SCRATCH_DIR}/results/${job_name}_\${SLURM_JOB_ID}" "${test_path}"
