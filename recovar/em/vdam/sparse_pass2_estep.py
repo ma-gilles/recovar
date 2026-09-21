@@ -195,7 +195,12 @@ _SPARSE_PASS2_CONTROL_KEYS = {
 
 
 def _pop_sparse_pass2_options(engine_kwargs: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Split shared dense/local-engine kwargs from InitialModel pass-2 controls."""
+    """Split shared-engine kwargs from pass controls once per E-step.
+
+    Keep absent keys absent: coarse sizing and sampling have distinct fallbacks.
+    Values remain shared with the caller; scoped environment flags are read
+    separately at their execution boundary.
+    """
 
     cleaned = dict(engine_kwargs)
     options = {name: cleaned.pop(name) for name in list(cleaned) if name in _SPARSE_PASS2_CONTROL_KEYS}

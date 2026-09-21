@@ -49,6 +49,7 @@ def test_initial_model_coarse_tie_ulp_diagnostic_override(monkeypatch):
         (1, True, 1, False, False),
         (1, False, 1, True, False),
         (2, True, 1, True, False),
+        (4, True, 1, True, False),
     ],
 )
 def test_initial_model_f32_fine_posterior_excludes_zero_oversampling(
@@ -2018,3 +2019,49 @@ def test_vdam_probe_flag_parsing(monkeypatch, default, value, expected):
     else:
         monkeypatch.setenv(variable, value)
     assert _env_enabled(variable, default=default) is (default if value is None else expected)
+
+
+def test_vdam_probe_reads_follow_scoped_environment(monkeypatch):
+    from recovar.em.vdam.sparse_pass2_estep import _env_enabled
+
+    variable = "RECOVAR_INITIAL_MODEL_FLAT_LOCAL_ROWS"
+    monkeypatch.setenv(variable, "off")
+    assert not _env_enabled(variable)
+    with monkeypatch.context() as scope:
+        scope.setenv(variable, "")
+        assert _env_enabled(variable)
+    assert not _env_enabled(variable)
+
+
+@pytest.mark.parametrize("value", ["", "bad", "1.5", "-1", "17"])
+def test_initial_model_coarse_tie_ulps_reject_invalid(value, monkeypatch):
+    monkeypatch.setenv("RECOVAR_INITIAL_MODEL_RELION_F32_COARSE_TIE_ULPS", value)
+    with pytest.raises(ValueError, match="must be"):
+        _initial_model_relion_f32_coarse_tie_ulps()
+
+
+@pytest.mark.parametrize("value,expected", [("auto", "auto"), (" LOCAL ", "local"), ("LOCAL_SEGMENTED", "local_segmented")])
+def test_initial_model_pass2_engine_tokens(value, expected):
+    from recovar.em.vdam.sparse_pass2_estep import _resolve_pass2_engine
+
+    assert _resolve_pass2_engine(value) == expected
+
+
+@pytest.mark.parametrize("value", ["", "dense", "resident", None])
+def test_initial_model_pass2_engine_rejects_unsupported(value):
+    from recovar.em.vdam.sparse_pass2_estep import _resolve_pass2_engine
+
+    with pytest.raises(ValueError, match="pass2_engine must be"):
+        _resolve_pass2_engine(value)
+
+
+def test_sparse_control_split_preserves_input_and_array_identity():
+    from recovar.em.vdam.sparse_pass2_estep import _pop_sparse_pass2_options
+
+    metadata = np.array([[0.125, 0.25]], dtype=np.float64)
+    supplied = {"sparse_pass2": True, "coarse_translations": metadata, "image_pre_shifts": metadata}
+    cleaned, options = _pop_sparse_pass2_options(supplied)
+    assert set(supplied) == {"sparse_pass2", "coarse_translations", "image_pre_shifts"}
+    assert set(cleaned) == {"image_pre_shifts"}
+    assert set(options) == {"coarse_translations"}
+    assert cleaned["image_pre_shifts"] is options["coarse_translations"] is metadata
