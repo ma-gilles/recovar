@@ -270,6 +270,13 @@ def test_em_parity_long_k1_full(tmp_path):
         "42",
         "--init_resolution",
         "30.0",
+        # The fresh K=1 defaults (source-faithful powerClass normalization and
+        # exact RELION BPref operands) only work with RELION's CUDA image
+        # preprocessing, and refine_single_volume fails closed without it. The
+        # CLI still defaults to host_numpy, so the test has to ask for it -- the
+        # same pairing the fixed diagnostic arm enforces in run_full_refinement.
+        "--image-fourier-backend",
+        "relion_cuda",
         "--image_batch_size",
         "64",
         "--rotation_block_size",
@@ -432,6 +439,13 @@ def test_em_parity_long_k1_native_initialmodel_quality(tmp_path):
         str(output_dir / "run"),
         "--nr_iter",
         "8",
+        # This test reads the maps from iterations 1, 2 and 8 to see the quality
+        # trajectory, not just its endpoint. grad_write_iter defaults to 10 and
+        # artifacts are written when iteration % grad_write_iter == 0 or iteration ==
+        # nr_iter, so at nr_iter=8 only iterations 0 and 8 reach disk and the
+        # intermediate maps this test names have never existed.
+        "--grad_write_iter",
+        "1",
         "--K",
         "1",
         "--sym",
@@ -588,9 +602,11 @@ def test_em_parity_long_k1_native_initialmodel_quality(tmp_path):
 def test_em_parity_long_kclass_full(tmp_path):
     """K=4 256² 50k full ab-initio (~4 hr on A100).
 
-    Runs the K-class engine for 15 iterations and compares against RELION
-    Class3D reference. Asserts per-class FSC@0.5 vs GT within ±0.5 Å and
-    Hungarian-aligned class assignment accuracy ≥ 95 %.
+    Runs the K-class engine for 15 iterations and compares against the RELION
+    Class3D reference. Classes are paired by Hungarian matching, then each RECOVAR
+    class is compared with its matched RELION class by shellwise FSC. Gates on
+    per-class mean FSC over shells 1-16 and on Hungarian class assignment accuracy
+    >= 95 %. Map correlation is recorded as a diagnostic and never gates.
     """
     _assert_parity_ancestors_or_skip()
     _require_fixture(KCLASS_SCRIPT, K4_LONG_FIXTURE_DIR, K4_LONG_RELION_DIR, K4_LONG_DATA_STAR)
@@ -634,9 +650,31 @@ def test_em_parity_long_kclass_full(tmp_path):
     map_corrs = [float(c) for c in best_perm["map_correlations"]]
     class_acc = float(summary["class_assignment_accuracy_after_permutation"])
 
+    # Map correlation is a diagnostic, never a gate. Pair each RECOVAR class with the
+    # RELION class the Hungarian matching chose and measure shellwise FSC between them,
+    # which is what decides quality here.
+    recovar_to_relion = [int(idx) for idx in best_perm["recovar_to_relion"]]
+    output_maps = [Path(path) for path in summary["output_maps"]]
+    per_class_fsc = []
+    for recovar_index, relion_index in enumerate(recovar_to_relion):
+        relion_map = K4_LONG_RELION_DIR / f"run_it{final_iter:03d}_class{relion_index + 1:03d}.mrc"
+        _require_fixture(output_maps[recovar_index], relion_map)
+        per_class_fsc.append(
+            _relion_frame_map_similarity(output_maps[recovar_index], relion_map)
+        )
+    fsc_1_16 = [float(item["mean_fsc_1_16"]) for item in per_class_fsc]
+    fsc_1_8 = [float(item["mean_fsc_1_8"]) for item in per_class_fsc]
+    shell_05 = [float(item["shell_05"]) for item in per_class_fsc]
+    shell_0143 = [float(item["shell_0143"]) for item in per_class_fsc]
+
     payload = {
         "kclass_long_mean_corr": mean_corr,
         "kclass_long_per_class_map_corr": map_corrs,
+        "kclass_long_per_class_mean_fsc_1_8": fsc_1_8,
+        "kclass_long_per_class_mean_fsc_1_16": fsc_1_16,
+        "kclass_long_per_class_shell_05": shell_05,
+        "kclass_long_per_class_shell_0143": shell_0143,
+        "kclass_long_recovar_to_relion_permutation": recovar_to_relion,
         "kclass_long_class_assignment_accuracy": class_acc,
         "kclass_long_walltime_s": elapsed,
         "kclass_long_target_iter": final_iter,
@@ -651,8 +689,23 @@ def test_em_parity_long_kclass_full(tmp_path):
     print(f"  mean_corr={mean_corr:.6f}", file=sys.stderr, flush=True)
     print(f"  class assignment accuracy={class_acc:.4f}", file=sys.stderr, flush=True)
 
-    # K-class quality bands: per-class corr ≥ 0.99 and Hungarian assignment ≥ 95%.
-    assert all(c >= 0.99 for c in map_corrs), f"K-class long per-class map corr below threshold 0.99: {map_corrs}"
+    print(f"  per-class mean FSC shells 1-16: {fsc_1_16}", file=sys.stderr, flush=True)
+    print(f"  per-class FSC=0.143 shell: {shell_0143}", file=sys.stderr, flush=True)
+
+    # Quality is decided on FSC, never on map correlation. The correlation figures stay
+    # in the ledger and the log as diagnostics only.
+    #
+    # The 0.99 threshold is carried over from the map-correlation gate this replaces and
+    # is NOT calibrated: this rung has never run, because its fixture
+    # (data_pdb_k4_50k_256) does not exist. Shellwise FSC over low shells generally sits
+    # above a global correlation, so the same number may be a looser bar here than it
+    # was there. Recalibrate against the first real run before treating a pass as
+    # meaningful, and record the decision.
+    assert all(value >= 0.99 for value in fsc_1_16), (
+        "K-class long per-class mean FSC over shells 1-16 below threshold 0.99: "
+        f"{fsc_1_16} (RECOVAR class i compared against RELION class "
+        f"{recovar_to_relion} at iteration {final_iter})"
+    )
     assert class_acc >= 0.95, (
         f"K-class long Hungarian-aligned class assignment accuracy {class_acc:.4f} below threshold 0.95"
     )

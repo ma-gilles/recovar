@@ -7,6 +7,7 @@ import pytest
 from recovar.em.local.local_big_jit import (
     _class_volume,
     _project_local_class_segments,
+    _project_local_class_segments_flat,
     _project_local_half_spectrum,
 )
 
@@ -384,3 +385,64 @@ def test_joint_winner_is_the_best_class_winner():
         k = int(joint_class[image])
         row_in_segment = (int(joint_argmax[image]) // n_trans) - k * seg
         assert int(winner[image, k]) == row_in_segment * n_trans + int(joint_argmax[image]) % n_trans
+
+
+def _tagging_project_rows(volume, projector_half, rotations):
+    """Return each class volume's leading value, so a row reveals which volume made it."""
+    tag = jnp.asarray(volume).reshape(-1)[0].real
+    return jnp.full((int(rotations.shape[0]), 2), tag, dtype=jnp.float32)
+
+
+def test_flat_class_segments_project_each_block_from_its_own_volume():
+    """Packed class-major rows must not be projected from the wrong class volume.
+
+    `local_big_jit` refuses flat rows at K>1 precisely to avoid "silently projecting a
+    row from the wrong class". The flat plan is emitted class-major and reports
+    `class_row_counts`, so each class's contiguous block can use its own volume.
+    """
+    n_classes = 3
+    means = jnp.asarray(np.arange(n_classes, dtype=np.complex64).reshape(n_classes, 1) + 1)
+    class_row_counts = (5, 2, 3)
+    packed = sum(class_row_counts)
+    flat_rotations = jnp.asarray(np.zeros((packed, 3, 3), dtype=np.float32))
+
+    out = _project_local_class_segments_flat(
+        means, means, flat_rotations, _tagging_project_rows,
+        n_classes=n_classes, class_row_counts=class_row_counts,
+    )
+
+    expected = np.concatenate(
+        [np.full(count, index + 1.0) for index, count in enumerate(class_row_counts)]
+    )
+    np.testing.assert_allclose(np.asarray(out)[:, 0], expected)
+
+
+def test_flat_class_segments_keep_the_static_capacity_tail():
+    """Capacity padding past the plan's present rows must keep the compiled row shape."""
+    n_classes = 2
+    means = jnp.asarray(np.arange(n_classes, dtype=np.complex64).reshape(n_classes, 1) + 1)
+    class_row_counts = (3, 4)
+    tail = 6
+    flat_rotations = jnp.asarray(
+        np.zeros((sum(class_row_counts) + tail, 3, 3), dtype=np.float32)
+    )
+
+    out = _project_local_class_segments_flat(
+        means, means, flat_rotations, _tagging_project_rows,
+        n_classes=n_classes, class_row_counts=class_row_counts,
+    )
+
+    assert int(out.shape[0]) == int(flat_rotations.shape[0])
+    np.testing.assert_allclose(np.asarray(out)[-tail:, :], 0.0)
+
+
+def test_flat_class_segments_reject_a_block_table_that_overruns_the_packed_rows():
+    n_classes = 2
+    means = jnp.asarray(np.arange(n_classes, dtype=np.complex64).reshape(n_classes, 1) + 1)
+    flat_rotations = jnp.asarray(np.zeros((4, 3, 3), dtype=np.float32))
+
+    with pytest.raises(ValueError, match="only 4 are packed"):
+        _project_local_class_segments_flat(
+            means, means, flat_rotations, _tagging_project_rows,
+            n_classes=n_classes, class_row_counts=(3, 3),
+        )

@@ -1273,13 +1273,13 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
         tex_y_init = tex_z_init = -(padded_max_r + 1);
         texture_voxels = static_cast<int64_t>(tex_x) * tex_y * tex_z;
     }
-    err = cudaMalloc(
+    err = recovar::scratch_alloc(
         reinterpret_cast<void**>(&real),
-        static_cast<size_t>(texture_voxels) * sizeof(float));
+        static_cast<size_t>(texture_voxels) * sizeof(float), stream);
     if (err != cudaSuccess) goto cleanup;
-    err = cudaMalloc(
+    err = recovar::scratch_alloc(
         reinterpret_cast<void**>(&imag),
-        static_cast<size_t>(texture_voxels) * sizeof(float));
+        static_cast<size_t>(texture_voxels) * sizeof(float), stream);
     if (err != cudaSuccess) goto cleanup;
 
     if (capacity_projector)
@@ -1400,21 +1400,21 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
         const float significant_weight = std::numeric_limits<float>::min();
         const float weight_norm = 1.0f;
 
-        err = cudaMalloc(
+        err = recovar::scratch_alloc(
             reinterpret_cast<void**>(&image_real),
-            static_cast<size_t>(image_value_count) * sizeof(float));
+            static_cast<size_t>(image_value_count) * sizeof(float), stream);
         if (err != cudaSuccess) goto cleanup;
-        err = cudaMalloc(
+        err = recovar::scratch_alloc(
             reinterpret_cast<void**>(&image_imag),
-            static_cast<size_t>(image_value_count) * sizeof(float));
+            static_cast<size_t>(image_value_count) * sizeof(float), stream);
         if (err != cudaSuccess) goto cleanup;
-        err = cudaMalloc(
+        err = recovar::scratch_alloc(
             reinterpret_cast<void**>(&translation_x),
-            static_cast<size_t>(translation_count) * sizeof(float));
+            static_cast<size_t>(translation_count) * sizeof(float), stream);
         if (err != cudaSuccess) goto cleanup;
-        err = cudaMalloc(
+        err = recovar::scratch_alloc(
             reinterpret_cast<void**>(&translation_y),
-            static_cast<size_t>(translation_count) * sizeof(float));
+            static_cast<size_t>(translation_count) * sizeof(float), stream);
         if (err != cudaSuccess) goto cleanup;
         if (preproject_persistent_requested)
         {
@@ -1428,15 +1428,15 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
                 err = cudaErrorInvalidValue;
                 goto cleanup;
             }
-            err = cudaMalloc(
+            err = recovar::scratch_alloc(
                 reinterpret_cast<void**>(&preprojected_references),
-                reference_count * sizeof(float2));
+                reference_count * sizeof(float2), stream);
             if (err != cudaSuccess) goto cleanup;
             if (precompute_residuals_requested)
             {
-                err = cudaMalloc(
+                err = recovar::scratch_alloc(
                     reinterpret_cast<void**>(&precomputed_residual_weights),
-                    reference_count * sizeof(float));
+                    reference_count * sizeof(float), stream);
                 if (err != cudaSuccess) goto cleanup;
             }
         }
@@ -1450,9 +1450,9 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
                 err = cudaErrorInvalidValue;
                 goto cleanup;
             }
-            err = cudaMalloc(
+            err = recovar::scratch_alloc(
                 reinterpret_cast<void**>(&ordered_scatter_graph_eulers),
-                euler_value_count * sizeof(float));
+                euler_value_count * sizeof(float), stream);
             if (err != cudaSuccess) goto cleanup;
             ordered_scatter_graphs = static_cast<cudaGraph_t*>(std::calloc(
                 static_cast<size_t>(reconstruction_group_count),
@@ -1475,9 +1475,9 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
             constexpr int kWavgOutputCount = 3;
             const size_t wavg_output_count = static_cast<size_t>(
                 kRelionVdamWorkerStreams) * kWavgOutputCount * pixel_count;
-            err = cudaMalloc(
+            err = recovar::scratch_alloc(
                 reinterpret_cast<void**>(&wavg_dummy_outputs),
-                wavg_output_count * sizeof(float));
+                wavg_output_count * sizeof(float), stream);
             if (err != cudaSuccess) goto cleanup;
             err = cudaMemsetAsync(
                 wavg_dummy_outputs, 0, wavg_output_count * sizeof(float), stream);
@@ -1514,11 +1514,11 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
         {
             const size_t accumulator_bytes =
                 static_cast<size_t>(accumulator_count) * sizeof(double);
-            err = cudaMalloc(reinterpret_cast<void**>(&data_real_volume_f64), accumulator_bytes);
+            err = recovar::scratch_alloc(reinterpret_cast<void**>(&data_real_volume_f64), accumulator_bytes, stream);
             if (err != cudaSuccess) goto cleanup;
-            err = cudaMalloc(reinterpret_cast<void**>(&data_imag_volume_f64), accumulator_bytes);
+            err = recovar::scratch_alloc(reinterpret_cast<void**>(&data_imag_volume_f64), accumulator_bytes, stream);
             if (err != cudaSuccess) goto cleanup;
-            err = cudaMalloc(reinterpret_cast<void**>(&weight_volume_f64), accumulator_bytes);
+            err = recovar::scratch_alloc(reinterpret_cast<void**>(&weight_volume_f64), accumulator_bytes, stream);
             if (err != cudaSuccess) goto cleanup;
             const unsigned int cast_blocks = static_cast<unsigned int>(
                 (accumulator_count + BLOCK_SIZE - 1) / BLOCK_SIZE);
@@ -1551,10 +1551,10 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
         }
         if (device_trace_requested)
         {
-            err = cudaMalloc(
+            err = recovar::scratch_alloc(
                 reinterpret_cast<void**>(&candidate_trace_records),
                 static_cast<size_t>(n_particles * rotation_count) *
-                    sizeof(VdamCandidateBlockTraceRecord));
+                    sizeof(VdamCandidateBlockTraceRecord), stream);
             if (err != cudaSuccess) goto cleanup;
         }
         if (captured_rotation_replay)
@@ -2819,24 +2819,24 @@ cleanup:
     if (rotation_replay_order_host) cudaFreeHost(rotation_replay_order_host);
     if (rotation_replay_counts_host) cudaFreeHost(rotation_replay_counts_host);
     if (particle_start_offsets_ns_host) cudaFreeHost(particle_start_offsets_ns_host);
-    if (candidate_trace_records) cudaFree(candidate_trace_records);
-    if (data_real_volume_f64) cudaFree(data_real_volume_f64);
-    if (data_imag_volume_f64) cudaFree(data_imag_volume_f64);
-    if (weight_volume_f64) cudaFree(weight_volume_f64);
+    if (candidate_trace_records) recovar::scratch_free(candidate_trace_records, stream);
+    if (data_real_volume_f64) recovar::scratch_free(data_real_volume_f64, stream);
+    if (data_imag_volume_f64) recovar::scratch_free(data_imag_volume_f64, stream);
+    if (weight_volume_f64) recovar::scratch_free(weight_volume_f64, stream);
     if (texture_real) cudaDestroyTextureObject(texture_real);
     if (texture_imag) cudaDestroyTextureObject(texture_imag);
     if (array_real) cudaFreeArray(array_real);
     if (array_imag) cudaFreeArray(array_imag);
-    if (image_real) cudaFree(image_real);
-    if (image_imag) cudaFree(image_imag);
-    if (translation_x) cudaFree(translation_x);
-    if (translation_y) cudaFree(translation_y);
-    if (wavg_dummy_outputs) cudaFree(wavg_dummy_outputs);
-    if (precomputed_residual_weights) cudaFree(precomputed_residual_weights);
-    if (preprojected_references) cudaFree(preprojected_references);
-    if (ordered_scatter_graph_eulers) cudaFree(ordered_scatter_graph_eulers);
-    if (real) cudaFree(real);
-    if (imag) cudaFree(imag);
+    if (image_real) recovar::scratch_free(image_real, stream);
+    if (image_imag) recovar::scratch_free(image_imag, stream);
+    if (translation_x) recovar::scratch_free(translation_x, stream);
+    if (translation_y) recovar::scratch_free(translation_y, stream);
+    if (wavg_dummy_outputs) recovar::scratch_free(wavg_dummy_outputs, stream);
+    if (precomputed_residual_weights) recovar::scratch_free(precomputed_residual_weights, stream);
+    if (preprojected_references) recovar::scratch_free(preprojected_references, stream);
+    if (ordered_scatter_graph_eulers) recovar::scratch_free(ordered_scatter_graph_eulers, stream);
+    if (real) recovar::scratch_free(real, stream);
+    if (imag) recovar::scratch_free(imag, stream);
     return err;
 }
 
@@ -2990,9 +2990,9 @@ extern "C" int recovar_relion_vdam_exact_native_host_replay(
 
 #define RECOVAR_HOST_REPLAY_ALLOC_COPY(device_pointer, host_pointer, count)       \
     do {                                                                          \
-        error = cudaMalloc(                                                       \
+        error = recovar::scratch_alloc(                                                       \
             reinterpret_cast<void**>(&(device_pointer)),                         \
-            static_cast<std::size_t>(count) * sizeof(*(device_pointer)));         \
+            static_cast<std::size_t>(count) * sizeof(*(device_pointer)), stream);         \
         if (error != cudaSuccess) goto cleanup_host_replay;                       \
         error = cudaMemcpyAsync(                                                  \
             (device_pointer),                                                     \
@@ -3041,9 +3041,9 @@ extern "C" int recovar_relion_vdam_exact_native_host_replay(
         device_data_imag, arguments->data_imag_volume, accumulator_count);
     RECOVAR_HOST_REPLAY_ALLOC_COPY(
         device_weight, arguments->weight_volume, accumulator_count);
-    error = cudaMalloc(
+    error = recovar::scratch_alloc(
         reinterpret_cast<void**>(&device_denominator),
-        static_cast<std::size_t>(denominator_count) * sizeof(float));
+        static_cast<std::size_t>(denominator_count) * sizeof(float), stream);
     if (error != cudaSuccess) goto cleanup_host_replay;
     error = cudaMemsetAsync(
         device_denominator,
@@ -3133,24 +3133,24 @@ extern "C" int recovar_relion_vdam_exact_native_host_replay(
 cleanup_host_replay:
 #undef RECOVAR_HOST_REPLAY_ALLOC_COPY
 #undef RECOVAR_HOST_REPLAY_COPY_OUTPUT
-    if (device_projector) cudaFree(device_projector);
-    if (device_images) cudaFree(device_images);
-    if (device_ctf) cudaFree(device_ctf);
-    if (device_minvsigma2) cudaFree(device_minvsigma2);
-    if (device_posterior) cudaFree(device_posterior);
-    if (device_translations) cudaFree(device_translations);
-    if (device_eulers) cudaFree(device_eulers);
-    if (device_compact_rotations) cudaFree(device_compact_rotations);
-    if (device_reconstruction_groups) cudaFree(device_reconstruction_groups);
-    if (device_worker_lanes) cudaFree(device_worker_lanes);
-    if (device_particle_trace_ids) cudaFree(device_particle_trace_ids);
-    if (device_rotation_order) cudaFree(device_rotation_order);
-    if (device_rotation_counts) cudaFree(device_rotation_counts);
-    if (device_particle_offsets) cudaFree(device_particle_offsets);
-    if (device_data_real) cudaFree(device_data_real);
-    if (device_data_imag) cudaFree(device_data_imag);
-    if (device_weight) cudaFree(device_weight);
-    if (device_denominator) cudaFree(device_denominator);
+    if (device_projector) recovar::scratch_free(device_projector, stream);
+    if (device_images) recovar::scratch_free(device_images, stream);
+    if (device_ctf) recovar::scratch_free(device_ctf, stream);
+    if (device_minvsigma2) recovar::scratch_free(device_minvsigma2, stream);
+    if (device_posterior) recovar::scratch_free(device_posterior, stream);
+    if (device_translations) recovar::scratch_free(device_translations, stream);
+    if (device_eulers) recovar::scratch_free(device_eulers, stream);
+    if (device_compact_rotations) recovar::scratch_free(device_compact_rotations, stream);
+    if (device_reconstruction_groups) recovar::scratch_free(device_reconstruction_groups, stream);
+    if (device_worker_lanes) recovar::scratch_free(device_worker_lanes, stream);
+    if (device_particle_trace_ids) recovar::scratch_free(device_particle_trace_ids, stream);
+    if (device_rotation_order) recovar::scratch_free(device_rotation_order, stream);
+    if (device_rotation_counts) recovar::scratch_free(device_rotation_counts, stream);
+    if (device_particle_offsets) recovar::scratch_free(device_particle_offsets, stream);
+    if (device_data_real) recovar::scratch_free(device_data_real, stream);
+    if (device_data_imag) recovar::scratch_free(device_data_imag, stream);
+    if (device_weight) recovar::scratch_free(device_weight, stream);
+    if (device_denominator) recovar::scratch_free(device_denominator, stream);
     if (stream) cudaStreamDestroy(stream);
     if (error != cudaSuccess)
         std::fprintf(

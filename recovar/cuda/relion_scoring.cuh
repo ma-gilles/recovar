@@ -935,9 +935,9 @@ cudaError_t launch_relion_coarse_diff2_projector_f32_impl(
     cudaStream_t worker_streams[kRelionVdamWorkerStreams] = {};
     cudaEvent_t worker_inputs_ready = nullptr;
 
-    err = cudaMalloc(reinterpret_cast<void**>(&real), voxel_count * sizeof(float));
+    err = recovar::scratch_alloc(reinterpret_cast<void**>(&real), voxel_count * sizeof(float), stream);
     if (err != cudaSuccess) goto cleanup;
-    err = cudaMalloc(reinterpret_cast<void**>(&imag), voxel_count * sizeof(float));
+    err = recovar::scratch_alloc(reinterpret_cast<void**>(&imag), voxel_count * sizeof(float), stream);
     if (err != cudaSuccess) goto cleanup;
     fill_relion_texture_compact_kernel<float><<<
         (voxel_count + BLOCK_SIZE - 1) / BLOCK_SIZE,
@@ -1123,8 +1123,8 @@ cleanup:
     if (texture_imag) cudaDestroyTextureObject(texture_imag);
     if (array_real) cudaFreeArray(array_real);
     if (array_imag) cudaFreeArray(array_imag);
-    if (real) cudaFree(real);
-    if (imag) cudaFree(imag);
+    if (real) recovar::scratch_free(real, stream);
+    if (imag) recovar::scratch_free(imag, stream);
     return err;
 }
 
@@ -1727,13 +1727,13 @@ cudaError_t launch_relion_coarse_diff2_native_texture_rectangular_f32(
     cudaTextureObject_t texture_real = 0;
     cudaTextureObject_t texture_imag = 0;
 
-    err = cudaMalloc(
+    err = recovar::scratch_alloc(
         reinterpret_cast<void**>(&real),
-        static_cast<size_t>(texture_voxels) * sizeof(float));
+        static_cast<size_t>(texture_voxels) * sizeof(float), stream);
     if (err != cudaSuccess) goto cleanup;
-    err = cudaMalloc(
+    err = recovar::scratch_alloc(
         reinterpret_cast<void**>(&imag),
-        static_cast<size_t>(texture_voxels) * sizeof(float));
+        static_cast<size_t>(texture_voxels) * sizeof(float), stream);
     if (err != cudaSuccess) goto cleanup;
 
     {
@@ -1858,8 +1858,8 @@ cleanup:
     if (texture_imag) cudaDestroyTextureObject(texture_imag);
     if (array_real) cudaFreeArray(array_real);
     if (array_imag) cudaFreeArray(array_imag);
-    if (real) cudaFree(real);
-    if (imag) cudaFree(imag);
+    if (real) recovar::scratch_free(real, stream);
+    if (imag) recovar::scratch_free(imag, stream);
     return err;
 }
 
@@ -1899,13 +1899,13 @@ cudaError_t launch_relion_coarse_normalized_cc_native_texture_pairs_f32(
     cudaArray_t array_imag = nullptr;
     cudaTextureObject_t texture_real = 0;
     cudaTextureObject_t texture_imag = 0;
-    cudaError_t err = cudaMalloc(
+    cudaError_t err = recovar::scratch_alloc(
         reinterpret_cast<void**>(&real),
-        static_cast<size_t>(texture_voxels) * sizeof(float));
+        static_cast<size_t>(texture_voxels) * sizeof(float), stream);
     if (err != cudaSuccess) goto cleanup;
-    err = cudaMalloc(
+    err = recovar::scratch_alloc(
         reinterpret_cast<void**>(&imag),
-        static_cast<size_t>(texture_voxels) * sizeof(float));
+        static_cast<size_t>(texture_voxels) * sizeof(float), stream);
     if (err != cudaSuccess) goto cleanup;
 
     {
@@ -2015,8 +2015,8 @@ cleanup:
     if (texture_imag) cudaDestroyTextureObject(texture_imag);
     if (array_real) cudaFreeArray(array_real);
     if (array_imag) cudaFreeArray(array_imag);
-    if (real) cudaFree(real);
-    if (imag) cudaFree(imag);
+    if (real) recovar::scratch_free(real, stream);
+    if (imag) recovar::scratch_free(imag, stream);
     return err;
 }
 

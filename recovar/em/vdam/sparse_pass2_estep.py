@@ -66,6 +66,11 @@ _EXACT_RELION_FINE_DIFF2_ENV = "RECOVAR_INITIAL_MODEL_EXACT_FINE_DIFF2"
 
 
 _FLAT_LOCAL_ROWS_ENV = "RECOVAR_INITIAL_MODEL_FLAT_LOCAL_ROWS"
+# Opt-in, default off: allow the exact RELION CUDA operand/fine-diff2 path at K>1.
+# That path computes only the candidates a particle actually needs, where the JAX
+# fallback pads to rectangles; at K=4 100k/256 the fallback computes 28.8x the rows
+# it needs. Leaving this off preserves the qualified K>1 behavior exactly.
+_KCLASS_EXACT_FINE_ENV = "RECOVAR_INITIAL_MODEL_KCLASS_EXACT_FINE"
 
 
 _STABLE_FLAT_ROW_CAPACITY_ENV = "RECOVAR_INITIAL_MODEL_STABLE_FLAT_ROW_CAPACITY"
@@ -765,6 +770,15 @@ def _run_sparse_pass2_initial_model_estep(
 
         t0 = time.time()
         from recovar.em.sparse_pass2 import sparse_pass2_posterior as sparse_diagnostics
+        # Opt-in: pack class-segmented candidates into flat rows. This does NOT take
+        # the exact-RELION operand chain, whose native VDAM M-step scatters into one
+        # volume pair per call and cannot separate class segments. It scores the same
+        # candidate set through the ordinary bucket program, just packed instead of
+        # padded to rectangles, so it is mathematically equivalent but not bitwise
+        # identical to the rectangular path.
+        kclass_flat_rows = bool(
+            state.K > 1 and _env_enabled(_KCLASS_EXACT_FINE_ENV)
+        )
         use_exact_local_relion_operands = bool(
             state.K == 1
             and use_exact_relion_projector
@@ -780,7 +794,8 @@ def _run_sparse_pass2_initial_model_estep(
             and _env_enabled(_EXACT_RELION_FINE_DIFF2_ENV, default=True)
         )
         use_flat_local_rows = bool(
-            use_exact_fine_diff2 and _env_enabled(_FLAT_LOCAL_ROWS_ENV)
+            (use_exact_fine_diff2 and _env_enabled(_FLAT_LOCAL_ROWS_ENV))
+            or kclass_flat_rows
         )
         if requested_fused_pair_fine_score and not use_flat_local_rows:
             raise ValueError(

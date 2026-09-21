@@ -126,6 +126,7 @@ from recovar.em.local.local_big_jit import (
     run_fixed_capacity_segmented_local_scan,
 )
 from recovar.em.local.local_bucket_stages import (
+    FlatLocalRowCapacities,
     LOCAL_BUCKET_CONSTANT_PROGRAM_ENV,
     LOCAL_POSTPROCESS_ROW_PROGRAM_ENV,
     _accumulate_packed_noise_chunk,
@@ -135,6 +136,7 @@ from recovar.em.local.local_bucket_stages import (
     _build_nonzero_reconstruction_pack_indices,
     _build_reconstruction_pack_indices,
     _FixedCapacityWholeScoreCallContext,
+    _flat_local_row_class_blocks,
     _invoke_local_bucket_big_jit,
     _local_mstep_adjoint_window,
     _local_projection_mode,
@@ -354,6 +356,20 @@ def _accumulate_class_segment_statistics(
             )[:rows][np.arange(rows), winner_row]
 
 
+def _unpadded_rows(array, n_rows: int):
+    """Return the first ``n_rows`` rows, without emitting a slice when it is a no-op.
+
+    The bucket loop trims padded kernel outputs back to the bucket's real image count
+    ~48 times per bucket. Most buckets are full, so the trim is an identity, but
+    ``array[:n]`` on a device array still dispatches a slice and XLA compiles one
+    program per distinct shape. On a K=4 5k/128 run that produced 4167 compilations of
+    `dynamic_slice` costing 365 s. Returning the array untouched when the row count
+    already matches removes the op entirely for full buckets.
+    """
+
+    return array if int(getattr(array, "shape", (n_rows,))[0]) == int(n_rows) else array[:n_rows]
+
+
 def run_local_em_exact(
     experiment_dataset,
     mean,
@@ -571,10 +587,6 @@ def run_local_em_exact(
     relion_exact_score_translation = bool(relion_exact_score_translation)
     relion_exact_bpref_operands = bool(relion_exact_bpref_operands)
     relion_exact_fine_diff2 = bool(relion_exact_fine_diff2)
-    if flat_local_rows_enabled and not relion_exact_fine_diff2:
-        raise ValueError(
-            "flat local rows require exact RELION fine diff2"
-        )
     if stable_flat_row_capacity_enabled and not flat_local_rows_enabled:
         raise ValueError("stable flat-row capacity requires flat local rows")
     if packed_local_projection_enabled and not flat_local_rows_enabled:
@@ -752,14 +764,22 @@ def run_local_em_exact(
         if float(class_log_prior) != 0.0:
             raise ValueError("class_log_prior is the single-class scalar; use class_log_priors for K>1")
         local_layout = class_layouts[0]
+    if flat_local_rows_enabled and n_classes == 1 and not relion_exact_fine_diff2:
+        # The single-class flat-row ABI was built for the exact RELION fine scorer.
+        # Class-segmented flat rows score through the ordinary bucket program instead,
+        # so they carry no such requirement.
+        raise ValueError(
+            "flat local rows require exact RELION fine diff2"
+        )
     if n_classes > 1:
         # Everything below that a class segment cannot express yet. Each of these is a
         # K=1 exact-RELION path that indexes rows by (image, rotation row) alone, or a
-        # route that writes a single volume pair per call.
+        # route that writes a single volume pair per call. Flat local rows used to be on
+        # this list; they are now expressible because the plan is emitted class-major
+        # and projection slices each class's block from its own volume.
         unsupported = {
             "score_only": bool(score_only),
             "fixed-capacity execution": bool(_fixed_capacity_enabled or _fixed_capacity_whole_boundary_enabled),
-            "flat local rows": bool(_flat_local_rows_enabled),
             "packed local projection": bool(_packed_local_projection_enabled),
             "fused pair fine score": bool(fused_pair_fine_score),
             "stable Fourier windows": bool(stable_fourier_window_shapes),
@@ -1475,7 +1495,9 @@ def run_local_em_exact(
             large_bucket_quantum=_exact_local_large_bucket_quantum(rotation_block_size),
         )
         if flat_local_rows_enabled
-        else {}
+        else FlatLocalRowCapacities(
+            capacities={}, required_rows=0, pool_size=1, round_row_widths=True,
+        )
     )
     fine_job_capacities = (
         _plan_local_fine_job_capacities(bucket_specs)
@@ -1842,6 +1864,28 @@ def run_local_em_exact(
     fixed_capacity_whole_initial_carry = None
     fixed_capacity_whole_static_options = None
     fixed_capacity_whole_preparation_s = 0.0
+    # These four operands are fixed for the whole iteration (assigned above, well
+    # before this loop) but were converted to device arrays inside it, once per
+    # bucket. At ~4400 bucket visits per 20 iterations that is tens of thousands of
+    # redundant host-to-device transfers, which showed up as `batched_device_put`
+    # in the host profile. Place them once.
+    # `noise_variance_half` is fixed for the iteration (assigned far above), so its
+    # reciprocal and the float64 view used to scale CTF^2 do not vary per bucket.
+    # Both were recomputed inside the loop on every bucket.
+    inverse_noise_rfloat_cast_once = np.reciprocal(
+        np.asarray(noise_variance_half, dtype=np.float64)
+    ).astype(np.float32)
+    inverse_noise_rfloat_cast_row_f64 = inverse_noise_rfloat_cast_once[None, :].astype(np.float64)
+    relion_fine_full_to_compact_device = jnp.asarray(relion_fine_full_to_compact, dtype=jnp.int32)
+    big_jit_relion_wavg_rectangle_indices_device = jnp.asarray(
+        big_jit_relion_wavg_rectangle_indices_arg, dtype=jnp.int32,
+    )
+    big_jit_relion_wavg_exact_positions_device = jnp.asarray(
+        big_jit_relion_wavg_exact_positions_arg, dtype=jnp.int32,
+    )
+    big_jit_relion_wavg_rectangle_shell_indices_device = jnp.asarray(
+        big_jit_relion_wavg_rectangle_shell_indices_arg, dtype=jnp.int32,
+    )
     for bucket_index in range(len(bucket_specs)):
         bucket_build_t0 = time.time()
         bucket = bucket_specs[bucket_index]
@@ -2074,7 +2118,7 @@ def run_local_em_exact(
             total_padded_rotations += executed_padded_rotations
             flat_score_rows = (
                 int(
-                    flat_local_row_capacities[
+                    flat_local_row_capacities.capacities[
                         (
                             int(executed_padded_image_count),
                             int(bucket.bucket_rotation_count),
@@ -2172,13 +2216,10 @@ def run_local_em_exact(
                     ),
                     dtype=jnp.float64,
                 )
-                inverse_noise_rfloat_cast_np = np.reciprocal(
-                    np.asarray(noise_variance_half, dtype=np.float64)
-                ).astype(np.float32)
+                inverse_noise_rfloat_cast_np = inverse_noise_rfloat_cast_once
                 ctf_squared_rfloat = ctf_rfloat_unpadded * ctf_rfloat_unpadded
                 corr_img_rfloat_square_unpadded = (
-                    inverse_noise_rfloat_cast_np[None, :].astype(np.float64)
-                    * ctf_squared_rfloat
+                    inverse_noise_rfloat_cast_row_f64 * ctf_squared_rfloat
                 ).astype(np.float32)
                 inverse_noise_rfloat_cast_arg = jnp.asarray(
                     inverse_noise_rfloat_cast_np,
@@ -2489,6 +2530,17 @@ def run_local_em_exact(
                 if flat_local_rows_enabled
                 else np.zeros((1, 3), dtype=np.int32)
             )
+            flat_local_row_class_blocks = (
+                _flat_local_row_class_blocks(
+                    unpadded_bucket,
+                    flat_local_row_capacities,
+                    dense_batch_size=batch_size,
+                    rotation_block_size=rotation_block_size,
+                    exact_local_bucket_radix=resolved_exact_local_bucket_radix,
+                )
+                if flat_local_rows_enabled
+                else None
+            )
             if fused_pair_fine_score_enabled:
                 fine_job_capacity_key = (
                     int(batch_size),
@@ -2558,11 +2610,11 @@ def run_local_em_exact(
                 half_weights,
                 norm_half_weights,
                 big_jit_window_indices_arg,
-                jnp.asarray(relion_fine_full_to_compact, dtype=jnp.int32),
+                relion_fine_full_to_compact_device,
                 big_jit_recon_window_indices_arg,
-                jnp.asarray(big_jit_relion_wavg_rectangle_indices_arg, dtype=jnp.int32),
-                jnp.asarray(big_jit_relion_wavg_exact_positions_arg, dtype=jnp.int32),
-                jnp.asarray(big_jit_relion_wavg_rectangle_shell_indices_arg, dtype=jnp.int32),
+                big_jit_relion_wavg_rectangle_indices_device,
+                big_jit_relion_wavg_exact_positions_device,
+                big_jit_relion_wavg_rectangle_shell_indices_device,
                 big_jit_mstep_recon_window_indices_arg,
                 shell_indices_half_arg,
                 shell_indices_noise_arg,
@@ -2598,6 +2650,7 @@ def run_local_em_exact(
             big_jit_static_options = dict(
                 n_classes=n_classes,
                 class_segment_rotation_count=(bucket.segment_rotation_count if n_classes > 1 else None),
+                class_flat_row_counts=flat_local_row_class_blocks,
                 return_uncast_normalizer=capture_uncast_normalizer,
                 mask_mode=big_jit_mask_mode,
                 score_with_masked_images=score_with_masked_images,
@@ -2882,7 +2935,7 @@ def run_local_em_exact(
                 skip_deferred_zero_norm and return_big_jit_deferred_mstep_inputs
             ):
                 noise_norm_correction = noise_norm_correction.at[jnp.asarray(bucket_image_indices, dtype=jnp.int32)].add(
-                    bucket_norm_correction[:unpadded_batch_size].astype(noise_norm_correction.dtype),
+                    _unpadded_rows(bucket_norm_correction, unpadded_batch_size).astype(noise_norm_correction.dtype),
                 )
             timing.big_jit_bucket_s += time.time() - big_jit_t0
             big_jit_bucket_count += 1
@@ -2890,19 +2943,19 @@ def run_local_em_exact(
                 sparse_big_jit_bucket_count += 1
 
             if return_big_jit_debug_arrays:
-                debug_probs_unpadded = debug_probs[:unpadded_batch_size]
+                debug_probs_unpadded = _unpadded_rows(debug_probs, unpadded_batch_size)
                 debug_scores_unpadded = (
-                    debug_scores[:unpadded_batch_size]
+                    _unpadded_rows(debug_scores, unpadded_batch_size)
                     if return_big_jit_debug_scores
                     else None
                 )
-                log_Z_unpadded = log_Z[:unpadded_batch_size]
-                best_log_score_unpadded = best_log_score[:unpadded_batch_size]
-                best_argmax_unpadded = best_argmax[:unpadded_batch_size]
-                max_posterior_unpadded = max_posterior[:unpadded_batch_size]
-                reconstruction_sample_mask_unpadded = reconstruction_sample_mask[:unpadded_batch_size]
-                reconstruction_rotation_mask_unpadded = reconstruction_rotation_mask[:unpadded_batch_size]
-                n_significant_samples_unpadded = n_significant_samples[:unpadded_batch_size]
+                log_Z_unpadded = _unpadded_rows(log_Z, unpadded_batch_size)
+                best_log_score_unpadded = _unpadded_rows(best_log_score, unpadded_batch_size)
+                best_argmax_unpadded = _unpadded_rows(best_argmax, unpadded_batch_size)
+                max_posterior_unpadded = _unpadded_rows(max_posterior, unpadded_batch_size)
+                reconstruction_sample_mask_unpadded = _unpadded_rows(reconstruction_sample_mask, unpadded_batch_size)
+                reconstruction_rotation_mask_unpadded = _unpadded_rows(reconstruction_rotation_mask, unpadded_batch_size)
+                n_significant_samples_unpadded = _unpadded_rows(n_significant_samples, unpadded_batch_size)
                 if bpref_contribution_capture_active:
                     if summed is None or ctf_probs is None or debug_scores_unpadded is None:
                         raise RuntimeError(
@@ -2993,7 +3046,7 @@ def run_local_em_exact(
                         debug_scores_unpadded,
                         debug_probs_unpadded.shape,
                         bucket=unpadded_bucket,
-                        rotation_log_prior=local_rotation_log_prior_arg[:unpadded_batch_size],
+                        rotation_log_prior=_unpadded_rows(local_rotation_log_prior_arg, unpadded_batch_size),
                     )
                     reconstruction_probs_for_dump = (
                         _exact_local_bpref_reconstruction_probs_for_capture(
@@ -3021,9 +3074,12 @@ def run_local_em_exact(
                         experiment_dataset=experiment_dataset,
                         image_indices=unpadded_bucket.image_indices,
                         current_size=current_size,
-                        summed=summed[:unpadded_batch_size],
-                        ctf_probs=ctf_probs[:unpadded_batch_size],
+                        summed=_unpadded_rows(summed, unpadded_batch_size),
+                        ctf_probs=_unpadded_rows(ctf_probs, unpadded_batch_size),
                         rotations=_local_mstep_rotations(unpadded_bucket),
+                        # Row-aligned with local_rotation_ids below; the layout
+                        # emits ids and matrices together.
+                        candidate_rotations=unpadded_bucket.local_rotations,
                         actual_counts=unpadded_bucket.actual_rotation_counts,
                         # Diagnostic-only: the segmented layout already carries per-class
                         # valid counts and the segment stride; forwarding them lets the
@@ -3086,7 +3142,7 @@ def run_local_em_exact(
                         reconstruction_group_ids=(
                             None
                             if bucket_reconstruction_group_ids is None
-                            else bucket_reconstruction_group_ids[:unpadded_batch_size]
+                            else _unpadded_rows(bucket_reconstruction_group_ids, unpadded_batch_size)
                         ),
                     )
                 if fused_debug_bucket_matches and debug_fused_posterior_dump_targets:
@@ -3179,7 +3235,7 @@ def run_local_em_exact(
                 probs_sum_t_np = (
                     np.asarray(probs_sum_t, dtype=np.float64)[:unpadded_batch_size]
                     if host_publication_enabled
-                    else np.asarray(probs_sum_t[:unpadded_batch_size], dtype=np.float64)
+                    else np.asarray(_unpadded_rows(probs_sum_t, unpadded_batch_size), dtype=np.float64)
                 )
                 (
                     reconstruction_take_indices,
@@ -3204,9 +3260,9 @@ def run_local_em_exact(
                     packed_mstep_rotations_np,
                 ) = _packed_bucket_rotations(bucket, reconstruction_take_indices, reconstruction_pack_mask_np, batch_rows=unpadded_batch_size)
                 if not host_plan_pack_enabled:
-                    packed_reconstruction_probs = _packed_reconstruction_rows(reconstruction_probs[:unpadded_batch_size], reconstruction_take_indices_jnp, reconstruction_pack_mask_jnp)
+                    packed_reconstruction_probs = _packed_reconstruction_rows(_unpadded_rows(reconstruction_probs, unpadded_batch_size), reconstruction_take_indices_jnp, reconstruction_pack_mask_jnp)
                     packed_reconstruction_probs_sum_t = jnp.take_along_axis(
-                        reconstruction_probs_sum_t[:unpadded_batch_size],
+                        _unpadded_rows(reconstruction_probs_sum_t, unpadded_batch_size),
                         reconstruction_take_indices_jnp,
                         axis=1,
                     )
@@ -3224,7 +3280,7 @@ def run_local_em_exact(
                             :unpadded_batch_size
                         ]
                         packed_source_vdam_minvsigma2 = (
-                            deferred_source_vdam_minvsigma2[:unpadded_batch_size]
+                            _unpadded_rows(deferred_source_vdam_minvsigma2, unpadded_batch_size)
                         )
                         packed_source_vdam_posterior = packed_reconstruction_probs
                     if packed_final_noise_enabled:
@@ -3310,7 +3366,7 @@ def run_local_em_exact(
                             )
                     else:
                         packed_source_vdam_ctf_probs = jnp.take_along_axis(
-                            deferred_source_vdam_ctf_probs[:unpadded_batch_size],
+                            _unpadded_rows(deferred_source_vdam_ctf_probs, unpadded_batch_size),
                             reconstruction_take_indices_jnp[:, :, None],
                             axis=1,
                         )
@@ -3324,7 +3380,7 @@ def run_local_em_exact(
                 packed_ctf_probs = None
                 packed_flat_rotations = None
             elif return_source_vdam_operands:
-                probs_sum_t_np = np.asarray(probs_sum_t[:unpadded_batch_size], dtype=np.float64)
+                probs_sum_t_np = np.asarray(_unpadded_rows(probs_sum_t, unpadded_batch_size), dtype=np.float64)
                 if vdam_replay._relion_vdam_block_start_replay_active(
                     debug_iteration=debug_iteration
                 ):
@@ -3363,16 +3419,16 @@ def run_local_em_exact(
                     packed_rotations_np,
                     packed_mstep_rotations_np,
                 ) = _packed_bucket_rotations(bucket, reconstruction_take_indices, reconstruction_pack_mask_np, batch_rows=unpadded_batch_size, rotations_dtype=np.float32)
-                packed_source_vdam_images = source_vdam_images[:unpadded_batch_size]
-                packed_source_vdam_ctf = source_vdam_ctf[:unpadded_batch_size]
-                packed_source_vdam_minvsigma2 = source_vdam_minvsigma2[:unpadded_batch_size]
-                packed_source_vdam_posterior = _packed_reconstruction_rows(source_vdam_posterior[:unpadded_batch_size], reconstruction_take_indices_jnp, reconstruction_pack_mask_jnp)
-                packed_source_vdam_reference = _packed_reconstruction_rows(source_vdam_reference[:unpadded_batch_size], reconstruction_take_indices_jnp, reconstruction_pack_mask_jnp)
+                packed_source_vdam_images = _unpadded_rows(source_vdam_images, unpadded_batch_size)
+                packed_source_vdam_ctf = _unpadded_rows(source_vdam_ctf, unpadded_batch_size)
+                packed_source_vdam_minvsigma2 = _unpadded_rows(source_vdam_minvsigma2, unpadded_batch_size)
+                packed_source_vdam_posterior = _packed_reconstruction_rows(_unpadded_rows(source_vdam_posterior, unpadded_batch_size), reconstruction_take_indices_jnp, reconstruction_pack_mask_jnp)
+                packed_source_vdam_reference = _packed_reconstruction_rows(_unpadded_rows(source_vdam_reference, unpadded_batch_size), reconstruction_take_indices_jnp, reconstruction_pack_mask_jnp)
                 packed_summed = None
                 packed_ctf_probs = None
                 packed_flat_rotations = None
             elif sparse_big_jit_backprojection and (not disable_adjoint_y or not disable_adjoint_ctf):
-                probs_sum_t_np = np.asarray(probs_sum_t[:unpadded_batch_size], dtype=np.float64)
+                probs_sum_t_np = np.asarray(_unpadded_rows(probs_sum_t, unpadded_batch_size), dtype=np.float64)
                 (
                     reconstruction_take_indices,
                     reconstruction_pack_mask_np,
@@ -3391,8 +3447,8 @@ def run_local_em_exact(
                     packed_rotations_np,
                     packed_mstep_rotations_np,
                 ) = _packed_bucket_rotations(bucket, reconstruction_take_indices, reconstruction_pack_mask_np, batch_rows=unpadded_batch_size)
-                packed_summed = _packed_reconstruction_rows(summed[:unpadded_batch_size], reconstruction_take_indices_jnp, reconstruction_pack_mask_jnp)
-                packed_ctf_probs = _packed_reconstruction_rows(ctf_probs[:unpadded_batch_size], reconstruction_take_indices_jnp, reconstruction_pack_mask_jnp)
+                packed_summed = _packed_reconstruction_rows(_unpadded_rows(summed, unpadded_batch_size), reconstruction_take_indices_jnp, reconstruction_pack_mask_jnp)
+                packed_ctf_probs = _packed_reconstruction_rows(_unpadded_rows(ctf_probs, unpadded_batch_size), reconstruction_take_indices_jnp, reconstruction_pack_mask_jnp)
                 packed_flat_rotations = flatten_bucket_rotations(jnp.asarray(packed_mstep_rotations_np))
                 if n_classes > 1:
                     # One joint pack would scatter every class's rows into one volume.
@@ -3419,12 +3475,12 @@ def run_local_em_exact(
                         class_packed_adjoint_inputs.append((
                             flatten_bucket_rows(
                                 _packed_reconstruction_rows(
-                                    summed[:unpadded_batch_size], class_take_jnp, class_mask_jnp,
+                                    _unpadded_rows(summed, unpadded_batch_size), class_take_jnp, class_mask_jnp,
                                 )
                             ),
                             flatten_bucket_rows(
                                 _packed_reconstruction_rows(
-                                    ctf_probs[:unpadded_batch_size], class_take_jnp, class_mask_jnp,
+                                    _unpadded_rows(ctf_probs, unpadded_batch_size), class_take_jnp, class_mask_jnp,
                                 )
                             ),
                             flatten_bucket_rotations(jnp.asarray(class_mstep_rotations_np)),
@@ -3479,8 +3535,8 @@ def run_local_em_exact(
                         float(sparse_big_jit_mstep_cap_gb),
                     )
                     logged_deferred_mstep_chunking = True
-                shifted_recon_split_unpadded = shifted_recon_split[:unpadded_batch_size]
-                ctf2_over_nv_recon_unpadded = ctf2_over_nv_recon[:unpadded_batch_size]
+                shifted_recon_split_unpadded = _unpadded_rows(shifted_recon_split, unpadded_batch_size)
+                ctf2_over_nv_recon_unpadded = _unpadded_rows(ctf2_over_nv_recon, unpadded_batch_size)
                 for particle_start in range(0, unpadded_batch_size, particle_chunk_size):
                     particle_stop = min(
                         unpadded_batch_size,
@@ -3539,8 +3595,8 @@ def run_local_em_exact(
                         unpadded_batch_size,
                     )
                     logged_deferred_mstep_chunking = True
-                shifted_recon_split_unpadded = shifted_recon_split[:unpadded_batch_size]
-                ctf2_over_nv_recon_unpadded = ctf2_over_nv_recon[:unpadded_batch_size]
+                shifted_recon_split_unpadded = _unpadded_rows(shifted_recon_split, unpadded_batch_size)
+                ctf2_over_nv_recon_unpadded = _unpadded_rows(ctf2_over_nv_recon, unpadded_batch_size)
                 for chunk_start in range(0, packed_rotation_count, chunk_rows):
                     chunk_stop = min(packed_rotation_count, chunk_start + chunk_rows)
                     chunk_probs = packed_reconstruction_probs[:, chunk_start:chunk_stop]
@@ -3710,11 +3766,11 @@ def run_local_em_exact(
                         )
                         & reconstruction_pack_mask_np
                     ),
-                    local_rotation_ids=bucket.local_rotation_ids[:unpadded_batch_size],
+                    local_rotation_ids=_unpadded_rows(bucket.local_rotation_ids, unpadded_batch_size),
                     reconstruction_group_ids=(
                         None
                         if bucket_reconstruction_group_ids is None
-                        else bucket_reconstruction_group_ids[:unpadded_batch_size]
+                        else _unpadded_rows(bucket_reconstruction_group_ids, unpadded_batch_size)
                     ),
                     candidate_launch_counts=native_grid_counts,
                     debug_iteration=debug_iteration,
@@ -4201,7 +4257,7 @@ def run_local_em_exact(
                 and not use_packed_final_noise
             ):
                 noise_t0 = time.time()
-                reconstruction_probs_unpadded = reconstruction_probs[:unpadded_batch_size]
+                reconstruction_probs_unpadded = _unpadded_rows(reconstruction_probs, unpadded_batch_size)
                 preserve_dense_noise_reduction = bool(
                     return_deferred_source_vdam_operands
                 )
@@ -4277,7 +4333,7 @@ def run_local_em_exact(
                     and logical_current_size is not None
                 )
                 bucket_group_ids = (
-                    group_ids_arg[:unpadded_batch_size] if group_ids_np is not None else None
+                    _unpadded_rows(group_ids_arg, unpadded_batch_size) if group_ids_np is not None else None
                 )
                 if preserve_dense_noise_reduction:
                     flat_row_plan = jnp.asarray(
@@ -4402,12 +4458,12 @@ def run_local_em_exact(
                         noise_scale_xa = add_segment_sum(
                             noise_scale_xa,
                             bucket_group_ids,
-                            scale_xa_per_image[:unpadded_batch_size].astype(noise_scale_xa.dtype),
+                            _unpadded_rows(scale_xa_per_image, unpadded_batch_size).astype(noise_scale_xa.dtype),
                         )
                         noise_scale_aa = add_segment_sum(
                             noise_scale_aa,
                             bucket_group_ids,
-                            scale_aa_per_image[:unpadded_batch_size].astype(noise_scale_aa.dtype),
+                            _unpadded_rows(scale_aa_per_image, unpadded_batch_size).astype(noise_scale_aa.dtype),
                         )
                 else:
                     shifted_noise_split_unpadded = shifted_noise_split[
@@ -4599,7 +4655,7 @@ def run_local_em_exact(
                     noise_xa = noise_xa + block_xa_shells
                 bucket_norm_rows = batch_img_power_per_image + block_norm_residual
                 if preserve_dense_noise_reduction:
-                    bucket_norm_rows = bucket_norm_rows[:unpadded_batch_size]
+                    bucket_norm_rows = _unpadded_rows(bucket_norm_rows, unpadded_batch_size)
                 noise_norm_correction = noise_norm_correction.at[jnp.asarray(bucket_image_indices, dtype=jnp.int32)].add(
                     bucket_norm_rows.astype(noise_norm_correction.dtype),
                 )
@@ -5284,6 +5340,7 @@ def run_local_em_exact(
                     summed=summed,
                     ctf_probs=ctf_probs,
                     rotations=_local_mstep_rotations(bucket),
+                    candidate_rotations=bucket.local_rotations,
                     actual_counts=bucket.actual_rotation_counts,
                     # Same diagnostic-only forwarding as the big-JIT call site above;
                     # both local routes can reach a class-segmented bucket.
@@ -6143,6 +6200,13 @@ def run_local_em_exact(
             "sum_union_rows": np.int64(total_local_rotations),
             "sum_padded_rows": np.int64(total_padded_rotations),
             "sum_flat_score_rows": np.int64(total_flat_score_rows),
+            "sum_flat_required_rows": np.int64(
+                flat_local_row_capacities.required_rows
+            ),
+            "flat_local_pool_size": np.int64(flat_local_row_capacities.pool_size),
+            "flat_local_row_rounding": np.asarray(
+                flat_local_row_capacities.round_row_widths
+            ),
             "sum_fused_pair_candidates": np.int64(total_fused_pair_candidates),
             "sum_fused_pair_capacity": np.int64(total_fused_pair_capacity),
             "sum_fused_pair_dense_capacity": np.int64(

@@ -2,13 +2,131 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 
 import jax.numpy as jnp
 import numpy as np
 
 from recovar.em.helpers.deterministic_reduce import deterministic_reductions_enabled
-from recovar.em.local.local_layout import _exact_bucket_rotation_size
+from recovar.em.local.local_layout import (
+    _exact_bucket_rotation_size,
+    _exact_local_large_bucket_quantum,
+)
+
+# Consecutive images are packed in pools that share one rotation width, so a pool
+# costs ``pool_size`` times its largest member's padded neighborhood. Pooling exists
+# to keep the number of distinct packed shapes down, not for any scientific reason:
+# ``valid_mask`` already marks which rows carry a real hypothesis, so the pool size
+# changes the padded shape and nothing about the result. Larger pools mean fewer
+# shapes and more padded rows; 3 is the historical default.
+EXACT_LOCAL_FLAT_POOL_SIZE = 3
+EXACT_LOCAL_FLAT_POOL_SIZE_ENV = "RECOVAR_EXACT_LOCAL_FLAT_POOL_SIZE"
+
+# Inside a pool, each image's row block is first rounded up to an ordinary exact-local
+# rotation bucket (powers of two below the engine cap). That rounding predates packed
+# rows, where a row block's length was also a compiled shape; in a packed plan the row
+# block is addressed entirely through ``image_indices``/``rotation_rows`` and only the
+# final ``packed_row_count`` is a shape. So the rounding now costs rows and buys
+# nothing, and switching it off is a padding change, not a semantic one -- but it is
+# left on by default until measured, because the rounded widths do make neighboring
+# pools agree more often and so make the shared capacity a tighter fit.
+EXACT_LOCAL_FLAT_ROW_ROUNDING = True
+EXACT_LOCAL_FLAT_ROW_ROUNDING_ENV = "RECOVAR_EXACT_LOCAL_FLAT_ROW_ROUNDING"
+
+# The shared packed-row capacity is a running maximum over the current iteration's
+# buckets, so it drifts with the trajectory, and because ``packed_row_count`` is a
+# compiled shape every drift mints a new XLA program. On the shipped 200-mini-batch
+# K=1 schedule that is expensive: compilation is 736 s of a 6284 s host profile
+# (11.7% of wall), and the compile attribution names ``run_local_bucket_big_jit``
+# the largest single contributor at about 2 s per compilation.
+#
+# Rounding the capacity onto a coarse ladder makes neighboring iterations reuse one
+# shape. The extra rows are the same score-inert tail the pool padding already adds
+# -- ``valid_mask`` marks the real hypotheses and validity-aware fine CUDA returns
+# ``+inf`` before doing pixel work -- and padding measures nearly free: across a
+# pool sweep the capacity rose 35% (2 804 736 to 3 784 704 rows) while the big-jit
+# kernel time moved 2% (17.85 to 17.43 s).
+#
+# The value is the number of ladder steps per power of two, so 8 means at most
+# 12.5% padding and at most 8 distinct capacities per octave. 0 disables the ladder
+# and restores the exact running maximum, which is the default until measured.
+EXACT_LOCAL_FLAT_ROW_CAPACITY_STEPS = 0
+EXACT_LOCAL_FLAT_ROW_CAPACITY_STEPS_ENV = "RECOVAR_EXACT_LOCAL_FLAT_ROW_CAPACITY_STEPS"
+
+
+def resolve_flat_local_row_capacity_steps(explicit: int | None = None) -> int:
+    """Resolve the packed-row capacity ladder granularity, in steps per octave."""
+
+    source = "flat_local_row_capacity_steps"
+    raw_value = explicit
+    if raw_value is None:
+        source = EXACT_LOCAL_FLAT_ROW_CAPACITY_STEPS_ENV
+        raw_value = os.environ.get(
+            EXACT_LOCAL_FLAT_ROW_CAPACITY_STEPS_ENV,
+            str(EXACT_LOCAL_FLAT_ROW_CAPACITY_STEPS),
+        ).strip()
+        if not raw_value:
+            raw_value = EXACT_LOCAL_FLAT_ROW_CAPACITY_STEPS
+    try:
+        steps = int(raw_value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{source} must be a non-negative integer") from exc
+    if steps < 0:
+        raise ValueError(f"{source} must be a non-negative integer")
+    return steps
+
+
+def quantize_packed_row_capacity(capacity: int, steps: int) -> int:
+    """Round a packed-row capacity up onto a ladder of ``steps`` values per octave.
+
+    Returns ``capacity`` unchanged when the ladder is disabled or the capacity is
+    not positive. The result is never smaller than ``capacity``, so a quantized
+    plan always has room for every row the unquantized plan required.
+    """
+
+    capacity = int(capacity)
+    if steps <= 0 or capacity <= 0:
+        return capacity
+    octave = 1 << (capacity.bit_length() - 1)
+    stride = max(1, octave // steps)
+    return -(-capacity // stride) * stride
+
+
+def resolve_flat_local_pool_size(explicit: int | None = None) -> int:
+    """Resolve the packed-row pool size from an explicit value or the environment."""
+
+    source = "flat_local_pool_size"
+    raw_value = explicit
+    if raw_value is None:
+        source = EXACT_LOCAL_FLAT_POOL_SIZE_ENV
+        raw_value = os.environ.get(
+            EXACT_LOCAL_FLAT_POOL_SIZE_ENV, str(EXACT_LOCAL_FLAT_POOL_SIZE)
+        ).strip()
+        if not raw_value:
+            raw_value = EXACT_LOCAL_FLAT_POOL_SIZE
+    try:
+        pool_size = int(raw_value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{source} must be a positive integer") from exc
+    if pool_size < 1:
+        raise ValueError(f"{source} must be a positive integer")
+    return pool_size
+
+
+def resolve_flat_local_row_rounding(explicit: bool | None = None) -> bool:
+    """Resolve whether packed row blocks round up to ordinary rotation buckets."""
+
+    if explicit is not None:
+        return bool(explicit)
+    raw_value = os.environ.get(EXACT_LOCAL_FLAT_ROW_ROUNDING_ENV, "").strip()
+    if not raw_value:
+        return bool(EXACT_LOCAL_FLAT_ROW_ROUNDING)
+    if raw_value in ("0", "false", "False"):
+        return False
+    if raw_value in ("1", "true", "True"):
+        return True
+    raise ValueError(f"{EXACT_LOCAL_FLAT_ROW_ROUNDING_ENV} must be 0 or 1")
 
 
 @dataclass(frozen=True)
@@ -17,8 +135,16 @@ class FlatLocalRowPlan:
 
     image_indices: np.ndarray
     rotation_rows: np.ndarray
+    present_mask: np.ndarray
     valid_mask: np.ndarray
+    batch_size: int
+    physical_image_count: int
+    dense_rotation_count: int
     packed_row_count: int
+    # Class-segmented plans only. Rows are emitted class-major, so class k owns the
+    # contiguous block [sum(class_row_counts[:k]), +class_row_counts[k]). Projection
+    # slices those blocks to use each class's own volume; None for single-class plans.
+    class_row_counts: tuple[int, ...] | None = None
 
 
 def encode_flat_local_row_plan(plan: FlatLocalRowPlan) -> np.ndarray:
@@ -146,6 +272,7 @@ def build_pool_flat_local_row_plan(
     packed_row_count: int | None = None,
     dense_batch_size: int | None = None,
     large_bucket_quantum: int | None = None,
+    round_row_widths: bool | None = None,
 ) -> FlatLocalRowPlan:
     """Pack consecutive physical pools without changing image/rotation order.
 
@@ -175,18 +302,21 @@ def build_pool_flat_local_row_plan(
     if np.any(rotation_counts < 1) or np.any(rotation_counts > dense_rotation_count):
         raise ValueError("rotation counts must lie in [1, dense_rotation_count]")
 
-    ordinary_buckets = np.asarray(
-        [
-            _exact_bucket_rotation_size(
-                int(count),
-                rotation_block_size,
-                large_bucket_quantum=large_bucket_quantum,
-                exact_local_bucket_radix=exact_local_bucket_radix,
-            )
-            for count in rotation_counts
-        ],
-        dtype=np.int32,
-    )
+    if resolve_flat_local_row_rounding(round_row_widths):
+        ordinary_buckets = np.asarray(
+            [
+                _exact_bucket_rotation_size(
+                    int(count),
+                    rotation_block_size,
+                    large_bucket_quantum=large_bucket_quantum,
+                    exact_local_bucket_radix=exact_local_bucket_radix,
+                )
+                for count in rotation_counts
+            ],
+            dtype=np.int32,
+        )
+    else:
+        ordinary_buckets = rotation_counts.astype(np.int32, copy=True)
     if np.any(ordinary_buckets > dense_rotation_count):
         raise ValueError("a pool bucket exceeds the enclosing dense rotation axis")
 
@@ -213,6 +343,7 @@ def build_pool_flat_local_row_plan(
         raise ValueError(
             f"packed_row_count {packed_row_count} is smaller than required rows {required_rows}",
         )
+    present_mask = np.arange(packed_row_count, dtype=np.int32) < required_rows
     if packed_row_count > required_rows:
         pad = packed_row_count - required_rows
         image_indices = np.pad(image_indices, (0, pad), constant_values=0)
@@ -222,8 +353,149 @@ def build_pool_flat_local_row_plan(
     return FlatLocalRowPlan(
         image_indices=image_indices,
         rotation_rows=rotation_rows,
+        present_mask=present_mask,
         valid_mask=valid_mask,
+        batch_size=dense_batch_size,
+        physical_image_count=physical_image_count,
+        dense_rotation_count=dense_rotation_count,
         packed_row_count=packed_row_count,
+    )
+
+
+def build_pool_flat_local_row_plan_for_classes(
+    class_rotation_counts,
+    segment_rotation_count: int,
+    *,
+    pool_size: int = 3,
+    rotation_block_size: int = 5000,
+    exact_local_bucket_radix: int | None = None,
+    large_bucket_quantum: int | None = None,
+    packed_row_count: int | None = None,
+    dense_batch_size: int | None = None,
+    round_row_widths: bool | None = None,
+) -> FlatLocalRowPlan:
+    """Pack class-segmented local rows without changing image/class/rotation order.
+
+    A class-segmented bucket lays each image's rows out class-major,
+    ``[class 0 rows | pad | class 1 rows | pad | ...]``, so a row's index on the
+    dense axis is ``class * segment_rotation_count + rotation``. That is the only
+    thing the flat plan needs to know about classes, which is why the returned
+    plan is an ordinary :class:`FlatLocalRowPlan`: downstream kernels index rows
+    through ``rotation_rows`` and never learn that classes exist.
+
+    Unlike the rectangular layout, each class is sized independently from the
+    largest count that class needs inside the pool, instead of every class and
+    image sharing one segment width taken over the whole halfset.
+
+    ``class_rotation_counts`` is ``[n_images, n_classes]``.
+    """
+
+    class_rotation_counts = np.asarray(class_rotation_counts, dtype=np.int32)
+    if class_rotation_counts.ndim != 2:
+        raise ValueError("class_rotation_counts must be [n_images, n_classes]")
+    physical_image_count, n_classes = (int(x) for x in class_rotation_counts.shape)
+    segment_rotation_count = int(segment_rotation_count)
+    pool_size = int(pool_size)
+    rotation_block_size = int(rotation_block_size)
+    if dense_batch_size is None:
+        dense_batch_size = physical_image_count
+    dense_batch_size = int(dense_batch_size)
+    if physical_image_count < 1:
+        raise ValueError("class_rotation_counts must contain at least one image")
+    if n_classes < 1:
+        raise ValueError("class_rotation_counts must contain at least one class")
+    if dense_batch_size < physical_image_count:
+        raise ValueError("dense_batch_size cannot be smaller than the physical image count")
+    if pool_size < 1:
+        raise ValueError("pool_size must be positive")
+    if segment_rotation_count < 1:
+        raise ValueError("segment_rotation_count must be positive")
+    if np.any(class_rotation_counts < 0) or np.any(class_rotation_counts > segment_rotation_count):
+        raise ValueError("class rotation counts must lie in [0, segment_rotation_count]")
+
+    dense_rotation_count = segment_rotation_count * n_classes
+    # The segment width came from the bucketer's resolved large-bucket quantum, so a
+    # class must be quantized with the same one; a different quantum can round a class
+    # above its own segment.
+    resolved_large_bucket_quantum = _exact_local_large_bucket_quantum(
+        rotation_block_size, large_bucket_quantum,
+    )
+    if resolve_flat_local_row_rounding(round_row_widths):
+        ordinary_buckets = np.asarray(
+            [
+                [
+                    _exact_bucket_rotation_size(
+                        int(count),
+                        rotation_block_size,
+                        large_bucket_quantum=resolved_large_bucket_quantum,
+                        exact_local_bucket_radix=exact_local_bucket_radix,
+                    )
+                    if int(count) > 0
+                    else 0
+                    for count in image_counts
+                ]
+                for image_counts in class_rotation_counts
+            ],
+            dtype=np.int32,
+        )
+    else:
+        ordinary_buckets = class_rotation_counts.astype(np.int32, copy=True)
+    if np.any(ordinary_buckets > segment_rotation_count):
+        raise ValueError("a pool bucket exceeds the enclosing class segment")
+
+    image_parts: list[np.ndarray] = []
+    rotation_parts: list[np.ndarray] = []
+    valid_parts: list[np.ndarray] = []
+    class_row_counts: list[int] = []
+    # Class-major: every row of class k is emitted before any row of class k+1, so a
+    # projection can slice class k's block and use class k's volume. Within a class the
+    # original pool/image order is preserved.
+    for class_index in range(n_classes):
+        rows_before = int(sum(part.size for part in image_parts))
+        for pool_start in range(0, physical_image_count, pool_size):
+            pool_stop = min(physical_image_count, pool_start + pool_size)
+            # Each class gets its own width inside the pool; a class that no image in
+            # the pool uses contributes no rows at all.
+            width = int(ordinary_buckets[pool_start:pool_stop, class_index].max())
+            if width == 0:
+                continue
+            rows = np.arange(width, dtype=np.int32)
+            for image_index in range(pool_start, pool_stop):
+                image_parts.append(np.full(width, image_index, dtype=np.int32))
+                rotation_parts.append(rows + class_index * segment_rotation_count)
+                valid_parts.append(rows < int(class_rotation_counts[image_index, class_index]))
+        class_row_counts.append(int(sum(part.size for part in image_parts)) - rows_before)
+
+    if not image_parts:
+        raise ValueError("class-segmented flat rows need at least one populated class")
+    image_indices = np.concatenate(image_parts)
+    rotation_rows = np.concatenate(rotation_parts)
+    valid_mask = np.concatenate(valid_parts)
+    required_rows = int(image_indices.size)
+    if packed_row_count is None:
+        packed_row_count = required_rows
+    packed_row_count = int(packed_row_count)
+    if packed_row_count < required_rows:
+        raise ValueError(
+            f"packed_row_count {packed_row_count} is smaller than required rows {required_rows}",
+        )
+    present_mask = np.arange(packed_row_count, dtype=np.int32) < required_rows
+    if packed_row_count > required_rows:
+        pad = packed_row_count - required_rows
+        image_indices = np.pad(image_indices, (0, pad), constant_values=0)
+        rotation_rows = np.pad(rotation_rows, (0, pad), constant_values=0)
+        valid_mask = np.pad(valid_mask, (0, pad), constant_values=False)
+
+    return FlatLocalRowPlan(
+        image_indices=image_indices,
+        rotation_rows=rotation_rows,
+        present_mask=present_mask,
+        valid_mask=valid_mask,
+        batch_size=dense_batch_size,
+        physical_image_count=physical_image_count,
+        dense_rotation_count=dense_rotation_count,
+        packed_row_count=packed_row_count,
+        class_row_counts=tuple(class_row_counts),
     )
 
 

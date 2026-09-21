@@ -672,6 +672,7 @@ def _maybe_dump_bpref_contribution_rows(
     relion_cuda_preprocess_radius=None,
     relion_cuda_preprocess_cosine_width=None,
     preprocess_path=None,
+    candidate_rotations=None,
 ):
     """Dump posterior-reduced active rows for whole-accumulator scatter replay.
 
@@ -859,6 +860,21 @@ def _maybe_dump_bpref_contribution_rows(
         rotation_indices_np = np.broadcast_to(rotation_indices_np[None, :], summed_np.shape[:2])
     if rotation_indices_np.shape[:2] != summed_np.shape[:2]:
         raise ValueError("BPref contribution dump rotation_indices shape mismatch")
+
+    if candidate_rotations is None:
+        candidate_rotations_np = np.empty((0, 0, 3, 3), dtype=np.float32)
+    else:
+        candidate_rotations_np = _select_particle_axis(candidate_rotations).astype(
+            np.float32, copy=False
+        )
+        expected = summed_np.shape[:2] + (3, 3)
+        if candidate_rotations_np.shape != expected:
+            raise ValueError(
+                "BPref contribution dump candidate_rotations must be row-aligned with the "
+                f"candidate axis: expected {expected}, got {candidate_rotations_np.shape}"
+            )
+        if not np.all(np.isfinite(candidate_rotations_np)):
+            raise ValueError("BPref contribution dump candidate_rotations must be finite")
 
     global _bpref_contribution_dump_counter
     dump_idx = _bpref_contribution_dump_counter
@@ -1051,6 +1067,11 @@ def _maybe_dump_bpref_contribution_rows(
         reconstruction_padding_factor=np.int32(reconstruction_padding_factor),
         actual_counts=actual_counts_np,
         oversampled_rotation_indices=rotation_indices_np,
+        # The rotation matrices the engine actually scored, row-aligned with
+        # oversampled_rotation_indices. The layout produces ids and matrices together
+        # (local_layout.py:930-937), so a replay cannot recover these by indexing any
+        # global table; recording them removes that reconstruction entirely.
+        candidate_rotations=candidate_rotations_np,
         fine_translations=np.asarray(fine_translations),
         candidate_preprior_scores=preprior_scores_np,
         candidate_rotation_log_prior=rotation_log_prior_np,

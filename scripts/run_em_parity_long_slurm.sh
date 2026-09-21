@@ -34,7 +34,45 @@ K1_FIXTURE_DIR="${K1_FIXTURE_DIR:-/scratch/gpfs/GILLES/mg6942/em_relion_proj/dat
 K1_NATIVE_RELION_DIR="${K1_NATIVE_RELION_DIR:-${K1_FIXTURE_DIR}/relion_initialmodel_k1_it008}"
 RELION_REFINE="${RELION_REFINE:-/scratch/gpfs/GILLES/mg6942/relion/build_patched/bin/relion_refine}"
 mkdir -p "${SCRATCH_DIR}"
+# pytest --basetemp creates only its own leaf directory, so the results root has to
+# exist first; without it every test job dies in setup with FileNotFoundError before
+# running anything.
+mkdir -p "${SCRATCH_DIR}/results"
 touch "${SCRATCH_DIR}/SAFE_TO_DELETE"
+
+# Build the custom CUDA library once, here, into the cache root the jobs will use.
+# The builder serializes on a lock file, so without this the four GPU jobs would each
+# hold an allocation while waiting for whichever of them won the build. Building up
+# front also means every job in this tier loads one binary whose digest is printed in
+# each job log.
+export RECOVAR_CUDA_CACHE_DIR="${SCRATCH_DIR}/cuda_cache"
+mkdir -p "${RECOVAR_CUDA_CACHE_DIR}"
+RELION_SRC_DIR="${RELION_SRC_DIR:-/scratch/gpfs/GILLES/mg6942/relion/src}"
+if [[ ! -f "${RELION_SRC_DIR}/projector.h" ]]; then
+  echo "RELION_SRC_DIR must name a RELION src directory containing projector.h" >&2
+  echo "  got: ${RELION_SRC_DIR}" >&2
+  exit 2
+fi
+export RELION_SRC_DIR
+
+# run_full_refinement.py imports recovar.relion_bind._relion_bind_core for the RELION
+# half-set ordering, and a fresh checkout has no built extension, so every K=1 rung
+# dies in seconds with an ImportError. Build it once here, into this tier's own scratch
+# directory, and let the jobs load it through RECOVAR_RELION_BIND_BUILD_DIR -- the same
+# arrangement the robustness matrix uses, and for the same reason the CUDA library is
+# built here: a login-node build keeps a foreign toolchain and a per-job rebuild out of
+# the GPU allocations.
+export RECOVAR_RELION_BIND_BUILD_DIR="${SCRATCH_DIR}/relion_bind_build"
+mkdir -p "${RECOVAR_RELION_BIND_BUILD_DIR}"
+echo "Building the RELION binding into ${RECOVAR_RELION_BIND_BUILD_DIR} ..."
+"${REPO_ROOT}/.pixi/envs/default/bin/python" "${REPO_ROOT}/recovar/relion_bind/build.py"
+ls -1 "${RECOVAR_RELION_BIND_BUILD_DIR}"/_relion_bind_core*.so \
+  || { echo "RELION binding build produced no extension" >&2; exit 2; }
+
+echo "Building the custom CUDA library into ${RECOVAR_CUDA_CACHE_DIR} ..."
+"${REPO_ROOT}/.pixi/envs/default/bin/python" -m recovar.commands.build_custom_cuda \
+  --output "${RECOVAR_CUDA_CACHE_DIR}/libcuda_backproject.so"
+sha256sum "${RECOVAR_CUDA_CACHE_DIR}/libcuda_backproject.so"
 
 WATCH=0
 for arg in "$@"; do
@@ -65,11 +103,42 @@ make_test_script() {
 set -euo pipefail
 cd "${REPO_ROOT}"
 unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV
+# Keep the pixi environment's conda toolchain off the front of PATH. A run of this
+# tier failed its custom CUDA build with "ld: cannot find -lcuda": nvcc picked the
+# conda g++ because that environment's bin came first, and the conda gcc's bundled
+# linker does not search where the CUDA driver stub lives. The environment is this
+# checkout's own -- .pixi is a symlink chain ending in a shared env -- so this is not
+# foreign contamination, it is an ordering problem, and prepending would cause it
+# rather than cure it. Everything here invokes the interpreter by absolute path, so
+# the environment is appended, leaving the system toolchain first for nvcc.
+PATH="\$(printf '%s' "\${PATH}" | tr ':' '\\n' \\
+  | grep -v '/\\.pixi/envs/' \\
+  | paste -sd: -)"
+export PATH="\${PATH}:${REPO_ROOT}/.pixi/envs/default/bin"
 export PYTHONNOUSERSITE=1
 export TMPDIR="${SCRATCH_DIR}/tmp/${job_name}_\${SLURM_JOB_ID}"
 export PIXI_HOME="${SCRATCH_DIR}/pixi_home/${job_name}_\${SLURM_JOB_ID}"
 export RATTLER_CACHE_DIR="${SCRATCH_DIR}/rattler_cache/${job_name}_\${SLURM_JOB_ID}"
-mkdir -p "\${TMPDIR}" "\${PIXI_HOME}" "\${RATTLER_CACHE_DIR}"
+# The custom CUDA library cache is keyed on the home directory alone, not on the
+# CUDA sources, so every checkout on this machine shares one libcuda_backproject.so.
+# The staleness test compares source mtimes against that one file, which means a
+# rebuild triggered here would rewrite the binary underneath any other job already
+# running against it, and a checkout whose sources are older than someone else's
+# build silently loads someone else's binary. Giving the tier its own cache root
+# makes the library this tier builds and loads private to this tier.
+export RECOVAR_CUDA_CACHE_DIR="${SCRATCH_DIR}/cuda_cache"
+# tests/conftest.py builds its own library at <repo>/.tmp/pytest_custom_cuda/ and
+# overrides RECOVAR_CUDA_CACHE_DIR while doing so, so that path -- not the cache root
+# -- is what these jobs would load. It is shared by every test job running from this
+# checkout and is resolved by a plain exists() check taken before the build lock, so a
+# second concurrent job can pick up a partially written .so. conftest honors
+# RECOVAR_CUDA_LIB read-only, resolving it and never rebuilding, so pointing every job
+# at the one library the launcher already built removes the race, avoids an nvcc build
+# inside each GPU allocation, and gives the tier a single binary identity.
+export RECOVAR_CUDA_LIB="${SCRATCH_DIR}/cuda_cache/libcuda_backproject.so"
+export RECOVAR_RELION_BIND_BUILD_DIR="${SCRATCH_DIR}/relion_bind_build"
+export RELION_SRC_DIR="${RELION_SRC_DIR}"
+mkdir -p "\${TMPDIR}" "\${PIXI_HOME}" "\${RATTLER_CACHE_DIR}" "\${RECOVAR_CUDA_CACHE_DIR}"
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
 
 echo "=== EM-long parity Slurm job ${job_name} ==="
@@ -83,6 +152,10 @@ echo
 # Provenance gate runs inside the test, but print a short banner for the log.
 git -C "${REPO_ROOT}" rev-parse HEAD
 git -C "${REPO_ROOT}" symbolic-ref --short HEAD || echo '<detached>'
+# A configured path is not a loaded-binary identity; print the digest of the file
+# that will actually be loaded so a result can be tied to one binary after the fact.
+sha256sum "\${RECOVAR_CUDA_LIB}" 2>/dev/null \
+  || { echo "custom CUDA library missing at \${RECOVAR_CUDA_LIB}" >&2; exit 1; }
 
 pixi run python -m pytest --em-parity-long -v -s \
   --basetemp "${SCRATCH_DIR}/results/${job_name}_\${SLURM_JOB_ID}" "${test_path}"
@@ -222,6 +295,39 @@ for job_id in ${K1_NATIVE_REF_JOB} ${K1_JOB} ${K1_NATIVE_JOB} ${K4_JOB}; do
 done
 echo
 
+# A Slurm state of COMPLETED only says the job exited 0. pytest exits 0 when it
+# skips, so a rung whose fixture is missing looks exactly like a rung that passed.
+# Classify each rung from its own pytest summary line instead, and never let a
+# skipped rung contribute to an overall pass: a missing measurement is not agreement.
+skipped=0
+measured=0
+echo "=== rung outcomes ==="
+for job_name in em_parity_long_k1 em_parity_long_k1_native em_parity_long_k4; do
+  out="${SCRATCH_DIR}/\${job_name}.out"
+  if [[ ! -f "\${out}" ]]; then
+    echo "\${job_name}: NO OUTPUT"
+    failed=1
+    continue
+  fi
+  line=\$(grep -ohE '[0-9]+ (passed|failed|error|skipped)[^=]*' "\${out}" | tail -1)
+  if grep -qE '^SKIPPED|[0-9]+ skipped' "\${out}" && ! grep -qE '[0-9]+ passed' "\${out}"; then
+    echo "\${job_name}: SKIPPED (not measured) -- \${line:-no pytest summary}"
+    grep -A4 'short test summary' "\${out}" 2>/dev/null | tail -4
+    skipped=1
+  elif grep -qE '[0-9]+ (failed|error)' "\${out}"; then
+    echo "\${job_name}: FAILED -- \${line:-no pytest summary}"
+    failed=1
+  elif grep -qE '[0-9]+ passed' "\${out}"; then
+    echo "\${job_name}: passed -- \${line}"
+    measured=\$((measured + 1))
+  else
+    echo "\${job_name}: INDETERMINATE -- no pytest summary line"
+    failed=1
+  fi
+done
+echo "rungs actually measured: \${measured}"
+echo
+
 for job_name in em_parity_long_k1_native_ref em_parity_long_k1 em_parity_long_k1_native em_parity_long_k4; do
   echo "--- \${job_name} stdout tail ---"
   tail -40 "${SCRATCH_DIR}/\${job_name}.out" 2>/dev/null || echo "(no stdout)"
@@ -250,6 +356,15 @@ do
   fi
 done
 
+if [[ "\${skipped}" -ne 0 ]]; then
+  echo "EM-long tier did NOT validate: at least one rung was skipped for a missing" >&2
+  echo "fixture and therefore measured nothing. A skipped rung is not a passing rung." >&2
+  failed=1
+fi
+
+if [[ "\${failed}" -eq 0 ]]; then
+  echo "EM-long tier: all \${measured} rungs measured and passed."
+fi
 exit "\${failed}"
 EOF
 chmod +x "${SUMMARY_SCRIPT}"

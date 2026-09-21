@@ -28,16 +28,25 @@ def prepared_cache(monkeypatch):
     """A warm per-image row cache, so no STAR file or RELION binding is needed."""
 
     rng = np.random.default_rng(17)
-    rows = {
-        index: rng.standard_normal(HALF_PIXELS).astype(np.float64)
-        for index in range(N_IMAGES)
-    }
+    # The per-image rows live in one 2-D block addressed by a slot table, so the
+    # assembled operand is one gather rather than a Python loop; see the commit
+    # that introduced `slots`/`rows`. Warm every slot so this fixture still needs
+    # no STAR file or RELION binding.
+    block = rng.standard_normal((N_IMAGES, HALF_PIXELS)).astype(np.float64)
+    rows = {index: block[index] for index in range(N_IMAGES)}
     source = "/nonexistent/source.star"
     key = (source, tuple(int(size) for size in IMAGE_SHAPE))
     monkeypatch.setitem(
         relion_ctf._RELION_EXACT_CTF_SOURCE_CACHE,
         key,
-        {"particles": None, "optics": {}, "relion_bind": None, "images": dict(rows)},
+        {
+            "particles": None,
+            "optics": {},
+            "relion_bind": None,
+            "slots": np.arange(N_IMAGES, dtype=np.int64),
+            "rows": block,
+            "n_cached": N_IMAGES,
+        },
     )
     monkeypatch.setattr(relion_ctf, "_relion_exact_ctf_source_star", lambda dataset: source)
     monkeypatch.setattr(

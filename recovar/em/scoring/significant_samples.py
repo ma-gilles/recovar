@@ -56,9 +56,12 @@ def compact_significant_sample_indices_from_mask(mask) -> object:
     """Encode one boolean significance mask without materializing dense keeps."""
 
     mask_np = np.asarray(mask, dtype=bool).reshape(-1)
-    if bool(np.all(mask_np)):
-        return None
+    # One pass, not two: every element is true exactly when the count equals the
+    # size, so a separate `np.all` would walk the mask to learn what the count
+    # already says.
     included = int(np.count_nonzero(mask_np))
+    if included == mask_np.size:
+        return None
     excluded = int(mask_np.size - included)
     if included > excluded:
         return ComplementSignificantSampleIndices(

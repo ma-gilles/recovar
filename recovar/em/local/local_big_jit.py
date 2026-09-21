@@ -1604,6 +1604,66 @@ def _project_local_class_segments(
     return jnp.concatenate(segments, axis=1).reshape(batch_size * rows, segments[0].shape[-1])
 
 
+def _project_local_class_segments_flat(
+    mean_for_proj,
+    relion_projector_half,
+    flat_rotations,
+    project_rows,
+    *,
+    n_classes: int,
+    class_row_counts,
+    mean_is_per_class: bool = True,
+    projector_is_per_class: bool = True,
+):
+    """Project packed class-major flat rows, each class block from its own volume.
+
+    The rectangular sibling slices ``local_rotations[:, k*seg:(k+1)*seg]``. Flat rows
+    have no per-image rotation axis to slice, so the plan emits them class-major and
+    reports ``class_row_counts``; class ``k`` owns the contiguous block
+    ``[sum(counts[:k]), +counts[k])``. Slicing those blocks is what keeps a packed row
+    from being projected out of the wrong class volume.
+
+    ``class_row_counts`` must be static Python ints: they set the projection shapes.
+    """
+
+    counts = tuple(int(c) for c in class_row_counts)
+    if len(counts) != int(n_classes):
+        raise ValueError(
+            f"class_row_counts must have {int(n_classes)} entries, got {len(counts)}"
+        )
+    total = sum(counts)
+    if total > int(flat_rotations.shape[0]):
+        raise ValueError(
+            f"class row blocks cover {total} rows but only {int(flat_rotations.shape[0])} are packed"
+        )
+    segments = []
+    start = 0
+    for class_index, count in enumerate(counts):
+        if count <= 0:
+            continue
+        projected = project_rows(
+            _class_volume(mean_for_proj, class_index, n_classes, per_class=mean_is_per_class),
+            _class_volume(
+                relion_projector_half, class_index, n_classes, per_class=projector_is_per_class
+            ),
+            flat_rotations[start : start + count],
+        )
+        segments.append(projected)
+        start += count
+    if not segments:
+        raise ValueError("class-segmented flat rows need at least one populated class")
+    projected_rows = jnp.concatenate(segments, axis=0)
+    tail = int(flat_rotations.shape[0]) - total
+    if tail > 0:
+        # Static capacity padding beyond the plan's present rows: score-inert, but the
+        # row axis must keep its compiled shape.
+        projected_rows = jnp.concatenate(
+            (projected_rows, jnp.zeros((tail,) + projected_rows.shape[1:], projected_rows.dtype)),
+            axis=0,
+        )
+    return projected_rows
+
+
 def _adjoint_local_class_segments(
     summed,
     ctf_probs,
@@ -1925,6 +1985,7 @@ def _split_local_big_jit_carry(result):
         "unweighted_high_shell_image_power",
         "n_classes",
         "class_segment_rotation_count",
+        "class_flat_row_counts",
         "return_uncast_normalizer",
     ),
 )
@@ -2052,6 +2113,7 @@ def run_local_bucket_big_jit(
     unweighted_high_shell_image_power: bool = False,
     n_classes: int = 1,
     class_segment_rotation_count: int | None = None,
+    class_flat_row_counts: tuple[int, ...] | None = None,
     return_uncast_normalizer: bool = False,
 ):
     """Run one exact-local bucket in a single compiled numeric boundary.
@@ -2111,8 +2173,16 @@ def run_local_bucket_big_jit(
         # from the wrong class.
         if use_relion_projection_cache:
             raise ValueError("class-segmented rows do not use the K=1 local projection cache")
-        if use_flat_local_rows or use_packed_local_projection or use_fused_pair_fine_score:
-            raise ValueError("class-segmented rows do not use K=1 packed/flat local rows")
+        if use_fused_pair_fine_score:
+            raise ValueError("class-segmented rows do not use K=1 fused pair fine scoring")
+        if use_flat_local_rows and class_flat_row_counts is None:
+            # Without a class block table the packed rows are an undifferentiated list
+            # and projection cannot tell which class volume a row belongs to.
+            raise ValueError(
+                "class-segmented flat local rows require class_flat_row_counts"
+            )
+        if use_packed_local_projection and not use_flat_local_rows:
+            raise ValueError("class-segmented packed projection requires flat local rows")
         if projector_capacity:
             raise ValueError("class-segmented rows do not use the K=1 projector capacity path")
         if relion_exact_bpref_operands:
@@ -2128,7 +2198,10 @@ def run_local_bucket_big_jit(
             )
     flat_local_row_plan = jnp.asarray(flat_local_row_plan)
     if use_flat_local_rows:
-        if not relion_exact_fine_diff2:
+        if not relion_exact_fine_diff2 and class_flat_row_counts is None:
+            # The K=1 flat-row ABI was built for the exact RELION fine scorer. The
+            # class-segmented flat path scores through the ordinary bucket program
+            # instead: it is mathematically the same candidate set, just packed.
             raise ValueError(
                 "flat local rows require exact RELION fine diff2"
             )
@@ -2583,7 +2656,18 @@ def run_local_bucket_big_jit(
                 runtime_projector_r_max=runtime_projector_r_max,
             )
 
-        if n_classes > 1:
+        if n_classes > 1 and packed_local_projection and class_flat_row_counts is not None:
+            proj_half_flat = _project_local_class_segments_flat(
+                mean_for_proj,
+                relion_projector_half,
+                flat_rotations,
+                _project_rows,
+                n_classes=n_classes,
+                class_row_counts=class_flat_row_counts,
+                mean_is_per_class=not use_relion_projector,
+                projector_is_per_class=bool(use_relion_projector),
+            )
+        elif n_classes > 1:
             proj_half_flat = _project_local_class_segments(
                 mean_for_proj,
                 relion_projector_half,
