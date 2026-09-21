@@ -37,13 +37,13 @@ def test_pool_flat_rows_preserve_source_chronology_and_static_tail():
     expected = []
     for image_index, bucket_size in ((0, 64), (1, 64), (2, 64), (3, 256), (4, 256)):
         expected.extend((image_index, rotation) for rotation in range(bucket_size))
-    present = plan.present_mask
+    present = np.arange(plan.packed_row_count) < len(expected)
+    assert np.array_equal(plan.present_mask, present)
     assert list(zip(plan.image_indices[present], plan.rotation_rows[present], strict=True)) == expected
     assert np.array_equal(
         plan.valid_mask[present],
         np.asarray([rotation < counts[image] for image, rotation in expected]),
     )
-    assert not np.any(plan.present_mask[-7:])
     assert not np.any(plan.valid_mask[-7:])
     encoded = encode_flat_local_row_plan(plan)
     assert encoded.dtype == np.int32
@@ -65,9 +65,10 @@ def test_flat_row_gather_and_scatter_restore_present_dense_rows_exactly():
         exact_local_bucket_radix=4,
         packed_row_count=712,
     )
+    present = np.arange(plan.packed_row_count) < 3 * 64 + 2 * 256
     dense = np.arange(5 * dense_rotation_count * 2, dtype=np.float32).reshape(5, dense_rotation_count, 2)
     gathered = jnp.asarray(dense)[jnp.asarray(plan.image_indices), jnp.asarray(plan.rotation_rows)]
-    gathered = gathered.at[jnp.logical_not(jnp.asarray(plan.present_mask))].set(
+    gathered = gathered.at[jnp.logical_not(jnp.asarray(present))].set(
         jnp.nan,
     )
     restored = np.asarray(
@@ -84,8 +85,8 @@ def test_flat_row_gather_and_scatter_restore_present_dense_rows_exactly():
 
     expected_present = np.zeros(dense.shape[:2], dtype=bool)
     expected_present[
-        plan.image_indices[plan.present_mask],
-        plan.rotation_rows[plan.present_mask],
+        plan.image_indices[present],
+        plan.rotation_rows[present],
     ] = True
     assert np.array_equal(restored[expected_present], dense[expected_present])
     assert np.all(restored[~expected_present] == -1.0)
