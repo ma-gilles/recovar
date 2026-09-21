@@ -7,6 +7,7 @@ include setup_helpers.py
 include recovar/cuda/noise_residual.cuh
 include recovar/cuda/relion_vdam_mstep.cuh
 include recovar/cuda/relion_scoring.cuh
+include recovar/cuda/relion_posterior.cuh
 include recovar/cuda/vdam_trace.cuh
 include recovar/cuda/relion_preprocess.cuh
 include recovar/cuda/sparse_pass2_posterior.cuh

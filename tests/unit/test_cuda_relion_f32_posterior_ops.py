@@ -20,6 +20,11 @@ def test_relion_f32_posterior_cuda_source_pins_deployed_arithmetic():
         / "cuda_backproject.cu"
     ).read_text()
 
+    source = source.replace(
+        '#include "relion_posterior.cuh"',
+        (Path(__file__).resolve().parents[2] / "recovar/cuda/relion_posterior.cuh").read_text(),
+    )
+
     exponentiate_start = source.index("relion_exponentiate_f32_kernel")
     exponentiate_end = source.index("ffi::Error RelionExponentiateF32Impl", exponentiate_start)
     exponentiate = source[exponentiate_start:exponentiate_end]

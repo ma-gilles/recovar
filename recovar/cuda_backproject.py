@@ -60,6 +60,7 @@ _CUDA_BUILD_SOURCE_NAMES = (
     "relion_preprocess.cuh",
     "relion_vdam_mstep.cuh",
     "relion_scoring.cuh",
+    "relion_posterior.cuh",
     "sparse_pass2_posterior.cuh",
     "relion_translate_sum.cuh",
     "cuda_backproject.cu",

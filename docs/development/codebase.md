@@ -99,6 +99,11 @@ for detailed module contracts. Start with the boundary being changed:
 | Standard half-set and first-iteration adapters | [`refinement/half_scoring.py`](../../recovar/em/refinement/half_scoring.py), [`refinement/firstiter_cc.py`](../../recovar/em/refinement/firstiter_cc.py) |
 | Coarse/sparse scoring | [`scoring/significance.py`](../../recovar/em/scoring/significance.py), [`sparse_pass2/sparse_pass2_bucketed.py`](../../recovar/em/sparse_pass2/sparse_pass2_bucketed.py) |
 
+Coarse window metadata is published by `scoring/coarse_publication.py`; local
+reconstruction-group admission belongs to `local/local_batch_planning.py`.
+Live BPref execution modes are selected by `sparse_pass2/sparse_pass2_policy.py`;
+capture scopes and shadow comparisons stay with the diagnostic owners.
+
 Import execution APIs directly from their defining modules; helpers must not
 initialize controllers or scoring engines. During structural cleanup preserve
 casts, reduction/JIT order, array lifetime, scientific defaults and saved formats.
