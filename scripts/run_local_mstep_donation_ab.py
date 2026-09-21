@@ -216,6 +216,7 @@ SEALED_STATIC_ARGNAMES = (
     "unweighted_high_shell_image_power",
     "n_classes",
     "class_segment_rotation_count",
+    "class_flat_row_counts",
     "return_uncast_normalizer",
 )
 
