@@ -4,15 +4,13 @@ from __future__ import annotations
 
 import logging
 import os
+from functools import partial
 
 import jax
+import jax.numpy as jnp
 import numpy as np
 
 import recovar.core.fourier_transform_utils as fourier_transform_utils
-from recovar.em.local.local_backprojection import (
-    enforce_relion_half_volume_x0_hermitian,
-    enforce_relion_half_volume_x0_hermitian_host,
-)
 
 _RELION_X_HALF_TO_NATIVE_HALF_MIN_VOXELS = 200_000_000
 _RELION_X_HALF_FULL_HOST_MIN_VOXELS = 100_000_000
@@ -340,3 +338,59 @@ def _relion_x_half_volume_to_full_host(volume_flat, recon_volume_shape):
         relion_full[:, :, redundant] = conj_partner[:, :, source_cols]
 
     return np.ascontiguousarray(relion_full.transpose(2, 1, 0))
+
+
+def enforce_relion_half_volume_x0_hermitian(volume_flat, full_volume_shape):
+    """Match RELION BackProjector::enforceHermitianSymmetry on x=0 plane."""
+
+    return _enforce_relion_half_volume_x0_hermitian_jit(
+        volume_flat,
+        tuple(int(value) for value in full_volume_shape),
+    )
+
+
+@partial(jax.jit, static_argnames=("full_volume_shape",))
+def _enforce_relion_half_volume_x0_hermitian_jit(volume_flat, full_volume_shape):
+    half_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(full_volume_shape)
+    vol = jnp.asarray(volume_flat).reshape(half_shape)
+    n0, n1, _ = half_shape
+    i0 = jnp.arange(n0, dtype=jnp.int32)
+    i1 = jnp.arange(n1, dtype=jnp.int32)
+    # RELION pairs logical Xmipp-origin coordinates (z, y) with (-z, -y).
+    # In RECOVAR's centered array convention this is (N - (N % 2) - i) % N;
+    # odd RELION BPref grids therefore use N-1-i, not the unshifted -i.
+    p0 = (n0 - (n0 % 2) - i0) % n0
+    p1 = (n1 - (n1 % 2) - i1) % n1
+    plane = vol[:, :, 0]
+    partner = jnp.conj(plane[p0[:, None], p1[None, :]])
+    summed = plane + partner
+    self_partner = (p0[:, None] == i0[:, None]) & (p1[None, :] == i1[None, :])
+    plane = jnp.where(self_partner, plane, summed)
+    return vol.at[:, :, 0].set(plane).reshape(-1)
+
+
+def enforce_relion_half_volume_x0_hermitian_host(volume_flat, full_volume_shape):
+    """Host implementation of RELION x=0 Hermitian-plane enforcement.
+
+    The device path updates a single plane with ``.at[..., 0].set(...)`` but may
+    still allocate another full packed half-volume.  Large RELION BPref grids
+    already repack through host memory downstream, so handling the plane update
+    here avoids a transient GPU allocation without changing the arithmetic.
+    """
+
+    half_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(full_volume_shape)
+    host = np.asarray(jax.device_get(volume_flat))
+    if isinstance(volume_flat, np.ndarray) or not host.flags.writeable:
+        host = host.copy()
+    vol = host.reshape(half_shape)
+    n0, n1, _ = half_shape
+    i0 = np.arange(n0, dtype=np.int32)
+    i1 = np.arange(n1, dtype=np.int32)
+    p0 = (n0 - (n0 % 2) - i0) % n0
+    p1 = (n1 - (n1 % 2) - i1) % n1
+    plane = vol[:, :, 0]
+    partner = np.conj(plane[np.ix_(p0, p1)])
+    summed = plane + partner
+    self_partner = (p0[:, None] == i0[:, None]) & (p1[None, :] == i1[None, :])
+    vol[:, :, 0] = np.where(self_partner, plane, summed)
+    return vol.reshape(-1)

@@ -191,7 +191,7 @@ def test_run_em_output_to_bpref_accepts_shared_compact_backprojector_cube():
 
 def test_relion_x_public_output_to_bpref_exactly_inverts_shared_public_layout():
     from recovar.em.helpers.half_volume_mstep import relion_x_half_volume_to_full
-    from recovar.em.local.local_backprojection import enforce_relion_half_volume_x0_hermitian_host
+    from recovar.em.helpers.half_volume_mstep import enforce_relion_half_volume_x0_hermitian_host
 
     ori_size = 128
     r_max = 19

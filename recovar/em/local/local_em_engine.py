@@ -213,7 +213,7 @@ from recovar.em.local.local_timing import (
     _new_local_transfer_timer,
     _prefixed_timer_profile,
 )
-from recovar.em.refinement.projector_preparation import prepare_local_projector_slab
+from recovar.em.relion.relion_projector_setup import prepare_local_projector_slab
 from recovar.em.relion import relion_ctf
 from recovar.em.sparse_pass2 import sparse_pass2_bucketed
 from recovar.em.sparse_pass2.sparse_pass2_wavg import _make_relion_wavg_rectangle, _make_stable_relion_wavg_rectangle

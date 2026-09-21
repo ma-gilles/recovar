@@ -6,6 +6,7 @@ import pytest
 
 from recovar.em.helpers.env_flags import (
     parse_env_binary_flag,
+    parse_env_capacity_ladder,
     parse_env_flag,
     parse_env_flag_or_false,
     parse_env_true_flag,
@@ -53,3 +54,22 @@ def test_parsing_is_live_and_other_flag_contracts_remain_distinct(monkeypatch):
     assert parse_env_flag(NAME) is True
     with pytest.raises(ValueError, match="must be 0 or 1"):
         parse_env_binary_flag(NAME)
+
+
+@pytest.mark.parametrize("raw, expected", [
+    (None, (2, 4)), ("", (2, 4)), ("  ", (2, 4)),
+    ("1, 2  4", (1, 2, 4)), ("2,2,4", (2, 2, 4)),
+])
+def test_capacity_ladder_preserves_defaults_and_equal_adjacent_values(monkeypatch, raw, expected):
+    if raw is None:
+        monkeypatch.delenv(NAME, raising=False)
+    else:
+        monkeypatch.setenv(NAME, raw)
+    assert parse_env_capacity_ladder(NAME, ("2", 4)) == expected
+
+
+@pytest.mark.parametrize("raw", [",", "0,2", "-1,2", "4,2", "two", "1;2"])
+def test_capacity_ladder_rejects_invalid_values(monkeypatch, raw):
+    monkeypatch.setenv(NAME, raw)
+    with pytest.raises(ValueError):
+        parse_env_capacity_ladder(NAME, (2, 4))

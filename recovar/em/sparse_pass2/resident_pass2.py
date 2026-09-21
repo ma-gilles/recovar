@@ -74,6 +74,8 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+from recovar.em.helpers.env_flags import parse_env_capacity_ladder
+
 from recovar.em.helpers.batch_fetch import fetch_indexed_batch
 from recovar.em.helpers.deterministic_reduce import deterministic_reductions_enabled
 from recovar.em.helpers.env_flags import parse_env_flag
@@ -475,16 +477,6 @@ class ResidentPass2Plan:
     row_capacity_ladder: tuple
     image_capacity_ladder: tuple
     mstep_block_rows: int
-
-
-def _ladder_from_env(name: str, default: tuple) -> tuple:
-    raw = os.environ.get(name, "").strip()
-    if not raw:
-        return tuple(int(v) for v in default)
-    values = tuple(int(part) for part in raw.replace(",", " ").split())
-    if not values or list(values) != sorted(values) or values[0] <= 0:
-        raise ValueError(f"{name} must be an increasing list of positive integers, got {raw!r}")
-    return values
 
 
 def _floor_power_of_two(value: int) -> int:
@@ -1635,9 +1627,9 @@ def compute_pass2_stats_resident(
     )
 
     # ---- capacity plan ----------------------------------------------------
-    row_ladder = _ladder_from_env(_ROW_CAPACITY_LADDER_ENV, _DEFAULT_ROW_CAPACITY_LADDER)
+    row_ladder = parse_env_capacity_ladder(_ROW_CAPACITY_LADDER_ENV, _DEFAULT_ROW_CAPACITY_LADDER)
     image_ladder = _cap_image_capacity_ladder(
-        _ladder_from_env(_IMAGE_CAPACITY_LADDER_ENV, _DEFAULT_IMAGE_CAPACITY_LADDER),
+        parse_env_capacity_ladder(_IMAGE_CAPACITY_LADDER_ENV, _DEFAULT_IMAGE_CAPACITY_LADDER),
         n_fine_trans=n_fine_trans,
         n_recon_pixels=n_recon_windowed,
         max_tile_bytes=_max_translation_tile_bytes_for_pass(

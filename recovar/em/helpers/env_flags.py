@@ -113,3 +113,13 @@ def parse_env_flag(name: str, *, default: bool = False) -> bool:
     if raw is None or raw.strip() == "":
         return bool(default)
     return raw.strip().lower() not in {"0", "false", "no", "off"}
+
+
+def parse_env_capacity_ladder(name: str, default: tuple) -> tuple:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return tuple(int(v) for v in default)
+    values = tuple(int(part) for part in raw.replace(",", " ").split())
+    if not values or list(values) != sorted(values) or values[0] <= 0:
+        raise ValueError(f"{name} must be an increasing list of positive integers, got {raw!r}")
+    return values

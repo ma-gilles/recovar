@@ -17,12 +17,7 @@ import numpy as np
 
 from recovar.em import sampling
 
-# _run_sparse_k_class_adaptive_pass2 is re-exported: test_refactor_invariants pins it as
-# the single shared K-class entry point, so it must stay importable from here.
-from recovar.em.classification.k_class import (  # noqa: F401
-    _run_sparse_k_class_adaptive_pass2,
-    run_local_k_class_em,
-)
+from recovar.em.classification.k_class import run_local_k_class_em
 from recovar.em.diagnostics import bpref_diagnostics
 from recovar.em.diagnostics.coarse_gaussian_diagnostics import _initial_model_coarse_gemm_diagnostic_scopes
 from recovar.em.diagnostics.coarse_score_diagnostics import (

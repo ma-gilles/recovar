@@ -265,3 +265,23 @@ def reference_to_relion_projector_half_maps_and_power(
         np.asarray(power_spectra, dtype=np.float64),
         int(r_max_values[0]),
     )
+
+
+def prepare_local_projector_slab(projector_half, *, path_label="local RELION projector path"):
+    """Return one (z, y, x_half) slab, preserving the input's JAX dtype.
+
+    Local scoring accepts a slab or a singleton class axis. This is shape
+    normalization only: no Fourier conversion, interpolation or precision policy.
+    """
+    slab = jnp.asarray(projector_half)
+    if slab.ndim == 4:
+        if int(slab.shape[0]) != 1:
+            raise ValueError(
+                f"{path_label} expected a single-class projector slab, got {slab.shape}",
+            )
+        slab = slab[0]
+    if slab.ndim != 3:
+        raise ValueError(
+            f"{path_label} expected Projector::data shape (z, y, x_half), got {slab.shape}",
+        )
+    return slab

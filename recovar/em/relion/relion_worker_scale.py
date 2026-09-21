@@ -22,11 +22,13 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 
 from recovar.em.helpers.iteration_history import RefinementHistory
-from recovar.em.refinement.refinement_options import RefinementOptions
+if TYPE_CHECKING:
+    from recovar.em.refinement.refinement_options import RefinementOptions
 
 logger = logging.getLogger(__name__)
 

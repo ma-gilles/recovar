@@ -249,7 +249,7 @@ def test_relion_backprojector_volume_shape_rejects_invalid_inputs():
 
 
 def test_enforce_relion_x0_hermitian_uses_centered_odd_grid_partner():
-    from recovar.em.local.local_backprojection import (
+    from recovar.em.helpers.half_volume_mstep import (
         enforce_relion_half_volume_x0_hermitian,
         enforce_relion_half_volume_x0_hermitian_host,
     )

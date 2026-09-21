@@ -618,7 +618,7 @@ def fused_dense_pose_ppca_block(
 
 
 def _enforce_augmented_x0(volumes, volume_shape):
-    from recovar.em.local.local_backprojection import enforce_relion_half_volume_x0_hermitian
+    from recovar.em.helpers.half_volume_mstep import enforce_relion_half_volume_x0_hermitian
 
     enforced = [enforce_relion_half_volume_x0_hermitian(volumes[i], volume_shape) for i in range(volumes.shape[0])]
     return jnp.stack(enforced, axis=0)

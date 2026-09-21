@@ -54,7 +54,7 @@ from recovar.em.local.local_backprojection import (
 )
 from recovar.em.local.local_big_jit import _reconstruct_fixed_capacity_score_only_result, run_local_bucket_big_jit
 from recovar.em.local.local_layout import LocalBucketSpec, _exact_bucket_rotation_size, _local_mstep_rotations
-from recovar.em.refinement.projector_preparation import prepare_local_projector_slab
+from recovar.em.relion.relion_projector_setup import prepare_local_projector_slab
 from recovar.em.scoring import compact_candidates
 from recovar.em.sparse_pass2 import sparse_pass2_bucketed
 from recovar.utils.nvtx_shim import nvtx

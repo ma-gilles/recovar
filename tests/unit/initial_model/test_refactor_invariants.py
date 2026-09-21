@@ -98,10 +98,6 @@ def test_initial_model_estep_reuses_shared_dense_em_engine():
             sparse_pass2_estep._compute_k_class_significance_batched,
             significance._compute_k_class_significance_batched,
         ),
-        "_run_sparse_k_class_adaptive_pass2": (
-            sparse_pass2_estep._run_sparse_k_class_adaptive_pass2,
-            k_class._run_sparse_k_class_adaptive_pass2,
-        ),
         "run_local_k_class_em": (
             sparse_pass2_estep.run_local_k_class_em,
             k_class.run_local_k_class_em,
@@ -123,7 +119,7 @@ def test_initial_model_estep_reuses_shared_dense_em_engine():
     initial_model_source = "\n".join(path.read_text() for path in PACKAGE_DIR.glob("*.py"))
     copied = [
         name
-        for name in shared_callables
+        for name in (*shared_callables, "_run_sparse_k_class_adaptive_pass2")
         if f"def {name}(" in initial_model_source
     ]
     assert not copied, f"InitialModel contains private copies of shared EM functions: {copied}"

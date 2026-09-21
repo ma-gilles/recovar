@@ -205,7 +205,7 @@ def _fake_result_with_profile(n_classes: int, n: int, *, n_images: int = 2, n_gr
 
 def test_arrays_to_accumulators_inverts_relion_x_public_layout_without_projector_flip():
     from recovar.em.helpers.half_volume_mstep import relion_x_half_volume_to_full
-    from recovar.em.local.local_backprojection import enforce_relion_half_volume_x0_hermitian_host
+    from recovar.em.helpers.half_volume_mstep import enforce_relion_half_volume_x0_hermitian_host
     from recovar.em.vdam.layout import relion_bpref_frame_scales
 
     state = initialise_denovo_state(

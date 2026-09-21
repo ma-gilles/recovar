@@ -74,6 +74,8 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+from recovar.em.helpers.env_flags import parse_env_capacity_ladder
+
 from recovar.em.helpers.env_flags import parse_env_flag
 from recovar.em.helpers.half_spectrum import (
     make_relion_noise_shell_indices_half,
@@ -92,7 +94,7 @@ from recovar.em.helpers.projection import (
 )
 from recovar.em.helpers.scale_groups import prepare_scale_correction_groups
 from recovar.em.helpers.types import LocalEMResult, make_noise_stats, make_relion_stats
-from recovar.em.refinement.projector_preparation import prepare_local_projector_slab
+from recovar.em.relion.relion_projector_setup import prepare_local_projector_slab
 from recovar.em.sparse_pass2 import resident_pass2 as rp
 from recovar.em.sparse_pass2.resident_local_layout import (
     materialize_local_chunk,
@@ -292,16 +294,6 @@ def require_resident_local_configuration(**kwargs) -> None:
             not parse_env_flag(name, default=False),
             f"the diagnostic flag {name} is set; this driver has no such arm",
         )
-
-
-def _ladder_from_env(name: str, default: tuple) -> tuple:
-    raw = os.environ.get(name, "").strip()
-    if not raw:
-        return tuple(int(v) for v in default)
-    values = tuple(int(part) for part in raw.replace(",", " ").split())
-    if not values or list(values) != sorted(values) or values[0] <= 0:
-        raise ValueError(f"{name} must be an increasing list of positive integers, got {raw!r}")
-    return values
 
 
 def _cap_row_capacity_ladder(
@@ -614,13 +606,13 @@ def compute_local_search_resident(
 
     # ---- capacity plan ----------------------------------------------------
     row_ladder = _cap_row_capacity_ladder(
-        _ladder_from_env(_ROW_CAPACITY_LADDER_ENV, _DEFAULT_ROW_CAPACITY_LADDER),
+        parse_env_capacity_ladder(_ROW_CAPACITY_LADDER_ENV, _DEFAULT_ROW_CAPACITY_LADDER),
         n_score_pixels=n_windowed,
         n_recon_pixels=n_recon_windowed,
         max_bytes=_projection_cache_max_bytes_for_pass(device_memory_bytes),
     )
     image_ladder = rp._cap_image_capacity_ladder(
-        _ladder_from_env(_IMAGE_CAPACITY_LADDER_ENV, _DEFAULT_IMAGE_CAPACITY_LADDER),
+        parse_env_capacity_ladder(_IMAGE_CAPACITY_LADDER_ENV, _DEFAULT_IMAGE_CAPACITY_LADDER),
         n_fine_trans=n_fine_trans,
         n_recon_pixels=n_recon_windowed,
         max_tile_bytes=_max_translation_tile_bytes_for_pass(

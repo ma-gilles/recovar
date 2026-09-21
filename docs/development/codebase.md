@@ -153,7 +153,10 @@ performs the established frame and dtype conversion; the maps-only wrapper
 releases the unused power spectrum. EM projector caching and VDAM both use this
 owner directly. VDAM's `dense_adapter` retains state-specific preparation and
 accumulator conversion, so EM no longer imports the VDAM execution adapter to
-construct projectors.
+construct projectors. The same shared owner normalizes local projector slab
+shapes without changing dtype. Shared host/device x=0 Hermitian enforcement
+lives in [`helpers/half_volume_mstep.py`](../../recovar/em/helpers/half_volume_mstep.py);
+resident capacity ladders use [`helpers/env_flags.py`](../../recovar/em/helpers/env_flags.py).
 
 ## VDAM code budgets
 

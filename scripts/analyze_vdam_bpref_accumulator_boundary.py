@@ -17,7 +17,7 @@ from recovar.em.diagnostics.bpref_contribution_replay import (
     replay_relion_double,
     summarize_bpref_contribution_bundle,
 )
-from recovar.em.local.local_backprojection import enforce_relion_half_volume_x0_hermitian_host
+from recovar.em.helpers.half_volume_mstep import enforce_relion_half_volume_x0_hermitian_host
 from recovar.em.vdam.layout import relion_bpref_frame_scales
 from scripts.analyze_vdam_mstep_boundary import _read_relion_array
 
