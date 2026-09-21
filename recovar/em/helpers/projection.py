@@ -212,7 +212,10 @@ def _validate_centered_relion_projector_pixel_indices(
     image_shape,
     projector_output_size: int,
 ) -> None:
-    """Fail early if compact RELION projector indices cannot live in the crop."""
+    """Validate compact indices against the RELION projector crop.
+
+    See ``docs/math/em_projector_indices.md`` for full-box Nyquist labeling.
+    """
 
     indices = np.asarray(pixel_indices, dtype=np.int64)
     if indices.size == 0:
@@ -222,10 +225,22 @@ def _validate_centered_relion_projector_pixel_indices(
     rows = indices // full_x_half
     cols = indices - rows * full_x_half
     ky = rows - image_size // 2
-    projector_x_half = int(projector_output_size) // 2 + 1
-    min_ky = -(int(projector_output_size) // 2 - 1)
-    max_ky = int(projector_output_size) // 2
-    valid = (ky >= min_ky) & (ky <= max_ky) & (cols >= 0) & (cols < projector_x_half)
+    projector_size = int(projector_output_size)
+    projector_x_half = projector_size // 2 + 1
+    min_ky = -(projector_size // 2 - 1)
+    max_ky = projector_size // 2
+    if projector_size == image_size:
+        # The full even box stores its positive Nyquist row at centered row zero,
+        # matching the texture gather. Smaller crops exclude that physical row.
+        ky = np.where(rows == 0, max_ky, ky)
+    valid = (
+        (indices >= 0)
+        & (indices < image_size * full_x_half)
+        & (ky >= min_ky)
+        & (ky <= max_ky)
+        & (cols >= 0)
+        & (cols < projector_x_half)
+    )
     if not np.all(valid):
         bad = indices[~valid][:8].tolist()
         raise ValueError(

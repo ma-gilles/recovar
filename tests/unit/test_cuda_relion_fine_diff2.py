@@ -3631,3 +3631,98 @@ def test_exact_ctf_compact_indices_never_materialize_device_inputs(monkeypatch, 
                 (4, 4),
                 pixel_indices=indices,
             )
+
+
+@pytest.mark.gpu
+def test_relion_half_texture_full_even_indexed_projection_matches_full_scatter_bitwise(
+    monkeypatch,
+    custom_cuda_lib,
+    gpu_device,
+):
+    """The full-box Nyquist alias must survive compact indexed projection."""
+
+    import recovar.cuda_backproject as cuda_backproject
+    from recovar.em.helpers.projection import (
+        compute_relion_projector_projections_block,
+    )
+
+    monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
+    monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
+    monkeypatch.setattr(cuda_backproject, "_cuda_ok", None)
+    image_size = 16
+    padding_factor = 1
+    projector_max_r = image_size // 2
+    padded_r_max = projector_max_r * padding_factor
+    projector_size = 2 * (padded_r_max + 1) + 1
+    rng = np.random.default_rng(194)
+    projector = (
+        rng.normal(0, 0.02, (projector_size, projector_size, padded_r_max + 2))
+        + 1j
+        * rng.normal(0, 0.02, (projector_size, projector_size, padded_r_max + 2))
+    ).astype(np.complex64)
+    rotations = _off_grid_so3_rotations()
+    pixel_indices = np.arange(
+        image_size * (image_size // 2 + 1),
+        dtype=np.int32,
+    )
+
+    common = dict(
+        image_shape=(image_size, image_size),
+        r_max=projector_max_r,
+        padding_factor=padding_factor,
+        return_abs2=True,
+        centered_rows=True,
+        dense_scale=True,
+        projector_output_size=image_size,
+        relion_texture_interp=True,
+    )
+    with jax.default_device(gpu_device):
+        full_projection, full_abs2 = compute_relion_projector_projections_block(
+            jnp.asarray(projector),
+            jnp.asarray(rotations),
+            **common,
+        )
+        indexed_projection, indexed_abs2 = compute_relion_projector_projections_block(
+            jnp.asarray(projector),
+            jnp.asarray(rotations),
+            pixel_indices=pixel_indices,
+            **common,
+        )
+
+    np.testing.assert_array_equal(
+        np.asarray(indexed_projection).view(np.uint32),
+        np.asarray(full_projection).view(np.uint32),
+    )
+    np.testing.assert_array_equal(
+        np.asarray(indexed_abs2).view(np.uint32),
+        np.asarray(full_abs2).view(np.uint32),
+    )
+
+
+def _off_grid_so3_rotations() -> np.ndarray:
+    """Deterministic proper rotations with all three model axes active."""
+
+    matrices = []
+    for angle_x, angle_y, angle_z in (
+        (0.37, -0.52, 0.19),
+        (-0.91, 0.43, 1.17),
+        (1.20, -0.73, -0.44),
+        (-0.28, -1.01, 0.66),
+    ):
+        cosine_x, sine_x = np.cos(angle_x), np.sin(angle_x)
+        cosine_y, sine_y = np.cos(angle_y), np.sin(angle_y)
+        cosine_z, sine_z = np.cos(angle_z), np.sin(angle_z)
+        rotation_x = np.asarray(
+            [[1, 0, 0], [0, cosine_x, -sine_x], [0, sine_x, cosine_x]],
+            dtype=np.float64,
+        )
+        rotation_y = np.asarray(
+            [[cosine_y, 0, sine_y], [0, 1, 0], [-sine_y, 0, cosine_y]],
+            dtype=np.float64,
+        )
+        rotation_z = np.asarray(
+            [[cosine_z, -sine_z, 0], [sine_z, cosine_z, 0], [0, 0, 1]],
+            dtype=np.float64,
+        )
+        matrices.append(np.asarray(rotation_z @ rotation_y @ rotation_x, np.float32))
+    return np.stack(matrices)
