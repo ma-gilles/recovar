@@ -32,6 +32,21 @@ VDAM_QUIESCED_PRELAUNCH_CAPTURE_DIR_ENV = (
 )
 
 
+def _worker_replay_topology() -> str:
+    return os.environ.get(
+        RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
+        "captured",
+    ).strip().lower()
+
+
+def _worker_schedule_path() -> str:
+    return os.environ.get(RELION_VDAM_WORKER_SCHEDULE_ENV, "").strip()
+
+
+def _block_chronology_path() -> str:
+    return os.environ.get(RELION_VDAM_BLOCK_CHRONOLOGY_ENV, "").strip()
+
+
 @functools.lru_cache(maxsize=8)
 def _load_relion_vdam_worker_schedule(path: str) -> np.ndarray:
     """Return a dense stack-index to worker-lane map from a sealed v2 trace."""
@@ -291,10 +306,7 @@ def _relion_vdam_particle_issue_order_for_images(
 ) -> np.ndarray | None:
     """Return the current particles ordered by native global launch sequence."""
 
-    topology = os.environ.get(
-        RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
-        "captured",
-    ).strip().lower()
+    topology = _worker_replay_topology()
     if topology not in {
         "captured_particle_issue",
         "captured_particle_issue_native_count",
@@ -304,8 +316,8 @@ def _relion_vdam_particle_issue_order_for_images(
         "captured_particle_timing_native_grid",
     }:
         return None
-    schedule_path = os.environ.get(RELION_VDAM_WORKER_SCHEDULE_ENV, "").strip()
-    chronology_path = os.environ.get(RELION_VDAM_BLOCK_CHRONOLOGY_ENV, "").strip()
+    schedule_path = _worker_schedule_path()
+    chronology_path = _block_chronology_path()
     if not schedule_path or not chronology_path:
         raise ValueError(
             "captured particle issue replay requires sealed worker schedule and chronology NPZs"
@@ -343,18 +355,15 @@ def _relion_vdam_particle_start_offsets_for_images(
 ) -> np.ndarray | None:
     """Return native first-block offsets for the exact sealed iteration."""
 
-    topology = os.environ.get(
-        RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
-        "captured",
-    ).strip().lower()
+    topology = _worker_replay_topology()
     if topology not in {
         "captured_particle_timing",
         "captured_particle_timing_native_count",
         "captured_particle_timing_native_grid",
     }:
         return None
-    schedule_path = os.environ.get(RELION_VDAM_WORKER_SCHEDULE_ENV, "").strip()
-    chronology_path = os.environ.get(RELION_VDAM_BLOCK_CHRONOLOGY_ENV, "").strip()
+    schedule_path = _worker_schedule_path()
+    chronology_path = _block_chronology_path()
     if not schedule_path or not chronology_path:
         raise ValueError(
             "captured particle timing requires sealed worker schedule and chronology NPZs"
@@ -394,8 +403,8 @@ def _relion_vdam_block_start_orders_for_images(
 
     if not _relion_vdam_block_start_replay_active(debug_iteration=debug_iteration):
         return None
-    schedule_path = os.environ.get(RELION_VDAM_WORKER_SCHEDULE_ENV, "").strip()
-    chronology_path = os.environ.get(RELION_VDAM_BLOCK_CHRONOLOGY_ENV, "").strip()
+    schedule_path = _worker_schedule_path()
+    chronology_path = _block_chronology_path()
     _, dataset_particles, orders = _load_relion_vdam_block_start_orders(
         schedule_path,
         chronology_path,
@@ -457,10 +466,7 @@ def _relion_vdam_block_start_orders_for_images(
 def _relion_vdam_block_start_replay_active(*, debug_iteration: int | None) -> bool:
     """Return whether this call is the exact iteration represented by the seal."""
 
-    topology = os.environ.get(
-        RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
-        "captured",
-    ).strip().lower()
+    topology = _worker_replay_topology()
     if topology not in {
         "captured_block_start",
         "captured_block_grid",
@@ -475,8 +481,8 @@ def _relion_vdam_block_start_replay_active(*, debug_iteration: int | None) -> bo
         "captured_particle_timing_native_grid",
     }:
         return False
-    schedule_path = os.environ.get(RELION_VDAM_WORKER_SCHEDULE_ENV, "").strip()
-    chronology_path = os.environ.get(RELION_VDAM_BLOCK_CHRONOLOGY_ENV, "").strip()
+    schedule_path = _worker_schedule_path()
+    chronology_path = _block_chronology_path()
     if not schedule_path or not chronology_path:
         raise ValueError(
             "captured block replay requires sealed worker schedule and block chronology NPZs"
@@ -496,11 +502,8 @@ def _relion_vdam_worker_lanes_for_images(
 ):
     """Resolve optional native worker owners into the current physical bucket order."""
 
-    path = os.environ.get(RELION_VDAM_WORKER_SCHEDULE_ENV, "").strip()
-    topology = os.environ.get(
-        RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
-        "captured",
-    ).strip().lower()
+    path = _worker_schedule_path()
+    topology = _worker_replay_topology()
     replay_iteration_raw = os.environ.get(
         RELION_VDAM_WORKER_REPLAY_ITER_ENV,
         "",
@@ -639,10 +642,7 @@ def _relion_vdam_native_grid_counts_for_images(
 ) -> np.ndarray | None:
     """Return sealed native per-particle grid sizes for the exact-grid replay."""
 
-    topology = os.environ.get(
-        RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
-        "captured",
-    ).strip().lower()
+    topology = _worker_replay_topology()
     if topology not in {
         "captured_native_grid",
         "captured_native_count",
@@ -664,8 +664,8 @@ def _relion_vdam_native_grid_counts_for_images(
     )
     if orders is None:
         return None
-    schedule_path = os.environ.get(RELION_VDAM_WORKER_SCHEDULE_ENV, "").strip()
-    chronology_path = os.environ.get(RELION_VDAM_BLOCK_CHRONOLOGY_ENV, "").strip()
+    schedule_path = _worker_schedule_path()
+    chronology_path = _block_chronology_path()
     _, dataset_particles, captured_orders = _load_relion_vdam_block_start_orders(
         schedule_path,
         chronology_path,
@@ -690,10 +690,7 @@ def _relion_vdam_native_grid_counts_for_images(
 def _relion_vdam_identity_native_grid_replay() -> bool:
     """Return whether native grid counts should keep identity physical rows."""
 
-    topology = os.environ.get(
-        RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
-        "captured",
-    ).strip().lower()
+    topology = _worker_replay_topology()
     return topology in {
         "captured_native_count",
         "captured_native_trace_shape",
@@ -707,10 +704,7 @@ def _relion_vdam_materialized_native_grid_replay(
 ) -> bool:
     """Materialize captured logical rows before the native identity-grid launch."""
 
-    topology = os.environ.get(
-        RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
-        "captured",
-    ).strip().lower()
+    topology = _worker_replay_topology()
     return topology == "materialized_native_grid_trace_shape" and (
         _relion_vdam_block_start_replay_active(debug_iteration=debug_iteration)
     )
@@ -721,10 +715,7 @@ def _relion_vdam_native_trace_shape_replay(
 ) -> bool:
     """Retain native trace instructions only at the sealed trace iteration."""
 
-    topology = os.environ.get(
-        RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
-        "captured",
-    ).strip().lower()
+    topology = _worker_replay_topology()
     return topology in {
         "captured_native_trace_shape",
         "captured_native_grid_trace_shape",
@@ -816,11 +807,8 @@ def _relion_vdam_candidate_trace_ids_for_images(
 def _relion_vdam_serial_rotation_replay() -> bool:
     """Return whether the opt-in worker replay also serializes rotations."""
 
-    path = os.environ.get(RELION_VDAM_WORKER_SCHEDULE_ENV, "").strip()
-    topology = os.environ.get(
-        RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
-        "captured",
-    ).strip().lower()
+    path = _worker_schedule_path()
+    topology = _worker_replay_topology()
     return bool(path) and topology in {
         "single_rotation",
         "single_rotation_f64",
@@ -832,44 +820,32 @@ def _relion_vdam_serial_rotation_replay() -> bool:
 def _relion_vdam_captured_block_serial_replay() -> bool:
     """Return whether captured native block order uses one-block launches."""
 
-    path = os.environ.get(RELION_VDAM_WORKER_SCHEDULE_ENV, "").strip()
-    topology = os.environ.get(
-        RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
-        "captured",
-    ).strip().lower()
+    path = _worker_schedule_path()
+    topology = _worker_replay_topology()
     return bool(path) and topology == "captured_block_start"
 
 
 def _relion_vdam_float64_accumulator_replay() -> bool:
     """Return whether the diagnostic uses binary64 accumulator storage."""
 
-    path = os.environ.get(RELION_VDAM_WORKER_SCHEDULE_ENV, "").strip()
-    topology = os.environ.get(
-        RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
-        "captured",
-    ).strip().lower()
+    path = _worker_schedule_path()
+    topology = _worker_replay_topology()
     return bool(path) and topology == "single_rotation_f64"
 
 
 def _relion_vdam_reverse_rotation_replay() -> bool:
     """Return whether serialized orientation blocks run in reverse order."""
 
-    path = os.environ.get(RELION_VDAM_WORKER_SCHEDULE_ENV, "").strip()
-    topology = os.environ.get(
-        RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
-        "captured",
-    ).strip().lower()
+    path = _worker_schedule_path()
+    topology = _worker_replay_topology()
     return bool(path) and topology == "single_rotation_reverse"
 
 
 def _relion_vdam_rotation_replay_stride() -> int:
     """Return the logical native-SM stride for serialized orientation blocks."""
 
-    path = os.environ.get(RELION_VDAM_WORKER_SCHEDULE_ENV, "").strip()
-    topology = os.environ.get(
-        RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
-        "captured",
-    ).strip().lower()
+    path = _worker_schedule_path()
+    topology = _worker_replay_topology()
     return 132 if path and topology == "single_rotation_sm132" else 0
 
 
