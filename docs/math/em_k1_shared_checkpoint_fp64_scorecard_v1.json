@@ -1,0 +1,92 @@
+{
+  "schema": "recovar.em_k1_shared_checkpoint_fp64_scorecard.v1",
+  "suite_id": "k1-case22-shared-checkpoint-fp64-reference",
+  "suite_version": 1,
+  "classification": "shared_checkpoint_fp64_reference_rejected",
+  "metric_policy": "Fixed 34-gate control-floor audit. Map quality uses shellwise FSC/FSC-AUC; correlation is forbidden. This diagnostic cannot change the K=1 quality scorecard.",
+  "correlation_used": false,
+  "scorecard_change_admissible": false,
+  "frozen_denominator": 34,
+  "acceptance_contract": {
+    "compute_job_id": 11850133,
+    "compute_state": "COMPLETED",
+    "compute_exit_code": "0:0",
+    "elapsed": "00:34:58",
+    "gpu_uuid": "GPU-6b5da455-0f76-eeaa-6041-ec8df42a2e8a",
+    "accepted": false,
+    "grid_correction": "unset/default-off",
+    "forced_final_all_data_after_nonconvergence": false
+  },
+  "evidence": {
+    "fixed_audit": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_shared_checkpoint_fp64_1101a2e_20260731T2030ET/analysis/SHARED_CHECKPOINT_FP64_AUDIT.json",
+      "sha256": "84bc7606ab570fccaebc1e0549ac2dda5a4a7a0c70f43eca8be41eef721faf25"
+    },
+    "audit_complete": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_shared_checkpoint_fp64_1101a2e_20260731T2030ET/provenance/POST_TERMINAL_AUDIT_COMPLETE.json",
+      "sha256": "0185283f0a6719160ca6dc86a78fe60b967c5926971a2c75b257ee057bb2205a"
+    },
+    "compute_complete": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_shared_checkpoint_fp64_1101a2e_20260731T2030ET/provenance/SCIENCE_COMPUTE_COMPLETE.json",
+      "sha256": "e9e9bdb5ed2dced986614824dbf3c3bdd6707f6ed21859453ae6161b56331576"
+    },
+    "snapshot_compute_audit": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_shared_checkpoint_fp64_1101a2e_20260731T2030ET/analysis/SNAPSHOT_AND_COMPUTE_AUDIT.json",
+      "sha256": "4e3c762d68680187c1549ae42474145f59b5b0f5c22268eeb074a95416a659e2"
+    },
+    "predeclaration": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_shared_checkpoint_fp64_1101a2e_20260731T2030ET/provenance/PREDECLARATION.md",
+      "sha256": "560ae299790fa22d55e2f121fbe6615e6fedf06d2332efbb1aa138ba7c85896d"
+    },
+    "audit_declaration": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_shared_checkpoint_fp64_1101a2e_20260731T2030ET/provenance/AUDIT_DECLARATION.md",
+      "sha256": "1054da001071054b76226dac7c3eb8a630b227d91a816d07f053f43b1695452b"
+    }
+  },
+  "cases": [
+    {"id": "snapshot-half1-float32-roundtrip", "result": "pass", "checked": true},
+    {"id": "snapshot-half2-float32-roundtrip", "result": "pass", "checked": true},
+    {"id": "component-structural-normal_a", "result": "pass", "checked": true},
+    {"id": "component-structural-normal_b", "result": "pass", "checked": true},
+    {"id": "component-structural-fp64_reference", "result": "pass", "checked": true},
+    {"id": "geometry-raw_input", "result": "pass", "checked": true},
+    {"id": "geometry-rotation_keys", "result": "pass", "checked": true},
+    {"id": "geometry-local_rotation_indices", "result": "pass", "checked": true},
+    {"id": "geometry-euler_matrices", "result": "pass", "checked": true},
+    {"id": "geometry-translation_values", "result": "pass", "checked": true},
+    {"id": "preprocess-norm-correction", "result": "pass", "checked": true},
+    {"id": "preprocess-masked-real", "result": "pass", "checked": true},
+    {"id": "preprocess-masked-fourier-pre-optics", "result": "pass", "checked": true},
+    {"id": "preprocess-masked-fourier-post-optics", "result": "pass", "checked": true},
+    {"id": "score-beyond-floor-stack-0035", "result": "fail", "checked": false},
+    {"id": "score-beyond-floor-stack-0252", "result": "fail", "checked": false},
+    {"id": "score-beyond-floor-stack-0348", "result": "fail", "checked": false},
+    {"id": "score-beyond-floor-stack-0591", "result": "fail", "checked": false},
+    {"id": "score-beyond-floor-stack-0683", "result": "fail", "checked": false},
+    {"id": "score-beyond-floor-stack-1100", "result": "fail", "checked": false},
+    {"id": "score-beyond-floor-stack-1522", "result": "fail", "checked": false},
+    {"id": "score-beyond-floor-stack-1640", "result": "fail", "checked": false},
+    {"id": "score-beyond-floor-stack-1767", "result": "fail", "checked": false},
+    {"id": "score-beyond-floor-stack-2124", "result": "fail", "checked": false},
+    {"id": "score-beyond-floor-stack-2322", "result": "fail", "checked": false},
+    {"id": "score-beyond-floor-stack-2330", "result": "fail", "checked": false},
+    {"id": "score-beyond-floor-stack-2846", "result": "fail", "checked": false},
+    {"id": "score-beyond-floor-stack-2994", "result": "fail", "checked": false},
+    {"id": "map-parity-beyond-floor-half1", "result": "fail", "checked": false},
+    {"id": "map-gt-nondegradation-half1", "result": "pass", "checked": true},
+    {"id": "map-parity-beyond-floor-half2", "result": "fail", "checked": false},
+    {"id": "map-gt-nondegradation-half2", "result": "fail", "checked": false},
+    {"id": "map-parity-beyond-floor-merged", "result": "fail", "checked": false},
+    {"id": "map-gt-nondegradation-merged", "result": "pass", "checked": true}
+  ],
+  "summary": {"pass": 16, "evaluated": 34},
+  "key_observations": {
+    "score_live_reference_dominated": "0/14",
+    "map_parity_beyond_control_floor": "0/3",
+    "map_gt_nondegraded": "2/3",
+    "half1_parity_delta": -4.955137411499777e-10,
+    "half2_parity_delta": -6.178676459356325e-10,
+    "merged_parity_delta": -5.604823272165049e-10,
+    "half2_gt_delta": -3.563917605475808e-09
+  }
+}

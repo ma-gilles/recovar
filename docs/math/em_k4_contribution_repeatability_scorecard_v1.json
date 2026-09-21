@@ -1,0 +1,80 @@
+{
+  "schema": "recovar.em_k4_contribution_repeatability_scorecard.v1",
+  "suite_id": "k4-it2-h1-orig53722-class1-same-observer-repeatability",
+  "suite_version": 1,
+  "recorded_et": "2026-07-31T19:25:00-04:00",
+  "classification": "same_observer_archives_do_not_repeat_bit_for_bit",
+  "metric_policy": "Fixed three-gate strict per-element byte equality; identical keys, shapes, dtypes, and bytes required; no tolerance, scale, sign, threshold, map metric, FSC claim, or correlation.",
+  "correlation_used": false,
+  "fsc_auc_evaluated": false,
+  "scorecard_change_admissible": false,
+  "frozen_denominator": 3,
+  "acceptance_contract": {
+    "producer_job_id": 11847462,
+    "producer_state": "FAILED",
+    "producer_exit_code": "1:0",
+    "audit_job_id": 11847542,
+    "audit_state": "COMPLETED",
+    "audit_exit_code": "0:0",
+    "same_physical_gpu": true,
+    "gpu_uuid": "GPU-5e619c2e-82b4-ff79-cbcb-ab29514a9f30",
+    "accepted": false,
+    "grid_correction": "unset/default-off",
+    "forced_final_all_data_after_nonconvergence": false
+  },
+  "evidence": {
+    "strict_audit_report": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it2_contribution_strict_afterany_retry3_e87565c5_20260731T1810ET/analysis/STRICT_BYTE_REPEATABILITY.json",
+      "sha256": "9c791cfe7de4bc17b391ee55c896e9451db466618a9f82ab59e2393928d54b7f"
+    },
+    "strict_audit_complete": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it2_contribution_strict_afterany_retry3_e87565c5_20260731T1810ET/provenance/STRICT_REPEATABILITY_AUDIT_COMPLETE.json",
+      "sha256": "ad355ce2ef184297fa8e5b005f152cb0b5fa67f3b1b4e610c22987f7ea1ee9db"
+    },
+    "observed_pass2": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it2_contribution_stop_repeat_retry3_3gpu_d1fb8e52_20260731T1805ET/capture/pass2/pass2_orig053722_class001_cs038.npz",
+      "sha256": "a654eb32963659b0c7641410bde4216f270e1f9901683b463ba198d480584afc"
+    },
+    "observed_contribution": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it2_contribution_stop_repeat_retry3_3gpu_d1fb8e52_20260731T1805ET/capture/contribution/bpref_contribution_rows_it002_h1_call000000_dump000000_cs038.npz",
+      "sha256": "a7bbd6c00a40c5a77cd3b0129aae6a177ea7f76365de1b1a324c24e978f488c3"
+    },
+    "observed_device_signature": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it2_contribution_stop_repeat_retry3_3gpu_d1fb8e52_20260731T1805ET/device_signature/bpref_contribution_rows_it002_h1_call000000_dump000000_cs038.device.npz",
+      "sha256": "63c14a7ee4fedf8b2a62ed366e7847c9c7a5643c107fae7cc1981b3a1ba10934"
+    }
+  },
+  "cases": [
+    {
+      "id": "pass2-archive-byte-equality",
+      "name": "Pass-2 score archive strict byte equality",
+      "archive": "pass2",
+      "result": "fail",
+      "checked": false,
+      "failed_array_count": 5,
+      "observed": "14,717 finite raw-diff2/pre-prior/with-prior score cells differ; maximum absolute score delta 0.0001220703125"
+    },
+    {
+      "id": "contribution-archive-byte-equality",
+      "name": "BPref contribution archive strict byte equality",
+      "archive": "contribution",
+      "result": "fail",
+      "checked": false,
+      "failed_array_count": 14,
+      "observed": "score drift propagates through posterior probabilities, active summed images, CTF weights, and shadow-reduction diagnostics"
+    },
+    {
+      "id": "device-signature-archive-byte-equality",
+      "name": "Device-signature archive strict byte equality",
+      "archive": "device_signature",
+      "result": "fail",
+      "checked": false,
+      "failed_array_count": 2,
+      "observed": "source_values and the companion contribution digest differ after ignoring only the declared companion absolute path"
+    }
+  ],
+  "summary": {
+    "pass": 0,
+    "evaluated": 3
+  }
+}

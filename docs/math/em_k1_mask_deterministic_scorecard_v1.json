@@ -1,0 +1,192 @@
+{
+  "schema": "recovar.em_k1_mask_deterministic_scorecard.v1",
+  "suite_id": "k1-case22-sameallocation-continuation-mask-deterministic-ab",
+  "suite_version": 1,
+  "recorded_et": "2026-07-31T18:45:00-04:00",
+  "classification": "deterministic_mask_reduction_closes_masked_preprocessing_identity_but_score_map_panel_is_retained",
+  "causal_interpretation": "mask-background reduction order was the final non-bitwise preprocessing boundary; closing it leaves the fixed score and FSC-AUC result unchanged, placing the remaining residual downstream of preprocessing",
+  "metric_policy": "Fixed 3-group masked-preprocessing identity, 5-group geometry identity, and 21 score/map gates; shellwise FSC/FSC-AUC with signed deltas; no fitted tolerance, scale, sign, shell boundary, or correlation.",
+  "correlation_used": false,
+  "scorecard_change_admissible": false,
+  "score_map_group_denominators": {
+    "score": 14,
+    "map-parity": 3,
+    "map-gt": 3,
+    "overall-arm": 1
+  },
+  "acceptance_contract": {
+    "normalization_baseline_job_id": 11845465,
+    "science_job_id": 11847373,
+    "science_job_terminal_state": "COMPLETED",
+    "science_job_exit_code": "0:0",
+    "same_physical_gpu": true,
+    "gpu_uuid": "GPU-5e619c2e-82b4-ff79-cbcb-ab29514a9f30",
+    "all_arms_complete": true,
+    "predeclared_primary_hypothesis_accepted": true,
+    "launcher_gate_valid": true,
+    "independent_replay_complete": true,
+    "analysis_environment_warning_audited": true,
+    "score_map_metric_observational": true,
+    "grid_correction": "unset/default-off",
+    "forced_final_all_data_after_nonconvergence": false
+  },
+  "evidence": {
+    "normalization_baseline_terminal": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_norm_roundtrip_ab_96942ee_20260731T1700ET/provenance/TERMINAL_RESULT.json",
+      "sha256": "d667f6d40ec384a8f3e0294d15ae7471f711e6c64fa9ac22ed188148241f1bbd"
+    },
+    "mask_terminal": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_mask_deterministic_ab_ee4c525_20260731T1800ET/provenance/TERMINAL_RESULT.json",
+      "sha256": "30b1ba96e747c004128ea03c1c985e201fc80c1010e3b5ff7936b5819504ef10"
+    },
+    "mask_science_complete": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_mask_deterministic_ab_ee4c525_20260731T1800ET/provenance/SCIENCE_COMPLETE.json",
+      "sha256": "97bf11a6b3bf0770ff4974cdd348b48014a694ff7ff2b4bc2276464bc198e8e9"
+    },
+    "mask_ab_report": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_mask_deterministic_ab_ee4c525_20260731T1800ET/analysis/MASK_DETERMINISTIC_AB.json",
+      "sha256": "eb9ebb975bc45245b6ff64d1f15f2fd3b88df7063803a21e4149f32980dcfbb1"
+    },
+    "mask_background": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_mask_deterministic_ab_ee4c525_20260731T1800ET/analysis/mask_deterministic_MASK_BACKGROUND.json",
+      "sha256": "132727281ea6e63125d8e6bca2b3a97e7dbe8f46598d3a1b865fbeb971f0cf3e"
+    },
+    "baseline_operand": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_norm_roundtrip_ab_96942ee_20260731T1700ET/analysis/norm_roundtrip_restart1_OPERAND_BOUNDARY.json",
+      "sha256": "b9824c7142c73d767896528e95abc9478aeda7738ac04b0f23d42f2239aa030d"
+    },
+    "treatment_operand": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_mask_deterministic_ab_ee4c525_20260731T1800ET/analysis/mask_deterministic_restart1_OPERAND_BOUNDARY.json",
+      "sha256": "6feb11135bd1274b2122106c4cc3cb1ef77ef0b62d46ea1a81df26ff8f2fb528"
+    },
+    "baseline_score": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_norm_roundtrip_ab_96942ee_20260731T1700ET/analysis/norm_roundtrip_restart1_SCORE_BOUNDARY.json",
+      "sha256": "86ecd8727e3a32f5611aa3867e1a08f2ea0b0fce894659a59b9b3f696502eb5e"
+    },
+    "treatment_score": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_mask_deterministic_ab_ee4c525_20260731T1800ET/analysis/mask_deterministic_restart1_SCORE_BOUNDARY.json",
+      "sha256": "01568ed8bebb210dc7da12be7063b684845f1b317af7f464be866db81c171866"
+    },
+    "baseline_map": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_norm_roundtrip_ab_96942ee_20260731T1700ET/analysis/norm_roundtrip_restart1_MAP_FSC.json",
+      "sha256": "f9a0e17982715ce93b4ddceb311d54ae73a5fccc241ef66a6a059d5f5bf9158f"
+    },
+    "treatment_map": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_mask_deterministic_ab_ee4c525_20260731T1800ET/analysis/mask_deterministic_restart1_MAP_FSC.json",
+      "sha256": "d0f31eb00066066961cc8199b072f8f2b9f1a16c003705a3e53c6bd75acfe82c"
+    },
+    "fresh_arm_complete": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_mask_deterministic_ab_ee4c525_20260731T1800ET/fresh/provenance/ARM_COMPLETE.json",
+      "sha256": "4bd4c2744a892b26a8bced026cf199b99075a04cbecbbd7bc1294c2f459b7443"
+    },
+    "stock_arm_complete": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_mask_deterministic_ab_ee4c525_20260731T1800ET/stock_restart1/provenance/ARM_COMPLETE.json",
+      "sha256": "5907fd45036ccd8ff2a6f2be9a2ce81ff0510f1ec9f04aa899b8f2566e626917"
+    },
+    "treatment_arm_complete": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_mask_deterministic_ab_ee4c525_20260731T1800ET/mask_deterministic_restart1/provenance/ARM_COMPLETE.json",
+      "sha256": "1d3e31fe3dbbdcb9f69dff57a7d205f033e51cb3c4fc6140660e0c04f4a3604f"
+    }
+  },
+  "preprocess_cases": [
+    {
+      "id": "mask-deterministic-preprocess-background",
+      "name": "Zero-mask background-value identity",
+      "baseline_result": "fail",
+      "treatment_result": "pass",
+      "result": "pass",
+      "transition": "improved",
+      "checked": true,
+      "observed": "normalization-only baseline did not close background identity; deterministic reduction treatment is 14/14 bitwise exact"
+    },
+    {
+      "id": "mask-deterministic-preprocess-masked-real",
+      "name": "Masked real-image identity",
+      "baseline_result": "fail",
+      "treatment_result": "pass",
+      "result": "pass",
+      "transition": "improved",
+      "checked": true,
+      "observed": "normalization-only 4/14 exact, max_abs=1.1920928955078125e-7; deterministic reduction 14/14 exact"
+    },
+    {
+      "id": "mask-deterministic-preprocess-masked-fourier",
+      "name": "Masked Fourier-image identity before and after optics",
+      "baseline_result": "fail",
+      "treatment_result": "pass",
+      "result": "pass",
+      "transition": "improved",
+      "checked": true,
+      "observed": "normalization-only 4/14 exact before and after optics, max_abs=7.483250778162943e-9; deterministic reduction 14/14 exact at both stages"
+    }
+  ],
+  "preprocess_summary": {
+    "baseline_pass": 0,
+    "treatment_pass": 3,
+    "evaluated": 3,
+    "denominator": 3,
+    "paired_gain": 3
+  },
+  "preprocess_transitions": {
+    "improved": 3,
+    "retained": 0,
+    "regressed": 0,
+    "unchanged-fail": 0
+  },
+  "geometry_cases": [
+    {"id": "mask-deterministic-geometry-raw-input", "name": "Raw input image identity", "baseline_result": "pass", "treatment_result": "pass", "result": "pass", "transition": "retained", "checked": true, "observed": "normalization-only 14/14 exact; deterministic reduction 14/14 exact"},
+    {"id": "mask-deterministic-geometry-rotation-keys", "name": "Rotation-key identity", "baseline_result": "pass", "treatment_result": "pass", "result": "pass", "transition": "retained", "checked": true, "observed": "normalization-only 14/14 exact; deterministic reduction 14/14 exact"},
+    {"id": "mask-deterministic-geometry-local-rotation-indices", "name": "Local-rotation-index identity", "baseline_result": "pass", "treatment_result": "pass", "result": "pass", "transition": "retained", "checked": true, "observed": "normalization-only 14/14 exact; deterministic reduction 14/14 exact"},
+    {"id": "mask-deterministic-geometry-euler-matrices", "name": "Euler-matrix identity", "baseline_result": "pass", "treatment_result": "pass", "result": "pass", "transition": "retained", "checked": true, "observed": "normalization-only 14/14 exact; deterministic reduction 14/14 exact"},
+    {"id": "mask-deterministic-geometry-translations", "name": "Translation-grid identity", "baseline_result": "pass", "treatment_result": "pass", "result": "pass", "transition": "retained", "checked": true, "observed": "normalization-only 14/14 exact; deterministic reduction 14/14 exact"}
+  ],
+  "geometry_summary": {
+    "baseline_pass": 5,
+    "treatment_pass": 5,
+    "evaluated": 5,
+    "denominator": 5,
+    "paired_gain": 0
+  },
+  "geometry_transitions": {
+    "improved": 0,
+    "retained": 5,
+    "regressed": 0,
+    "unchanged-fail": 0
+  },
+  "score_map_cases": [
+    {"id": "mask-deterministic-score-stack-0035", "name": "Stack 35 score counterfactual", "group": "score", "baseline_result": "pass", "treatment_result": "pass", "result": "pass", "transition": "retained", "checked": true, "observed": "normalization-only pass; deterministic reduction pass"},
+    {"id": "mask-deterministic-score-stack-0252", "name": "Stack 252 score counterfactual", "group": "score", "baseline_result": "pass", "treatment_result": "pass", "result": "pass", "transition": "retained", "checked": true, "observed": "normalization-only pass; deterministic reduction pass"},
+    {"id": "mask-deterministic-score-stack-0348", "name": "Stack 348 score counterfactual", "group": "score", "baseline_result": "pass", "treatment_result": "pass", "result": "pass", "transition": "retained", "checked": true, "observed": "normalization-only pass; deterministic reduction pass"},
+    {"id": "mask-deterministic-score-stack-0591", "name": "Stack 591 score counterfactual", "group": "score", "baseline_result": "pass", "treatment_result": "pass", "result": "pass", "transition": "retained", "checked": true, "observed": "normalization-only pass; deterministic reduction pass"},
+    {"id": "mask-deterministic-score-stack-0683", "name": "Stack 683 score counterfactual", "group": "score", "baseline_result": "pass", "treatment_result": "pass", "result": "pass", "transition": "retained", "checked": true, "observed": "normalization-only pass; deterministic reduction pass"},
+    {"id": "mask-deterministic-score-stack-1100", "name": "Stack 1100 score counterfactual", "group": "score", "baseline_result": "pass", "treatment_result": "pass", "result": "pass", "transition": "retained", "checked": true, "observed": "normalization-only pass; deterministic reduction pass"},
+    {"id": "mask-deterministic-score-stack-1522", "name": "Stack 1522 score counterfactual", "group": "score", "baseline_result": "pass", "treatment_result": "pass", "result": "pass", "transition": "retained", "checked": true, "observed": "normalization-only pass; deterministic reduction pass"},
+    {"id": "mask-deterministic-score-stack-1640", "name": "Stack 1640 score counterfactual", "group": "score", "baseline_result": "pass", "treatment_result": "pass", "result": "pass", "transition": "retained", "checked": true, "observed": "normalization-only pass; deterministic reduction pass"},
+    {"id": "mask-deterministic-score-stack-1767", "name": "Stack 1767 score counterfactual", "group": "score", "baseline_result": "pass", "treatment_result": "pass", "result": "pass", "transition": "retained", "checked": true, "observed": "normalization-only pass; deterministic reduction pass"},
+    {"id": "mask-deterministic-score-stack-2124", "name": "Stack 2124 score counterfactual", "group": "score", "baseline_result": "pass", "treatment_result": "pass", "result": "pass", "transition": "retained", "checked": true, "observed": "normalization-only pass; deterministic reduction pass"},
+    {"id": "mask-deterministic-score-stack-2322", "name": "Stack 2322 score counterfactual", "group": "score", "baseline_result": "pass", "treatment_result": "pass", "result": "pass", "transition": "retained", "checked": true, "observed": "normalization-only pass; deterministic reduction pass"},
+    {"id": "mask-deterministic-score-stack-2330", "name": "Stack 2330 score counterfactual", "group": "score", "baseline_result": "pass", "treatment_result": "pass", "result": "pass", "transition": "retained", "checked": true, "observed": "normalization-only pass; deterministic reduction pass"},
+    {"id": "mask-deterministic-score-stack-2846", "name": "Stack 2846 score counterfactual", "group": "score", "baseline_result": "pass", "treatment_result": "pass", "result": "pass", "transition": "retained", "checked": true, "observed": "normalization-only pass; deterministic reduction pass"},
+    {"id": "mask-deterministic-score-stack-2994", "name": "Stack 2994 score counterfactual", "group": "score", "baseline_result": "pass", "treatment_result": "pass", "result": "pass", "transition": "retained", "checked": true, "observed": "normalization-only pass; deterministic reduction pass"},
+    {"id": "mask-deterministic-map-parity-half1", "name": "Half-1 signed RECOVAR-parity FSC-AUC improvement", "group": "map-parity", "baseline_result": "pass", "treatment_result": "pass", "result": "pass", "transition": "retained", "checked": true, "observed": "normalization-only delta=+2.4651617969162487e-7; deterministic reduction delta=+2.4940213116941834e-7"},
+    {"id": "mask-deterministic-map-parity-half2", "name": "Half-2 signed RECOVAR-parity FSC-AUC improvement", "group": "map-parity", "baseline_result": "pass", "treatment_result": "pass", "result": "pass", "transition": "retained", "checked": true, "observed": "normalization-only delta=+6.076843761526618e-8; deterministic reduction delta=+6.351724901598743e-8"},
+    {"id": "mask-deterministic-map-parity-merged", "name": "Merged signed RECOVAR-parity FSC-AUC improvement", "group": "map-parity", "baseline_result": "pass", "treatment_result": "pass", "result": "pass", "transition": "retained", "checked": true, "observed": "normalization-only delta=+1.4399273118304023e-7; deterministic reduction delta=+1.468204324783784e-7"},
+    {"id": "mask-deterministic-map-gt-half1", "name": "Half-1 GT FSC-AUC non-degradation", "group": "map-gt", "baseline_result": "fail", "treatment_result": "fail", "result": "fail", "transition": "unchanged-fail", "checked": false, "observed": "normalization-only delta=-2.088204033534602e-5; deterministic reduction delta=-2.0893204545124888e-5"},
+    {"id": "mask-deterministic-map-gt-half2", "name": "Half-2 GT FSC-AUC non-degradation", "group": "map-gt", "baseline_result": "fail", "treatment_result": "fail", "result": "fail", "transition": "unchanged-fail", "checked": false, "observed": "normalization-only delta=-1.6847619594639873e-5; deterministic reduction delta=-1.6798937257617164e-5"},
+    {"id": "mask-deterministic-map-gt-merged", "name": "Merged GT FSC-AUC non-degradation", "group": "map-gt", "baseline_result": "fail", "treatment_result": "fail", "result": "fail", "transition": "unchanged-fail", "checked": false, "observed": "normalization-only delta=-1.9022787312833467e-5; deterministic reduction delta=-1.9005026456325735e-5"},
+    {"id": "mask-deterministic-overall", "name": "Overall intervention acceptance", "group": "overall-arm", "baseline_result": "fail", "treatment_result": "fail", "result": "fail", "transition": "unchanged-fail", "checked": false, "observed": "both arms pass score and parity gates but fail all three GT non-degradation gates"}
+  ],
+  "score_map_summary": {
+    "baseline_pass": 17,
+    "treatment_pass": 17,
+    "evaluated": 21,
+    "denominator": 21,
+    "paired_gain": 0
+  },
+  "score_map_transitions": {
+    "improved": 0,
+    "retained": 17,
+    "regressed": 0,
+    "unchanged-fail": 4
+  }
+}

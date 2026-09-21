@@ -1,0 +1,382 @@
+{
+  "schema": "recovar.em_k1_sampling_perturbation_scorecard.v1",
+  "suite_id": "k1-case22-sameallocation-continuation-sampling-perturbation-ab",
+  "suite_version": 1,
+  "recorded_et": "2026-07-31T15:27:00-04:00",
+  "classification": "sampling_perturbation_restore_collapses_geometry_score_and_map_gaps_but_star_precision_prevents_identity_and_signed_gate_closure",
+  "causal_interpretation": "the_accumulated_sampling_perturbation_is_required_but_decimal_round_trip_precision_is_the_next_earliest_continuation_boundary",
+  "metric_policy": "Fixed 5-group bitwise geometry identity and 21 score/map gates; shellwise FSC/FSC-AUC with signed deltas; no fitted tolerance, scale, sign, shell boundary, or correlation.",
+  "correlation_used": false,
+  "scorecard_change_admissible": false,
+  "score_map_group_denominators": {
+    "score": 14,
+    "map-parity": 3,
+    "map-gt": 3,
+    "overall-arm": 1
+  },
+  "acceptance_contract": {
+    "science_job_id": 11842188,
+    "science_job_terminal_state": "FAILED",
+    "science_job_exit_code": "1:0",
+    "same_physical_gpu": true,
+    "gpu_uuid": "GPU-eb1c5b04-20c1-b6c9-16e6-b3dc87905bd7",
+    "all_arms_complete": true,
+    "post_terminal_analysis_complete": true,
+    "predeclared_hypothesis_accepted": false,
+    "grid_correction": "unset/default-off",
+    "forced_final_all_data_after_nonconvergence": false
+  },
+  "evidence": {
+    "fail_closed_result": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_sampling_perturbation_ab_54616ee_20260731T1445ET/provenance/FAIL_CLOSED_CAUSAL_RESULT.json",
+      "sha256": "408152e7f24842406988ad29ee207e54c219415a934f8965dd935339beb56c1e"
+    },
+    "baseline_operand": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_continuation_operand_boundary_v1_20260731T1450ET/analysis/CONTINUATION_OPERAND_BOUNDARY_V1.json",
+      "sha256": "520c4eaba86f0f9641963420433463084f8e78e7e59dee52bb106241e48e3aed"
+    },
+    "fresh_arm_complete": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_sampling_perturbation_ab_54616ee_20260731T1445ET/fresh/provenance/ARM_COMPLETE.json",
+      "sha256": "4bd4c2744a892b26a8bced026cf199b99075a04cbecbbd7bc1294c2f459b7443"
+    },
+    "stock_arm_complete": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_sampling_perturbation_ab_54616ee_20260731T1445ET/stock_restart1/provenance/ARM_COMPLETE.json",
+      "sha256": "5907fd45036ccd8ff2a6f2be9a2ce81ff0510f1ec9f04aa899b8f2566e626917"
+    },
+    "treatment_arm_complete": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_sampling_perturbation_ab_54616ee_20260731T1445ET/patched_restart1/provenance/ARM_COMPLETE.json",
+      "sha256": "43e33bfccb03a4f8e563fa7ef6bf080ec10b2c363d6e956f474ab6122db3ad97"
+    },
+    "treatment_operand": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_sampling_perturbation_ab_54616ee_20260731T1445ET/analysis/patched_restart1_OPERAND_BOUNDARY.json",
+      "sha256": "34fae25a8f921890a9052984e8c0712b7a2c9355424b4b7756829ede857f3768"
+    },
+    "stock_score": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_sampling_perturbation_ab_54616ee_20260731T1445ET/analysis/stock_restart1_SCORE_BOUNDARY.json",
+      "sha256": "92f4e753cc055e25c02c782d409c1730c1c9ec5423609abcfcc0b8d18c77d495"
+    },
+    "treatment_score": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_sampling_perturbation_ab_54616ee_20260731T1445ET/analysis/patched_restart1_SCORE_BOUNDARY.json",
+      "sha256": "2c8459682de3f91149c429f839d569f737bb07c89406856924bb6040d8674b06"
+    },
+    "stock_map": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_sampling_perturbation_ab_54616ee_20260731T1445ET/analysis/stock_restart1_MAP_FSC.json",
+      "sha256": "1268660a21693fb664f3e8f56f8cca55ae464bbf6dca06c7025fd1e7f617481d"
+    },
+    "treatment_map": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_sampling_perturbation_ab_54616ee_20260731T1445ET/analysis/patched_restart1_MAP_FSC.json",
+      "sha256": "96362f26457a154c515f25730ad97b8db9eeb12914e3cf2f4df97ea56432e6b3"
+    }
+  },
+  "geometry_cases": [
+    {
+      "id": "sampling-perturb-geometry-raw-input",
+      "name": "Raw input image identity",
+      "baseline_result": "pass",
+      "treatment_result": "pass",
+      "result": "pass",
+      "transition": "retained",
+      "checked": true,
+      "observed": "baseline 14/14 exact; treatment 14/14 exact"
+    },
+    {
+      "id": "sampling-perturb-geometry-rotation-keys",
+      "name": "Rotation-key identity",
+      "baseline_result": "pass",
+      "treatment_result": "pass",
+      "result": "pass",
+      "transition": "retained",
+      "checked": true,
+      "observed": "baseline 14/14 exact; treatment 14/14 exact"
+    },
+    {
+      "id": "sampling-perturb-geometry-local-rotation-indices",
+      "name": "Local-rotation-index identity",
+      "baseline_result": "pass",
+      "treatment_result": "pass",
+      "result": "pass",
+      "transition": "retained",
+      "checked": true,
+      "observed": "baseline 14/14 exact; treatment 14/14 exact"
+    },
+    {
+      "id": "sampling-perturb-geometry-euler-matrices",
+      "name": "Euler-matrix identity",
+      "baseline_result": "fail",
+      "treatment_result": "fail",
+      "result": "fail",
+      "transition": "unchanged-fail",
+      "checked": false,
+      "observed": "baseline 0/14 exact, max_abs=0.143614752218; treatment 0/14 exact, max_abs=1.06543302536e-6"
+    },
+    {
+      "id": "sampling-perturb-geometry-translations",
+      "name": "Translation-grid identity",
+      "baseline_result": "fail",
+      "treatment_result": "fail",
+      "result": "fail",
+      "transition": "unchanged-fail",
+      "checked": false,
+      "observed": "baseline 0/14 exact, max_abs=0.0241493657231; treatment 0/14 exact, max_abs=1.86264514923e-7"
+    }
+  ],
+  "geometry_summary": {
+    "baseline_pass": 3,
+    "treatment_pass": 3,
+    "evaluated": 5,
+    "denominator": 5,
+    "paired_gain": 0
+  },
+  "geometry_transitions": {
+    "improved": 0,
+    "retained": 3,
+    "regressed": 0,
+    "unchanged-fail": 2
+  },
+  "score_map_cases": [
+    {
+      "id": "sampling-perturb-score-stack-0035",
+      "name": "Stack 35 score counterfactual",
+      "group": "score",
+      "baseline_result": "fail",
+      "treatment_result": "fail",
+      "result": "fail",
+      "transition": "unchanged-fail",
+      "checked": false,
+      "observed": "stock p95=2.85503523062, max=5.21235444833; treatment p95=0.000166968357024, max=0.000245837222991"
+    },
+    {
+      "id": "sampling-perturb-score-stack-0252",
+      "name": "Stack 252 score counterfactual",
+      "group": "score",
+      "baseline_result": "fail",
+      "treatment_result": "fail",
+      "result": "fail",
+      "transition": "unchanged-fail",
+      "checked": false,
+      "observed": "stock p95=4.00673852511, max=6.399377876; treatment p95=0.000263122032425, max=0.0004509892957"
+    },
+    {
+      "id": "sampling-perturb-score-stack-0348",
+      "name": "Stack 348 score counterfactual",
+      "group": "score",
+      "baseline_result": "fail",
+      "treatment_result": "fail",
+      "result": "fail",
+      "transition": "unchanged-fail",
+      "checked": false,
+      "observed": "stock p95=2.35394651621, max=3.42740658471; treatment p95=0.000153881959648, max=0.000192659445077"
+    },
+    {
+      "id": "sampling-perturb-score-stack-0591",
+      "name": "Stack 591 score counterfactual",
+      "group": "score",
+      "baseline_result": "fail",
+      "treatment_result": "fail",
+      "result": "fail",
+      "transition": "unchanged-fail",
+      "checked": false,
+      "observed": "stock p95=2.2351598535, max=3.42298786979; treatment p95=0.000230897231813, max=0.000357545181032"
+    },
+    {
+      "id": "sampling-perturb-score-stack-0683",
+      "name": "Stack 683 score counterfactual",
+      "group": "score",
+      "baseline_result": "fail",
+      "treatment_result": "fail",
+      "result": "fail",
+      "transition": "unchanged-fail",
+      "checked": false,
+      "observed": "stock p95=1.3500960191, max=1.96974000137; treatment p95=0.000122211750994, max=0.000191209012684"
+    },
+    {
+      "id": "sampling-perturb-score-stack-1100",
+      "name": "Stack 1100 score counterfactual",
+      "group": "score",
+      "baseline_result": "fail",
+      "treatment_result": "fail",
+      "result": "fail",
+      "transition": "unchanged-fail",
+      "checked": false,
+      "observed": "stock p95=2.83694059374, max=3.71149217608; treatment p95=0.000188422392785, max=0.000283455658973"
+    },
+    {
+      "id": "sampling-perturb-score-stack-1522",
+      "name": "Stack 1522 score counterfactual",
+      "group": "score",
+      "baseline_result": "fail",
+      "treatment_result": "fail",
+      "result": "fail",
+      "transition": "unchanged-fail",
+      "checked": false,
+      "observed": "stock p95=3.11295068302, max=4.64386064968; treatment p95=0.000111341413196, max=0.000262339804465"
+    },
+    {
+      "id": "sampling-perturb-score-stack-1640",
+      "name": "Stack 1640 score counterfactual",
+      "group": "score",
+      "baseline_result": "fail",
+      "treatment_result": "fail",
+      "result": "fail",
+      "transition": "unchanged-fail",
+      "checked": false,
+      "observed": "stock p95=2.87697724885, max=4.33168888503; treatment p95=0.000132587101484, max=0.000239488933062"
+    },
+    {
+      "id": "sampling-perturb-score-stack-1767",
+      "name": "Stack 1767 score counterfactual",
+      "group": "score",
+      "baseline_result": "fail",
+      "treatment_result": "fail",
+      "result": "fail",
+      "transition": "unchanged-fail",
+      "checked": false,
+      "observed": "stock p95=4.72945935435, max=6.78508706403; treatment p95=0.000155949339631, max=0.000266273394828"
+    },
+    {
+      "id": "sampling-perturb-score-stack-2124",
+      "name": "Stack 2124 score counterfactual",
+      "group": "score",
+      "baseline_result": "fail",
+      "treatment_result": "fail",
+      "result": "fail",
+      "transition": "unchanged-fail",
+      "checked": false,
+      "observed": "stock p95=3.59681763725, max=5.97628626899; treatment p95=0.000197799768631, max=0.000274035279261"
+    },
+    {
+      "id": "sampling-perturb-score-stack-2322",
+      "name": "Stack 2322 score counterfactual",
+      "group": "score",
+      "baseline_result": "fail",
+      "treatment_result": "fail",
+      "result": "fail",
+      "transition": "unchanged-fail",
+      "checked": false,
+      "observed": "stock p95=2.74920147977, max=4.2698397491; treatment p95=0.0002012327432, max=0.000334651780065"
+    },
+    {
+      "id": "sampling-perturb-score-stack-2330",
+      "name": "Stack 2330 score counterfactual",
+      "group": "score",
+      "baseline_result": "fail",
+      "treatment_result": "fail",
+      "result": "fail",
+      "transition": "unchanged-fail",
+      "checked": false,
+      "observed": "stock p95=3.5420647174, max=6.40715088547; treatment p95=0.000215134696549, max=0.000410103671442"
+    },
+    {
+      "id": "sampling-perturb-score-stack-2846",
+      "name": "Stack 2846 score counterfactual",
+      "group": "score",
+      "baseline_result": "fail",
+      "treatment_result": "fail",
+      "result": "fail",
+      "transition": "unchanged-fail",
+      "checked": false,
+      "observed": "stock p95=3.70674764503, max=5.72710973609; treatment p95=0.000212223839696, max=0.000280825781886"
+    },
+    {
+      "id": "sampling-perturb-score-stack-2994",
+      "name": "Stack 2994 score counterfactual",
+      "group": "score",
+      "baseline_result": "fail",
+      "treatment_result": "fail",
+      "result": "fail",
+      "transition": "unchanged-fail",
+      "checked": false,
+      "observed": "stock p95=2.53986274924, max=5.00249936853; treatment p95=0.000158680022878, max=0.000386457544437"
+    },
+    {
+      "id": "sampling-perturb-map-parity-half1",
+      "name": "half1 RECOVAR-to-RELION FSC-AUC improvement",
+      "group": "map-parity",
+      "baseline_result": "fail",
+      "treatment_result": "fail",
+      "result": "fail",
+      "transition": "unchanged-fail",
+      "checked": false,
+      "observed": "stock delta=-0.0279291111748617; treatment delta=-5.15543992207768e-6"
+    },
+    {
+      "id": "sampling-perturb-map-parity-half2",
+      "name": "half2 RECOVAR-to-RELION FSC-AUC improvement",
+      "group": "map-parity",
+      "baseline_result": "fail",
+      "treatment_result": "fail",
+      "result": "fail",
+      "transition": "unchanged-fail",
+      "checked": false,
+      "observed": "stock delta=-0.0336945720714545; treatment delta=-6.09520865690882e-6"
+    },
+    {
+      "id": "sampling-perturb-map-parity-merged",
+      "name": "merged RECOVAR-to-RELION FSC-AUC improvement",
+      "group": "map-parity",
+      "baseline_result": "fail",
+      "treatment_result": "fail",
+      "result": "fail",
+      "transition": "unchanged-fail",
+      "checked": false,
+      "observed": "stock delta=-0.0282849120795929; treatment delta=-3.08654903125039e-6"
+    },
+    {
+      "id": "sampling-perturb-map-gt-half1",
+      "name": "half1 GT FSC-AUC non-degradation",
+      "group": "map-gt",
+      "baseline_result": "pass",
+      "treatment_result": "fail",
+      "result": "fail",
+      "transition": "regressed",
+      "checked": false,
+      "observed": "stock delta=0.0027845675225863; treatment delta=-3.81127383475566e-5"
+    },
+    {
+      "id": "sampling-perturb-map-gt-half2",
+      "name": "half2 GT FSC-AUC non-degradation",
+      "group": "map-gt",
+      "baseline_result": "pass",
+      "treatment_result": "fail",
+      "result": "fail",
+      "transition": "regressed",
+      "checked": false,
+      "observed": "stock delta=0.00304757450664922; treatment delta=-5.15433279671407e-6"
+    },
+    {
+      "id": "sampling-perturb-map-gt-merged",
+      "name": "merged GT FSC-AUC non-degradation",
+      "group": "map-gt",
+      "baseline_result": "pass",
+      "treatment_result": "fail",
+      "result": "fail",
+      "transition": "regressed",
+      "checked": false,
+      "observed": "stock delta=0.00286505794539424; treatment delta=-2.17440365055666e-5"
+    },
+    {
+      "id": "sampling-perturb-overall",
+      "name": "Sampling-perturbation overall acceptance",
+      "group": "overall-arm",
+      "baseline_result": "fail",
+      "treatment_result": "fail",
+      "result": "fail",
+      "transition": "unchanged-fail",
+      "checked": false,
+      "observed": "stock and treatment both fail signed score/map acceptance"
+    }
+  ],
+  "score_map_summary": {
+    "baseline_pass": 3,
+    "treatment_pass": 0,
+    "evaluated": 21,
+    "denominator": 21,
+    "paired_gain": -3
+  },
+  "score_map_transitions": {
+    "improved": 0,
+    "retained": 0,
+    "regressed": 3,
+    "unchanged-fail": 18
+  }
+}

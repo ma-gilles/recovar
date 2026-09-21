@@ -1,0 +1,110 @@
+{
+  "schema": "recovar.em_k4_allclass_boundary_capture_scorecard.v1",
+  "suite_id": "k4-it2-fixed-a100-recovar-allclass-pass2-boundary",
+  "suite_version": 1,
+  "classification": "recovar_four_class_joint_posterior_boundary_complete",
+  "frozen_denominator": 4,
+  "scorecard_change_admissible": false,
+  "correlation_used": false,
+  "cross_engine_parity_established": false,
+  "acceptance_contract": {
+    "slurm_job_id": 11987097,
+    "state": "COMPLETED",
+    "exit_code": "0:0",
+    "elapsed": "00:38:28",
+    "gpu_uuid": "GPU-f3e94635-d095-bea9-dbe3-26e91dd3ea27",
+    "accepted": true
+  },
+  "boundary": {
+    "iteration": 2,
+    "current_size": 38,
+    "target_original_index_zero_based": 53722,
+    "target_stack_index_one_based": 53723,
+    "translations_per_rotation": 116,
+    "joint_probability_mass": 0.9999999999999997,
+    "joint_significant_support_mass": 0.999000044117344,
+    "replayed_joint_log_normalizer": -1.8714483132983646,
+    "probability_replay_max_abs": 4.336808689942018e-19
+  },
+  "cases": [
+    {
+      "id": "k4-it2-class1-recovar-boundary",
+      "class_one_based": 1,
+      "rotation_count": 2968,
+      "active_candidate_count": 109184,
+      "significant_candidate_count": 38982,
+      "probability_mass": 0.9397193852725108,
+      "artifact_sha256": "32c0318a70f71437fab705cbd31fa6f7ef47ef542556954059d02628129f5b97",
+      "result": "pass",
+      "checked": true
+    },
+    {
+      "id": "k4-it2-class2-recovar-boundary",
+      "class_one_based": 2,
+      "rotation_count": 2432,
+      "active_candidate_count": 65952,
+      "significant_candidate_count": 14076,
+      "probability_mass": 0.02484960009538349,
+      "artifact_sha256": "7c5e4dcbde0c5a2e3cfce238d737ac0a0525ae6e7f92b79a3c3cc404082516c7",
+      "result": "pass",
+      "checked": true
+    },
+    {
+      "id": "k4-it2-class3-recovar-boundary",
+      "class_one_based": 3,
+      "rotation_count": 2096,
+      "active_candidate_count": 64704,
+      "significant_candidate_count": 11804,
+      "probability_mass": 0.02010952446954389,
+      "artifact_sha256": "986077d552326bebab005058068a83c5bc9725ec5ae61cb1ccd3896e2dae8535",
+      "result": "pass",
+      "checked": true
+    },
+    {
+      "id": "k4-it2-class4-recovar-boundary",
+      "class_one_based": 4,
+      "rotation_count": 392,
+      "active_candidate_count": 7392,
+      "significant_candidate_count": 2124,
+      "probability_mass": 0.01532149016256159,
+      "artifact_sha256": "4d80fc4b3cb0bccb8f7f772274ed2b2462d0544579b66180330a64b434c1402f",
+      "result": "pass",
+      "checked": true
+    }
+  ],
+  "summary": {
+    "pass": 4,
+    "evaluated": 4
+  },
+  "evidence": {
+    "capture_report": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_allclass_recovar_retry_223e7e81_20260804T0200ET/analysis/ALLCLASS_PASS2_CAPTURE.json",
+      "sha256": "45beed43d823191ca6ad2358cd3965cde80ffc534b67a5e127b3f9028f4f3d03"
+    },
+    "launcher": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_allclass_recovar_retry_223e7e81_20260804T0200ET/jobs/run_allclass_pass2.sbatch",
+      "sha256": "ee4ea47352b4bb95ac0d72b6f71f9879bdb655c26fe02837d0519d011b607cc3"
+    },
+    "predeclaration": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_allclass_recovar_retry_223e7e81_20260804T0200ET/provenance/EXECUTION_PREDECLARATION.md",
+      "sha256": "ca1bb1dcabf3b54052ff8d1defce78508c45d355d6901c672a62e889bccaf7eb"
+    },
+    "postterminal_audit": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_allclass_recovar_retry_223e7e81_20260804T0200ET/provenance/POSTTERMINAL_AUDIT_11987097.md",
+      "sha256": "870157ef201f4517655c2f14b7637fabae9f13187bfb95308fffaa7aa20425ac"
+    },
+    "science_manifest": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_allclass_recovar_retry_223e7e81_20260804T0200ET/provenance/science_outputs_11987097.sha256",
+      "sha256": "8272520263a3e5a6edc9164e6ea45821bb411b1ca9483a8e105231435116c784"
+    },
+    "static_manifest": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_allclass_recovar_retry_223e7e81_20260804T0200ET/provenance/static_inputs_11987097.sha256",
+      "sha256": "253d5598b98f029a4bcc0eb5c8e6f23f88d56129490d0cd725fd5e60b5fcd45d"
+    },
+    "wrapper_manifest": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_allclass_recovar_retry_223e7e81_20260804T0200ET/provenance/wrapper_inputs_11987097.sha256",
+      "sha256": "147a0aa0bd1f83ff247a9fa36322c0b59f9eb4834cf6505d9c96e2fdf02494e3"
+    }
+  },
+  "metric_policy": "Capture completeness and exact joint-posterior replay only; non-scoring; cross-engine parity not established; no correlation"
+}
