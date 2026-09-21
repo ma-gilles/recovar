@@ -250,6 +250,39 @@ for job_id in ${K1_NATIVE_REF_JOB} ${K1_JOB} ${K1_NATIVE_JOB} ${K4_JOB}; do
 done
 echo
 
+# A Slurm state of COMPLETED only says the job exited 0. pytest exits 0 when it
+# skips, so a rung whose fixture is missing looks exactly like a rung that passed.
+# Classify each rung from its own pytest summary line instead, and never let a
+# skipped rung contribute to an overall pass: a missing measurement is not agreement.
+skipped=0
+measured=0
+echo "=== rung outcomes ==="
+for job_name in em_parity_long_k1 em_parity_long_k1_native em_parity_long_k4; do
+  out="${SCRATCH_DIR}/\${job_name}.out"
+  if [[ ! -f "\${out}" ]]; then
+    echo "\${job_name}: NO OUTPUT"
+    failed=1
+    continue
+  fi
+  line=\$(grep -ohE '[0-9]+ (passed|failed|error|skipped)[^=]*' "\${out}" | tail -1)
+  if grep -qE '^SKIPPED|[0-9]+ skipped' "\${out}" && ! grep -qE '[0-9]+ passed' "\${out}"; then
+    echo "\${job_name}: SKIPPED (not measured) -- \${line:-no pytest summary}"
+    grep -A4 'short test summary' "\${out}" 2>/dev/null | tail -4
+    skipped=1
+  elif grep -qE '[0-9]+ (failed|error)' "\${out}"; then
+    echo "\${job_name}: FAILED -- \${line:-no pytest summary}"
+    failed=1
+  elif grep -qE '[0-9]+ passed' "\${out}"; then
+    echo "\${job_name}: passed -- \${line}"
+    measured=\$((measured + 1))
+  else
+    echo "\${job_name}: INDETERMINATE -- no pytest summary line"
+    failed=1
+  fi
+done
+echo "rungs actually measured: \${measured}"
+echo
+
 for job_name in em_parity_long_k1_native_ref em_parity_long_k1 em_parity_long_k1_native em_parity_long_k4; do
   echo "--- \${job_name} stdout tail ---"
   tail -40 "${SCRATCH_DIR}/\${job_name}.out" 2>/dev/null || echo "(no stdout)"
@@ -278,6 +311,15 @@ do
   fi
 done
 
+if [[ "\${skipped}" -ne 0 ]]; then
+  echo "EM-long tier did NOT validate: at least one rung was skipped for a missing" >&2
+  echo "fixture and therefore measured nothing. A skipped rung is not a passing rung." >&2
+  failed=1
+fi
+
+if [[ "\${failed}" -eq 0 ]]; then
+  echo "EM-long tier: all \${measured} rungs measured and passed."
+fi
 exit "\${failed}"
 EOF
 chmod +x "${SUMMARY_SCRIPT}"
