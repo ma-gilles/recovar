@@ -106,6 +106,7 @@ from recovar.em.local.local_backprojection import (
     flatten_bucket_rows,
 )
 from recovar.em.local.local_batch_planning import (
+    prepare_reconstruction_groups,
     _exact_local_effective_max_hypotheses_per_microbatch,
     _exact_local_microbatch_env_overridden,
     _exact_local_xhalf_auto_microbatch_boost,
@@ -649,37 +650,13 @@ def run_local_em_exact(
             "deferred packed VDAM requires source-faithful significant-only "
             "RELION residual backprojection"
         )
-    reconstruction_group_ids_np = None
-    resolved_reconstruction_group_count = 1
-    if reconstruction_group_ids is not None:
-        reconstruction_group_ids_np = np.asarray(reconstruction_group_ids)
-        if reconstruction_group_ids_np.dtype != np.int32:
-            raise TypeError("reconstruction_group_ids must be int32")
-        if reconstruction_group_ids_np.shape != (int(local_layout.n_images),):
-            raise ValueError(
-                "reconstruction_group_ids must match the local-layout image axis"
-            )
-        if reconstruction_group_count is None:
-            raise ValueError(
-                "reconstruction_group_count is required with reconstruction_group_ids"
-            )
-        resolved_reconstruction_group_count = int(reconstruction_group_count)
-        if resolved_reconstruction_group_count <= 0:
-            raise ValueError("reconstruction_group_count must be positive")
-        if np.any(reconstruction_group_ids_np < 0) or np.any(
-            reconstruction_group_ids_np >= resolved_reconstruction_group_count
-        ):
-            raise ValueError("reconstruction_group_ids contains an out-of-range group")
-        if score_only:
-            raise ValueError("grouped reconstruction is not supported in score-only mode")
-        if not source_faithful_bpref:
-            raise ValueError(
-                "grouped reconstruction requires source-faithful RELION BPref accumulation"
-            )
-    elif reconstruction_group_count not in (None, 1):
-        raise ValueError(
-            "reconstruction_group_ids is required when reconstruction_group_count is not one"
-        )
+    reconstruction_group_ids_np, resolved_reconstruction_group_count = prepare_reconstruction_groups(
+        reconstruction_group_ids,
+        reconstruction_group_count,
+        n_images=local_layout.n_images,
+        score_only=score_only,
+        source_faithful_bpref=source_faithful_bpref,
+    )
     if preserve_bpref_particle_order and not mstep_relion_x_half:
         raise ValueError("BPref particle-order preservation requires the RELION x-half M-step")
     if preserve_bpref_particle_order and not relion_exact_bpref_operands:

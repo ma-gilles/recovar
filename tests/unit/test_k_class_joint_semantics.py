@@ -1249,7 +1249,7 @@ def test_adaptive_k_class_firstiter_fine_pass_uses_global_winner_subsets(monkeyp
 
 
 def test_adaptive_k_class_firstiter_sparse_fine_pass_uses_global_winner_subsets(monkeypatch):
-    from recovar.em.helpers import oversampling as oversampling_module
+    from recovar.em.sparse_pass2 import dispatch as sparse_dispatch
     from recovar.em.sampling import rotation_grid_size
 
     score_calls = []
@@ -1339,7 +1339,7 @@ def test_adaptive_k_class_firstiter_sparse_fine_pass_uses_global_winner_subsets(
 
 
     monkeypatch.setattr(k_class_module, "run_em", fake_run_em)
-    monkeypatch.setattr(oversampling_module, "compute_pass2_stats_sparse", fake_compute_pass2_stats_sparse)
+    monkeypatch.setattr(sparse_dispatch, "compute_pass2_stats_sparse", fake_compute_pass2_stats_sparse)
     def fake_joint_probe(*args, **kwargs):
         probe_calls.append((args, kwargs))
         return _firstiter_probe_result(
@@ -1387,7 +1387,7 @@ def test_adaptive_k_class_firstiter_sparse_fine_pass_uses_global_winner_subsets(
 
 
 def test_sparse_firstiter_k1_adapter_forwards_exact_cc_and_spectrum_norm(monkeypatch):
-    from recovar.em.helpers import oversampling as oversampling_module
+    from recovar.em.sparse_pass2 import dispatch as sparse_dispatch
 
     calls = []
 
@@ -1435,7 +1435,7 @@ def test_sparse_firstiter_k1_adapter_forwards_exact_cc_and_spectrum_norm(monkeyp
 
 
     monkeypatch.setattr(
-        oversampling_module,
+        sparse_dispatch,
         "compute_pass2_stats_sparse",
         fake_compute_pass2_stats_sparse,
     )
@@ -1558,7 +1558,7 @@ def test_sparse_k_class_adaptive_mstep_uses_score_space_log_z(monkeypatch):
     # production default is the joint fused path, covered separately.
     monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_FUSED", "0")
 
-    from recovar.em.helpers import oversampling as oversampling_module
+    from recovar.em.sparse_pass2 import dispatch as sparse_dispatch
     from recovar.em.sampling import rotation_grid_size
 
     calls = []
@@ -1611,7 +1611,7 @@ def test_sparse_k_class_adaptive_mstep_uses_score_space_log_z(monkeypatch):
         return common
 
 
-    monkeypatch.setattr(oversampling_module, "compute_pass2_stats_sparse", fake_compute_pass2_stats_sparse)
+    monkeypatch.setattr(sparse_dispatch, "compute_pass2_stats_sparse", fake_compute_pass2_stats_sparse)
 
     result = _run_sparse_k_class_adaptive_pass2(
         TinyDataset(),
@@ -1662,7 +1662,7 @@ def test_sparse_k_class_adaptive_single_pass_uses_largest_support_class(monkeypa
     # Largest-support-class reuse is specific to the legacy 2K-1 path.
     monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_FUSED", "0")
 
-    from recovar.em.helpers import oversampling as oversampling_module
+    from recovar.em.sparse_pass2 import dispatch as sparse_dispatch
     from recovar.em.sampling import rotation_grid_size
 
     calls = []
@@ -1712,7 +1712,7 @@ def test_sparse_k_class_adaptive_single_pass_uses_largest_support_class(monkeypa
         return common
 
 
-    monkeypatch.setattr(oversampling_module, "compute_pass2_stats_sparse", fake_compute_pass2_stats_sparse)
+    monkeypatch.setattr(sparse_dispatch, "compute_pass2_stats_sparse", fake_compute_pass2_stats_sparse)
 
     _run_sparse_k_class_adaptive_pass2(
         TinyDataset(),
@@ -1771,7 +1771,7 @@ def test_sparse_k1_adapter_forwards_source_faithful_spectrum_norm(monkeypatch):
     """The K=1-through-K-class adapter must not drop the fresh-run guard."""
 
     from recovar import cuda_backproject
-    from recovar.em.helpers import oversampling as oversampling_module
+    from recovar.em.sparse_pass2 import dispatch as sparse_dispatch
     from recovar.em.sampling import rotation_grid_size
 
     calls = []
@@ -1811,7 +1811,7 @@ def test_sparse_k1_adapter_forwards_source_faithful_spectrum_norm(monkeypatch):
 
 
     monkeypatch.setattr(
-        oversampling_module,
+        sparse_dispatch,
         "compute_pass2_stats_sparse",
         fake_compute_pass2_stats_sparse,
     )
