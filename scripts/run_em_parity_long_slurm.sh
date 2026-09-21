@@ -103,15 +103,18 @@ make_test_script() {
 set -euo pipefail
 cd "${REPO_ROOT}"
 unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV
-# PATH is a contaminating variable too. A run of this tier picked up the conda
-# toolchain of an unrelated checkout's pixi environment, whose linker could not find
-# the CUDA driver stub, and the custom CUDA build failed with "ld: cannot find -lcuda"
-# inside the GPU allocation. Drop every pixi environment that is not this checkout's
-# so the toolchain comes from here or from the system, never from someone else's tree.
+# Keep the pixi environment's conda toolchain off the front of PATH. A run of this
+# tier failed its custom CUDA build with "ld: cannot find -lcuda": nvcc picked the
+# conda g++ because that environment's bin came first, and the conda gcc's bundled
+# linker does not search where the CUDA driver stub lives. The environment is this
+# checkout's own -- .pixi is a symlink chain ending in a shared env -- so this is not
+# foreign contamination, it is an ordering problem, and prepending would cause it
+# rather than cure it. Everything here invokes the interpreter by absolute path, so
+# the environment is appended, leaving the system toolchain first for nvcc.
 PATH="\$(printf '%s' "\${PATH}" | tr ':' '\\n' \\
   | grep -v '/\\.pixi/envs/' \\
   | paste -sd: -)"
-export PATH="${REPO_ROOT}/.pixi/envs/default/bin:\${PATH}"
+export PATH="\${PATH}:${REPO_ROOT}/.pixi/envs/default/bin"
 export PYTHONNOUSERSITE=1
 export TMPDIR="${SCRATCH_DIR}/tmp/${job_name}_\${SLURM_JOB_ID}"
 export PIXI_HOME="${SCRATCH_DIR}/pixi_home/${job_name}_\${SLURM_JOB_ID}"
