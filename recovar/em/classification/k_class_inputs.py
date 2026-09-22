@@ -44,16 +44,31 @@ def _select_class_value(value, class_index: int, n_classes: int):
 
 
 def _select_projector_half_for_class(value, class_index: int, n_classes: int):
-    """Select a host view before the consuming engine decides when to upload.
+    """Select one RELION projector before transferring it to the device.
 
-    Preserve existing eager/traced JAX indexing for device-owned callers.
-    Selecting a NumPy class must not implicitly stage every class on device.
+    Production projector slabs are NumPy arrays.  Preserve a host view for
+    both singleton reshape and K-class indexing so only the selected 3-D slab
+    reaches ``jnp.asarray`` in its consumer.  A traced JAX value may reshape
+    inside its enclosing compilation.  Reject eager 4-D JAX arrays because
+    even a logically shape-only reshape can allocate a second device buffer.
     """
     if value is None:
         return None
     value_array = value if isinstance(value, (np.ndarray, jax.Array, jax.core.Tracer)) else np.asarray(value)
-    if value_array.ndim >= 4 and int(value_array.shape[0]) == n_classes:
-        return value_array[class_index]
+    if value_array.ndim >= 4 and int(value_array.shape[0]) == int(n_classes):
+        if isinstance(value_array, jax.Array) and not isinstance(value_array, jax.core.Tracer):
+            raise ValueError(
+                "RELION projector class selection must occur before eager "
+                "device transfer; pass the NumPy host array or select inside "
+                "an enclosing jax.jit trace",
+            )
+        if int(n_classes) == 1:
+            if int(class_index) != 0:
+                raise IndexError("a singleton RELION projector only has class index 0")
+            if isinstance(value_array, jax.core.Tracer):
+                return jnp.reshape(value_array, value_array.shape[1:])
+            return np.reshape(value_array, value_array.shape[1:])
+        return value_array[int(class_index)]
     return value
 
 
@@ -75,9 +90,11 @@ def _local_engine_kwargs_for_class(engine_kwargs: dict, class_index: int, n_clas
     kwargs["include_unweighted_norm_high_shell"] = class_index == 0
     projector_half = kwargs.get("relion_projector_half")
     if projector_half is not None:
-        projector_half_arr = jnp.asarray(projector_half)
-        if projector_half_arr.ndim >= 4 and int(projector_half_arr.shape[0]) == n_classes:
-            kwargs["relion_projector_half"] = projector_half_arr[class_index]
+        kwargs["relion_projector_half"] = _select_projector_half_for_class(
+            projector_half,
+            class_index,
+            n_classes,
+        )
     scale_dvp = kwargs.get("scale_correction_data_vs_prior")
     if scale_dvp is not None:
         kwargs["scale_correction_data_vs_prior"] = _select_class_value(

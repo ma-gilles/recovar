@@ -3236,6 +3236,66 @@ def test_relion_coarse_normalized_cc_native_texture_fails_closed_without_gpu(
         )
 
 
+def test_relion_projector_half_texture_fails_closed_without_gpu(monkeypatch):
+    import recovar.cuda_backproject as cuda_backproject
+
+    monkeypatch.setattr(cuda_backproject.jax, "default_backend", lambda: "cpu")
+    with pytest.raises(RuntimeError, match="requires a JAX GPU backend"):
+        cuda_backproject.relion_projector_half_texture_f32.__wrapped__(
+            jnp.zeros((5, 5, 3), dtype=jnp.complex64),
+            jnp.eye(3, dtype=jnp.float32)[None, :, :],
+            current_size=2,
+            padding_factor=1,
+            projector_max_r=1,
+        )
+
+
+def test_relion_projector_singleton_selection_is_shape_only_across_handoffs():
+    from recovar.em.classification import k_class_inputs
+    from recovar.em.local import local_em_engine
+
+    select_relion_projector_half_for_class = k_class_inputs._select_projector_half_for_class
+    projector = np.arange(1 * 5 * 5 * 3, dtype=np.float32).reshape(1, 5, 5, 3).astype(np.complex64)
+    selected = select_relion_projector_half_for_class(projector, 0, 1)
+    assert selected.shape == (5, 5, 3)
+    assert np.shares_memory(selected, projector)
+    np.testing.assert_array_equal(selected, projector.reshape(5, 5, 3))
+
+    projector_jax = jnp.asarray(projector)
+    stablehlo = str(
+        jax.jit(lambda value: select_relion_projector_half_for_class(value, 0, 1))
+        .lower(projector_jax)
+        .compiler_ir(dialect="stablehlo")
+    )
+    assert "stablehlo.reshape" in stablehlo
+    assert "stablehlo.slice" not in stablehlo
+    assert "stablehlo.dynamic_slice" not in stablehlo
+    with pytest.raises(ValueError, match="before eager device transfer"):
+        select_relion_projector_half_for_class(projector_jax, 0, 1)
+
+    two_classes = np.concatenate((projector, projector + 100), axis=0)
+    selected_second = select_relion_projector_half_for_class(two_classes, 1, 2)
+    assert np.shares_memory(selected_second, two_classes)
+    np.testing.assert_array_equal(
+        selected_second,
+        two_classes[1],
+    )
+
+    local_kwargs = k_class_inputs._local_engine_kwargs_for_class(
+        {"relion_projector_half": projector},
+        0,
+        1,
+    )
+    assert local_kwargs["relion_projector_half"].shape == (5, 5, 3)
+    assert np.shares_memory(local_kwargs["relion_projector_half"], projector)
+
+    local_source = Path(local_em_engine.__file__).read_text()
+    k_class_source = Path(k_class_inputs.__file__).read_text()
+    assert "relion_projector_half_big_jit = relion_projector_half_big_jit[0]" not in local_source
+    assert "relion_projector_half = relion_projector_half[0]" not in local_source
+    assert "projector_half_arr[class_index]" not in k_class_source
+
+
 def test_relion_coarse_native_texture_fails_closed_without_gpu(monkeypatch):
     import recovar.cuda_backproject as cuda_backproject
 
@@ -3631,6 +3691,126 @@ def test_exact_ctf_compact_indices_never_materialize_device_inputs(monkeypatch, 
                 (4, 4),
                 pixel_indices=indices,
             )
+
+
+@pytest.mark.gpu
+def test_relion_half_texture_projection_matches_legacy_full_staging_bitwise(
+    monkeypatch,
+    custom_cuda_lib,
+    gpu_device,
+):
+    """The compact production projector must preserve every projected bit."""
+
+    import recovar.cuda_backproject as cuda_backproject
+    from recovar.em.helpers.projection import (
+        compute_relion_projector_projections_block,
+        relion_projector_half_to_texture_full,
+    )
+
+    monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
+    monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
+    monkeypatch.setattr(cuda_backproject, "_cuda_ok", None)
+    rng = np.random.default_rng(191)
+    current_size = 16
+    padding_factor = 2
+    projector_max_r = 7
+    projector_size = 31
+    projector_half = (
+        rng.normal(0, 0.02, (projector_size, projector_size, 16))
+        + 1j * rng.normal(0, 0.02, (projector_size, projector_size, 16))
+    ).astype(np.complex64)
+    rotations = _off_grid_so3_rotations()
+    image_coordinates = np.stack(
+        np.meshgrid(
+            np.arange(-current_size // 2 + 1, current_size // 2 + 1),
+            np.arange(current_size // 2 + 1),
+            indexing="ij",
+        ),
+        axis=-1,
+    ).reshape(-1, 2)
+    model_coordinates = np.einsum(
+        "rij,pj->rpi",
+        rotations[:, :, :2],
+        image_coordinates[:, ::-1],
+    ) * np.float32(padding_factor)
+    assert np.any(model_coordinates[..., 0] < 0)
+    assert np.any(model_coordinates[..., 0] > 0)
+    assert np.any(np.abs(model_coordinates[..., 2]) > 0.25)
+    assert np.any(np.abs(model_coordinates[..., 2] - np.rint(model_coordinates[..., 2])) > 0.05)
+    assert np.any(np.sum(model_coordinates * model_coordinates, axis=-1) > (projector_max_r * padding_factor) ** 2)
+
+    with jax.default_device(gpu_device):
+        projector_half_jax = jnp.asarray(projector_half)
+        rotations_jax = jnp.asarray(rotations)
+        projector_full = relion_projector_half_to_texture_full(projector_half_jax)
+        legacy = cuda_backproject.project(
+            projector_full.reshape(-1),
+            rotations_jax,
+            image_shape=(current_size, current_size),
+            volume_shape=(projector_size,) * 3,
+            order=1,
+            half_volume=False,
+            half_image=True,
+            max_r=float(projector_max_r),
+            relion_texture_interp=True,
+        )
+        compact = cuda_backproject.relion_projector_half_texture_f32(
+            projector_half_jax,
+            rotations_jax,
+            current_size=current_size,
+            padding_factor=padding_factor,
+            projector_max_r=projector_max_r,
+        )
+        native_scale = np.float32(-(current_size**2))
+        legacy_native_scaled = cuda_backproject.project(
+            (projector_full * native_scale).reshape(-1),
+            rotations_jax,
+            image_shape=(current_size, current_size),
+            volume_shape=(projector_size,) * 3,
+            order=1,
+            half_volume=False,
+            half_image=True,
+            max_r=float(projector_max_r),
+            relion_texture_interp=True,
+        )
+        compact_native_scaled = cuda_backproject.relion_projector_half_texture_f32(
+            projector_half_jax,
+            rotations_jax,
+            current_size=current_size,
+            padding_factor=padding_factor,
+            projector_max_r=projector_max_r,
+            projector_scale=float(native_scale),
+        )
+        production, production_abs2 = compute_relion_projector_projections_block(
+            projector_half_jax,
+            rotations_jax,
+            (current_size, current_size),
+            r_max=projector_max_r,
+            padding_factor=padding_factor,
+            centered_rows=True,
+            dense_scale=True,
+            projector_output_size=current_size,
+            relion_texture_interp=True,
+        )
+        legacy_scaled = legacy * np.float32(-(current_size**2))
+        legacy_abs2 = jnp.abs(legacy_scaled) ** 2
+
+    np.testing.assert_array_equal(
+        np.asarray(compact).view(np.uint32),
+        np.asarray(legacy).view(np.uint32),
+    )
+    np.testing.assert_array_equal(
+        np.asarray(compact_native_scaled).view(np.uint32),
+        np.asarray(legacy_native_scaled).view(np.uint32),
+    )
+    np.testing.assert_array_equal(
+        np.asarray(production).view(np.uint32),
+        np.asarray(legacy_scaled).view(np.uint32),
+    )
+    np.testing.assert_array_equal(
+        np.asarray(production_abs2).view(np.uint32),
+        np.asarray(legacy_abs2).view(np.uint32),
+    )
 
 
 @pytest.mark.gpu
