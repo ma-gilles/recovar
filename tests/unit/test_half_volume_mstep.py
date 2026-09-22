@@ -613,6 +613,7 @@ def test_relion_x_half_cuda_pins_physical_radius_accumulation_order():
     assert "__fmaf_rn(rk0, rk0, xy2)" in helper
     assert "relion_vdam_mstep_fused_x_half_kernel" in text
     assert text.count("relion_radius_squared(rk0, rk1, rk2)") == 5
+    assert "if ((xp * xp + yp * yp + zp * zp) > max_r2_vol) continue;" in text
 
 
 def test_relion_x_half_bp_block_topology_env_is_off_by_default(monkeypatch):
@@ -878,6 +879,12 @@ def test_relion_fused_x_half_cuda_source_interleaves_neighbor_atomics():
         )
     ]
     assert handler.count(".Ret<ffi::AnyBuffer>()") == 2
+    firstiter_start = text.index("RelionFirstiterBprefFusedXHalf, RelionFirstiterBprefFusedXHalfImpl")
+    firstiter_stop = text.index("RelionFusedXHalfBackprojectSignature, RelionFusedXHalfBackprojectSignatureImpl")
+    firstiter_handler = text[firstiter_start:firstiter_stop]
+    assert firstiter_handler.count(".Ret<ffi::AnyBuffer>()") == 3
+    assert '.Attr<float>("significant_weight")' in firstiter_handler
+    assert '.Attr<float>("weight_norm")' in firstiter_handler
     assert "RelionFusedXHalfBackprojectParticleGridImpl" in text
     assert "for (int64_t particle = 0; particle < n_particles; ++particle)" in text
 
