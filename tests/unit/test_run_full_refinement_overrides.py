@@ -1007,6 +1007,83 @@ def test_firstiter_cc_passes_relion_cli_ini_high_to_refinement_loop():
     assert value.body.id == "relion_firstiter_ini_high_angstrom"
 
 
+@pytest.mark.parametrize(
+    ("optimiser_ini_high", "startup_lowpass_ini_high", "expected"),
+    [
+        (30.0, None, 30.0),
+        (30.0, 60.0, 30.0),
+        (None, 30.0, 30.0),
+        (None, None, None),
+    ],
+)
+def test_relion_firstiter_ini_high_uses_startup_lowpass_without_optimiser_value(
+    optimiser_ini_high, startup_lowpass_ini_high, expected
+):
+    """RELION re-filters after firstiter_cc iteration 1 with the start-up ``ini_high``.
+
+    ml_optimiser.cpp:6389-6397 calls initialLowPassFilterReferences (3556)
+    again with the same ``ini_high``. A fresh run has no optimiser command, so
+    the ``--apply-initial-lowpass`` value is that ``ini_high``; without it no
+    re-low-pass runs (``--init_resolution`` alone is not an ``ini_high``).
+    """
+    got = run_full_refinement._resolve_relion_firstiter_ini_high(
+        optimiser_ini_high=optimiser_ini_high,
+        startup_lowpass_ini_high=startup_lowpass_ini_high,
+    )
+    assert got == expected
+
+
+def test_firstiter_cc_resolves_ini_high_from_startup_lowpass_before_parity_options():
+    tree = ast.parse(RUN_FULL_REFINEMENT.read_text())
+    main = next(
+        node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "main"
+    )
+    lowpass_lines = [
+        node.lineno
+        for node in ast.walk(main)
+        if isinstance(node, ast.Assign)
+        and any(isinstance(t, ast.Name) and t.id == "_ini_high_for_lowpass" for t in node.targets)
+    ]
+    assert len(lowpass_lines) == 1
+    guards = [
+        node
+        for node in ast.walk(main)
+        if isinstance(node, ast.If)
+        and isinstance(node.test, ast.Attribute)
+        and node.test.attr == "firstiter_cc"
+        and any(
+            isinstance(inner, ast.Call)
+            and isinstance(inner.func, ast.Name)
+            and inner.func.id == "_resolve_relion_firstiter_ini_high"
+            for inner in ast.walk(node)
+        )
+    ]
+    assert len(guards) == 1
+    resolves = [
+        node
+        for node in ast.walk(guards[0])
+        if isinstance(node, ast.Assign)
+        and isinstance(node.value, ast.Call)
+        and isinstance(node.value.func, ast.Name)
+        and node.value.func.id == "_resolve_relion_firstiter_ini_high"
+    ]
+    assert len(resolves) == 1
+    (target,) = resolves[0].targets
+    assert isinstance(target, ast.Name) and target.id == "relion_firstiter_ini_high_angstrom"
+    keywords = {keyword.arg: keyword.value for keyword in resolves[0].value.keywords}
+    assert isinstance(keywords["startup_lowpass_ini_high"], ast.Name)
+    assert keywords["startup_lowpass_ini_high"].id == "_ini_high_for_lowpass"
+    parity_calls = [
+        node.lineno
+        for node in ast.walk(main)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "RelionParityOptions"
+    ]
+    assert len(parity_calls) == 1
+    assert lowpass_lines[0] < resolves[0].lineno < parity_calls[0]
+
+
 def test_refinement_results_persist_final_tau2_weight_combination():
     from recovar.em.helpers.iteration_history import add_refinement_history_artifacts
 

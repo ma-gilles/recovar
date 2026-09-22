@@ -123,6 +123,28 @@ def _k1_relion_live_initial_noise_enabled(
     )
 
 
+def _resolve_relion_firstiter_ini_high(
+    *,
+    optimiser_ini_high: float | None,
+    startup_lowpass_ini_high: float | None,
+) -> float | None:
+    """Return RELION's ``ini_high`` for the post-iteration-1 re-low-pass.
+
+    RELION filters the start-up references (``initialLowPassFilterReferences``,
+    ml_optimiser.cpp:3556) and re-filters them after the firstiter_cc
+    iteration 1 (ml_optimiser.cpp:6389-6397) with one ``ini_high``. A positive
+    ``--ini_high`` on the RELION optimiser command wins. Otherwise the value
+    that drove RECOVAR's ``--apply-initial-lowpass`` start-up filter is that
+    ``ini_high``. Without either, RELION's ``ini_high`` is unset and no
+    re-low-pass runs: ``--init_resolution`` alone is not an ``ini_high``.
+    """
+    if optimiser_ini_high is not None:
+        return float(optimiser_ini_high)
+    if startup_lowpass_ini_high is not None:
+        return float(startup_lowpass_ini_high)
+    return None
+
+
 def _configure_relion_firstiter_controls(
     *,
     firstiter_cc: bool,
@@ -3043,8 +3065,7 @@ def main():
         if args.firstiter_cc:
             if relion_firstiter_ini_high_angstrom is None:
                 logger.info(
-                    "RELION firstiter_cc: no positive --ini_high found in %s; "
-                    "not applying post-iter1 ini_high low-pass",
+                    "RELION firstiter_cc: no positive --ini_high found in %s",
                     optimiser_star,
                 )
             else:
@@ -3166,6 +3187,23 @@ def main():
         if _apply_ini_lowpass and float(args.init_resolution) > 0.0
         else None
     )
+    if args.firstiter_cc:
+        _optimiser_ini_high = relion_firstiter_ini_high_angstrom
+        relion_firstiter_ini_high_angstrom = _resolve_relion_firstiter_ini_high(
+            optimiser_ini_high=_optimiser_ini_high,
+            startup_lowpass_ini_high=_ini_high_for_lowpass,
+        )
+        if relion_firstiter_ini_high_angstrom is None:
+            logger.info(
+                "RELION firstiter_cc: no positive --ini_high and no --apply-initial-lowpass; "
+                "not applying post-iter1 ini_high low-pass",
+            )
+        elif _optimiser_ini_high is None:
+            logger.info(
+                "RELION firstiter_cc: using the --apply-initial-lowpass ini_high %.2f A "
+                "for the post-iter1 low-pass",
+                relion_firstiter_ini_high_angstrom,
+            )
     _use_initial_projector_real, _tree_margin_defaulted = _configure_relion_firstiter_controls(
         firstiter_cc=bool(args.firstiter_cc),
         n_classes=int(args.n_classes),
