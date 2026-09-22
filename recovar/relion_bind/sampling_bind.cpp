@@ -239,6 +239,68 @@ static py::array_t<double> get_coarse_orientations(
 }
 
 
+static bool is_c1_symmetry(const std::string& symmetry) {
+    return symmetry == "C1" || symmetry == "c1";
+}
+
+
+/**
+ * Build the symmetry-reduced sampling used by getOrientations.
+ *
+ * Construction enumerates and reduces the whole point-group grid, which costs
+ * milliseconds per call at HEALPix order 3-4 for I1. Batched callers build it
+ * once and reuse it for every row.
+ */
+static HealpixSampling make_symmetric_oversampling(
+    int healpix_order,
+    double random_perturbation,
+    const std::string& symmetry
+) {
+    HealpixSampling sampling = make_3d_sampling(healpix_order, -1.0, symmetry);
+    sampling.random_perturbation = random_perturbation;
+    return sampling;
+}
+
+
+/**
+ * Append RELION getOrientations rows for one symmetry-reduced (idir, ipsi).
+ *
+ * getOrientations only reads the sampling (relion/src/healpix_sampling.cpp),
+ * so one prebuilt sampling serves any number of rows with identical results.
+ */
+static void append_symmetric_oversampled_orientations(
+    HealpixSampling& sampling,
+    int oversampling_order,
+    long idir,
+    long ipsi,
+    std::vector<double> &my_rot,
+    std::vector<double> &my_tilt,
+    std::vector<double> &my_psi
+) {
+    if (idir < 0 || idir >= static_cast<long>(sampling.rot_angles.size()))
+        throw std::runtime_error("idir out of range");
+    if (ipsi < 0 || ipsi >= static_cast<long>(sampling.psi_angles.size()))
+        throw std::runtime_error("ipsi out of range");
+    std::vector<RFLOAT> rot, tilt, psi;
+    std::vector<int> pointer_dir_nonzeroprior, pointer_psi_nonzeroprior;
+    std::vector<RFLOAT> directions_prior, psi_prior;
+    sampling.getOrientations(
+        idir,
+        ipsi,
+        oversampling_order,
+        rot,
+        tilt,
+        psi,
+        pointer_dir_nonzeroprior,
+        directions_prior,
+        pointer_psi_nonzeroprior,
+        psi_prior);
+    my_rot.insert(my_rot.end(), rot.begin(), rot.end());
+    my_tilt.insert(my_tilt.end(), tilt.begin(), tilt.end());
+    my_psi.insert(my_psi.end(), psi.begin(), psi.end());
+}
+
+
 /**
  * Get oversampled orientations for a given (idir, ipsi) pair.
  * Returns (n_oversampled, 3) array of [rot, tilt, psi] in degrees.
@@ -257,30 +319,11 @@ static void append_oversampled_orientations(
     std::vector<double> &my_psi,
     const std::string& symmetry
 ) {
-    if (symmetry != "C1" && symmetry != "c1") {
-        HealpixSampling sampling = make_3d_sampling(healpix_order, -1.0, symmetry);
-        if (idir < 0 || idir >= static_cast<long>(sampling.rot_angles.size()))
-            throw std::runtime_error("idir out of range");
-        if (ipsi < 0 || ipsi >= static_cast<long>(sampling.psi_angles.size()))
-            throw std::runtime_error("ipsi out of range");
-        sampling.random_perturbation = random_perturbation;
-        std::vector<RFLOAT> rot, tilt, psi;
-        std::vector<int> pointer_dir_nonzeroprior, pointer_psi_nonzeroprior;
-        std::vector<RFLOAT> directions_prior, psi_prior;
-        sampling.getOrientations(
-            idir,
-            ipsi,
-            oversampling_order,
-            rot,
-            tilt,
-            psi,
-            pointer_dir_nonzeroprior,
-            directions_prior,
-            pointer_psi_nonzeroprior,
-            psi_prior);
-        my_rot.insert(my_rot.end(), rot.begin(), rot.end());
-        my_tilt.insert(my_tilt.end(), tilt.begin(), tilt.end());
-        my_psi.insert(my_psi.end(), psi.begin(), psi.end());
+    if (!is_c1_symmetry(symmetry)) {
+        HealpixSampling sampling = make_symmetric_oversampling(
+            healpix_order, random_perturbation, symmetry);
+        append_symmetric_oversampled_orientations(
+            sampling, oversampling_order, idir, ipsi, my_rot, my_tilt, my_psi);
         return;
     }
 
@@ -390,10 +433,19 @@ static py::array_t<double> get_oversampled_orientations_batch(
     my_rot.reserve(idir_values.shape(0) * children_per_parent);
     my_tilt.reserve(idir_values.shape(0) * children_per_parent);
     my_psi.reserve(idir_values.shape(0) * children_per_parent);
-    for (py::ssize_t i = 0; i < idir_values.shape(0); i++)
-        append_oversampled_orientations(
-            healpix_order, oversampling_order, idir_values(i), ipsi_values(i),
-            random_perturbation, my_rot, my_tilt, my_psi, symmetry);
+    if (!is_c1_symmetry(symmetry) && idir_values.shape(0) > 0) {
+        HealpixSampling sampling = make_symmetric_oversampling(
+            healpix_order, random_perturbation, symmetry);
+        for (py::ssize_t i = 0; i < idir_values.shape(0); i++)
+            append_symmetric_oversampled_orientations(
+                sampling, oversampling_order, idir_values(i), ipsi_values(i),
+                my_rot, my_tilt, my_psi);
+    } else {
+        for (py::ssize_t i = 0; i < idir_values.shape(0); i++)
+            append_oversampled_orientations(
+                healpix_order, oversampling_order, idir_values(i), ipsi_values(i),
+                random_perturbation, my_rot, my_tilt, my_psi, symmetry);
+    }
 
     const py::ssize_t count = (py::ssize_t)my_rot.size();
     py::array_t<double> result({count, (py::ssize_t)3});
