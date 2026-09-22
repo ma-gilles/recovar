@@ -213,6 +213,49 @@ def _resolve_target_random_perturbation(
     return float(exact), source
 
 
+def _adaptive_coarse_scoring_rotations(
+    source_eulers_deg,
+    host_rotations,
+    *,
+    random_perturbation: float,
+    angular_sampling_deg: float,
+    adaptive_2pass: bool,
+):
+    """Use RELION's CUDA-built Euler matrices for adaptive pass-1 scoring.
+
+    RELION constructs adaptive coarse scorer matrices in ``make_eulers_3D``
+    on the device. Fine scoring and weighted-sum backprojection use the
+    separate host inverse path represented by ``host_rotations``. The two
+    panels are only a few float32 ulps apart, but those ulps can flip the
+    integer-truncated outer-shell cutoff, so a parity replay must not reuse
+    the host panel for coarse scoring.
+    """
+
+    host = np.asarray(host_rotations, dtype=np.float32)
+    if not adaptive_2pass:
+        return host, "host_inverse"
+
+    from recovar.em.sampling import _relion_adaptive_pass1_rotations
+
+    device = _relion_adaptive_pass1_rotations(
+        np.asarray(source_eulers_deg, dtype=np.float32),
+        float(random_perturbation),
+        float(angular_sampling_deg),
+    )
+    if device is None:
+        raise RuntimeError(
+            "adaptive K-class parity requires a GPU and the custom CUDA "
+            "RELION make_eulers_3D implementation"
+        )
+    device = np.asarray(device, dtype=np.float32)
+    if device.shape != host.shape:
+        raise RuntimeError(
+            "RELION device/host coarse rotation panels have different shapes: "
+            f"{device.shape} vs {host.shape}"
+        )
+    return device, "relion_cuda_make_eulers_3d"
+
+
 def _scalar(table_or_dict, name: str, default=None):
     if table_or_dict is None:
         if default is None:
@@ -229,6 +272,36 @@ def _scalar(table_or_dict, name: str, default=None):
             raise KeyError(name)
         return default
     return table_or_dict[name].iloc[0]
+
+
+def _resolve_relion_padding_factor(
+    model_general,
+    cli_override: int | None,
+    *,
+    option_name: str,
+) -> tuple[int, str]:
+    """Resolve a replay padding factor from RELION unless explicitly overridden."""
+
+    if cli_override is None:
+        raw_value = _scalar(model_general, "rlnPaddingFactor")
+        source = "relion_model"
+    else:
+        raw_value = cli_override
+        source = "cli_override"
+
+    value = float(raw_value)
+    if not np.isfinite(value):
+        raise ValueError(
+            f"{option_name} must resolve to a positive integer; got {raw_value!r} "
+            f"from {source}"
+        )
+    rounded = int(round(value))
+    if rounded < 1 or abs(value - rounded) > 1e-6:
+        raise ValueError(
+            f"{option_name} must resolve to a positive integer; got {raw_value!r} "
+            f"from {source}"
+        )
+    return rounded, source
 
 
 def _class_table(model, class_index: int):
@@ -943,8 +1016,18 @@ def main() -> None:
     parser.add_argument("--image-batch-size", type=int, default=250)
     parser.add_argument("--rotation-block-size", type=int, default=5000)
     parser.add_argument("--tau2-fudge", type=float, default=None)
-    parser.add_argument("--projection-padding-factor", type=int, default=2)
-    parser.add_argument("--reconstruction-padding-factor", type=int, default=2)
+    parser.add_argument(
+        "--projection-padding-factor",
+        type=int,
+        default=None,
+        help="Override RELION's model padding factor for projection diagnostics.",
+    )
+    parser.add_argument(
+        "--reconstruction-padding-factor",
+        type=int,
+        default=None,
+        help="Override RELION's model padding factor for reconstruction diagnostics.",
+    )
     parser.add_argument("--disc-type", default="linear_interp")
     parser.add_argument(
         "--firstiter-cc-mode",
@@ -1256,6 +1339,20 @@ def main() -> None:
     pixel_size = float(_scalar(prev_model["model_general"], "rlnPixelSize"))
     current_size = int(_scalar(target_model["model_general"], "rlnCurrentImageSize"))
     tau2_fudge = float(args.tau2_fudge or _scalar(prev_model["model_general"], "rlnTau2FudgeFactor", 4.0))
+    args.projection_padding_factor, projection_padding_factor_source = (
+        _resolve_relion_padding_factor(
+            prev_model["model_general"],
+            args.projection_padding_factor,
+            option_name="--projection-padding-factor",
+        )
+    )
+    args.reconstruction_padding_factor, reconstruction_padding_factor_source = (
+        _resolve_relion_padding_factor(
+            prev_model["model_general"],
+            args.reconstruction_padding_factor,
+            option_name="--reconstruction-padding-factor",
+        )
+    )
     particle_diameter = _read_particle_diameter(relion_dir, args.prev_iter)
     relion_cli_flags = _read_relion_optimiser_cli_flags(relion_dir, args.prev_iter)
     optimiser = read_relion_optimiser_metadata(str(prev_prefix) + "_optimiser.star")
@@ -1275,6 +1372,12 @@ def main() -> None:
 
     print(f"RELION K-class replay: K={n_classes}, N={grid_size}, prev={args.prev_iter}, target={args.target_iter}")
     print(f"  current_size={current_size}, pixel_size={pixel_size}, tau2_fudge={tau2_fudge}")
+    print(
+        "  padding factors: "
+        f"projection={args.projection_padding_factor} ({projection_padding_factor_source}), "
+        f"reconstruction={args.reconstruction_padding_factor} "
+        f"({reconstruction_padding_factor_source})"
+    )
     print(f"  output_dir={output_dir}")
     print(f"  JAX devices: {jax.devices()}")
     print(
@@ -1373,10 +1476,24 @@ def main() -> None:
     )
     offset_range_px = float(sampling["offset_range"]) / pixel_size
     offset_step_px = float(sampling["offset_step"]) / pixel_size
+    source_rotation_eulers = get_relion_rotation_grid_eulers(healpix_order)
+    angular_sampling_deg = relion_angular_sampling_deg(
+        healpix_order,
+        adaptive_oversampling=0,
+    )
     rotations, _ = apply_relion_rotation_perturbation_to_eulers(
-        get_relion_rotation_grid_eulers(healpix_order),
+        source_rotation_eulers,
         random_perturbation,
-        relion_angular_sampling_deg(healpix_order, adaptive_oversampling=0),
+        angular_sampling_deg,
+    )
+    coarse_scoring_rotations, coarse_rotation_source = (
+        _adaptive_coarse_scoring_rotations(
+            source_rotation_eulers,
+            rotations,
+            random_perturbation=random_perturbation,
+            angular_sampling_deg=angular_sampling_deg,
+            adaptive_2pass=bool(args.adaptive_2pass),
+        )
     )
     base_translations = get_translation_grid(offset_range_px, offset_step_px).astype(np.float32)
     translations = apply_relion_translation_perturbation(
@@ -1391,6 +1508,7 @@ def main() -> None:
         f"star_rp={star_random_perturbation:+.12g}, "
         f"offset_range_px={offset_range_px:.3f}, offset_step_px={offset_step_px:.3f}"
     )
+    print(f"  coarse scorer rotations: {coarse_rotation_source}")
     coarse_current_size = None
     coarse_engine_current_size = current_size
     if args.adaptive_2pass:
@@ -1585,7 +1703,7 @@ def main() -> None:
             means,
             mean_variance_prev,
             noise_variance,
-            rotations.astype(np.float32),
+            coarse_scoring_rotations,
             translations.astype(np.float32),
             fine_rotations,
             fine_translations,
@@ -1611,7 +1729,7 @@ def main() -> None:
             means,
             mean_variance_prev,
             noise_variance,
-            rotations.astype(np.float32),
+            coarse_scoring_rotations,
             translations.astype(np.float32),
             args.disc_type,
             current_size=current_size,
@@ -1641,7 +1759,7 @@ def main() -> None:
             ds,
             means,
             noise_variance,
-            rotations.astype(np.float32),
+            coarse_scoring_rotations,
             translations.astype(np.float32),
             args.disc_type,
             class_log_priors=class_log_priors,
@@ -1760,7 +1878,7 @@ def main() -> None:
             ds,
             means,
             noise_variance,
-            rotations.astype(np.float32),
+            coarse_scoring_rotations,
             translations.astype(np.float32),
             args.disc_type,
             class_log_priors=class_log_priors,
@@ -1972,12 +2090,17 @@ def main() -> None:
         "n_classes": int(n_classes),
         "n_images": int(ds.n_images),
         "current_size": int(current_size),
+        "projection_padding_factor": int(args.projection_padding_factor),
+        "projection_padding_factor_source": projection_padding_factor_source,
+        "reconstruction_padding_factor": int(args.reconstruction_padding_factor),
+        "reconstruction_padding_factor_source": reconstruction_padding_factor_source,
         "healpix_order": int(healpix_order),
         "n_rotations": int(rotations.shape[0]),
         "n_translations": int(translations.shape[0]),
         "random_perturbation": float(random_perturbation),
         "random_perturbation_star": float(star_random_perturbation),
         "random_perturbation_source": random_perturbation_source,
+        "coarse_rotation_source": coarse_rotation_source,
         "perturb_restart_state_iteration": args.perturb_restart_state_iteration,
         "elapsed_s": float(elapsed_s),
         "image_fourier_backend": args.image_fourier_backend,

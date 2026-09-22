@@ -95,6 +95,85 @@ def test_k_class_replay_star_precision_is_explicitly_rounded():
 
 
 
+def test_k_class_replay_inherits_relion_model_padding_factor():
+    from scripts.run_k_class_parity import _resolve_relion_padding_factor
+
+    value, source = _resolve_relion_padding_factor(
+        {"rlnPaddingFactor": 1.0},
+        None,
+        option_name="--projection-padding-factor",
+    )
+
+    assert value == 1
+    assert source == "relion_model"
+
+
+def test_k_class_replay_padding_override_is_explicit_and_validated():
+    from scripts.run_k_class_parity import _resolve_relion_padding_factor
+
+    assert _resolve_relion_padding_factor(
+        {"rlnPaddingFactor": 1.0},
+        2,
+        option_name="--reconstruction-padding-factor",
+    ) == (2, "cli_override")
+    with pytest.raises(ValueError, match="positive integer"):
+        _resolve_relion_padding_factor(
+            {"rlnPaddingFactor": 1.5},
+            None,
+            option_name="--reconstruction-padding-factor",
+        )
+
+
+def test_k_class_replay_adaptive_coarse_rotations_use_relion_device_builder(monkeypatch):
+    from recovar.em import sampling
+    from scripts.run_k_class_parity import _adaptive_coarse_scoring_rotations
+
+    source_eulers = np.asarray([[10.0, 20.0, 30.0], [40.0, 50.0, 60.0]], dtype=np.float32)
+    host = np.zeros((2, 3, 3), dtype=np.float32)
+    expected = np.arange(18, dtype=np.float32).reshape(2, 3, 3)
+    calls = []
+
+    def fake_builder(eulers, perturbation, angular_sampling):
+        calls.append((np.asarray(eulers), perturbation, angular_sampling))
+        return expected
+
+    monkeypatch.setattr(sampling, "_relion_adaptive_pass1_rotations", fake_builder)
+    actual, source = _adaptive_coarse_scoring_rotations(
+        source_eulers,
+        host,
+        random_perturbation=-0.125,
+        angular_sampling_deg=7.5,
+        adaptive_2pass=True,
+    )
+
+    np.testing.assert_array_equal(actual, expected)
+    np.testing.assert_array_equal(calls[0][0], source_eulers)
+    assert calls[0][1:] == (-0.125, 7.5)
+    assert source == "relion_cuda_make_eulers_3d"
+
+
+def test_k_class_replay_nonadaptive_coarse_rotations_keep_host_panel(monkeypatch):
+    from recovar.em import sampling
+    from scripts.run_k_class_parity import _adaptive_coarse_scoring_rotations
+
+    monkeypatch.setattr(
+        sampling,
+        "_relion_adaptive_pass1_rotations",
+        lambda *_args: pytest.fail("device builder must not run for a nonadaptive replay"),
+    )
+    host = np.eye(3, dtype=np.float32)[None]
+    actual, source = _adaptive_coarse_scoring_rotations(
+        np.zeros((1, 3), dtype=np.float32),
+        host,
+        random_perturbation=0.0,
+        angular_sampling_deg=7.5,
+        adaptive_2pass=False,
+    )
+
+    np.testing.assert_array_equal(actual, host)
+    assert source == "host_inverse"
+
+
 def test_k_class_replay_reads_relion_firstiter_cc_cli_flag(tmp_path):
     from scripts.run_k_class_parity import _read_relion_optimiser_cli_flags
 
