@@ -4311,6 +4311,47 @@ def test_run_local_search_iteration_dispatches_aligned_mstep_grid(monkeypatch, r
     assert backward_compatible.mstep_rotations_flat is None
 
 
+@pytest.mark.parametrize("use_float64_scoring", [False, True])
+def test_run_local_search_iteration_fallback_planner_uses_resolved_score_precision(
+    monkeypatch, rng, use_float64_scoring
+):
+    """Without a caller planner, local batches are sized for the precision that will score them."""
+    from recovar.em.refinement import local_search_iteration as local_iteration_module
+
+    captured = {}
+
+    class PlannerCaptured(Exception):
+        pass
+
+    def capture_planner(**kwargs):
+        captured.update(kwargs)
+        raise PlannerCaptured
+
+    monkeypatch.setattr(local_iteration_module, "_estimate_relion_em_batch_sizes", capture_planner)
+
+    with pytest.raises(PlannerCaptured):
+        local_search_iteration._run_local_search_iteration(
+            MockDataset(1, rng),
+            jnp.zeros(VOLUME_SIZE, dtype=jnp.complex64),
+            jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
+            np.zeros((1, 3), dtype=np.float32),
+            get_relion_rotation_grid(0).astype(np.float32),
+            healpix_order=0,
+            sigma_rot=0.0,
+            sigma_psi=0.0,
+            translations=np.zeros((1, 2), dtype=np.float32),
+            prior_translations=np.zeros((1, 2), dtype=np.float32),
+            sigma_offset_angstrom=1.0,
+            disc_type="linear_interp",
+            image_batch_size=1,
+            rotation_block_size=16,
+            current_size=4,
+            use_float64_scoring=use_float64_scoring,
+        )
+
+    assert captured["use_float64_scoring"] is use_float64_scoring
+
+
 def test_run_local_search_iteration_clamps_highres_local_batches(monkeypatch):
     # Pin GPU memory queries so the batch-size clamp is deterministic.
     # ``_estimate_relion_em_batch_sizes`` reads
@@ -4480,7 +4521,9 @@ def test_run_local_search_iteration_relion_xhalf_uses_windowed_batch_guard_by_de
     )
 
     assert captured["image_batch_size"] == 41
-    assert captured["rotation_block_size"] == 58
+    # Planned for the float32 scoring this pass runs (final-Q 3b76715e25): the
+    # exact local engine has an intentional minimum tile of 64 rotations.
+    assert captured["rotation_block_size"] == 64
 
     monkeypatch.setenv("RECOVAR_LOCAL_XHALF_BATCH_GUARD", "full")
     local_search_iteration._run_local_search_iteration(
@@ -4508,8 +4551,8 @@ def test_run_local_search_iteration_relion_xhalf_uses_windowed_batch_guard_by_de
         pass2_layout=layout,
     )
 
-    assert captured["image_batch_size"] == 13
-    assert captured["rotation_block_size"] == 19
+    assert captured["image_batch_size"] == 27
+    assert captured["rotation_block_size"] == 38
 
 
 def test_run_local_search_iteration_plumbs_score_only_to_exact_engine(monkeypatch, rng):
@@ -15959,7 +16002,7 @@ def test_run_local_search_iteration_plumbs_score_only_and_reuses_batch_planner(
         "n_rot": 2, "n_trans": 2, "n_classes": 1,
         "image_shape": mock_dataset.image_shape,
         "volume_shape": mock_dataset.volume_shape,
-        "padding_factor": 1, "current_size": 4,
+        "padding_factor": 1, "current_size": 4, "use_float64_scoring": False,
     }]
     assert captured["image_batch_size"] == 1
     assert captured["rotation_block_size"] == 1
