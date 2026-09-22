@@ -39,7 +39,6 @@ logger = logging.getLogger(__name__)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PARITY_SCRIPT = REPO_ROOT / "scripts" / "run_multi_iter_parity.py"
-KCLASS_SCRIPT = REPO_ROOT / "scripts" / "run_k_class_parity.py"
 REFINE_SCRIPT = REPO_ROOT / "scripts" / "run_full_refinement.py"
 ABINITIO_SCRIPT = REPO_ROOT / "recovar" / "commands" / "initial_model.py"
 
@@ -174,13 +173,10 @@ def _real_space_shell_fsc(lhs: np.ndarray, rhs: np.ndarray) -> np.ndarray:
     return out
 
 
-def _relion_frame_map_similarity(lhs_path: Path, rhs_path: Path) -> dict[str, float]:
-    """Same-frame map parity metrics; no GT alignment or handedness search."""
+def _volume_similarity(lhs: np.ndarray, rhs: np.ndarray) -> dict[str, float]:
+    """Same-frame map parity metrics on loaded volumes; no GT alignment or handedness search."""
     from recovar.em.diagnostics.gt_metrics import centered_correlation, first_shell_below_threshold
-    from recovar.utils import helpers
 
-    lhs, _lhs_voxel = helpers.load_relion_volume(str(lhs_path), return_voxel_size=True)
-    rhs, _rhs_voxel = helpers.load_relion_volume(str(rhs_path), return_voxel_size=True)
     lhs = np.asarray(lhs, dtype=np.float64)
     rhs = np.asarray(rhs, dtype=np.float64)
     fsc = _real_space_shell_fsc(lhs, rhs)
@@ -191,6 +187,39 @@ def _relion_frame_map_similarity(lhs_path: Path, rhs_path: Path) -> dict[str, fl
         "shell_05": float(first_shell_below_threshold(fsc, 0.5)),
         "shell_0143": float(first_shell_below_threshold(fsc, 0.143)),
     }
+
+
+def _relion_frame_map_similarity(lhs_path: Path, rhs_path: Path) -> dict[str, float]:
+    """Same-frame map parity metrics between two RELION-frame MRCs."""
+    from recovar.utils import helpers
+
+    lhs, _lhs_voxel = helpers.load_relion_volume(str(lhs_path), return_voxel_size=True)
+    rhs, _rhs_voxel = helpers.load_relion_volume(str(rhs_path), return_voxel_size=True)
+    return _volume_similarity(lhs, rhs)
+
+
+def _recovar_vs_relion_map_similarity(recovar_path: Path, relion_path: Path) -> dict[str, float]:
+    """Map parity metrics between a RECOVAR ``write_mrc`` map and a RELION map, in the RECOVAR frame."""
+    from recovar.utils import helpers
+
+    return _volume_similarity(helpers.load_mrc(str(recovar_path)), helpers.load_relion_volume(str(relion_path)))
+
+
+def _assert_relion_command_tokens(optimiser: Path, required_tokens: tuple[str, ...]) -> str:
+    """Fail closed unless RELION's optimiser header records every command token the test mirrors."""
+    _require_fixture(optimiser)
+    cli_line = next(
+        (line.lstrip("#").strip() for line in optimiser.read_text().splitlines() if line.lstrip().startswith("# --")),
+        "",
+    )
+    padded = f" {cli_line} "
+    missing = [token for token in required_tokens if f" {token} " not in padded]
+    if missing:
+        raise AssertionError(
+            f"{optimiser} does not record the RELION command this test mirrors; "
+            f"missing token(s): {missing}. Command:\n{cli_line}"
+        )
+    return cli_line
 
 
 def _assert_relion_initialmodel_reference(relion_dir: Path, *, expected_iter: int) -> None:
@@ -603,104 +632,222 @@ def test_em_parity_long_k1_native_initialmodel_quality(tmp_path):
 @pytest.mark.gpu
 @pytest.mark.integration
 def test_em_parity_long_kclass_full(tmp_path):
-    """K=4 256² 50k full ab-initio (~4 hr on A100).
+    """K=4 256² 50k 15-iteration Class3D trajectory against RELION (~2-4 hr on H100).
 
-    Runs the K-class engine for 15 iterations and compares against the RELION
-    Class3D reference. Classes are paired by Hungarian matching, then each RECOVAR
-    class is compared with its matched RELION class by shellwise FSC. Gates on
-    per-class mean FSC over shells 1-16 and on Hungarian class assignment accuracy
-    >= 95 %. Map correlation is recorded as a diagnostic and never gates.
+    Runs ``run_full_refinement.py --n_classes 4 --max_iter 15`` from the fixture's
+    initial class references with the RELION reference's Class3D command. Like
+    ``test_em_parity_fast_kclass_coldstart``, RELION's per-iteration sampling
+    perturbation and particle corrections are replayed from the reference while the
+    initial noise, tau2 and sigma are derived locally. The reference is a single
+    non-MPI ``relion_refine`` process, so it has no MPI followers or dispatch
+    schedule and the replay runs with ``--relion-scale-followers 0``.
+
+    The four final class maps are Hungarian-matched to RELION's
+    ``run_it015_class00N.mrc`` on mean FSC over shells 1-16, and each matched pair
+    is compared by shellwise FSC. Gates on per-class mean FSC over shells 1-16 and
+    on class assignment accuracy >= 95 % under the same matching. Map correlation is
+    recorded as a diagnostic and never gates.
     """
+    import starfile
+    from scipy.optimize import linear_sum_assignment
+
     _assert_parity_ancestors_or_skip()
-    _require_fixture(KCLASS_SCRIPT, K4_LONG_FIXTURE_DIR, K4_LONG_RELION_DIR, K4_LONG_DATA_STAR)
+    final_iter = 15
+    n_classes = 4
+    relion_optimiser = K4_LONG_RELION_DIR / "run_it000_optimiser.star"
+    relion_final_data = K4_LONG_RELION_DIR / f"run_it{final_iter:03d}_data.star"
+    relion_final_maps = [K4_LONG_RELION_DIR / f"run_it{final_iter:03d}_class{k + 1:03d}.mrc" for k in range(n_classes)]
+    generation_record = K4_LONG_FIXTURE_DIR / "GENERATION.json"
+    _require_fixture(
+        REFINE_SCRIPT,
+        K4_LONG_FIXTURE_DIR,
+        K4_LONG_RELION_DIR,
+        K4_LONG_DATA_STAR,
+        relion_final_data,
+        generation_record,
+        *relion_final_maps,
+    )
+    # Every value in the command below mirrors this RELION Class3D header. RELION's
+    # --oversampling default is 1 (_rlnAdaptiveOversampleOrder), matched by
+    # --adaptive_oversampling 1; --ctf, --flatten_solvent, --zero_mask, --norm,
+    # --scale and --pad 2 are fixed RELION defaults in the refinement.
+    _assert_relion_command_tokens(
+        relion_optimiser,
+        (
+            "--K 4",
+            "--tau2_fudge 4",
+            f"--iter {final_iter}",
+            "--healpix_order 1",
+            "--offset_range 6",
+            "--offset_step 2",
+            "--sym C1",
+            "--particle_diameter 200",
+            "--ini_high 30",
+            "--firstiter_cc",
+            "--ctf",
+            "--flatten_solvent",
+            "--zero_mask",
+            "--norm",
+            "--scale",
+            "--pad 2",
+            "--random_seed 1775735620",
+        ),
+    )
+    assert int(float(_read_relion_star_scalar(relion_optimiser, "_rlnAdaptiveOversampleOrder"))) == 1
+    mpi_layout = json.loads(generation_record.read_text())["relion_reference"]["mpi_layout"]
+    assert mpi_layout.startswith("non-MPI"), (
+        f"--relion-scale-followers 0 is exact only for a non-MPI RELION reference; {generation_record} "
+        f"records: {mpi_layout}"
+    )
 
     output_dir = tmp_path / "kclass_long"
     output_dir.mkdir()
-
-    # K-class long-form parity uses the parity script's --target-iter at the
-    # final RELION iteration (typically 15) starting from iter 0.
-    final_iter = 15
     cmd = [
         sys.executable,
-        str(KCLASS_SCRIPT),
-        "--relion-dir",
-        str(K4_LONG_RELION_DIR),
-        "--data-star",
-        str(K4_LONG_DATA_STAR),
-        "--prev-iter",
-        "0",
-        "--target-iter",
-        str(final_iter),
-        "--output-dir",
+        str(REFINE_SCRIPT),
+        "--data_dir",
+        str(K4_LONG_FIXTURE_DIR),
+        "--output",
         str(output_dir),
+        "--n_classes",
+        str(n_classes),
+        "--max_iter",
+        str(final_iter),
+        "--healpix_order",
+        "1",
+        "--offset_range",
+        "6",
+        "--offset_step",
+        "2",
+        "--adaptive_oversampling",
+        "1",
+        "--tau2_fudge",
+        "4.0",
+        "--perturb_factor",
+        "0.5",
+        "--perturb_replay_relion_dir",
+        str(K4_LONG_RELION_DIR),
+        "--relion-scale-followers",
+        "0",
+        "--relion_optimiser",
+        str(relion_optimiser),
+        "--particle_diameter_ang",
+        "200",
+        "--seed",
+        "1775735620",
+        "--firstiter_cc",
+        "--apply-initial-lowpass",
+        "--init_resolution",
+        "30.0",
+        "--image_batch_size",
+        "200",
+        "--rotation_block_size",
+        "2000",
     ]
     logger.info("K-class long cmd: %s", " ".join(cmd))
 
     t0 = time.time()
     proc = subprocess.run(cmd, capture_output=True, text=True, env=gpu_subprocess_env())
     elapsed = time.time() - t0
-
     assert proc.returncode == 0, (
-        f"run_k_class_parity.py exited {proc.returncode}\nstdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
+        f"run_full_refinement.py exited {proc.returncode}\nstdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
     )
 
-    summary_path = output_dir / "summary.json"
-    assert summary_path.exists()
-    summary = json.loads(summary_path.read_text())
-
-    best_perm = summary["best_permutation"]
-    mean_corr = float(best_perm["mean_corr"])
-    map_corrs = [float(c) for c in best_perm["map_correlations"]]
-    class_acc = float(summary["class_assignment_accuracy_after_permutation"])
-
-    # Map correlation is a diagnostic, never a gate. Pair each RECOVAR class with the
-    # RELION class the Hungarian matching chose and measure shellwise FSC between them,
-    # which is what decides quality here.
-    recovar_to_relion = [int(idx) for idx in best_perm["recovar_to_relion"]]
-    output_maps = [Path(path) for path in summary["output_maps"]]
-    per_class_fsc = []
-    for recovar_index, relion_index in enumerate(recovar_to_relion):
-        relion_map = K4_LONG_RELION_DIR / f"run_it{final_iter:03d}_class{relion_index + 1:03d}.mrc"
-        _require_fixture(output_maps[recovar_index], relion_map)
-        per_class_fsc.append(
-            _relion_frame_map_similarity(output_maps[recovar_index], relion_map)
+    npz_path = output_dir / "refinement_results.npz"
+    recovar_maps = [output_dir / f"final_class{k + 1:03d}.mrc" for k in range(n_classes)]
+    missing = [str(p) for p in (npz_path, *recovar_maps) if not p.exists()]
+    assert not missing, "K-class long refinement did not write required outputs:\n  " + "\n  ".join(missing)
+    assignment_key = f"class_assignments_by_image_iter_{final_iter - 1:03d}"
+    with np.load(npz_path) as npz:
+        n_iterations = int(np.asarray(npz["current_sizes"]).size)
+        assert n_iterations == final_iter, (
+            f"RECOVAR ran {n_iterations} numbered iterations; the RELION reference has {final_iter}"
         )
-    fsc_1_16 = [float(item["mean_fsc_1_16"]) for item in per_class_fsc]
-    fsc_1_8 = [float(item["mean_fsc_1_8"]) for item in per_class_fsc]
-    shell_05 = [float(item["shell_05"]) for item in per_class_fsc]
-    shell_0143 = [float(item["shell_0143"]) for item in per_class_fsc]
+        assert assignment_key in npz.files, f"{npz_path} lacks {assignment_key}"
+        recovar_class = np.asarray(npz[assignment_key], dtype=np.int64)
+
+    # Fresh Hungarian matching on the gating metric (mean FSC shells 1-16), never on correlation.
+    similarity = [
+        [_recovar_vs_relion_map_similarity(recovar_maps[i], relion_final_maps[j]) for j in range(n_classes)]
+        for i in range(n_classes)
+    ]
+    fsc_matrix = np.asarray([[cell["mean_fsc_1_16"] for cell in row] for row in similarity], dtype=np.float64)
+    assert np.all(np.isfinite(fsc_matrix)), f"Non-finite class FSC matrix:\n{fsc_matrix}"
+    rows, cols = linear_sum_assignment(-fsc_matrix)
+    recovar_to_relion = [int(cols[i]) for i in np.argsort(rows)]
+    matched = [similarity[i][recovar_to_relion[i]] for i in range(n_classes)]
+
+    # Per-particle agreement with RELION's final classes under the same matching,
+    # aligned by image name rather than STAR row order.
+    dataset_names = [
+        str(name) for name in starfile.read(K4_LONG_DATA_STAR, always_dict=True)["particles"]["rlnImageName"]
+    ]
+    relion_particles = starfile.read(relion_final_data, always_dict=True)["particles"]
+    relion_by_name = dict(
+        zip(
+            (str(name) for name in relion_particles["rlnImageName"]),
+            np.asarray(relion_particles["rlnClassNumber"], dtype=np.int64) - 1,
+            strict=True,
+        )
+    )
+    assert len(dataset_names) == len(set(dataset_names)) == len(relion_by_name) == recovar_class.size, (
+        "RECOVAR, RELION and fixture particle counts or image names disagree: "
+        f"fixture={len(dataset_names)}, RELION={len(relion_by_name)}, RECOVAR={recovar_class.size}"
+    )
+    assert set(relion_by_name) == set(dataset_names), "RELION and fixture image names differ"
+    relion_class = np.asarray([relion_by_name[name] for name in dataset_names], dtype=np.int64)
+    assert np.all((recovar_class >= 0) & (recovar_class < n_classes)), "RECOVAR class assignments out of range"
+    assert np.all((relion_class >= 0) & (relion_class < n_classes)), "RELION class numbers out of range"
+    class_acc = float(np.mean(np.asarray(recovar_to_relion, dtype=np.int64)[recovar_class] == relion_class))
+    confusion = np.zeros((n_classes, n_classes), dtype=np.int64)
+    np.add.at(confusion, (recovar_class, relion_class), 1)
+    best_rows, best_cols = linear_sum_assignment(-confusion)
+    assignment_optimal_acc = float(confusion[best_rows, best_cols].sum() / recovar_class.size)
+
+    fsc_1_16 = [float(item["mean_fsc_1_16"]) for item in matched]
+    fsc_1_8 = [float(item["mean_fsc_1_8"]) for item in matched]
+    shell_05 = [float(item["shell_05"]) for item in matched]
+    shell_0143 = [float(item["shell_0143"]) for item in matched]
+    map_corrs = [float(item["corr"]) for item in matched]
 
     payload = {
-        "kclass_long_mean_corr": mean_corr,
         "kclass_long_per_class_map_corr": map_corrs,
+        "kclass_long_mean_corr": float(np.mean(map_corrs)),
         "kclass_long_per_class_mean_fsc_1_8": fsc_1_8,
         "kclass_long_per_class_mean_fsc_1_16": fsc_1_16,
         "kclass_long_per_class_shell_05": shell_05,
         "kclass_long_per_class_shell_0143": shell_0143,
+        "kclass_long_fsc_1_16_matrix_recovar_by_relion": fsc_matrix.tolist(),
         "kclass_long_recovar_to_relion_permutation": recovar_to_relion,
         "kclass_long_class_assignment_accuracy": class_acc,
+        "kclass_long_assignment_optimal_accuracy": assignment_optimal_acc,
+        "kclass_long_assignment_confusion_recovar_by_relion": confusion.tolist(),
         "kclass_long_walltime_s": elapsed,
         "kclass_long_target_iter": final_iter,
+        "kclass_long_command": cmd,
     }
     ledger = _write_quality_ledger("kclass_long", payload, output_dir=output_dir)
     logger.info("K-class long ledger: %s", ledger)
 
     print(file=sys.stderr, flush=True)
-    print("=== K=4 long parity (256² 50k iter→15) ===", file=sys.stderr, flush=True)
+    print("=== K=4 long parity (256² 50k, 15-iteration trajectory vs RELION it015) ===", file=sys.stderr, flush=True)
     print(f"  walltime_s={elapsed:.1f}", file=sys.stderr, flush=True)
-    print(f"  per-class map corrs: {map_corrs}", file=sys.stderr, flush=True)
-    print(f"  mean_corr={mean_corr:.6f}", file=sys.stderr, flush=True)
-    print(f"  class assignment accuracy={class_acc:.4f}", file=sys.stderr, flush=True)
-
+    print(f"  RECOVAR->RELION class matching (FSC 1-16): {recovar_to_relion}", file=sys.stderr, flush=True)
     print(f"  per-class mean FSC shells 1-16: {fsc_1_16}", file=sys.stderr, flush=True)
     print(f"  per-class FSC=0.143 shell: {shell_0143}", file=sys.stderr, flush=True)
+    print(
+        f"  class assignment accuracy={class_acc:.4f} (assignment-optimal {assignment_optimal_acc:.4f})",
+        file=sys.stderr,
+        flush=True,
+    )
+    print(f"  per-class map corrs (diagnostic): {map_corrs}", file=sys.stderr, flush=True)
 
     # Quality is decided on FSC, never on map correlation. The correlation figures stay
     # in the ledger and the log as diagnostics only.
     #
     # The 0.99 threshold is carried over from the map-correlation gate this replaces and
-    # is NOT calibrated: this rung has never run, because its fixture
-    # (data_pdb_k4_50k_256) does not exist. Shellwise FSC over low shells generally sits
+    # is NOT calibrated: this rung had never run a 15-iteration trajectory before the
+    # data_pdb_k4_50k_256 fixture existed. Shellwise FSC over low shells generally sits
     # above a global correlation, so the same number may be a looser bar here than it
     # was there. Recalibrate against the first real run before treating a pass as
     # meaningful, and record the decision.
