@@ -3608,6 +3608,18 @@ def _compute_k_class_significance_batched(
                     "scores for min_diff2 offset reconstruction"
                 )
 
+            # RELION's CUDA coarse kernel forms ``pdf_orientation + pdf_offset +
+            # min_diff2 - diff2`` left to right (cuda_kernel_weights_exponent_coarse).
+            # Adding the priors to the absolute scores and the min_diff2 offset
+            # afterwards can tie poses that RELION separates by one ULP, so the
+            # support pass keeps the pre-prior scores unless a hybrid table
+            # already owns the prior addition.
+            relion_exact_coarse_weight_order = bool(
+                relion_f32_coarse_support_enabled
+                and n_classes == 1
+                and compact_hybrid_scores is None
+                and coarse_gaussian_gemm_hybrid_batch_result is None
+            )
             if not relion_f32_coarse_support_enabled:
                 relion_raw_score_max = None
             elif coarse_gaussian_gemm_hybrid_batch_result is not None:
@@ -3768,6 +3780,7 @@ def _compute_k_class_significance_batched(
                                     actual_image_count=actual_batch_size,
                                 )
                             )
+                        pre_prior_scores = scores
                         if not (
                             coarse_gaussian_gemm_hybrid_batch_result is not None
                             and coarse_gaussian_gemm_hybrid_batch_result.scores_include_priors
@@ -3813,7 +3826,9 @@ def _compute_k_class_significance_batched(
                                 )
                             )
                         if cached_score_blocks is not None:
-                            cached_score_blocks.append(scores)
+                            cached_score_blocks.append(
+                                pre_prior_scores if relion_exact_coarse_weight_order else scores,
+                            )
                         class_max, class_sum = _update_logsumexp(class_max, class_sum, scores)
                         global_max, global_sum = _update_logsumexp(global_max, global_sum, scores)
                     flat_scores = scores.reshape(batch_size, -1)
@@ -4076,7 +4091,7 @@ def _compute_k_class_significance_batched(
                                         scores,
                                         -jnp.inf,
                                     )
-                                if not (
+                                if not relion_exact_coarse_weight_order and not (
                                     coarse_gaussian_gemm_hybrid_batch_result is not None
                                     and coarse_gaussian_gemm_hybrid_batch_result.scores_include_priors
                                 ):
@@ -4113,6 +4128,37 @@ def _compute_k_class_significance_batched(
                 if relion_f32_coarse_support_enabled:
                     from recovar.em.helpers.oversampling import relion_cuda_f32_coarse_posterior
 
+                    posterior_min_diff2_offsets = -relion_raw_score_max
+                    if relion_exact_coarse_weight_order:
+                        from recovar.em.helpers.oversampling import relion_cuda_f32_coarse_log_weights
+
+                        if rotation_log_prior_padded is None:
+                            exact_rotation_prior = jnp.zeros(n_rot, dtype=jnp.float32)
+                        else:
+                            exact_rotation_prior = jnp.asarray(
+                                rotation_log_prior_padded[0, :n_rot],
+                                dtype=jnp.float32,
+                            )
+                        exact_rotation_prior = exact_rotation_prior + jnp.asarray(
+                            class_log_priors_np[0],
+                            dtype=jnp.float32,
+                        )
+                        if batch_translation_log_prior is None:
+                            exact_translation_prior = jnp.zeros((batch_size, n_trans), dtype=jnp.float32)
+                        elif translation_log_prior.ndim == 1:
+                            exact_translation_prior = jnp.broadcast_to(
+                                jnp.asarray(batch_translation_log_prior, dtype=jnp.float32)[None, :],
+                                (batch_size, n_trans),
+                            )
+                        else:
+                            exact_translation_prior = jnp.asarray(batch_translation_log_prior, dtype=jnp.float32)
+                        batch_values = relion_cuda_f32_coarse_log_weights(
+                            batch_values.reshape(batch_size, n_rot, n_trans),
+                            exact_rotation_prior,
+                            exact_translation_prior,
+                        ).reshape(batch_size, -1)
+                        # The RELION-order log weights already carry min_diff2.
+                        posterior_min_diff2_offsets = None
                     posterior_kwargs = {}
                     if compact_hybrid_scores is not None:
                         # Stage 1's positive-only primitive is the exact
@@ -4135,9 +4181,13 @@ def _compute_k_class_significance_batched(
                         adaptive_fraction=float(adaptive_fraction),
                         max_significants=max_significants,
                         tie_score_ulps=int(relion_f32_coarse_tie_ulps),
-                        min_diff2_offsets=-relion_raw_score_max,
+                        min_diff2_offsets=posterior_min_diff2_offsets,
                         **posterior_kwargs,
                     )
+                    if relion_exact_coarse_weight_order:
+                        # RELION publishes the coarse winner from these weights.
+                        best_argmax_batch = jnp.argmax(batch_weights, axis=1).astype(jnp.int32)
+                        best_class_batch = jnp.zeros(batch_size, dtype=jnp.int32)
                     relion_f32_sum_weight[start_idx:end_idx] = np.asarray(
                         _batch_sum_weight[:actual_batch_size],
                         dtype=np.float32,

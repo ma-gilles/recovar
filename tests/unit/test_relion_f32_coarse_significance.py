@@ -4,7 +4,11 @@ import inspect
 
 import numpy as np
 
-from recovar.em.helpers.oversampling import _relion_cuda_f32_tail_target, relion_cuda_f32_coarse_posterior
+from recovar.em.helpers.oversampling import (
+    _relion_cuda_f32_tail_target,
+    relion_cuda_f32_coarse_log_weights,
+    relion_cuda_f32_coarse_posterior,
+)
 from recovar.em.relion.relion_coarse_operands import _k1_relion_f32_coarse_support_enabled
 from recovar.em.scoring.coarse_gaussian_gemm import _K1_RELION_F32_COARSE_SUPPORT_ENV
 
@@ -103,6 +107,44 @@ def test_relion_cuda_f32_coarse_positive_filter_is_explicit_and_default_off():
             np.asarray(default_value),
             np.asarray(filtered_value),
         )
+
+
+def test_relion_cuda_f32_coarse_log_weights_preserves_boundary_ulp():
+    raw_scores = np.array(
+        [
+            [
+                [-1175.6976318359375, -np.inf],
+                [-1185.7271728515625, -np.inf],
+                [-np.inf, -1186.3282470703125],
+            ]
+        ],
+        dtype=np.float32,
+    )
+    rotation_prior = np.array(
+        [0.0, -5.415750503540039, -5.63659143447876],
+        dtype=np.float32,
+    )
+    translation_prior = np.array(
+        [-1.3931288719177246, -0.5713146328926086],
+        dtype=np.float32,
+    )
+
+    ordered = np.asarray(
+        relion_cuda_f32_coarse_log_weights(
+            raw_scores,
+            rotation_prior,
+            translation_prior,
+        )
+    )[0]
+    absolute_target_one = np.float32(np.float32(raw_scores[0, 1, 0] + rotation_prior[1]) + translation_prior[0])
+    absolute_target_two = np.float32(np.float32(raw_scores[0, 2, 1] + rotation_prior[2]) + translation_prior[1])
+
+    np.testing.assert_array_equal(
+        np.asarray([ordered[1, 0], ordered[2, 1]], dtype=np.float32).view(np.uint32),
+        np.asarray([-16.83837890625, -16.8385009765625], dtype=np.float32).view(np.uint32),
+    )
+    assert absolute_target_one == absolute_target_two
+    assert ordered[1, 0] > ordered[2, 1]
 
 
 def test_relion_cuda_f32_coarse_posterior_expands_cutoff_ties_after_rank_cap():

@@ -214,6 +214,81 @@ def test_coarse_numeric_normalization_preserves_selection(monkeypatch, n_classes
     assert candidate[5]["relion_f32_sum_weight"].dtype == np.float32
 
 
+@pytest.mark.parametrize("cache_mode", ["off", "force"])
+def test_k1_f32_coarse_support_forms_relion_ordered_log_weights(monkeypatch, cache_mode):
+    """K=1 support weights use RELION's prior + min_diff2 - diff2 order on pre-prior scores."""
+    from recovar.em.helpers import oversampling
+    from recovar.em.scoring import significance
+
+    monkeypatch.setenv("RECOVAR_SIGNIFICANCE_SCORE_CACHE", cache_mode)
+    monkeypatch.setattr(significance, "_k1_relion_f32_coarse_support_enabled", lambda **kwargs: True)
+    original_weights = oversampling.relion_cuda_f32_coarse_log_weights
+    original_posterior = oversampling.relion_cuda_f32_coarse_posterior
+
+    def run(n_classes, rotation_log_prior, translation_log_prior):
+        weight_calls, posterior_calls = [], []
+
+        def record_weights(raw_scores, rotation_prior, translation_prior):
+            log_weights = original_weights(raw_scores, rotation_prior, translation_prior)
+            weight_calls.append((np.asarray(raw_scores), np.asarray(rotation_prior), np.asarray(log_weights)))
+            return log_weights
+
+        def record_posterior(scores_flat, **kwargs):
+            result = original_posterior(scores_flat, **kwargs)
+            posterior_calls.append((np.asarray(scores_flat), kwargs.get("min_diff2_offsets"), np.asarray(result[0])))
+            return result
+
+        monkeypatch.setattr(oversampling, "relion_cuda_f32_coarse_log_weights", record_weights)
+        monkeypatch.setattr(oversampling, "relion_cuda_f32_coarse_posterior", record_posterior)
+        volume = _hermitian_volume(VOLUME_SHAPE, seed=913)
+        result = significance._compute_k_class_significance_batched(
+            MockDataset(n_images=3, seed=911),
+            jnp.stack([volume * (1.0 + 0.01 * k) for k in range(n_classes)]),
+            jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
+            _make_rotations(5, seed=917),
+            jnp.array([[0.0, 0.0], [1.0, -1.0]], dtype=jnp.float32),
+            "linear_interp",
+            class_log_priors=np.log(np.full(n_classes, 1.0 / n_classes)),
+            rotation_log_prior=rotation_log_prior,
+            translation_log_prior=translation_log_prior,
+            adaptive_fraction=0.9,
+            max_significants=4,
+            image_batch_size=2,
+            rotation_block_size=2,
+            current_size=None,
+        )
+        return result, weight_calls, posterior_calls
+
+    rotation_log_prior = np.linspace(0, -0.4, 5, dtype=np.float32)
+    translation_log_prior = np.array([[0, -0.1], [-0.2, 0], [0, -0.3]], dtype=np.float32)
+    result, weight_calls, posterior_calls = run(1, rotation_log_prior, translation_log_prior)
+    assert len(weight_calls) == len(posterior_calls) == 2
+    image_start = 0
+    for (raw_scores, rotation_prior, log_weights), (posterior_input, offsets, weights) in zip(
+        weight_calls, posterior_calls
+    ):
+        np.testing.assert_array_equal(posterior_input, log_weights.reshape(log_weights.shape[0], -1))
+        assert offsets is None
+        np.testing.assert_array_equal(rotation_prior, rotation_log_prior)
+        rows = min(2, 3 - image_start)
+        np.testing.assert_array_equal(
+            result[2][image_start : image_start + rows],
+            np.argmax(weights, axis=1)[:rows],
+        )
+        image_start += rows
+
+    # The support pass receives the scores before any prior was added.
+    _, flat_weight_calls, _ = run(1, np.zeros(5, dtype=np.float32), np.zeros((3, 2), dtype=np.float32))
+    for (raw_scores, _, log_weights), (flat_raw_scores, _, flat_log_weights) in zip(weight_calls, flat_weight_calls):
+        np.testing.assert_array_equal(raw_scores, flat_raw_scores)
+        assert not np.array_equal(log_weights, flat_log_weights)
+
+    # K > 1 keeps its existing absolute-frame support path.
+    _, class_weight_calls, class_posterior_calls = run(2, rotation_log_prior, translation_log_prior)
+    assert not class_weight_calls
+    assert class_posterior_calls and all(offsets is not None for _, offsets, _ in class_posterior_calls)
+
+
 @pytest.mark.parametrize(
     "kwargs",
     [
