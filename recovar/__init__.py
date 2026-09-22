@@ -32,7 +32,24 @@ def _configure_initial_model_cuda_allocator(*, argv=None, orig_argv=None, enviro
     return environ.get("TF_GPU_ALLOCATOR")
 
 
+def _configure_initial_model_xla_defaults(*, argv=None, orig_argv=None, environ=None):
+    """Opt the InitialModel CLI into the EM XLA defaults before JAX initializes.
+
+    ``recovar initial_model`` and ``python -m recovar.commands.initial_model``
+    import this package, and with it ``recovar.jax_config``, before the command
+    module's own ``setdefault`` of ``RECOVAR_EM_XLA_DEFAULTS`` runs, so the EM
+    defaults (``--xla_gpu_autotune_level=0``) never reached XLA for InitialModel.
+    An explicit ``RECOVAR_EM_XLA_DEFAULTS`` in the environment still wins.
+    """
+
+    environ = os.environ if environ is None else environ
+    if _initial_model_cli_requested(argv=argv, orig_argv=orig_argv):
+        environ.setdefault("RECOVAR_EM_XLA_DEFAULTS", "1")
+    return environ.get("RECOVAR_EM_XLA_DEFAULTS")
+
+
 _configure_initial_model_cuda_allocator()
+_configure_initial_model_xla_defaults()
 
 try:
     import recovar.jax_config  # noqa: F401
