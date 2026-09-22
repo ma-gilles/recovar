@@ -51,13 +51,15 @@ def test_noise_only_bootstrap_preserves_order_and_float32_boundary(monkeypatch):
         np.testing.assert_array_equal(kwargs['optics_group_ids'], optics)
         assert kwargs['particle_diameter_ang'] == 12
         assert kwargs['width_mask_edge_px'] == 3
+        assert kwargs['image_pixel_size'] == 1.25
         calls.append(kwargs)
         return sigma
 
     monkeypatch.setattr(driver, '_compute_relion_fresh_k1_initial_sigma2', compute)
     radial, noise = driver._compute_relion_noise_only_bootstrap(
         dataset, args=_args(), frozen_boundary=None, source_rows=rows,
-        optics_group_ids=optics, mask_params=(12., 3))
+        optics_group_ids=optics, mask_params=(12., 3),
+        optics_pixel_sizes=np.array([1.25]))
     assert len(calls) == 1
     assert radial.dtype == np.float64 and noise.dtype == np.float32
     np.testing.assert_array_equal(radial, sigma[0] * 8**4)
@@ -75,17 +77,20 @@ def test_noise_only_bootstrap_rejects_conflicting_modes(overrides):
     with pytest.raises(ValueError, match='noise-only bootstrap'):
         driver._compute_relion_noise_only_bootstrap(SimpleNamespace(grid_size=8),
             args=_args(**overrides), frozen_boundary=None,
-            source_rows=np.arange(3), optics_group_ids=np.ones(3), mask_params=(12., 3))
+            source_rows=np.arange(3), optics_group_ids=np.ones(3), mask_params=(12., 3),
+            optics_pixel_sizes=np.array([1.25]))
 
 
 @pytest.mark.parametrize('overrides', [
     dict(frozen_boundary=object()), dict(source_rows=None),
     dict(optics_group_ids=None), dict(mask_params=None),
-    dict(optics_group_ids=np.array([1, 2, 1])),
+    dict(optics_group_ids=np.array([1, 2, 1])), dict(optics_pixel_sizes=None),
+    dict(optics_pixel_sizes=np.array([1.25, 1.3])),
 ])
 def test_noise_only_bootstrap_rejects_missing_or_unsupported_inputs(overrides):
     params = dict(frozen_boundary=None, source_rows=np.arange(3),
-                  optics_group_ids=np.ones(3), mask_params=(12., 3)) | overrides
+                  optics_group_ids=np.ones(3), mask_params=(12., 3),
+                  optics_pixel_sizes=np.array([1.25])) | overrides
     with pytest.raises(ValueError, match='noise-only bootstrap'):
         driver._compute_relion_noise_only_bootstrap(SimpleNamespace(grid_size=8),
             args=_args(), **params)

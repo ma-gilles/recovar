@@ -1006,6 +1006,7 @@ def _compute_relion_fresh_k1_initial_sigma2(
     *,
     source_rows,
     optics_group_ids,
+    image_pixel_size: float,
     particle_diameter_ang: float,
     width_mask_edge_px: int,
     minimum_nr_particles: int = 1000,
@@ -1033,6 +1034,8 @@ def _compute_relion_fresh_k1_initial_sigma2(
         raise ValueError("fresh K=1 live-noise source rows are out of dataset bounds")
     if int(minimum_nr_particles) <= 0:
         raise ValueError("minimum_nr_particles must be positive")
+    if not np.isfinite(image_pixel_size) or float(image_pixel_size) <= 0.0:
+        raise ValueError("RELION image pixel size must be positive and finite")
 
     unique_optics = sorted(np.unique(optics_labels).tolist())
     optics_to_dense = {int(label): index for index, label in enumerate(unique_optics)}
@@ -1060,7 +1063,11 @@ def _compute_relion_fresh_k1_initial_sigma2(
     _average_image, sigma2_per_group = compute_avg_unaligned_and_sigma2(
         image_iter(),
         ori_size=int(dataset.grid_size),
-        pixel_size=float(dataset.voxel_size),
+        # RELION masks each source image using its optics-group pixel size.
+        # The model/MRC pixel size can differ in the last serialized digits;
+        # at this float64 startup-noise boundary that is enough to change the
+        # later float32 inverse-noise factor by one ULP.
+        pixel_size=float(image_pixel_size),
         particle_diameter_ang=float(particle_diameter_ang),
         width_mask_edge_px=int(width_mask_edge_px),
         do_zero_mask=True,
@@ -1081,6 +1088,7 @@ def _compute_relion_fresh_k1_initial_sigma2(
 
 def _compute_relion_noise_only_bootstrap(
     dataset, *, args, frozen_boundary, source_rows, optics_group_ids, mask_params,
+    optics_pixel_sizes,
 ):
     """Compute startup noise without replaying any model/particle state.
 
@@ -1094,15 +1102,17 @@ def _compute_relion_noise_only_bootstrap(
         or args.relion_init_dir is not None or args.init_noise_from_npz is not None
         or args.initial_noise_cache_dir is not None or args.relion_half_sets is None
         or source_rows is None or optics_group_ids is None or mask_params is None
+        or optics_pixel_sizes is None
     ):
         raise ValueError(
             "RELION noise-only bootstrap requires a fresh K1 start with half-set "
             "order/mask metadata and no state replay, noise replay or noise cache"
         )
-    if np.unique(optics_group_ids).size != 1:
+    if np.unique(optics_group_ids).size != 1 or np.asarray(optics_pixel_sizes).size != 1:
         raise ValueError("RELION noise-only bootstrap currently requires one optics group")
     sigma2 = _compute_relion_fresh_k1_initial_sigma2(
         dataset, source_rows=source_rows, optics_group_ids=optics_group_ids,
+        image_pixel_size=float(np.asarray(optics_pixel_sizes).reshape(-1)[0]),
         particle_diameter_ang=float(mask_params[0]), width_mask_edge_px=int(mask_params[1]),
     )[0]
     radial = sigma2 * float(dataset.grid_size) ** 4
@@ -3347,6 +3357,7 @@ def main():
             source_rows=relion_fresh_initial_noise_source_rows,
             optics_group_ids=relion_fresh_initial_noise_optics_group_ids,
             mask_params=relion_mask_params,
+            optics_pixel_sizes=relion_optics_pixel_sizes,
         )
         logger.info("Noise-only RELION bootstrap: %d shells, scoring dtype=%s; no state replay",
                     initial_noise_radial.size, noise_variance.dtype)
@@ -3476,6 +3487,8 @@ def main():
             invalid_reasons.append("RELION initial-noise source order is required")
         if relion_fresh_initial_noise_optics_group_ids is None:
             invalid_reasons.append("RELION initial-noise optics groups are required")
+        if relion_optics_pixel_sizes is None or relion_optics_pixel_sizes.size != 1:
+            invalid_reasons.append("exactly one RELION optics pixel size is required")
         if invalid_reasons:
             raise ValueError(
                 f"{_K1_RELION_LIVE_INITIAL_NOISE_ENV} is restricted to a strict fresh "
@@ -3485,6 +3498,7 @@ def main():
             ds,
             source_rows=relion_fresh_initial_noise_source_rows,
             optics_group_ids=relion_fresh_initial_noise_optics_group_ids,
+            image_pixel_size=float(relion_optics_pixel_sizes[0]),
             particle_diameter_ang=float(relion_mask_params[0]),
             width_mask_edge_px=int(relion_mask_params[1]),
         )
