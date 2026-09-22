@@ -30,7 +30,7 @@ from scipy.spatial.transform import Rotation
 from skimage.registration import phase_cross_correlation
 
 from recovar.core.mask import make_mask
-from recovar.em.initial_model.gt_metrics import (
+from recovar.em.diagnostics.gt_metrics import (
     align_volume_to_reference,
     lowpass_volume_by_shell,
     relion_alignment_rotations,
