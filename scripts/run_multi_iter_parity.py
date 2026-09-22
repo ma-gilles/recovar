@@ -19,6 +19,13 @@ import sys
 import time
 from pathlib import Path
 
+# This is an EM entry point, so it opts in to recovar's EM-scoped XLA defaults
+# (currently --xla_gpu_autotune_level=0; see recovar/jax_config.py and
+# scripts/run_full_refinement.py). It must be set before the first import that
+# reaches jax, which recovar.jax_config performs, and with `setdefault` so an
+# explicit RECOVAR_EM_XLA_DEFAULTS=0 in the environment still wins.
+os.environ.setdefault("RECOVAR_EM_XLA_DEFAULTS", "1")
+
 import numpy as np
 
 from recovar.em.diagnostics.gt_metrics import DEFAULT_GT_ALIGN_HEALPIX_ORDER, DEFAULT_GT_ALIGN_MAX_SHELL
