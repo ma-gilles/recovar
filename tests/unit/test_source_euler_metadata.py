@@ -27,15 +27,18 @@ pytestmark = pytest.mark.unit
 @pytest.mark.parametrize("dtype", [np.float32, np.float64])
 @pytest.mark.parametrize("with_source", [False, True])
 def test_per_class_layout_selection_preserves_source_eulers(dtype, with_source):
-    source = (
-        np.array([[159.3271497477632, 126.91279408422895, 85.75518260708287]]) if with_source else None
-    )
+    source = np.array([[159.3271497477632, 126.91279408422895, 85.75518260708287]]) if with_source else None
     layout = LocalHypothesisLayout(
-        n_global_rotations=1, n_pixels=1, n_psi=1,
-        rotation_offsets=np.array([0, 1]), rotation_ids_flat=np.array([0]),
+        n_global_rotations=1,
+        n_pixels=1,
+        n_psi=1,
+        rotation_offsets=np.array([0, 1]),
+        rotation_ids_flat=np.array([0]),
         rotations_flat=np.eye(3, dtype=dtype)[None],
-        rotation_log_priors_flat=np.zeros(1, dtype), rotation_counts=np.ones(1, np.int32),
-        translation_grid=np.zeros((1, 2), dtype), translation_log_priors=np.zeros((1, 1), dtype),
+        rotation_log_priors_flat=np.zeros(1, dtype),
+        rotation_counts=np.ones(1, np.int32),
+        translation_grid=np.zeros((1, 2), dtype),
+        translation_log_priors=np.zeros((1, 1), dtype),
         source_eulers_flat=source,
     )
     assert k_class_inputs._class_local_layouts(layout, 4)[0] is layout
@@ -109,9 +112,18 @@ def test_sparse_override_source_follows_true_child_permutation(order):
     for i in range(2):
         ids = inputs["oversampled_rot_indices"][i]
         np.testing.assert_array_equal(inputs["source_eulers"][i], eulers[ids])
-        for key in legacy:
-            if key != "source_eulers":
-                np.testing.assert_array_equal(inputs[key][i], legacy[key][i])
+        for key, expected in legacy.items():
+            if key == "source_eulers":
+                continue
+            actual = inputs[key]
+            if isinstance(expected, (list, tuple)):
+                np.testing.assert_array_equal(actual[i], expected[i])
+            elif expected is None:
+                # Optional resident/M-step tables are absent in both layouts here.
+                assert actual is None, key
+            else:
+                # Shared per-call tables and capacities must not depend on source metadata.
+                np.testing.assert_array_equal(actual, expected)
         assert legacy["source_eulers"][i] is None
 
 
