@@ -847,10 +847,13 @@ def test_native_vdam_tau2_refresh_and_ssnr_diagnostics_are_merge_guarded():
     visible in model.star.
     """
     package = _initial_model_package_source()
+    # 7811f82d5 moved the InitialModel model.star writer (_write_model_star),
+    # which serializes the sigma2/coverage diagnostics, to the RELION STAR owner.
+    star_io = (REPO_ROOT / "recovar/em/relion/initial_model_io.py").read_text()
     bind = (REPO_ROOT / "recovar/relion_bind/initialmodel_bind.cpp").read_text()
     tests = (REPO_ROOT / "tests/unit/initial_model/test_iteration_loop.py").read_text()
 
-    haystack = "\n".join([package, bind, tests])
+    haystack = "\n".join([package, star_io, bind, tests])
     expected_tokens = [
         "def refresh_tau2_from_projector_power",
         "vdam_projector_power_spectrum",
