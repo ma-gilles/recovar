@@ -52,6 +52,7 @@ from functools import partial
 import numpy as np
 
 from recovar.em.helpers.env_flags import parse_env_strict_flag
+from recovar.em.scoring.sparse_bucket_arrays import relion_parent_execution_key
 from recovar.em.sparse_pass2.resident_candidates import (
     ResidentCandidateTables,
     build_resident_candidate_tables,
@@ -482,19 +483,6 @@ def _children_by_parent(
     return child_offsets, child_ids
 
 
-def _relion_parent_order_key(parent_ids: np.ndarray, nside_level: int) -> np.ndarray:
-    """RELION's parent execution key, as ``_reorder_children`` computes it."""
-
-    n_pixels = 12 * (2 ** int(nside_level)) ** 2
-    n_psi = 6 * 2 ** int(nside_level)
-    parent_ids = np.asarray(parent_ids, dtype=np.int64)
-    if parent_ids.size and (
-        int(parent_ids.min()) < 0 or int(parent_ids.max()) >= int(n_pixels * n_psi)
-    ):
-        raise ValueError("RELION parent execution key is outside the coarse grid")
-    return (parent_ids % n_pixels) * n_psi + parent_ids // n_pixels
-
-
 def _ragged_gather(
     child_offsets: np.ndarray,
     child_ids: np.ndarray,
@@ -667,7 +655,9 @@ def build_resident_candidate_tables_from_csr(
     # Row order: image-major, then RELION's parent execution key when the fine
     # posterior requires it, then the host path's within-parent child order.
     if relion_parent_execution_order:
-        key = _relion_parent_order_key(parent_rot, nside_level)
+        key = relion_parent_execution_key(
+            parent_rot, n_coarse_rot=n_coarse_rot, nside_level=nside_level
+        )
         parent_order = np.lexsort((key, parent_image))
     else:
         parent_order = np.arange(parent_rot.size, dtype=np.int64)

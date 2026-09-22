@@ -17,7 +17,10 @@ from recovar.em.scoring.significant_samples import (
     ComplementSignificantSampleIndices,
     compact_significant_sample_indices_from_mask,
 )
-from recovar.em.scoring.sparse_bucket_arrays import _prepare_per_image_pass2_inputs
+from recovar.em.scoring.sparse_bucket_arrays import (
+    _prepare_per_image_pass2_inputs,
+    relion_parent_execution_key,
+)
 from recovar.em.sparse_pass2.resident_candidates import build_resident_candidate_tables
 from recovar.em.sparse_pass2.resident_significance import (
     CoarseSignificanceCSR,
@@ -33,8 +36,10 @@ pytestmark = pytest.mark.unit
 
 # Override fixture: a fine rotation grid given explicitly, as the adaptive
 # K-class route supplies it (k_class.py passes fine_rotations_override and
-# fine_rotation_parent_override into pass 2).
-N_COARSE_ROT = 16
+# fine_rotation_parent_override into pass 2). RELION's parent execution order
+# decomposes a coarse id into (direction, psi) with n_psi = 6 at healpix
+# level 0, so the coarse grid is whole psi rows: 3 directions x 6 psi.
+N_COARSE_ROT = 18
 CHILDREN = 4
 N_COARSE_TRANS = 5
 N_FINE_TRANS = 15
@@ -473,6 +478,29 @@ def test_compaction_fills_an_exactly_full_capacity():
     )
     assert compacted.size == capacity
     np.testing.assert_array_equal(compacted, ids)
+
+
+def test_relion_parent_execution_key_uses_the_grid_direction_count():
+    """One owner for the host rows and the resident CSR tables.
+
+    A full C1 grid keeps the HEALPix pixel count; a symmetry-reduced grid (the
+    same psi count, fewer directions) must use its own direction count, and a
+    grid that is not whole psi rows cannot be decomposed at all.
+    """
+
+    full_ids = np.arange(72, dtype=np.int64)  # level 0: 12 directions x 6 psi
+    np.testing.assert_array_equal(
+        relion_parent_execution_key(full_ids, n_coarse_rot=72, nside_level=0),
+        (full_ids % 12) * 6 + full_ids // 12,
+    )
+    reduced_ids = np.arange(18, dtype=np.int64)  # 3 directions x 6 psi
+    reduced = relion_parent_execution_key(reduced_ids, n_coarse_rot=18, nside_level=0)
+    np.testing.assert_array_equal(reduced, (reduced_ids % 3) * 6 + reduced_ids // 3)
+    assert sorted(reduced.tolist()) == list(range(18))
+    with pytest.raises(ValueError, match="whole psi rows"):
+        relion_parent_execution_key(np.arange(16), n_coarse_rot=16, nside_level=0)
+    with pytest.raises(ValueError, match="outside the coarse grid"):
+        relion_parent_execution_key(np.asarray([18]), n_coarse_rot=18, nside_level=0)
 
 
 def test_fixture_covers_every_support_regime():

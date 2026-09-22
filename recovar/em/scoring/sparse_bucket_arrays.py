@@ -745,6 +745,33 @@ def _rotation_table_key(table) -> tuple:
     return (table.shape, str(table.dtype), hashlib.sha1(table.view(np.uint8)).hexdigest())
 
 
+def relion_parent_execution_key(parent_ids, *, n_coarse_rot: int, nside_level: int) -> np.ndarray:
+    """RELION's execution key for coarse rotation ids.
+
+    RECOVAR's coarse grid is psi-slow and direction-fast
+    (``id = psi * n_directions + direction``); RELION executes parents
+    direction-major (``direction * n_psi + psi``). The direction count comes
+    from the grid itself, ``n_coarse_rot / n_psi``, so a symmetry-reduced grid
+    keeps its own direction count. The host pass-2 preparation and the resident
+    CSR tables both order rows with this key.
+    """
+
+    from recovar.em.sampling import rotation_grid_n_in_planes
+
+    n_psi = int(rotation_grid_n_in_planes(nside_level))
+    n_coarse_rot = int(n_coarse_rot)
+    if n_coarse_rot <= 0 or n_coarse_rot % n_psi:
+        raise ValueError(
+            f"RELION parent execution order needs whole psi rows: {n_coarse_rot} coarse "
+            f"rotations with {n_psi} psi angles at healpix level {int(nside_level)}"
+        )
+    n_directions = n_coarse_rot // n_psi
+    parent_ids = np.asarray(parent_ids, dtype=np.int64).reshape(-1)
+    if parent_ids.size and (int(parent_ids.min()) < 0 or int(parent_ids.max()) >= n_coarse_rot):
+        raise ValueError("RELION parent execution key is outside the coarse grid")
+    return (parent_ids % n_directions) * n_psi + parent_ids // n_directions
+
+
 def _prepare_per_image_pass2_inputs(
     significant_sample_indices,
     n_coarse_rot,
@@ -781,7 +808,6 @@ def _prepare_per_image_pass2_inputs(
     """
     from recovar.em.sampling import (
         get_oversampled_rotation_grid_from_samples,
-        rotation_grid_n_in_planes,
         rotation_grid_size,
     )
     from recovar.em.symmetry import canonicalize_rotational_symmetry
@@ -871,15 +897,11 @@ def _prepare_per_image_pass2_inputs(
         if not relion_parent_execution_order:
             return rotations, parent_map, rotation_indices, source_eulers
         parent_ids = np.asarray(parent_ids, dtype=np.int64).reshape(-1)
-        n_psi = rotation_grid_n_in_planes(nside_level)
-        n_pixels = int(n_coarse_rot) // int(n_psi)
         if parent_ids.shape != np.asarray(parent_map).shape:
             raise ValueError("RELION parent execution keys must match fine rotations")
-        if parent_ids.size and (
-            int(parent_ids.min(initial=0)) < 0 or int(parent_ids.max(initial=-1)) >= int(n_pixels * n_psi)
-        ):
-            raise ValueError("RELION parent execution key is outside the coarse grid")
-        relion_parent_key = (parent_ids % n_pixels) * n_psi + parent_ids // n_pixels
+        relion_parent_key = relion_parent_execution_key(
+            parent_ids, n_coarse_rot=n_coarse_rot, nside_level=nside_level
+        )
         order = np.argsort(relion_parent_key, kind="stable")
         return (
             np.asarray(rotations)[order],
