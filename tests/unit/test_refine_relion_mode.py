@@ -11218,8 +11218,11 @@ class TestRelionModeSmokeTest:
                 current_size=6,
                 half_spectrum_scoring=True,
                 square_window=False,
+                # RELION Projector::data geometry for r_max=1 at padding 1:
+                # 2 * (r_max + 1) + 1 = 5. The coarse rotated-radius mask runs
+                # only on the texture projector, which checks this geometry.
                 relion_projector_half=jnp.zeros(
-                    (1, 3, 3, 2),
+                    (1, 5, 5, 3),
                     dtype=jnp.complex64,
                 ),
                 relion_projector_r_max=1,
