@@ -64,3 +64,16 @@ def test_production_runner_leaves_cold_start_host_owned_until_normalization():
 
     assert "init_volume=init_vol_ft," in production_call
     assert "init_volume=jnp.asarray(init_vol_ft)" not in production_call
+
+
+def test_normalize_initial_means_reuses_immutable_shared_reference():
+    import jax.numpy as jnp
+
+    shared = jnp.arange(64, dtype=jnp.complex64)
+    got = mean_helpers._normalize_initial_means(shared, n_classes=1)
+
+    assert got[0] is got[1]
+    np.testing.assert_array_equal(np.asarray(got[0]), np.asarray(shared))
+    got[0] = got[0].at[0].set(jnp.complex64(-1.0))
+    assert got[0] is not got[1]
+    np.testing.assert_array_equal(np.asarray(got[1]), np.asarray(shared))

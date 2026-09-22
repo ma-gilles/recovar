@@ -798,7 +798,7 @@ def refine_single_volume(
         n_halves=2,
     )
     noise_variance = _mean_noise_variance(noise_variance_per_half)
-    initial_mean_variance = jnp.array(init_mean_variance)
+    initial_mean_variance = jnp.asarray(init_mean_variance)
     mean_variance, mean_variance_per_half = prepare_initial_mean_variance(
         initial_mean_variance,
         use_per_half_mean_variance=parity.use_per_half_mean_variance,
