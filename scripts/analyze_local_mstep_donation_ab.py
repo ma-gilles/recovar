@@ -1012,7 +1012,10 @@ def analyze(
         pixi_env = Path(runtime.get("pixi_env", "")).resolve()
         if launch_payload.get("repo_root") != str(repo_root):
             raise RuntimeError(f"arm runtime repo differs from the positional launch contract: {path}")
-        if pixi_env != repo_root / ".pixi" / "envs" / "default":
+        # The runner records the resolved environment path
+        # (run_local_mstep_donation_ab.py), so compare it with the resolved
+        # worktree environment; a symlinked .pixi is still that worktree's env.
+        if pixi_env != (repo_root / ".pixi" / "envs" / "default").resolve():
             raise RuntimeError(f"arm did not use the exact worktree pixi env: {path}")
         for key in ("python_executable", "python_prefix", "jax_path"):
             if not Path(runtime.get(key, "")).resolve().is_relative_to(pixi_env):
