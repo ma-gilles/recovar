@@ -438,7 +438,6 @@ def _run_local_search_iteration(
             relion_projector_r_max=relion_projector_r_max,
             use_float64_scoring=use_float64_scoring,
             use_float64_projections=use_float64_projections,
-            do_gridding_correction=do_gridding_correction,
             square_window=square_window,
             image_corrections=image_corrections,
             scale_corrections=scale_corrections,

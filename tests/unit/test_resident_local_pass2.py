@@ -270,6 +270,34 @@ def test_dispatch_routes_only_the_fine_pass():
     assert "K=1 only; K-class local search keeps the exact local engine" in source
 
 
+def test_dispatch_call_keywords_are_resident_parameters():
+    """Every keyword the dispatcher passes must be a resident-driver parameter.
+
+    A refactor narrowed the resident signature while the dispatcher kept
+    passing ``do_gridding_correction``; the resulting TypeError only surfaced
+    on GPU. The resident driver requires the RELION PPref projector, for which
+    the exact local engine applies no gridding correction either.
+    """
+
+    import ast
+    import inspect
+
+    tree = ast.parse(inspect.getsource(local_search_iteration))
+    calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "compute_local_search_resident"
+    ]
+    assert len(calls) == 1
+    passed = {keyword.arg for keyword in calls[0].keywords}
+    assert None not in passed
+    parameters = set(inspect.signature(rlp.compute_local_search_resident).parameters)
+    assert passed - parameters == set()
+    assert {"max_significants", "stats_use_reconstruction_probs"} <= passed
+
+
 @pytest.mark.parametrize(
     ("override", "expected"),
     [
@@ -285,6 +313,8 @@ def test_dispatch_routes_only_the_fine_pass():
         ({"normalization_log_evidence": np.zeros(3)}, "externally supplied normalizer"),
         ({"return_reconstruction_sample_indices": True}, "significant-sample capture"),
         ({"use_window": False}, "scientific decision"),
+        ({"max_significants": 500}, "maximum_significants cap"),
+        ({"stats_use_reconstruction_probs": False}, "pruned reconstruction posterior"),
     ],
 )
 def test_gate_names_the_missing_piece(override, expected):
@@ -296,6 +326,8 @@ def test_gate_names_the_missing_piece(override, expected):
         mstep_relion_x_half=True,
         accumulate_noise=True,
         reconstruct_significant_only=True,
+        max_significants=-1,
+        stats_use_reconstruction_probs=True,
         use_float64_scoring=False,
         use_float64_projections=False,
         relion_exact_score_translation=True,
@@ -586,15 +618,16 @@ def test_driver_does_not_narrow_the_projector_slab():
 
 
 @requires_resident_gpu
-def test_complex128_projector_is_carried_through_unnarrowed(
+def test_complex128_projector_follows_the_exact_engine_precision(
     monkeypatch, _resident_local_env
 ):
     """A double Projector::data slab, which is what the refinement loop builds.
 
     The other fixtures build the slab through the JAX projector-setup backend,
-    which already returns complex64, so they cannot see a narrowing. This one
-    hands both engines the same complex128 slab; they must still agree, and the
-    driver must not quietly cast it.
+    which already returns complex64, so they cannot see a precision mismatch.
+    This one hands both engines the same complex128 slab; they must still
+    agree, so the driver must apply the exact local engine's execution
+    precision (``cast_relion_projector_for_execution``) rather than its own.
     """
 
     case = _case()

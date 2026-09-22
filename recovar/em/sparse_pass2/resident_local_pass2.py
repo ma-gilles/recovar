@@ -92,7 +92,10 @@ from recovar.em.helpers.projection import (
 )
 from recovar.em.helpers.scale_groups import prepare_scale_correction_groups
 from recovar.em.helpers.types import LocalEMResult, make_noise_stats, make_relion_stats
-from recovar.em.relion.relion_projector_setup import prepare_local_projector_slab
+from recovar.em.relion.relion_projector_setup import (
+    cast_relion_projector_for_execution,
+    prepare_local_projector_slab,
+)
 from recovar.em.sparse_pass2 import resident_pass2 as rp
 from recovar.em.sparse_pass2.resident_local_layout import (
     materialize_local_chunk,
@@ -222,6 +225,15 @@ def require_resident_local_configuration(**kwargs) -> None:
         bool(kwargs["reconstruct_significant_only"]),
         "the resident M-step reconstructs from RELION's pruned fine weights, "
         "which the zero-oversampling local route does not request",
+    )
+    _require(
+        kwargs["max_significants"] is None or int(kwargs["max_significants"]) <= 0,
+        "a maximum_significants cap on the fine support is not in the segmented "
+        "posterior's contract",
+    )
+    _require(
+        bool(kwargs["stats_use_reconstruction_probs"]),
+        "the resident statistics stage accumulates the pruned reconstruction posterior",
     )
     _require(
         not bool(kwargs["use_float64_scoring"]) and not bool(kwargs["use_float64_projections"]),
@@ -354,10 +366,12 @@ def compute_local_search_resident(
     disable_adjoint_ctf=False,
     reconstruct_significant_only=False,
     adaptive_fraction=0.999,
+    max_significants=-1,
     return_best_pose_details=False,
     return_significant_counts=False,
     return_reconstruction_sample_indices=False,
     return_profile=False,
+    stats_use_reconstruction_probs=True,
     translation_prior_centers=None,
     normalization_log_z=None,
     normalization_log_evidence=None,
@@ -426,6 +440,8 @@ def compute_local_search_resident(
         mstep_relion_x_half=mstep_relion_x_half,
         accumulate_noise=accumulate_noise,
         reconstruct_significant_only=reconstruct_significant_only,
+        max_significants=max_significants,
+        stats_use_reconstruction_probs=stats_use_reconstruction_probs,
         use_float64_scoring=use_float64_scoring,
         use_float64_projections=use_float64_projections,
         relion_exact_score_translation=relion_exact_score_translation,
@@ -570,19 +586,24 @@ def compute_local_search_resident(
     # axis; the exact local engine normalizes it with the same helper before
     # projecting, so do that here rather than letting the projector unpack a
     # 4-D shape.
-    # ``prepare_local_projector_slab`` preserves the slab's dtype, and the exact
-    # local engine never narrows it. Narrowing Projector::data to complex64
-    # changes float32 projection arithmetic and engages the texture projector
-    # instead of the vmapped fallback, so a narrowed arm is both a different
-    # computation and a faster one than its control; the compact engine keeps
-    # that behind RECOVAR_SPARSE_PASS2_PROJECTOR_COMPLEX64, which the exact
-    # local engine does not read. Do exactly what the exact local engine does.
+    # The exact local engine selects the projection precision with
+    # ``cast_relion_projector_for_execution`` (complex64 unless double
+    # projection is requested) and then normalizes the slab. The precision
+    # decides float32 projection arithmetic and whether the texture projector
+    # or the vmapped fallback runs, so an arm with any other precision is both
+    # a different computation and a differently timed one than its control.
+    # The compact engine's RECOVAR_SPARSE_PASS2_PROJECTOR_COMPLEX64 gate is not
+    # read here, because the exact local engine does not read it. Do exactly
+    # what the exact local engine does.
+    relion_projector_half = cast_relion_projector_for_execution(
+        relion_projector_half, use_float64_projections=use_float64_projections
+    )
     relion_projector_half = prepare_local_projector_slab(
         relion_projector_half, path_label="device-resident local projector path"
     )
     logger.info(
         "Resident local pass-2 projector: slab dtype=%s shape=%s r_max=%s "
-        "(unnarrowed, as the exact local engine uses it)",
+        "(the exact local engine's execution precision)",
         relion_projector_half.dtype,
         tuple(relion_projector_half.shape),
         relion_projector_r_max,
