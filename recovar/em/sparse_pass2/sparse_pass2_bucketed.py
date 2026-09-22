@@ -4810,6 +4810,14 @@ def compute_pass2_stats_sparse_bucketed(
         # Noise accumulation
         _tail_locals = locals()
         _tail_snapshot = {name: _tail_locals[name] for name in _BUCKET_TAIL_SNAPSHOT_NAMES if name in _tail_locals}
+        # locals() returns this frame's cached namespace dict. Left bound, the
+        # next bucket's locals() stores that dict inside itself, and the cycle
+        # keeps the whole namespace (projection cache, bucket arrays) alive
+        # after the call returns until a full cyclic GC; its entries also pin
+        # this bucket's arrays through the next bucket. The snapshot holds
+        # what the tail needs.
+        _tail_locals.clear()
+        del _tail_locals
         if _tail_runner is not None:
             _tail_runner.submit(_tail_snapshot)
         else:

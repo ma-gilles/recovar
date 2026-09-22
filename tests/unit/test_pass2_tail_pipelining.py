@@ -1,8 +1,10 @@
 """Bucket-tail pipelining: ordered worker, error propagation, opt-in knob."""
 
+import gc
 import threading
 import time
 
+import numpy as np
 import pytest
 
 from recovar.em.sparse_pass2 import sparse_pass2_bucketed as bucketed
@@ -85,3 +87,65 @@ def test_snapshot_names_are_the_tail_inputs():
     assert len(names) == len(set(names)) == 35
     for required in ("image_indices", "probs", "best_argmax", "log_Z", "proj_for_noise", "bucket_size"):
         assert required in names
+
+
+def test_bucket_loop_leaves_no_namespace_cycle(monkeypatch):
+    """After a multi-bucket pass-2 call, its local namespace is not cyclic garbage.
+
+    A ``locals()`` dict that stored itself kept each call's namespace
+    (projection cache, bucket arrays) until a full cyclic GC. The K1 100k/256
+    completion run (job 14282511) ran out of memory with ~41 GiB of earlier
+    calls' arrays still allocated (census 14284210, referrer probe 14284301).
+    """
+
+    from test_sparse_pass2_bucketed_parity import TestSparsePass2Bucketed
+
+    from recovar.em.sparse_pass2.dispatch import compute_pass2_stats_sparse
+
+    submitted = []
+    submit = bucketed._BucketTailRunner.submit
+
+    def counting_submit(self, snapshot):
+        submitted.append(len(snapshot))
+        return submit(self, snapshot)
+
+    monkeypatch.setattr(bucketed._BucketTailRunner, "submit", counting_submit)
+    # Keep one bucket per rotation-count size, as for a production-size dataset.
+    monkeypatch.setenv("RECOVAR_SPARSE_PASS2_AUTO_SMALL_BUCKET_COALESCE_MAX_IMAGES", "0")
+    sig_indices = [
+        np.array([0, 1], dtype=np.int32),
+        np.array([0, 1, 2, 3, 4], dtype=np.int32),
+        np.array([5], dtype=np.int32),
+        np.arange(20, dtype=np.int32),
+        np.array([0, 4, 8, 12], dtype=np.int32),
+    ]
+    ds, volume, mean_variance, noise_variance, translations, nside = TestSparsePass2Bucketed()._common_args(sig_indices)
+
+    gc.collect()
+    debug_flags = gc.get_debug()
+    was_enabled = gc.isenabled()
+    gc.disable()
+    try:
+        compute_pass2_stats_sparse(
+            ds,
+            volume,
+            mean_variance,
+            noise_variance,
+            translations,
+            sig_indices,
+            nside_level=nside,
+            disc_type="linear_interp",
+            return_stats=True,
+        )
+        gc.set_debug(gc.DEBUG_SAVEALL)
+        gc.collect()
+        # Sizes of unreachable dicts holding the bucket loop's names.
+        leaked = [len(obj) for obj in gc.garbage if isinstance(obj, dict) and "_bucket_tail" in obj]
+    finally:
+        gc.set_debug(debug_flags)
+        gc.garbage.clear()
+        if was_enabled:
+            gc.enable()
+
+    assert len(submitted) >= 2, "the call must run several buckets for the cycle to form"
+    assert leaked == [], "pass-2 namespace left in a reference cycle"
