@@ -160,7 +160,13 @@ def _sum_noise_stats(noise_stats: tuple[NoiseStats, ...] | None, *, host_arrays=
 
 def _stack_accumulators(values, *, host: bool):
     if host:
-        return np.stack([np.asarray(value) for value in values], axis=0)
+        host_values = tuple(np.asarray(value) for value in values)
+        if len(host_values) == 1 and host_values[0].flags.c_contiguous and host_values[0].flags.writeable:
+            # K=1 already owns one contiguous host accumulator.  Adding the
+            # class axis as a view avoids copying the full box-scale BPref
+            # (15.35 GiB data + 7.68 GiB weight at box 800).
+            return host_values[0][None, ...]
+        return np.stack(host_values, axis=0)
     return jnp.stack([jnp.asarray(value) for value in values], axis=0)
 
 

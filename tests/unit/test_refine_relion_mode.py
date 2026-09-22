@@ -9421,7 +9421,13 @@ class TestRelionModeSmokeTest:
         original_join = regularization_module.join_halves_at_low_resolution
 
         def spy_join(*args, **kwargs):
-            join_calls.append(kwargs.get("current_resolution_angstrom"))
+            join_calls.append(
+                (
+                    kwargs.get("current_resolution_angstrom"),
+                    kwargs.get("preserve_inputs"),
+                    kwargs.get("return_retained_first_numerator"),
+                )
+            )
             return original_join(*args, **kwargs)
 
         monkeypatch.setattr(
@@ -9449,7 +9455,9 @@ class TestRelionModeSmokeTest:
 
         expected_resolution = shell_index_to_resolution_angstrom(1, IMAGE_SHAPE[0], half_datasets[0].voxel_size)
         assert len(join_calls) == 1
-        assert join_calls[0] == pytest.approx(expected_resolution)
+        assert join_calls[0][0] == pytest.approx(expected_resolution)
+        assert join_calls[0][1] is False
+        assert join_calls[0][2] is True
 
     def test_relion_final_iteration_scores_half_maps_after_convergence(
         self,

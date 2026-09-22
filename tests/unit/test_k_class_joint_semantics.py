@@ -27,7 +27,7 @@ from recovar.em.classification.k_class_results import (
     _expand_subset_noise_stats,
     _zero_subset_noise_stats,
 )
-from recovar.em.dense.score_outputs import _combine_optional_half_accumulators
+from recovar.em.dense.score_outputs import _combine_optional_half_accumulators, _select_single_class_accumulator
 from recovar.em.helpers.orientation_priors import (
     class_weights_from_direction_prior,
     normalize_class_direction_prior_per_half,
@@ -435,6 +435,83 @@ def test_k_class_assemble_result_can_keep_full_accumulators_on_host():
     assert isinstance(result.Ft_ctf, np.ndarray)
     np.testing.assert_allclose(result.Ft_y, np.asarray([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32))
     np.testing.assert_allclose(result.Ft_ctf, np.asarray([[5.0, 6.0], [7.0, 8.0]], dtype=np.float32))
+
+
+@pytest.mark.parametrize("dtype", [np.float32, np.complex64])
+def test_k_class_singleton_host_accumulator_adds_class_axis_without_copy(dtype):
+    source = np.arange(12, dtype=np.float32).reshape(3, 4).astype(dtype)
+
+    stacked = k_class_results._stack_accumulators([source], host=True)
+
+    assert stacked.shape == (1, 3, 4)
+    assert stacked.dtype == np.dtype(dtype)
+    assert np.shares_memory(stacked, source)
+    np.testing.assert_array_equal(stacked[0], source)
+
+
+def test_k_class_multiple_host_accumulators_remain_independent_stack():
+    first = np.asarray([1.0, 2.0], dtype=np.float32)
+    second = np.asarray([3.0, 4.0], dtype=np.float32)
+
+    stacked = k_class_results._stack_accumulators([first, second], host=True)
+
+    assert stacked.shape == (2, 2)
+    assert stacked.dtype == np.dtype(np.float32)
+    assert not np.shares_memory(stacked, first)
+    assert not np.shares_memory(stacked, second)
+    np.testing.assert_array_equal(stacked, np.asarray([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32))
+
+
+def test_k_class_singleton_noncontiguous_host_accumulator_keeps_stack_contract():
+    source = np.arange(12, dtype=np.float32).reshape(3, 4).T
+
+    stacked = k_class_results._stack_accumulators([source], host=True)
+
+    assert stacked.shape == (1, 4, 3)
+    assert stacked.flags.owndata
+    assert not np.shares_memory(stacked, source)
+    np.testing.assert_array_equal(stacked[0], source)
+
+
+def test_k_class_singleton_read_only_host_accumulator_is_stacked_into_writable_copy():
+    source = np.arange(12, dtype=np.float32).reshape(3, 4)
+    source.setflags(write=False)
+
+    stacked = k_class_results._stack_accumulators([source], host=True)
+
+    assert stacked.shape == (1, 3, 4)
+    assert stacked.flags.owndata
+    assert stacked.flags.writeable
+    assert not np.shares_memory(stacked, source)
+    np.testing.assert_array_equal(stacked[0], source)
+
+
+def test_k_class_assemble_result_publishes_singleton_host_accumulators_without_copy():
+    """Live K=1 assembly hands the engine's host BPref to the half consumer in place."""
+
+    Ft_y = np.asarray([1.0 + 2.0j, 3.0 - 1.0j], dtype=np.complex64)
+    Ft_ctf = np.asarray([5.0, 6.0], dtype=np.float32)
+    result = _assemble_result(
+        class_log_evidence=np.asarray([[0.0]], dtype=np.float64),
+        new_means=None,
+        Ft_y=[Ft_y],
+        Ft_ctf=[Ft_ctf],
+        per_class_hard_assignments=np.asarray([[3]], dtype=np.int32),
+        per_class_stats=(_stats([0.0], [-5.0], [1.0]),),
+        noise_stats=None,
+        host_accumulators=True,
+    )
+
+    assert result.Ft_y.shape == (1, 2)
+    assert result.Ft_ctf.shape == (1, 2)
+    assert np.shares_memory(result.Ft_y, Ft_y)
+    assert np.shares_memory(result.Ft_ctf, Ft_ctf)
+    selected_y = _select_single_class_accumulator(result.Ft_y, label="Ft_y")
+    selected_ctf = _select_single_class_accumulator(result.Ft_ctf, label="Ft_ctf")
+    assert np.shares_memory(selected_y, Ft_y)
+    assert np.shares_memory(selected_ctf, Ft_ctf)
+    np.testing.assert_array_equal(selected_y, Ft_y)
+    np.testing.assert_array_equal(selected_ctf, Ft_ctf)
 
 
 def test_k_class_combined_accumulator_skips_empty_half_allocation():
