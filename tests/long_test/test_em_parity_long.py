@@ -100,11 +100,20 @@ def _write_quality_ledger(name: str, payload: dict, *, output_dir: Path) -> Path
     return ledger_path
 
 
+def _fsc_05_resolution(fsc_values: np.ndarray, voxel_size: float, grid_size: int) -> float:
+    """Return the resolution in Å of the first shell >= 1 whose FSC drops below 0.5."""
+    fsc_values = np.asarray(fsc_values, dtype=np.float64)
+    shell_05 = next((s for s in range(1, len(fsc_values)) if fsc_values[s] < 0.5), len(fsc_values) - 1)
+    return float(grid_size) * float(voxel_size) / max(1, shell_05)
+
+
 def _read_relion_fsc_resolution(relion_dir: Path, iter_num: int, voxel_size: float, grid_size: int) -> float:
     """Read RELION's gold-standard FSC and return the FSC<0.5 resolution in Å."""
     import starfile
 
-    half1_model = starfile.read(str(relion_dir / f"run_it{iter_num:03d}_half1_model.star"))
+    model_path = relion_dir / f"run_it{iter_num:03d}_half1_model.star"
+    assert model_path.exists(), f"RELION reference has no iteration-{iter_num} half-1 model: {model_path}"
+    half1_model = starfile.read(str(model_path))
     fsc_table = half1_model["model_class_1"]
     if "rlnGoldStandardFsc" in fsc_table.columns:
         fsc_col = "rlnGoldStandardFsc"
@@ -112,10 +121,7 @@ def _read_relion_fsc_resolution(relion_dir: Path, iter_num: int, voxel_size: flo
         fsc_col = "rlnFourierShellCorrelation"
     else:
         raise ValueError(f"No FSC column in {relion_dir}/run_it{iter_num:03d}_half1_model.star")
-    fsc_values = np.asarray(fsc_table[fsc_col], dtype=np.float64)
-    # First shell where FSC drops below 0.5
-    shell_05 = next((s for s in range(1, len(fsc_values)) if fsc_values[s] < 0.5), len(fsc_values) - 1)
-    return float(grid_size) * float(voxel_size) / max(1, shell_05)
+    return _fsc_05_resolution(fsc_table[fsc_col], voxel_size, grid_size)
 
 
 def _relion_iter_walltimes_s(relion_dir: Path) -> list[float]:
@@ -260,23 +266,57 @@ def _assert_relion_initialmodel_reference(relion_dir: Path, *, expected_iter: in
 def test_em_parity_long_k1_full(tmp_path):
     """K=1 256² 50k full auto-refine replay (~3.5 hr on A100).
 
-    Runs ``run_full_refinement.py --max_iter 15`` and compares iter-by-iter
-    Pmax to RELION auto-refine's ``rlnAveragePmax`` plus final FSC@0.5 vs GT.
+    Runs ``run_full_refinement.py --max_iter 15`` with the RELION reference's
+    auto-refine command and compares iter-by-iter Pmax to RELION auto-refine's
+    ``rlnAveragePmax`` plus the final gold-standard FSC@0.5 resolution.
 
     Pass criteria:
-      * Final reconstruction FSC@0.5 vs GT within ±0.5 Å of RELION
+      * RECOVAR's half-set FSC<0.5 resolution at its last numbered iteration
+        within ±0.5 Å of RELION's ``rlnGoldStandardFsc`` at the same iteration
       * Per-iter |ΔPmax| < 1e-3 vs RELION at every iteration ≥ 3
         (iters 1–2 may diverge during initial cold start)
     """
     _assert_parity_ancestors_or_skip()
+    relion_optimiser = K1_LONG_RELION_DIR / "run_it000_optimiser.star"
     _require_fixture(REFINE_SCRIPT, K1_LONG_FIXTURE_DIR, K1_LONG_RELION_DIR, K1_LONG_DATA_STAR, K1_LONG_RELION_DATA_STAR)
+    # Every value in the command below mirrors this RELION auto-refine header.
+    # --tau2_fudge is absent there, so RELION used its auto-refine default 1
+    # (checked in the iteration-0 model). --ctf, --flatten_solvent, --zero_mask,
+    # --low_resol_join_halves 40, --norm, --scale and --pad 2 are fixed RELION
+    # defaults in the refinement. RELION 5.0.1-commit-f2c1a3 orders particles with
+    # mt19937, hence --relion-particle-shuffle mt19937.
+    _assert_relion_command_tokens(
+        relion_optimiser,
+        (
+            "--auto_refine",
+            "--split_random_halves",
+            "--random_seed 1775735620",
+            "--particle_diameter 200",
+            "--ini_high 30",
+            "--firstiter_cc",
+            "--ctf",
+            "--flatten_solvent",
+            "--zero_mask",
+            "--low_resol_join_halves 40",
+            "--norm",
+            "--scale",
+            "--healpix_order 3",
+            "--offset_range 3.0",
+            "--offset_step 1.0",
+            "--oversampling 1",
+            "--pad 2",
+        ),
+    )
+    assert "--tau2_fudge" not in relion_optimiser.read_text().splitlines()[1]
+    relion_it000_model = K1_LONG_RELION_DIR / "run_it000_half1_model.star"
+    assert float(_read_relion_star_scalar(relion_it000_model, "_rlnTau2FudgeFactor")) == 1.0
+    assert "5.0.1-commit-f2c1a3" in relion_optimiser.read_text().splitlines()[0]
 
     output_dir = tmp_path / "k1_long"
     output_dir.mkdir()
     timing_dir = output_dir / "timing"
     perf_ledger_path = output_dir / "benchmark_ledger.json"
 
-    # Match the RELION command in K1_LONG_RELION_DIR/run_it001_optimiser.star header.
     cmd = [
         sys.executable,
         str(REFINE_SCRIPT),
@@ -293,13 +333,23 @@ def test_em_parity_long_k1_full(tmp_path):
         "--offset_step",
         "1.0",
         "--adaptive_oversampling",
-        "0",
+        "1",
         "--tau2_fudge",
-        "4.0",
+        "1.0",
         "--perturb_factor",
         "0.5",
+        "--seed",
+        "1775735620",
         "--perturb_seed",
-        "42",
+        "1775735620",
+        "--relion-particle-shuffle",
+        "mt19937",
+        "--relion_optimiser",
+        str(relion_optimiser),
+        "--particle_diameter_ang",
+        "200",
+        "--firstiter_cc",
+        "--apply-initial-lowpass",
         "--init_resolution",
         "30.0",
         # The fresh K=1 defaults (source-faithful powerClass normalization and
@@ -338,10 +388,15 @@ def test_em_parity_long_k1_full(tmp_path):
     pmax_traj = np.asarray(npz["ave_Pmax_trajectory"], dtype=np.float64)
     voxel_size = float(npz["voxel_size"])
     grid_size = int(npz["volume_shape"][0])
+    n_iters = int(pmax_traj.size)
 
-    # Compare per-iter recovar Pmax against RELION's ave_Pmax across model.star files
+    # Compare per-iter recovar Pmax against RELION's ave_Pmax across model.star files.
+    # An iteration RELION never ran is a failed comparison, not a skipped one.
+    missing_relion = [
+        it for it in range(1, 1 + n_iters) if not (K1_LONG_RELION_DIR / f"run_it{it:03d}_half1_model.star").exists()
+    ]
     relion_pmax = []
-    for it in range(1, 1 + int(pmax_traj.size)):
+    for it in range(1, 1 + n_iters):
         model_path = K1_LONG_RELION_DIR / f"run_it{it:03d}_half1_model.star"
         if not model_path.exists():
             relion_pmax.append(np.nan)
@@ -359,17 +414,26 @@ def test_em_parity_long_k1_full(tmp_path):
     pmax_diff = np.abs(pmax_traj - relion_pmax[: pmax_traj.size])
     bad_iters = [i for i, d in enumerate(pmax_diff) if i >= 2 and d > 1e-3 and np.isfinite(d)]
 
-    # Final FSC@0.5 resolution comparison
-    final_npz_path = output_dir / "gt_comparison_final.npz"
-    if final_npz_path.exists():
-        gt_comp = np.load(final_npz_path)
-        recovar_shell_05 = int(gt_comp.get("recovar_merged_shell_05", -1))
-    else:
-        recovar_shell_05 = -1
-
-    recovar_res_05 = grid_size * voxel_size / max(1, recovar_shell_05)
-    relion_res_05 = _read_relion_fsc_resolution(
-        K1_LONG_RELION_DIR, iter_num=int(pmax_traj.size), voxel_size=voxel_size, grid_size=grid_size
+    # Final FSC@0.5 resolution comparison. fsc_iter_NNN is RECOVAR's own gold-standard
+    # FSC for numbered iteration NNN+1: compute_relion_fsc_from_backprojector applied to
+    # that iteration's two half-set BackProjector accumulators (data/weight averages
+    # downsampled to the native grid, unmasked and unregularized, up to current_size/2).
+    # That is RELION's compareTwoHalves definition of rlnGoldStandardFsc in
+    # run_itNNN_half1_model.star, so both resolutions come from one definition at the
+    # same numbered iteration. The final all-data iteration is not compared.
+    fsc_keys = sorted(key for key in npz.files if key.startswith("fsc_iter_"))
+    assert len(fsc_keys) == n_iters, f"{npz_path} has {len(fsc_keys)} per-iteration FSC curves for {n_iters} iterations"
+    recovar_fsc = np.asarray(npz[f"fsc_iter_{n_iters - 1:03d}"], dtype=np.float64)
+    assert recovar_fsc.size == grid_size // 2 + 1 and np.all(np.isfinite(recovar_fsc)), (
+        f"RECOVAR iteration-{n_iters} FSC is malformed: shape {recovar_fsc.shape}"
+    )
+    recovar_res_05 = _fsc_05_resolution(recovar_fsc, voxel_size, grid_size)
+    relion_res_05 = (
+        float("nan")
+        if missing_relion
+        else _read_relion_fsc_resolution(
+            K1_LONG_RELION_DIR, iter_num=n_iters, voxel_size=voxel_size, grid_size=grid_size
+        )
     )
     res_diff_angstrom = abs(recovar_res_05 - relion_res_05)
 
@@ -381,8 +445,12 @@ def test_em_parity_long_k1_full(tmp_path):
         "k1_long_recovar_fsc05_resolution_A": recovar_res_05,
         "k1_long_relion_fsc05_resolution_A": relion_res_05,
         "k1_long_fsc05_resolution_diff_A": res_diff_angstrom,
+        "k1_long_recovar_fsc_source": f"refinement_results.npz:fsc_iter_{n_iters - 1:03d}",
+        "k1_long_recovar_convergence_current_resolution_A": float(npz["convergence_current_resolution"]),
         "k1_long_walltime_s": elapsed,
-        "k1_long_n_iters": int(pmax_traj.size),
+        "k1_long_n_iters": n_iters,
+        "k1_long_relion_missing_iterations": missing_relion,
+        "k1_long_command": cmd,
         "k1_long_recovar_wall_times_trajectory": perf_ledger.get("wall_times_trajectory", []),
         "k1_long_recovar_setup_phase_seconds": perf_ledger.get("setup_phase_seconds", {}),
         "k1_long_recovar_timing_summary": perf_ledger.get("timing_summary", {}),
@@ -406,6 +474,10 @@ def test_em_parity_long_k1_full(tmp_path):
     if bad_iters:
         print(f"  iters with |ΔPmax|>1e-3: {bad_iters}", file=sys.stderr, flush=True)
 
+    assert not missing_relion, (
+        f"RECOVAR ran {n_iters} numbered iterations but the RELION reference has no half-1 model for "
+        f"iteration(s) {missing_relion}; the trajectories stopped at different iterations"
+    )
     assert res_diff_angstrom <= 0.5, (
         f"K=1 long FSC<0.5 resolution gap {res_diff_angstrom:.2f} Å exceeds threshold 0.5 Å "
         f"(recovar={recovar_res_05:.2f}, RELION={relion_res_05:.2f})"
