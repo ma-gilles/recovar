@@ -62,8 +62,11 @@ K1_LONG_GT_VOLUME = K1_LONG_FIXTURE_DIR / "reference_gt.mrc"
 # from accidentally comparing native VDAM against an auto-refine trajectory.
 K1_NATIVE_RELION_DIR = K1_LONG_FIXTURE_DIR / "relion_initialmodel_k1_it008"
 
-# 256² 50k K=4 — likely needs to be built via prepare_relion_multiclass_parity_benchmark.py
-K4_LONG_FIXTURE_DIR = FIXTURE_BASE / "data_pdb_k4_50k_256"
+# 256² 50k K=4. The curated copy lives outside FIXTURE_BASE (quota); select it with
+# EM_PARITY_LONG_K4_FIXTURE_DIR=/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_fixtures/data_pdb_k4_50k_256.
+K4_LONG_FIXTURE_DIR = Path(
+    os.environ.get("EM_PARITY_LONG_K4_FIXTURE_DIR", str(FIXTURE_BASE / "data_pdb_k4_50k_256"))
+)
 K4_LONG_RELION_DIR = K4_LONG_FIXTURE_DIR / "relion_pdb_k4_os0_ref"
 K4_LONG_DATA_STAR = K4_LONG_FIXTURE_DIR / "particles.star"
 
