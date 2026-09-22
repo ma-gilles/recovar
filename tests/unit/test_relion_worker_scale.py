@@ -993,6 +993,20 @@ def test_numbered_scale_telemetry_brackets_scoring_and_mstep_boundaries():
     assert '"relion_scale_follower_scales_numbered_post_mstep_trajectory"' in to_result_dict_source
 
 
+def test_relion_norm_scale_updates_are_not_disabled_for_k_class():
+    source = inspect.getsource(refine_single_volume)
+    update_start = source.index("can_update_norm_scale = (")
+    update_source = source[update_start : source.index("history.record_noise_and_tau2(", update_start)]
+
+    assert "not k_class_enabled" not in update_source
+    assert "update_relion_norm_scale_corrections(" in update_source
+    assert "experiment_datasets[_half_idx].n_units" in update_source
+    assert "np.zeros(int(experiment_datasets[_half_idx].n_units), dtype=np.int64)" in update_source
+    assert "_format_relion_correction_range(norm_scale_update.image_corrections_per_half[0])" in update_source
+    assert "_format_relion_correction_range(norm_scale_update.image_corrections_per_half[1])" in update_source
+    assert "np.min(np.asarray(norm_scale_update.image_corrections_per_half" not in update_source
+
+
 def test_sparse_follower_scale_replay_replaces_state_before_remap_and_telemetry():
     source = inspect.getsource(_dispatch_relion_follower_scale_for_numbered_iteration)
     replay_lookup = source.index(

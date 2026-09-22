@@ -144,6 +144,25 @@ def test_class_weight_history_snapshots_mstep_and_full_posterior():
     np.testing.assert_array_equal(history.class_mstep_weight_trajectory, [[0.25, 0.75]])
     np.testing.assert_array_equal(history.class_full_posterior_weight_trajectory, [[0.5, 0.5]])
 
+def test_kclass_weight_trajectories_record_mstep_and_full_posterior_provenance():
+    """Full-chain NPZ output must expose the class-mass split used in parity debugging."""
+
+    import inspect
+
+    from recovar.em.helpers import iteration_history
+    from recovar.em.refinement import iteration_loop
+
+    source = inspect.getsource(iteration_loop.refine_single_volume)
+    assert "history.record_class_weights(" in source
+
+    import scripts.run_full_refinement as run_full_refinement
+
+    save_source = inspect.getsource(run_full_refinement)
+    assert "iteration_history.add_class_history_artifacts(save_dict, result" in save_source
+    artifact_source = inspect.getsource(iteration_history.add_class_history_artifacts)
+    assert '"class_mstep_weight_trajectory"' in artifact_source
+    assert '"class_full_posterior_weight_trajectory"' in artifact_source
+
 def test_significance_dump_work_is_gated_before_scoring(monkeypatch, tmp_path):
     """A future-only dump request must not activate diagnostic scoring work."""
 
