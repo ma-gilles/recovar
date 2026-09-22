@@ -913,6 +913,28 @@ def _prepare_coarse_relion_projector(
     return jnp.asarray(projector, dtype=dtype)
 
 
+def _class_stacked_coarse_relion_projector(
+    projector, n_classes, *, use_float64_scoring, use_float64_projections,
+):
+    """Upload a coarse PPref as ``(n_classes, z, y, x_half)``.
+
+    K=1 callers may pass one ``(z, y, x_half)`` slab, such as the host-compacted
+    firstiter-CC projector; its class axis is added on the host before upload.
+    """
+    if np.ndim(projector) == 3 and int(n_classes) == 1:
+        projector = projector[None]
+    projector = _prepare_coarse_relion_projector(
+        projector, use_float64_scoring=use_float64_scoring,
+        use_float64_projections=use_float64_projections,
+    )
+    if projector.ndim != 4 or int(projector.shape[0]) != int(n_classes):
+        raise ValueError(
+            "relion_projector_half must have shape "
+            f"({n_classes}, z, y, x_half), or (z, y, x_half) for K=1; got {projector.shape}",
+        )
+    return projector
+
+
 def _compute_k_class_significance_batched(
     experiment_dataset,
     means,
@@ -1048,15 +1070,10 @@ def _compute_k_class_significance_batched(
     if use_relion_projector and relion_projector_r_max is None:
         raise ValueError("relion_projector_r_max is required when relion_projector_half is provided")
     if use_relion_projector:
-        relion_projector_half = _prepare_coarse_relion_projector(
-            relion_projector_half, use_float64_scoring=use_float64_scoring,
+        relion_projector_half = _class_stacked_coarse_relion_projector(
+            relion_projector_half, n_classes, use_float64_scoring=use_float64_scoring,
             use_float64_projections=use_float64_projections,
         )
-        if relion_projector_half.ndim != 4 or int(relion_projector_half.shape[0]) != n_classes:
-            raise ValueError(
-                "relion_projector_half must have shape "
-                f"({n_classes}, z, y, x_half), got {relion_projector_half.shape}",
-            )
     if projection_padding_factor > 1 and not use_relion_projector:
         from recovar.reconstruction.relion_functions import pad_volume_for_projection
 
