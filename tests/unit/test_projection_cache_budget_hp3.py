@@ -109,7 +109,9 @@ def test_per_particle_launches_pad_to_rungs_with_zeroed_spare_rows(monkeypatch):
         calls.append((np.asarray(block).copy(), np.asarray(rotations_block).copy()))
         return volume
 
-    monkeypatch.setattr(adjoint_mod, "_adjoint_slice_volume_windowed", fake_adjoint)
+    # 41128dcd0 made per-particle launches donate the accumulator; the
+    # donating adjoint keeps the non-donating positional signature.
+    monkeypatch.setattr(adjoint_mod, "_adjoint_slice_volume_windowed_donating", fake_adjoint)
     monkeypatch.delenv("RECOVAR_RELION_X_HALF_BP_PARTICLE_POOL_SIZE", raising=False)
     adjoint_mod._accumulate_relion_x_half_per_particle_launches(
         values, ctf_values, rotations, actual_counts, jnp.zeros((4,), jnp.complex64), jnp.zeros((4,), jnp.float32),
