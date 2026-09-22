@@ -59,7 +59,9 @@ from recovar.em.diagnostics.iteration import (
     _replay_manifest_array,
     _save_bpref_accumulators,
     _save_iteration_intermediates,
+    _save_iteration_particle_states,
     _significance_dump_half_indices,
+    _source_image_indices,
 )
 from recovar.em.diagnostics.relion_replay import (
     _apply_replay_correction_overrides,
@@ -1908,6 +1910,7 @@ def refine_single_volume(
         iter_sig_count_parts: list[np.ndarray] = []
         iter_recorded_sig_counts = None
         iter_recorded_sig_count_parts: list[np.ndarray] = []
+        iter_significant_counts_per_half = [None, None]
         use_adaptive = state.adaptive_oversampling > 0 and not use_local and effective_rotations.shape[0] > 16
         # Track the rotation grids used for pose extraction.
         # When adaptive oversampling is active, ha_k indices refer to the
@@ -2620,6 +2623,7 @@ def refine_single_volume(
             )
             if score_result.significant_counts is not None:
                 score_sig_counts = np.asarray(score_result.significant_counts, dtype=np.int32)
+                iter_significant_counts_per_half[k] = score_sig_counts
                 iter_recorded_sig_count_parts.append(score_sig_counts)
                 if not k_class_enabled:
                     iter_sig_count_parts.append(score_sig_counts)
@@ -3488,6 +3492,7 @@ def refine_single_volume(
         ]
         new_iter_best_rotations = [None, None]
         new_iter_best_rotation_eulers = [None, None]
+        new_iter_relative_translations = [None, None]
         new_iter_best_translations = [None, None]
         # Preserve the configured dtype for rotations and translation updates.
         # Explicit source Euler metadata stays float64; legacy matrix/grid
@@ -3531,6 +3536,7 @@ def refine_single_volume(
                 best_trans = np.asarray(current_translations)[trans_idx]
             new_iter_best_rotations[k] = best_rots
             new_iter_best_rotation_eulers[k] = best_eulers
+            new_iter_relative_translations[k] = best_trans
             new_iter_best_translations[k] = _relion_metadata_translations(
                 prior_iter_best_translations[k],
                 best_trans,
@@ -3543,6 +3549,20 @@ def refine_single_volume(
             [np.asarray(e).copy() if e is not None else None for e in new_iter_best_rotation_eulers],
             [np.asarray(t).copy() if t is not None else None for t in new_iter_best_translations],
         )
+        if debug.save_intermediates_dir is not None:
+            _save_iteration_particle_states(
+                debug.save_intermediates_dir,
+                iteration=iteration,
+                rotation_matrices_per_half=new_iter_best_rotations,
+                rotation_eulers_deg_per_half=new_iter_best_rotation_eulers,
+                relative_translations_pixels_per_half=new_iter_relative_translations,
+                absolute_translations_pixels_per_half=new_iter_best_translations,
+                max_posterior_per_half=max_posterior_per_half,
+                significant_counts_per_half=iter_significant_counts_per_half,
+                hard_assignments_per_half=hard_assignments,
+                coarse_hard_assignments_per_half=coarse_ha,
+                original_image_indices_per_half=[_source_image_indices(ds) for ds in experiment_datasets],
+            )
 
         current_rotation_matrices_combined = concatenate_pose_stacks_or_none(
             new_iter_best_rotations,

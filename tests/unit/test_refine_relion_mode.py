@@ -12555,6 +12555,64 @@ class TestRelionModeSmokeTest:
         assert (out_dir / "it000_half1_unreg.mrc").exists()
         assert (out_dir / "it000_half2_unreg.mrc").exists()
 
+    @pytest.mark.parametrize("n_classes", [1, 2])
+    def test_save_intermediates_writes_source_aligned_particle_states(
+        self,
+        half_datasets,
+        init_volume,
+        translations,
+        tmp_path,
+        n_classes,
+    ):
+        """Each numbered iteration saves resolved per-particle poses beside the maps (final-Q 68ac9d05ab)."""
+
+        out_dir = tmp_path / "intermediates"
+        k_class = (
+            KClassOptions()
+            if n_classes == 1
+            else KClassOptions(
+                n_classes=n_classes,
+                init_class_log_priors=np.log(np.full(n_classes, 1.0 / n_classes, dtype=np.float64)),
+            )
+        )
+        refine_single_volume(
+            half_datasets,
+            init_volume,
+            jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
+            jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
+            translations,
+            options=RefinementOptions(
+                disc_type="linear_interp",
+                schedule=RefinementSchedule(
+                    max_iter=1,
+                    init_current_size=16,
+                    init_healpix_order=2,
+                    max_healpix_order=3,
+                ),
+                batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=N_ROTATIONS),
+                adaptive=AdaptiveOptions(adaptive_oversampling=0),
+                debug=EngineDebugOptions(
+                    save_intermediates_dir=str(out_dir),
+                    save_intermediates_skip_unregularized=True,
+                ),
+                k_class=k_class,
+            ),
+        )
+
+        for half, dataset in enumerate(half_datasets, start=1):
+            with np.load(out_dir / f"it000_particle_state_half{half}.npz") as state:
+                n = int(dataset.n_units)
+                np.testing.assert_array_equal(state["half_local_indices"], np.arange(n))
+                assert state["rotation_matrices"].shape == (n, 3, 3)
+                assert state["rotation_eulers_deg"].shape == (n, 3)
+                assert state["relative_translations_pixels"].shape == (n, 2)
+                assert state["absolute_translations_pixels"].shape == (n, 2)
+                assert state["max_posterior"].shape == (n,)
+                assert state["fine_hard_assignment"].shape == (n,)
+                assert state["original_image_indices"].shape == (n,)
+                np.testing.assert_array_equal(state["one_based_iteration"], [1])
+                np.testing.assert_array_equal(state["half"], [half])
+
     def test_k1_save_intermediates_can_skip_unregularized_half_maps(
         self,
         half_datasets,
