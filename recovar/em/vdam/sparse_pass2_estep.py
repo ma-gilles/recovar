@@ -670,6 +670,9 @@ def _run_sparse_pass2_initial_model_estep(
             do_gridding_correction=bool(group_kwargs.get("do_gridding_correction", False)),
             square_window=bool(group_kwargs.get("square_window", False)),
             use_float64_scoring=bool(group_kwargs.get("use_float64_scoring", False)),
+            # Request the consumer precision explicitly; None keeps the complex128
+            # host PPref, which the complex64 texture projector cannot consume.
+            use_float64_projections=bool(group_kwargs.get("use_float64_projections", False)),
             relion_projector_half=relion_projector_half_by_class,
             relion_projector_r_max=relion_projector_r_max,
             debug_iteration=group_kwargs.get("debug_iteration"),
