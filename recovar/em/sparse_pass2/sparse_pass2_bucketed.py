@@ -309,10 +309,8 @@ from recovar.em.sparse_pass2.sparse_pass2_scoring import (
 from recovar.em.sparse_pass2.sparse_pass2_wavg import (
     _make_relion_wavg_rectangle,
     _relion_cuda_translate_wavg_norm_images,
-    _relion_wavg_atomic_triplet_terms,
+    _relion_wavg_add_triplet_pixels_chunked,
     _relion_wavg_direct_norm_per_image,
-    _relion_wavg_rectangle_triplet_terms,
-    _relion_wavg_sequential_triplet_terms,
     _replace_low_shell_noise_with_relion_wavg_direct_residual,
     _replace_untranslated_low_shell_norm_power,
     _select_optional_wavg_exact_pixels,
@@ -472,9 +470,7 @@ _BUCKET_TAIL_SNAPSHOT_NAMES = (
     "processed_score_half_for_noise",
     "proj_abs2_for_noise",
     "proj_for_noise",
-    "raw_translated_wavg_for_atomic",
     "raw_translated_wavg_for_norm",
-    "raw_translated_wavg_rectangle",
     "reconstruction_probs",
     "relion_norm_high_shell",
     "relion_wavg_atomic_direct_noise",
@@ -1633,9 +1629,7 @@ def compute_pass2_stats_sparse_bucketed(
         processed_score_half_for_noise = snap.get("processed_score_half_for_noise")
         proj_abs2_for_noise = snap.get("proj_abs2_for_noise")
         proj_for_noise = snap.get("proj_for_noise")
-        raw_translated_wavg_for_atomic = snap.get("raw_translated_wavg_for_atomic")
         raw_translated_wavg_for_norm = snap.get("raw_translated_wavg_for_norm")
-        raw_translated_wavg_rectangle = snap.get("raw_translated_wavg_rectangle")
         reconstruction_probs = snap.get("reconstruction_probs")
         relion_norm_high_shell = snap.get("relion_norm_high_shell")
         relion_wavg_atomic_direct_noise = snap.get("relion_wavg_atomic_direct_noise")
@@ -1719,35 +1713,10 @@ def compute_pass2_stats_sparse_bucketed(
             block_noise_shells_np = np.asarray(block_noise_shells, dtype=np.float64)
             relion_wavg_atomic_scale_triplet_pixels_np = None
             if relion_wavg_atomic_scale_aa:
-                from recovar.cuda_backproject import (
-                    relion_wavg_rotation_atomic_triplet_add_f32,
-                )
-
-                if direct_ctf_rfloat_recon is None:
-                    atomic_triplet_terms = _relion_wavg_atomic_triplet_terms(
-                        proj_for_noise,
-                        proj_abs2_for_noise,
-                        summed_masked_noise,
-                        ctf_probs,
-                        noise_variance_for_noise,
-                        bucket_scale_for_stats,
-                        raw_translated_wavg_for_atomic,
-                        noise_probs,
-                    )
-                else:
-                    atomic_triplet_terms = _relion_wavg_sequential_triplet_terms(
-                        proj_for_noise,
-                        direct_ctf_rfloat_recon,
-                        bucket_scale_for_stats,
-                        raw_translated_wavg_for_atomic,
-                        noise_probs,
-                    )
-                atomic_triplet_terms = _relion_wavg_rectangle_triplet_terms(
-                    atomic_triplet_terms,
-                    raw_translated_wavg_rectangle,
-                    noise_probs,
-                    relion_wavg_rectangle.exact_positions,
-                )
+                # The Wavg rectangle is translated here, per image chunk, from
+                # the snapshotted image rather than in the loop body, so no
+                # bucket carries a [batch, translations, pixels] complex64
+                # rectangle through the pipelined tail.
                 atomic_triplet_pixels = jnp.zeros(
                     (
                         batch,
@@ -1758,9 +1727,21 @@ def compute_pass2_stats_sparse_bucketed(
                 )
                 relion_wavg_atomic_scale_triplet_pixels_np = np.asarray(
                     jax.block_until_ready(
-                        relion_wavg_rotation_atomic_triplet_add_f32(
-                            atomic_triplet_terms,
+                        _relion_wavg_add_triplet_pixels_chunked(
                             atomic_triplet_pixels,
+                            processed_score_half=processed_score_half_for_noise,
+                            translation_angles=relion_score_translation_angles,
+                            rectangle=relion_wavg_rectangle,
+                            image_shape=image_shape,
+                            proj=proj_for_noise,
+                            proj_abs2=proj_abs2_for_noise,
+                            summed_shifted=summed_masked_noise,
+                            ctf_posterior=ctf_probs,
+                            noise_variance=noise_variance_for_noise,
+                            scale=bucket_scale_for_stats,
+                            raw_ctf=direct_ctf_rfloat_recon,
+                            posterior=noise_probs,
+                            max_block_bytes=max_noise_block_bytes,
                         )
                     ),
                     dtype=np.float32,
@@ -2264,8 +2245,6 @@ def compute_pass2_stats_sparse_bucketed(
                 window_indices,
                 image_shape,
             )
-        raw_translated_wavg_for_atomic = None
-        raw_translated_wavg_rectangle = None
         relion_wavg_rectangle = None
         diagnostic_wavg_atomic_capture = bool(
             accumulate_noise
@@ -2316,15 +2295,6 @@ def compute_pass2_stats_sparse_bucketed(
                 recon_window_indices,
                 reconstruction_current_size=mstep_current_size,
             )
-            raw_translated_wavg_rectangle = _relion_cuda_translate_wavg_norm_images(
-                processed_score_half_for_noise,
-                relion_score_translation_angles,
-                relion_wavg_rectangle.centered_indices,
-                image_shape,
-            )
-            raw_translated_wavg_for_atomic = raw_translated_wavg_rectangle[
-                :, :, relion_wavg_rectangle.exact_positions
-            ]
         if relion_wavg_atomic_direct_noise:
             direct_noise_log_key = relion_wavg_current_size
             if direct_noise_log_key not in _relion_wavg_direct_noise_log_keys:
@@ -3249,40 +3219,21 @@ def compute_pass2_stats_sparse_bucketed(
                             scale_correction_pixel_mask,
                         )
                         if relion_wavg_atomic_scale_aa:
-                            from recovar.cuda_backproject import (
-                                relion_wavg_rotation_atomic_triplet_add_f32,
-                            )
-
-                            if direct_ctf_rfloat_recon is None:
-                                atomic_triplet_terms = _relion_wavg_atomic_triplet_terms(
-                                    proj_for_noise_chunk,
-                                    proj_abs2_for_noise_chunk,
-                                    summed_masked_noise,
-                                    ctf_probs,
-                                    noise_variance_for_noise,
-                                    bucket_scale_for_stats,
-                                    raw_translated_wavg_for_atomic,
-                                    noise_probs,
-                                )
-                            else:
-                                atomic_triplet_terms = _relion_wavg_sequential_triplet_terms(
-                                    proj_for_noise_chunk,
-                                    direct_ctf_rfloat_recon,
-                                    bucket_scale_for_stats,
-                                    raw_translated_wavg_for_atomic,
-                                    noise_probs,
-                                )
-                            atomic_triplet_terms = _relion_wavg_rectangle_triplet_terms(
-                                atomic_triplet_terms,
-                                raw_translated_wavg_rectangle,
-                                noise_probs,
-                                relion_wavg_rectangle.exact_positions,
-                            )
-                            relion_wavg_atomic_scale_triplet_pixels = (
-                                relion_wavg_rotation_atomic_triplet_add_f32(
-                                    atomic_triplet_terms,
-                                    relion_wavg_atomic_scale_triplet_pixels,
-                                )
+                            relion_wavg_atomic_scale_triplet_pixels = _relion_wavg_add_triplet_pixels_chunked(
+                                relion_wavg_atomic_scale_triplet_pixels,
+                                processed_score_half=processed_score_half_for_noise,
+                                translation_angles=relion_score_translation_angles,
+                                rectangle=relion_wavg_rectangle,
+                                image_shape=image_shape,
+                                proj=proj_for_noise_chunk,
+                                proj_abs2=proj_abs2_for_noise_chunk,
+                                summed_shifted=summed_masked_noise,
+                                ctf_posterior=ctf_probs,
+                                noise_variance=noise_variance_for_noise,
+                                scale=bucket_scale_for_stats,
+                                raw_ctf=direct_ctf_rfloat_recon,
+                                posterior=noise_probs,
+                                max_block_bytes=max_noise_block_bytes,
                             )
                         if chunked_scale_aa_target_rows.size:
                             selected = jnp.asarray(

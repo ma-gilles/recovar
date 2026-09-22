@@ -432,12 +432,228 @@ def _relion_wavg_rectangle_triplet_terms(
         )
 
     image_power = _relion_wavg_rectangle_image_power(raw_shifted, posterior)
+    return _embed_relion_wavg_rectangle_terms(exact_terms, image_power, exact_positions)
+
+
+def _embed_relion_wavg_rectangle_terms(exact_terms, image_power, exact_positions):
+    """Rectangle ``[XA, AA, diff2]`` terms: image power everywhere, exact terms on the disk."""
+
+    exact_terms = jnp.asarray(exact_terms, dtype=jnp.float32)
+    image_power = jnp.asarray(image_power, dtype=jnp.float32)
+    exact_positions = jnp.asarray(exact_positions, dtype=jnp.int32)
     rectangle_terms = jnp.zeros(
-        exact_terms.shape[:2] + (raw_shifted.shape[-1], 3),
+        exact_terms.shape[:2] + (image_power.shape[-1], 3),
         dtype=jnp.float32,
     )
     rectangle_terms = rectangle_terms.at[..., 2].set(image_power)
     return rectangle_terms.at[:, :, exact_positions, :].set(exact_terms)
+
+
+# Separate programs for the image-chunked Wavg stage. The rectangle power is
+# jitted exactly as it is inside ``_relion_wavg_rectangle_triplet_terms``, and
+# the contraction keeps the whole bucket batch (see
+# ``_relion_wavg_add_triplet_pixels_chunked``).
+_relion_wavg_shifted_power_jit = jax.jit(_relion_wavg_shifted_power)
+_relion_wavg_rectangle_power_contraction_jit = jax.jit(_relion_wavg_rectangle_power_contraction)
+_embed_relion_wavg_rectangle_terms_jit = jax.jit(_embed_relion_wavg_rectangle_terms)
+
+
+def _relion_wavg_chunk_bytes_per_image(
+    n_translations: int,
+    n_rotations: int,
+    n_rectangle_pixels: int,
+    n_exact_pixels: int,
+) -> int:
+    """Device bytes one image adds to an image chunk of the Wavg triplet stage.
+
+    Counts the chunk-local arrays: the translated rectangle and its exact
+    gather (complex64, one row per translation), their float32 powers, the
+    per-rotation exact ``[XA, AA, diff2]`` terms with the working set of the
+    sequential translation reducer (reference re/im, three accumulators and
+    the loop temporaries), and the zero-filled and embedded rectangle terms
+    handed to the atomic add.
+    """
+
+    t, r, rect, exact = (
+        int(n_translations),
+        int(n_rotations),
+        int(n_rectangle_pixels),
+        int(n_exact_pixels),
+    )
+    translated = t * (rect + exact) * 8
+    powers = t * (rect + exact) * 4
+    exact_terms = r * exact * 4 * 11
+    rectangle_terms = r * rect * 4 * 3 * 2
+    return translated + powers + exact_terms + rectangle_terms
+
+
+def _relion_wavg_image_chunk_ranges(batch: int, bytes_per_image: int, max_block_bytes: int):
+    """Contiguous ``(start, stop)`` image ranges whose chunk working set fits the budget.
+
+    At least one image goes in each chunk, so an image larger than the budget
+    is still processed alone.
+    """
+
+    batch = int(batch)
+    images_per_chunk = max(1, int(max_block_bytes) // max(1, int(bytes_per_image)))
+    return [(start, min(start + images_per_chunk, batch)) for start in range(0, batch, images_per_chunk)]
+
+
+def _image_rows(values, start, stop, batch):
+    """Rows ``start:stop`` of a batch-first array; the array itself for the whole batch."""
+
+    if values is None or (start == 0 and stop == batch):
+        return values
+    return values[start:stop]
+
+
+def _concat_image_chunks(chunks):
+    return chunks[0] if len(chunks) == 1 else jnp.concatenate(chunks, axis=0)
+
+
+@partial(jax.jit, donate_argnums=0)
+def _write_image_rows(buffer, rows, start):
+    return jax.lax.dynamic_update_slice_in_dim(buffer, rows, start, axis=0)
+
+
+def _place_image_rows(buffer, rows, start, batch):
+    """Copy an image chunk into rows ``start:`` of a whole-batch buffer, in place.
+
+    The buffer is allocated on first use; a chunk that is the whole batch is
+    returned as it is. Assembling in place keeps the whole-batch operand from
+    existing twice, as it would while concatenating a list of chunks.
+    """
+
+    if int(rows.shape[0]) == int(batch):
+        return rows
+    if buffer is None:
+        buffer = jnp.zeros((int(batch),) + tuple(rows.shape[1:]), dtype=rows.dtype)
+    return _write_image_rows(buffer, rows, start)
+
+
+def _relion_wavg_add_triplet_pixels_chunked(
+    accumulator,
+    *,
+    processed_score_half,
+    translation_angles,
+    rectangle,
+    image_shape,
+    proj,
+    proj_abs2,
+    summed_shifted,
+    ctf_posterior,
+    noise_variance,
+    scale,
+    raw_ctf,
+    posterior,
+    max_block_bytes,
+):
+    """Add one rotation block's RELION Wavg ``[XA, AA, diff2]`` atomics to ``accumulator``.
+
+    Same result per image as translating the whole bucket's Wavg rectangle,
+    gathering its exact pixels, forming the exact terms
+    (``_relion_wavg_sequential_triplet_terms`` when ``raw_ctf`` is given, else
+    ``_relion_wavg_atomic_triplet_terms``), embedding them with
+    ``_relion_wavg_rectangle_triplet_terms`` and issuing
+    ``relion_wavg_rotation_atomic_triplet_add_f32``, but the complex64
+    ``[images, translations, pixels]`` rectangle and its gather only ever
+    exist for one image chunk, sized by ``max_block_bytes``.
+
+    Every per-image stage is elementwise over images and is computed per
+    chunk. The two contractions over translations (rectangle image power and,
+    on the algebraic path, the exact image power) run once over the whole
+    batch on operands assembled from the chunks: a batched GEMM's algorithm,
+    and with it the summation order, may depend on the batch count, so
+    splitting it would change the float32 result. The rectangle power is
+    squared in its own program exactly as inside the fused rectangle program;
+    the algebraic path squares with the same eager operations its own body
+    uses. The atomic add receives the same per-image summands in either
+    layout; their order is hardware scheduled in both.
+
+    ``accumulator`` is ``[images, rectangle pixels, 3]`` float32; the updated
+    accumulator is returned.
+    """
+
+    from recovar.cuda_backproject import relion_wavg_rotation_atomic_triplet_add_f32
+
+    batch, n_rotations, n_translations = (int(v) for v in posterior.shape)
+    exact_positions = rectangle.exact_positions
+    image_ranges = _relion_wavg_image_chunk_ranges(
+        batch,
+        _relion_wavg_chunk_bytes_per_image(
+            n_translations,
+            n_rotations,
+            int(rectangle.centered_indices.size),
+            int(exact_positions.size),
+        ),
+        max_block_bytes,
+    )
+
+    rectangle_power = None
+    exact_values = None
+    for start, stop in image_ranges:
+        raw_rectangle = _relion_cuda_translate_wavg_norm_images(
+            _image_rows(processed_score_half, start, stop, batch),
+            translation_angles,
+            rectangle.centered_indices,
+            image_shape,
+        )
+        raw_exact = raw_rectangle[:, :, exact_positions]
+        rectangle_power = _place_image_rows(
+            rectangle_power,
+            _relion_wavg_shifted_power_jit(raw_rectangle),
+            start,
+            batch,
+        )
+        del raw_rectangle
+        if raw_ctf is None:
+            exact_chunk = _relion_wavg_shifted_power(raw_exact)
+        else:
+            exact_chunk = _relion_wavg_sequential_triplet_terms(
+                _image_rows(proj, start, stop, batch),
+                _image_rows(raw_ctf, start, stop, batch),
+                _image_rows(scale, start, stop, batch),
+                raw_exact,
+                _image_rows(posterior, start, stop, batch),
+            )
+        del raw_exact
+        exact_values = _place_image_rows(exact_values, exact_chunk, start, batch)
+        del exact_chunk
+
+    image_power = _relion_wavg_rectangle_power_contraction_jit(rectangle_power, posterior)
+    del rectangle_power
+    if raw_ctf is None:
+        exact_power, exact_values = exact_values, None
+        exact_terms = _relion_wavg_atomic_triplet_terms(
+            proj,
+            proj_abs2,
+            summed_shifted,
+            ctf_posterior,
+            noise_variance,
+            scale,
+            None,
+            posterior,
+            image_power=_relion_wavg_rectangle_power_contraction(exact_power, posterior),
+        )
+        del exact_power
+    else:
+        exact_terms, exact_values = exact_values, None
+
+    accumulated = []
+    for start, stop in image_ranges:
+        rectangle_terms = _embed_relion_wavg_rectangle_terms_jit(
+            _image_rows(exact_terms, start, stop, batch),
+            _image_rows(image_power, start, stop, batch),
+            exact_positions,
+        )
+        accumulated.append(
+            relion_wavg_rotation_atomic_triplet_add_f32(
+                rectangle_terms,
+                _image_rows(accumulator, start, stop, batch),
+            )
+        )
+        del rectangle_terms
+    return _concat_image_chunks(accumulated)
 
 
 def _relion_wavg_direct_norm_per_image(
@@ -479,12 +695,18 @@ def _relion_wavg_atomic_triplet_terms(
     scale,
     raw_shifted_images,
     posterior,
+    *,
+    image_power=None,
 ):
     """Form per-rotation Wavg ``[XA, AA, diff2]`` float32 atomic operands.
 
     RELION accumulates all three quantities in one CUDA thread after its
     translation loop. XA and AA are returned in scale-correction units;
     diff2 stays in the raw residual units used by ``wsum_sigma2_noise``.
+
+    ``image_power`` optionally supplies the posterior-weighted translated
+    image power ``[B, R, P]`` computed as below; ``raw_shifted_images`` is
+    then unused (``_relion_wavg_add_triplet_pixels_chunked``).
     """
 
     proj = jnp.asarray(proj, dtype=jnp.complex64)
@@ -493,7 +715,6 @@ def _relion_wavg_atomic_triplet_terms(
     ctf_posterior = jnp.asarray(ctf_posterior, dtype=jnp.float32)
     noise_variance = jnp.asarray(noise_variance, dtype=jnp.float32).reshape(-1)
     scale = jnp.asarray(scale, dtype=jnp.float32).reshape(-1)
-    raw_shifted_images = jnp.asarray(raw_shifted_images, dtype=jnp.complex64)
     posterior = jnp.asarray(posterior, dtype=jnp.float32)
 
     ctf_has_mass = ctf_posterior != 0.0
@@ -515,19 +736,23 @@ def _relion_wavg_atomic_triplet_terms(
     xa = (xa_raw / safe_scale[:, None, None]).astype(jnp.float32)
     aa = (aa_raw / (safe_scale[:, None, None] ** 2)).astype(jnp.float32)
 
-    # RELION's g_img input is the raw translated preprocessed image, not the
-    # CTF/noise-weighted BPref numerator used by RECOVAR's adjoint path.
-    shifted_power = (raw_shifted_images.real * raw_shifted_images.real).astype(jnp.float32)
-    shifted_power = jax.lax.optimization_barrier(shifted_power)
-    shifted_power = (
-        shifted_power + raw_shifted_images.imag * raw_shifted_images.imag
-    ).astype(jnp.float32)
-    image_power = jnp.einsum(
-        "brt,btp->brp",
-        posterior,
-        shifted_power,
-        preferred_element_type=jnp.float32,
-    ).astype(jnp.float32)
+    if image_power is None:
+        # RELION's g_img input is the raw translated preprocessed image, not the
+        # CTF/noise-weighted BPref numerator used by RECOVAR's adjoint path.
+        raw_shifted_images = jnp.asarray(raw_shifted_images, dtype=jnp.complex64)
+        shifted_power = (raw_shifted_images.real * raw_shifted_images.real).astype(jnp.float32)
+        shifted_power = jax.lax.optimization_barrier(shifted_power)
+        shifted_power = (
+            shifted_power + raw_shifted_images.imag * raw_shifted_images.imag
+        ).astype(jnp.float32)
+        image_power = jnp.einsum(
+            "brt,btp->brp",
+            posterior,
+            shifted_power,
+            preferred_element_type=jnp.float32,
+        ).astype(jnp.float32)
+    else:
+        image_power = jnp.asarray(image_power, dtype=jnp.float32)
     diff2 = (
         (image_power + aa_raw)
         - jnp.asarray(2.0, dtype=jnp.float32) * xa_raw

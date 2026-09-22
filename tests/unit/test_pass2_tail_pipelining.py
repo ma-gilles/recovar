@@ -1,6 +1,8 @@
 """Bucket-tail pipelining: ordered worker, error propagation, opt-in knob."""
 
 import gc
+import inspect
+import re
 import threading
 import time
 
@@ -84,8 +86,17 @@ def test_runner_reraises_worker_failure_on_main_thread():
 
 def test_snapshot_names_are_the_tail_inputs():
     names = bucketed._BUCKET_TAIL_SNAPSHOT_NAMES
-    assert len(names) == len(set(names)) == 35
-    for required in ("image_indices", "probs", "best_argmax", "log_Z", "proj_for_noise", "bucket_size"):
+    tail_reads = set(re.findall(r'snap\.get\("(\w+)"\)', inspect.getsource(bucketed.compute_pass2_stats_sparse_bucketed)))
+    assert len(names) == len(set(names)) == 32
+    assert set(names) == tail_reads
+    for required in (
+        "image_indices",
+        "probs",
+        "best_argmax",
+        "log_Z",
+        "proj_for_noise",
+        "processed_score_half_for_noise",
+    ):
         assert required in names
 
 
