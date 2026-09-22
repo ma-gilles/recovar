@@ -636,12 +636,14 @@ def test_relion_coarse_prehalf_shared_body_is_built_packaged_and_stale_checked()
 
     build_inputs = (
         "cuda_backproject.cu",
+        "device_scratch.cuh",
         include_name,
         "noise_residual.cuh",
         "vdam_trace.cuh",
         "relion_preprocess.cuh",
         "relion_vdam_mstep.cuh",
         "relion_scoring.cuh",
+        "relion_posterior.cuh",
         "sparse_pass2_posterior.cuh",
         "relion_translate_sum.cuh",
     )
@@ -655,11 +657,13 @@ def test_relion_coarse_prehalf_shared_body_is_built_packaged_and_stale_checked()
     from recovar import cuda_backproject
 
     assert cuda_backproject._CUDA_BUILD_SOURCE_NAMES == (
+        "device_scratch.cuh",
         "noise_residual.cuh",
         "vdam_trace.cuh",
         "relion_preprocess.cuh",
         "relion_vdam_mstep.cuh",
         "relion_scoring.cuh",
+        "relion_posterior.cuh",
         "sparse_pass2_posterior.cuh",
         "relion_translate_sum.cuh",
         "cuda_backproject.cu",
@@ -1080,10 +1084,13 @@ def test_k1_coarse_gaussian_exact_operand_flags_honor_default_and_opt_out(monkey
     assert "relion_coarse_gaussian_default\n                and coarse_fused_projector_enabled" in source
     # PR179's NumPy preprocessing now supplies the same unshifted operands;
     # the exact-source specialization still requires the CUDA image path.
+    # 41128dcd0 nested this preprocessing one block deeper; the anchors follow
+    # its indentation so the slices stay the NumPy branch and its unpacking.
     numpy_start = source.index("if use_relion_numpy_preprocess and not relion_cuda_preprocess:")
-    numpy_branch = source[numpy_start : source.index("\n            else:", numpy_start)]
+    numpy_branch = source[numpy_start : source.index("\n                else:", numpy_start)]
     assert "return_unshifted_score_weighted=coarse_gaussian_sincosf_enabled" in numpy_branch
-    assert "coarse_gaussian_unshifted_score_weighted" in source[numpy_start : source.index("\n        batch_scale =", numpy_start)]
+    assert "_preprocess_batch(" not in numpy_branch
+    assert "coarse_gaussian_unshifted_score_weighted" in source[numpy_start : source.index("\n            batch_scale =", numpy_start)]
     assert "if not relion_cuda_preprocess or relion_preprocess_kwargs is None:" in source
     assert "RELION CUDA image preprocessing" in source
     assert "processed_direct = _process_relion_exact_coarse_half_image(" in source
