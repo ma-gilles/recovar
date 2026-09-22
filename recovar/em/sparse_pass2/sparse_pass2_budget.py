@@ -196,7 +196,8 @@ def _nvidia_smi_visible_device_memory_bytes(output: str, visible_devices: str | 
     rows = _parse_nvidia_smi_memory_rows(output)
     if not rows:
         return None
-    if visible_devices:
+    # An unset variable exposes every device; a set but empty one exposes none.
+    if visible_devices is not None:
         tokens = [
             part.strip()
             for part in visible_devices.split(",")

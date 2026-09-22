@@ -6478,6 +6478,8 @@ def test_sparse_pass2_device_memory_probe_honors_visible_device():
     assert _nvidia_smi_visible_device_memory_bytes(smi_output, "GPU-h100") == 81559 * 1024**2
     assert _nvidia_smi_visible_device_memory_bytes(smi_output, "h100") == 81559 * 1024**2
     assert _nvidia_smi_visible_device_memory_bytes(smi_output, "-1") is None
+    # CUDA_VISIBLE_DEVICES='' hides every device (CPU runs); it is not "unset".
+    assert _nvidia_smi_visible_device_memory_bytes(smi_output, "") is None
     assert _nvidia_smi_visible_device_memory_bytes(smi_output, None) == 40960 * 1024**2
 
 
