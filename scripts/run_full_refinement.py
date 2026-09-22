@@ -663,6 +663,36 @@ def _replay_process_start_noise_broadcast(
     return False
 
 
+def _validate_replay_saved_healpix_order(
+    perturb_replay_relion_dir,
+    init_relion_iteration,
+    healpix_order,
+    *,
+    replay_prefix="run",
+):
+    """Require a mid-trajectory replay to enter with RELION's saved sampling order.
+
+    RELION sizes pass-1 images (``image_coarse_size``) at the start of an
+    expectation from the sampling state saved by the previous iteration,
+    before ``updateAngularSampling`` switches order.  A replay that starts
+    after RELION iteration N takes that pre-update order from
+    ``--healpix_order``, so it must equal ``run_itNNN_sampling.star``.
+    """
+    if perturb_replay_relion_dir is None or int(init_relion_iteration) <= 0:
+        return
+    sampling_star = (
+        Path(perturb_replay_relion_dir)
+        / f"{replay_prefix}_it{int(init_relion_iteration):03d}_sampling.star"
+    )
+    saved_order = int(relion_metadata.read_relion_sampling_metadata(sampling_star)["healpix_order"])
+    if saved_order != int(healpix_order):
+        raise ValueError(
+            f"--healpix_order {int(healpix_order)} does not match RELION's saved sampling "
+            f"order {saved_order} in {sampling_star}; a replay after RELION iteration "
+            f"{int(init_relion_iteration)} sizes pass-1 images from that order"
+        )
+
+
 class NativeGroupLayout(NamedTuple):
     """RELION group labels in RECOVAR half order plus the full model axis."""
 
@@ -2327,6 +2357,13 @@ def main():
         args.init_relion_iteration,
         args.perturb_replay_relion_dir,
     )
+    if args.frozen_boundary_dir is None:
+        # A sealed frozen boundary owns its sampling state, including coarse size.
+        _validate_replay_saved_healpix_order(
+            args.perturb_replay_relion_dir,
+            args.init_relion_iteration,
+            args.healpix_order,
+        )
 
     frozen_boundary = None
     fixed_diagnostic_source_paths = None
