@@ -354,6 +354,18 @@ def require_resident_production_configuration(**kwargs) -> None:
     """
 
     _require(bool(kwargs["relion_x_half_mstep"]), "the RELION x-half M-step is required")
+    # The dispatcher opens a persistent texture only for the compact engine and
+    # routes non-C1 symmetry there (resident_pass2_out_of_scope_reason); a
+    # direct caller that supplies either gets a named refusal, not a drop.
+    _require(
+        kwargs["relion_projector_texture"] is None,
+        "a persistent RELION projector texture belongs to the compact engine; "
+        "the resident driver projects from relion_projector_half",
+    )
+    _require(
+        kwargs["symmetry_label"] == "C1",
+        f"{kwargs['symmetry_label']} point-group reconstruction symmetry is not implemented",
+    )
     _require(
         bool(kwargs["relion_exact_fine_gaussian"])
         and kwargs["relion_firstiter_score_mode"] == "gaussian",
@@ -1192,6 +1204,7 @@ def compute_pass2_stats_resident(
     relion_f32_fine_posterior=False,
     relion_exact_fine_normalized_cc=False,
     relion_projector_half=None,
+    relion_projector_texture=None,
     relion_projector_r_max=None,
     adaptive_fraction=0.999,
     bpref_device_signature_active: bool = False,
@@ -1199,6 +1212,7 @@ def compute_pass2_stats_resident(
     include_unweighted_norm_high_shell: bool = True,
     preserve_bpref_particle_order: bool = False,
     source_faithful_spectrum_norm: bool = False,
+    symmetry_label: str = "C1",
 ):
     """Device-resident K=1 sparse pass 2; same signature and return as the compact engine.
 
@@ -1316,6 +1330,8 @@ def compute_pass2_stats_resident(
         relion_wavg_atomic_scale_aa=relion_wavg_atomic_scale_aa,
         relion_wavg_atomic_direct_noise=relion_wavg_atomic_direct_noise,
         relion_wavg_atomic_direct_norm=relion_wavg_atomic_direct_norm,
+        relion_projector_texture=relion_projector_texture,
+        symmetry_label=symmetry_label,
     )
     _require(
         bool(use_relion_f32_fine_posterior),

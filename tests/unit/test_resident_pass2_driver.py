@@ -75,6 +75,8 @@ def _production_gate_kwargs(**overrides):
         relion_wavg_atomic_scale_aa=True,
         relion_wavg_atomic_direct_noise=True,
         relion_wavg_atomic_direct_norm=False,
+        relion_projector_texture=None,
+        symmetry_label="C1",
     )
     kwargs.update(overrides)
     return kwargs
@@ -108,6 +110,8 @@ def test_production_configuration_is_accepted():
         ({"relion_wavg_atomic_direct_norm": True}, "stopped diagnostic"),
         ({"relion_firstiter_score_mode": "normalized_cc"}, "fine Gaussian"),
         ({"mstep_subtract_ctf_projection": True}, "projected reference"),
+        ({"relion_projector_texture": object()}, "persistent RELION projector texture"),
+        ({"symmetry_label": "I1"}, "I1 point-group"),
     ],
 )
 def test_gate_names_the_missing_piece(override, expected):
