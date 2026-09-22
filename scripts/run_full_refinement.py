@@ -638,6 +638,31 @@ def _resolve_replay_normcorr(perturb_replay_relion_dir, replay_relion_normcorr):
     return perturb_replay_relion_dir is not None
 
 
+def _replay_process_start_noise_broadcast(
+    replay_noise_semantics,
+    init_relion_iteration,
+    perturb_replay_relion_dir,
+):
+    """Whether replay slot 0 scores both halves with the half-1 noise spectrum.
+
+    RELION MPI initialisation broadcasts follower rank 1's sigma2_noise, so a
+    fresh start and a ``--continue`` restart both score their first expectation
+    with the half-1 spectrum.  An uninterrupted trajectory scores every later
+    iteration with each half's own model-STAR spectrum, which is the state a
+    fixed-state replay against an uninterrupted RELION run must reproduce.
+    """
+    if replay_noise_semantics == "continuation":
+        return True
+    if replay_noise_semantics != "uninterrupted":
+        raise ValueError(f"unknown replay noise semantics: {replay_noise_semantics!r}")
+    if perturb_replay_relion_dir is None or int(init_relion_iteration) <= 0:
+        raise ValueError(
+            "--replay-noise-semantics uninterrupted requires --perturb_replay_relion_dir "
+            "and --init_relion_iteration > 0"
+        )
+    return False
+
+
 class NativeGroupLayout(NamedTuple):
     """RELION group labels in RECOVAR half order plus the full model axis."""
 
@@ -1776,6 +1801,17 @@ def _parse_args(argv=None):
         "--perturb_seed for same-seed autonomous refinement.",
     )
     parser.add_argument(
+        "--replay-noise-semantics",
+        choices=("continuation", "uninterrupted"),
+        default="continuation",
+        help=(
+            "Diagnostic replay after --init_relion_iteration > 0: 'continuation' "
+            "reproduces a RELION --continue restart, which scores both halves with "
+            "the half-1 sigma2_noise at its first expectation; 'uninterrupted' keeps "
+            "each half's own model-STAR spectrum, as an uninterrupted RELION run does."
+        ),
+    )
+    parser.add_argument(
         "--final-replay-relion-dir",
         default=None,
         help=(
@@ -2285,6 +2321,11 @@ def main():
         replay_relion_references=args.state_swap_replay_relion_references,
         init_relion_iteration=args.init_relion_iteration,
         max_iter=args.max_iter,
+    )
+    replay_process_start_noise_broadcast = _replay_process_start_noise_broadcast(
+        args.replay_noise_semantics,
+        args.init_relion_iteration,
+        args.perturb_replay_relion_dir,
     )
 
     frozen_boundary = None
@@ -3650,7 +3691,13 @@ def main():
                 include_k1_mean_variance=(args.state_swap_target_relion_iteration is not None),
                 include_k1_scoring_scale=(args.state_swap_target_relion_iteration is not None),
                 strict=True,
+                process_start_noise_broadcast=replay_process_start_noise_broadcast,
                 noise_dtype=np.float64 if _double_image_preprocessing else np.float32,
+            )
+            logger.info(
+                "Replay noise semantics: %s (slot-0 process-start broadcast=%s)",
+                args.replay_noise_semantics,
+                replay_process_start_noise_broadcast,
             )
 
     final_replay_override = None
