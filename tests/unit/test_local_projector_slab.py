@@ -35,6 +35,29 @@ def test_invalid_slab_preserves_exact_path_error(shape, path_label):
     assert str(error.value) == f"{path_label} expected {reason}, got {shape}"
 
 
+@pytest.mark.parametrize("strided", [False, True])
+def test_host_singleton_uploads_only_the_selected_slab(monkeypatch, strided):
+    from recovar.em.relion import relion_projector_setup
+
+    slab = (np.arange(120).reshape(4, 6, 5) + 3j).astype(np.complex64)
+    if strided:
+        slab = slab[::-1, ::2, ::-1]
+    supplied = slab[None]
+    uploaded_shapes = []
+    original_asarray = relion_projector_setup.jnp.asarray
+
+    def record_upload(value, *args, **kwargs):
+        uploaded_shapes.append(tuple(np.shape(value)))
+        return original_asarray(value, *args, **kwargs)
+
+    monkeypatch.setattr(relion_projector_setup.jnp, "asarray", record_upload)
+    actual = prepare_local_projector_slab(supplied)
+
+    assert uploaded_shapes == [slab.shape]
+    assert actual.dtype == slab.dtype
+    np.testing.assert_array_equal(actual, slab)
+
+
 def test_existing_device_slab_is_not_copied():
     slab = jnp.ones((4, 4, 3), dtype=jnp.complex64)
     assert prepare_local_projector_slab(slab) is slab

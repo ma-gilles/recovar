@@ -286,7 +286,11 @@ def prepare_local_projector_slab(projector_half, *, path_label="local RELION pro
 
     Local scoring accepts a slab or a singleton class axis. This is shape
     normalization only: no Fourier conversion, interpolation or precision policy.
+    A host singleton drops its class axis as a NumPy view before the upload, so
+    only the 3-D slab reaches the device (no transient 4-D copy to slice).
     """
+    if isinstance(projector_half, np.ndarray) and projector_half.ndim == 4 and int(projector_half.shape[0]) == 1:
+        projector_half = np.reshape(projector_half, projector_half.shape[1:])
     slab = jnp.asarray(projector_half)
     if slab.ndim == 4:
         if int(slab.shape[0]) != 1:
