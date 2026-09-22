@@ -423,7 +423,10 @@ def test_seed_zero_halfsets_use_relion_experiment_position_parity(monkeypatch):
 def test_translation_log_prior_matches_relion_pdf_offset_scaling():
     translations = np.asarray([[0.0, 0.0], [2.0, 0.0], [0.0, -1.0]], dtype=np.float32)
 
-    prior = native_sampling._translation_log_prior(translations, voxel_size=3.0, sigma_angstrom=6.0)
+    prior = native_sampling._translation_log_prior(
+        translations, voxel_size=3.0, sigma_angstrom=6.0,
+        old_offsets=np.zeros((1, 2), dtype=np.float32),
+    )[0]
 
     np.testing.assert_allclose(prior, np.asarray([0.0, -4.5, -1.125], dtype=np.float32), rtol=1e-6)
 
@@ -431,7 +434,7 @@ def test_translation_log_prior_matches_relion_pdf_offset_scaling():
         translations,
         voxel_size=3.0,
         sigma_angstrom=6.0,
-        centers=np.asarray([[-1.0, 0.0], [0.0, 1.0]], dtype=np.float32),
+        old_offsets=np.asarray([[3.0, 0.0], [0.0, -3.0]], dtype=np.float32),
     )
     np.testing.assert_allclose(
         centered,
@@ -757,6 +760,7 @@ def test_sampling_plan_oversamples_relion_grid():
 
     assert plan.rotations.shape == (4608, 3, 3)
     assert plan.translations.shape == (116, 2)
+    np.testing.assert_array_equal(plan.translation_parent, np.repeat(np.arange(29), 4))
     assert plan.translations.dtype == np.float32
     assert plan.metadata_translations.shape == plan.translations.shape
     assert plan.metadata_translations.dtype == np.float64
@@ -1002,6 +1006,7 @@ def test_initial_sampling_state_uses_relion_angstrom_internal_units():
     assert plan.offset_step_angstrom == pytest.approx(4.25)
     assert plan.rotations.shape == (4608, 3, 3)
     assert plan.translations.shape == (116, 2)
+    np.testing.assert_array_equal(plan.translation_parent, np.repeat(np.arange(29), 4))
 
 
 def test_sampling_plan_applies_relion_radius_tolerance_in_angstroms():
@@ -2251,6 +2256,7 @@ def test_dense_estep_config_splits_fine_and_coarse_translation_priors():
         random_perturbation=0.0,
         coarse_translations=np.asarray([[99.0, 0.0]], dtype=np.float32),
         coarse_prior_translations=np.asarray([[1.0, 0.0]], dtype=np.float32),
+        translation_parent=np.asarray([0, 0], dtype=np.int64),
     )
 
     config = dense_adapter._dense_estep_config(
@@ -2266,7 +2272,7 @@ def test_dense_estep_config_splits_fine_and_coarse_translation_priors():
 
     fine_prior = np.asarray(config.engine_kwargs["translation_log_prior"], dtype=np.float32)
     coarse_prior = np.asarray(config.engine_kwargs["coarse_translation_log_prior"], dtype=np.float32)
-    np.testing.assert_allclose(fine_prior, np.asarray([[-0.125, -1.125]], dtype=np.float32), rtol=1e-6)
+    np.testing.assert_allclose(fine_prior, np.asarray([[-0.5, -0.5]], dtype=np.float32), rtol=1e-6)
     np.testing.assert_allclose(coarse_prior, np.asarray([[-0.5]], dtype=np.float32), rtol=1e-6)
 
 

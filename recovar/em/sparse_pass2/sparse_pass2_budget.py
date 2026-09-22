@@ -35,6 +35,31 @@ _AUTO_FULL_HYPOTHESIS_DEVICE_FRACTION = 0.305
 
 
 _AUTO_FUSED_KCLASS_SCORE_GATHER_DEVICE_FRACTION = 0.100
+_FUSED_KCLASS_SCORE_GATHER_FRACTION_ENV = "RECOVAR_SPARSE_PASS2_FUSED_KCLASS_SCORE_GATHER_FRACTION"
+
+
+def _fused_kclass_score_gather_device_fraction() -> float:
+    """Device-memory share the fused K-class score gather may use per live buffer.
+
+    This fraction sets the hypotheses-per-microbatch budget, which divided by
+    (classes x pair bucket size) is what actually caps images per chunk - not the
+    projection-gather byte budget, which at 100k/256 K=4 does not bind (doubling it
+    left the dominant group at 2688 chunks, job 13840889). Every per-chunk host cost
+    scales with the chunk count, so this fraction is the lever on the ~5200 chunks an
+    iteration. It stays a fraction of real device memory rather than a fixed count so
+    the cap remains dimension- and capacity-dependent.
+    """
+
+    raw = os.environ.get(_FUSED_KCLASS_SCORE_GATHER_FRACTION_ENV)
+    if raw is None or not raw.strip():
+        return _AUTO_FUSED_KCLASS_SCORE_GATHER_DEVICE_FRACTION
+    value = float(raw)
+    if not (0.0 < value <= 0.45):
+        raise ValueError(
+            f"{_FUSED_KCLASS_SCORE_GATHER_FRACTION_ENV} must be in (0, 0.45], got {raw!r}; "
+            "the budget is multiplied by the number of live gathers"
+        )
+    return value
 
 
 _AUTO_FUSED_KCLASS_LIVE_COMPLEX_GATHERS = 2
@@ -428,7 +453,7 @@ def _auto_hypotheses_per_microbatch(
             1,
             int(
                 float(device_memory_bytes)
-                * _AUTO_FUSED_KCLASS_SCORE_GATHER_DEVICE_FRACTION
+                * _fused_kclass_score_gather_device_fraction()
                 * int(fused_k_class_count)
                 / (
                     int(n_score_pixels)
@@ -710,3 +735,57 @@ def _kclass_raw_diff2_bytes(class_bucket_arrays, compact_pair_arrays, *, n_fine_
             for arrays in class_bucket_arrays
         )
     return elements * np.dtype(dtype).itemsize
+
+
+def _max_images_for_mstep_output_budget(
+    bucket_size: int,
+    n_recon_pixels: int,
+    *,
+    max_output_bytes: int,
+    numerator_complex_dtype=np.complex64,
+    denominator_real_dtype=np.float32,
+) -> int:
+    """Cap one dense M-step bucket by its materialized output rows.
+
+    ``compute_local_mstep_sums`` returns a complex numerator and a real
+    denominator with shape ``(B, R, N)``.  The adjoint path can chunk these
+    rows only after both dense outputs have been formed, so its existing block
+    budget must also constrain the input bucket that creates them.
+    """
+
+    bytes_per_image = (
+        int(bucket_size)
+        * int(n_recon_pixels)
+        * (
+            _dtype_itemsize(numerator_complex_dtype)
+            + _dtype_itemsize(denominator_real_dtype)
+        )
+    )
+    return max(1, int(max_output_bytes) // max(1, bytes_per_image))
+
+
+def _split_sparse_pass2_buckets_by_mstep_output_budget(
+    buckets,
+    *,
+    n_recon_pixels: int,
+    max_output_bytes: int,
+    numerator_complex_dtype=np.complex64,
+    denominator_real_dtype=np.float32,
+):
+    """Split dense pass-2 buckets before their full-pixel M-step outputs exist."""
+
+    split_buckets = []
+    for bucket in buckets:
+        image_indices = np.asarray(bucket["image_indices"], dtype=np.int64)
+        max_images = _max_images_for_mstep_output_budget(
+            int(bucket["bucket_size"]),
+            int(n_recon_pixels),
+            max_output_bytes=int(max_output_bytes),
+            numerator_complex_dtype=numerator_complex_dtype,
+            denominator_real_dtype=denominator_real_dtype,
+        )
+        for start in range(0, int(image_indices.size), int(max_images)):
+            split_bucket = dict(bucket)
+            split_bucket["image_indices"] = image_indices[start : start + max_images]
+            split_buckets.append(split_bucket)
+    return split_buckets

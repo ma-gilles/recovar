@@ -9,6 +9,9 @@ Radius propagation: ``docs/math/sparse_projection_radius.md``.
 
 from __future__ import annotations
 
+import logging
+logger = logging.getLogger(__name__)
+
 from functools import partial
 
 import jax
@@ -32,6 +35,7 @@ def _compute_sparse_pass2_projections_block(
     output_complex_dtype=None,
     output_abs2_dtype=None,
     relion_projector_half=None,
+    relion_projector_texture=None,
     relion_projector_r_max: int | None = None,
     projection_padding_factor: int = 1,
     projector_output_size: int | None = None,
@@ -44,11 +48,11 @@ def _compute_sparse_pass2_projections_block(
     projection_max_r = projection_kwargs.get("max_r", None)
     projection_relion_texture_interp = projection_kwargs.get("relion_texture_interp")
     projection_mask_current_image_disk = bool(
-        projection_kwargs.pop("mask_current_image_disk", True)
+        projection_kwargs.pop("mask_current_image_disk", False)
     )
     if projector_output_size is None and projection_max_r is not None:
         projector_output_size = int(2 * float(projection_max_r))
-    use_relion_projector = relion_projector_half is not None
+    use_relion_projector = relion_projector_half is not None or relion_projector_texture is not None
     if use_relion_projector and relion_projector_r_max is None:
         raise ValueError("relion_projector_r_max is required when relion_projector_half is provided")
 
@@ -66,6 +70,7 @@ def _compute_sparse_pass2_projections_block(
                 relion_texture_interp=projection_relion_texture_interp,
                 projector_output_size=projector_output_size,
                 mask_current_image_disk=projection_mask_current_image_disk,
+                **({"persistent_texture": relion_projector_texture} if relion_projector_texture is not None else {}),
             )
         return _compute_projections_block(
             mean_for_proj,
@@ -155,6 +160,7 @@ def _compute_sparse_pass2_windowed_projections_block(
     output_complex_dtype=None,
     output_abs2_dtype=None,
     relion_projector_half=None,
+    relion_projector_texture=None,
     relion_projector_r_max: int | None = None,
     projection_padding_factor: int = 1,
     **projection_kwargs,
@@ -190,6 +196,7 @@ def _compute_sparse_pass2_windowed_projections_block(
             disc_type,
             max_projected_rotations=None,
             relion_projector_half=relion_projector_half,
+            relion_projector_texture=relion_projector_texture,
             relion_projector_r_max=relion_projector_r_max,
             projection_padding_factor=projection_padding_factor,
             **projection_kwargs,
@@ -239,3 +246,16 @@ def _finalize_windowed_projection_chunks(score_chunks, recon_chunks, *, output_a
     if output_abs2_dtype is not None:
         recon_abs2 = recon_abs2.astype(output_abs2_dtype)
     return score_proj, recon_proj, recon_abs2
+
+
+def _close_relion_projector_texture_after_sparse_scoring(texture):
+    """Release the function-scoped projector before output finalization."""
+
+    if texture is None:
+        return None
+    logger.info(
+        "Sparse pass-2 score/adjoint phase complete: releasing persistent "
+        "RELION projector texture before output finalization"
+    )
+    texture.close()
+    return None

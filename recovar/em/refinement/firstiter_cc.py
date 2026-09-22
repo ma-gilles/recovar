@@ -21,6 +21,19 @@ from recovar.em.sampling import (
 )
 
 
+def single_class_bucketed_pass2_selected(*, firstiter: bool) -> bool:
+    """Whether K1 uses the bucketed projector/BPref lifetime."""
+    from recovar.em.classification.k_class import _use_fused_sparse_k_class_pass2
+    from recovar.em.classification.k1_local_pass2 import k1_local_pass2_engine_selected
+    from recovar.em.sparse_pass2.resident_pass2 import resident_pass2_requested
+    return bool(
+        _sparse_pass2_selected("RECOVAR_K_CLASS_DENSE_PASS2" if firstiter else "RECOVAR_K1_DENSE_PASS2")
+        and (firstiter or not resident_pass2_requested())
+        and not _use_fused_sparse_k_class_pass2(1)
+        and not k1_local_pass2_engine_selected()
+    )
+
+
 def _score_kclass_firstiter_cc_pass2(
     *,
     logger: logging.Logger,
@@ -40,6 +53,7 @@ def _score_kclass_firstiter_cc_pass2(
     image_shape_k,
     em_kwargs: dict,
     safe_batch_sizes=None,
+    significance_safe_batch_sizes=None,
     coarse_current_size: int | None = None,
     fine_current_size: int | None = None,
     log_label: str = "",
@@ -47,6 +61,7 @@ def _score_kclass_firstiter_cc_pass2(
     bpref_device_signature_active: bool = False,
     debug_iteration: int | None = None,
     coarse_rotation_ids=None,
+    symmetry: str = "C1",
 ):
     """RELION iter-1 ``--firstiter_cc`` adaptive two-pass dispatch.
 
@@ -86,6 +101,7 @@ def _score_kclass_firstiter_cc_pass2(
             if coarse_rotation_ids is not None
             else {}
         ),
+        **({"symmetry": symmetry} if symmetry != "C1" else {}),
     )
     coarse_translation_phase_source = apply_relion_translation_perturbation(
         np.asarray(base_translations, dtype=np.float64),
@@ -96,6 +112,9 @@ def _score_kclass_firstiter_cc_pass2(
     firstiter_significance_image_batch_size = None
     firstiter_significance_rotation_block_size = None
     firstiter_sparse_pass2 = _sparse_pass2_selected("RECOVAR_K_CLASS_DENSE_PASS2")
+    if symmetry != "C1":
+        if not firstiter_sparse_pass2 or not em_kwargs.get("mstep_relion_x_half", False):
+            raise RuntimeError(f"{symmetry} requires sparse RELION x-half BPref reconstruction")
     if safe_batch_sizes is not None:
         batch_plan = _plan_kclass_adaptive_grid_batch_sizes(
             coarse_rotations=coarse_rot,
@@ -107,6 +126,7 @@ def _score_kclass_firstiter_cc_pass2(
             coarse_current_size=coarse_current_size if coarse_current_size is not None else em_kwargs.get("current_size"),
             fine_current_size=fine_current_size if fine_current_size is not None else em_kwargs.get("current_size"),
             safe_batch_sizes=safe_batch_sizes,
+            significance_safe_batch_sizes=significance_safe_batch_sizes,
         )
         if firstiter_sparse_pass2:
             requested_firstiter_image_batch_size = int(em_kwargs.get("image_batch_size", image_batch_size))

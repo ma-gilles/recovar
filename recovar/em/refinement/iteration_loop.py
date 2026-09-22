@@ -10,10 +10,12 @@ See ``docs/math/relion_refinement_algorithm.md`` for the algorithm map.
 """
 
 import gc
+from functools import partial
 import logging
 import os
 import time
 from typing import NamedTuple
+from types import SimpleNamespace
 
 import jax
 import jax.numpy as jnp
@@ -22,7 +24,10 @@ import numpy as np
 from recovar import utils
 from recovar.core import fourier_transform_utils
 from recovar.data_io import cryoem_dataset
+from recovar.em.refinement.firstiter_cc import single_class_bucketed_pass2_selected
+from recovar.em.classification.k_class_inputs import _select_projector_half_for_class
 from recovar.em import sampling
+from recovar.em.sparse_pass2 import sparse_pass2_budget, firstiter_bpref
 from recovar.em.dense.score_outputs import (
     HalfScoreResult,
     PerHalfOutputs,
@@ -77,7 +82,9 @@ from recovar.em.diagnostics.state_swap_runtime import (
     _copy_optional_float_pair,
     _snapshot_state_swap_inputs,
 )
+from recovar.em.helpers.projection import _host_relion_projector_texture_enabled
 from recovar.em.helpers.batch_planning import (
+    _RELION_EM_COMPACT_K1_FIXED_BASE_GB,
     _estimate_relion_em_batch_sizes,
     _image_backend,
     _plan_adaptive_dense_batch_sizes,
@@ -167,6 +174,7 @@ from recovar.em.refinement.mean_helpers import (
     _mean_variance_for_scoring_half,
     _merged_mean_from_halves,
     _normalize_initial_means,
+    _snapshot_and_release_previous_k1_means,
     _reconstruct_and_postprocess_means,
     _reconstruct_volume_eager,
     _stack_class_tau2_update_details,
@@ -261,6 +269,7 @@ def _initial_coarse_grids(
     n_classes: int,
     voxel_size: float,
     log,
+    symmetry: str = "C1",
 ) -> _CoarseGrids:
     """Materialize the first exhaustive coarse grid of a RELION refinement.
 
@@ -291,7 +300,7 @@ def _initial_coarse_grids(
             int(current_translations.shape[0]),
         )
     else:
-        rotations, rotation_eulers = sampling._relion_rotation_grid_float32(healpix_order, dtype=dtype)
+        rotations, rotation_eulers = sampling._relion_rotation_grid_float32(healpix_order, dtype=dtype, **({"symmetry": symmetry} if symmetry != "C1" else {}))
         if translations is None:
             translations = sampling._relion_base_translation_grid(
                 init_translation_range,
@@ -535,6 +544,7 @@ def refine_single_volume(
 
     from recovar.reconstruction import regularization
 
+    symmetry = options.symmetry.point_group
     schedule = options.schedule
     adaptive = options.adaptive
     parity = options.parity
@@ -702,6 +712,7 @@ def refine_single_volume(
         n_classes=n_classes,
         voxel_size=cryo.voxel_size,
         log=logger,
+        **({"symmetry": symmetry} if symmetry != "C1" else {}),
     )
     current_rotations = initial_grids.rotations
     current_rotation_eulers = initial_grids.rotation_eulers
@@ -728,8 +739,24 @@ def refine_single_volume(
 
     padded_volume_shape = tuple(d * PADDING_FACTOR for d in volume_shape)
 
-    def _safe_batch_sizes(n_rot, n_trans, *, classes=None, image_shape_for_batch=None, current_size_for_batch=None):
-        """Reduce batch sizes for large pose grids to avoid GPU OOM."""
+    def _safe_batch_sizes(
+        n_rot, n_trans, *, classes=None, image_shape_for_batch=None,
+        current_size_for_batch=None, compact_k1_relion_layout=False,
+        compact_k1_relion_score_bpref_overlap=False,
+        model_current_size_for_batch=None, score_projector_staging_bytes=0,
+        windowed_translation=False,
+    ):
+        """Reduce batch sizes using the selected phase's pending allocations."""
+        use_float64_scoring_for_batch = bool(
+            _DENSE_EM_STATIC_KWARGS["use_float64_scoring"]
+            or os.environ.get("RECOVAR_DIAGNOSTIC_FLOAT64_PASS2_ITERATIONS", "").strip()
+        )
+        runtime_free_memory_gb = None
+        if compact_k1_relion_layout:
+            # CUDA textures allocate outside XLA's reusable pool.
+            free_bytes = sparse_pass2_budget._device_free_memory_bytes()
+            if free_bytes is not None and int(free_bytes) > 0:
+                runtime_free_memory_gb = int(free_bytes) / 1e9
         plan = _estimate_relion_em_batch_sizes(
             requested_image_batch_size=batching.image_batch_size,
             requested_rotation_block_size=batching.rotation_block_size,
@@ -740,6 +767,13 @@ def refine_single_volume(
             padding_factor=PADDING_FACTOR,
             n_classes=n_classes if classes is None else classes,
             current_size=current_size_for_batch,
+            use_float64_scoring=use_float64_scoring_for_batch,
+            compact_k1_relion_layout=compact_k1_relion_layout,
+            compact_k1_relion_score_bpref_overlap=compact_k1_relion_score_bpref_overlap,
+            model_current_size=model_current_size_for_batch,
+            runtime_free_memory_gb=runtime_free_memory_gb,
+            score_projector_staging_bytes=score_projector_staging_bytes,
+            windowed_translation=windowed_translation,
         )
         plan.log_adjustment(
             requested_image_batch_size=batching.image_batch_size,
@@ -755,6 +789,7 @@ def refine_single_volume(
     # an explicit leading class axis; single-class callers keep the historical
     # flat per-half reference layout.
     means = _normalize_initial_means(init_volume, n_classes)
+    del init_volume
     initial_real_references_by_half = prepare_initial_real_references(
         replay.init_reference_real, volume_shape=volume_shape, n_classes=n_classes, log=logger
     )
@@ -816,6 +851,7 @@ def refine_single_volume(
         n_classes=n_classes,
         dtype=_dense_global_scoring_dtype(),
         log=logger,
+        **({"symmetry": symmetry, "expected_order": current_healpix_order} if symmetry != "C1" else {}),
     )
     _mark_setup_phase("direction_prior")
 
@@ -1273,6 +1309,7 @@ def refine_single_volume(
             preserve_existing_direction_prior=replay.preserve_initial_direction_prior,
             sealed_sampling_state=sealed_sampling_state,
             dtype=_dense_global_scoring_dtype(),
+            **({"symmetry": symmetry} if symmetry != "C1" else {}),
         )
         current_size = replay_result.cs
         _replay_prior_translations = replay_result.prior_translations
@@ -1501,7 +1538,8 @@ def refine_single_volume(
                     new_order,
                 )
                 current_rotations, current_rotation_eulers = sampling._relion_rotation_grid_float32(
-                    new_order, dtype=_dense_global_scoring_dtype()
+                    new_order, dtype=_dense_global_scoring_dtype(),
+                    **({"symmetry": symmetry} if symmetry != "C1" else {}),
                 )
                 current_healpix_order = new_order
             else:
@@ -1758,11 +1796,11 @@ def refine_single_volume(
             local_search_random_perturbation = 0.0
             local_search_angular_sampling_deg = None
             use_parent_expanded_local = state.adaptive_oversampling > 0
-            if effective_rotations.shape[0] != rotation_grid_size(local_search_order):
+            if effective_rotations.shape[0] != rotation_grid_size(local_search_order, **({"symmetry": symmetry} if symmetry != "C1" else {})):
                 logger.info(
                     "Using lazy fine local-search grid: order=%d (%d rotations) from capped base order=%d",
                     local_search_order,
-                    rotation_grid_size(local_search_order),
+                    rotation_grid_size(local_search_order, **({"symmetry": symmetry} if symmetry != "C1" else {})),
                     current_healpix_order,
                 )
                 local_search_angular_sampling_deg = relion_angular_sampling_deg(
@@ -1858,6 +1896,7 @@ def refine_single_volume(
                 dtype=_dense_global_scoring_dtype(),
                 log=logger,
                 half_index=_half_idx,
+                **({"symmetry": symmetry} if symmetry != "C1" else {}),
             )
             rotation_log_prior_per_half[_half_idx] = half_direction_priors.rotation_log_prior
             class_rotation_log_prior_per_half[_half_idx] = half_direction_priors.class_rotation_log_prior
@@ -2067,6 +2106,103 @@ def refine_single_volume(
             dense_k_class_rotation_block_size = batching.rotation_block_size
             significance_image_batch_size = None
             significance_rotation_block_size = None
+            safe_batch_sizes_for_half = _safe_batch_sizes
+            significance_safe_batch_sizes_for_half = _safe_batch_sizes
+            projector_half = _select_projector_half_for_class(
+                relion_projector_half_by_half[k], 0, n_classes,
+            )
+            compact_precision = not (
+                _DENSE_EM_STATIC_KWARGS["use_float64_scoring"]
+                or _DENSE_EM_STATIC_KWARGS["use_float64_projections"]
+                or os.environ.get("RECOVAR_DIAGNOSTIC_FLOAT64_PASS2_ITERATIONS", "").strip()
+            )
+            if (
+                use_adaptive and not use_local and not k_class_enabled
+                and relion_firstiter_cc_this_iter and compact_precision
+                and single_class_bucketed_pass2_selected(firstiter=True)
+                and _host_relion_projector_texture_enabled(
+                    projector_half, r_max=relion_projector_r_max_by_half[k],
+                    padding_factor=PROJECTION_PADDING_FACTOR, allow_float32_cast=True,
+                )
+            ):
+                model_size = int(volume_shape[0] if model_current_size_for_engine is None
+                                 else model_current_size_for_engine)
+                recon_shape = relion_backprojector_volume_shape(
+                    volume_shape, PADDING_FACTOR, current_size=model_size,
+                )
+                decision = firstiter_bpref._relion_firstiter_compact_batch_planning_decision(
+                    source_faithful_spectrum_norm=source_faithful_spectrum_norm,
+                    winner_take_all=firstiter_winner_take_all_this_iter,
+                    preserve_bpref_particle_order=parity.preserve_bpref_particle_order,
+                    use_relion_x_half_mstep=_k1_relion_x_half_mstep_enabled(),
+                    projector_half=SimpleNamespace(shape=projector_half.shape, dtype=np.dtype(np.complex64)),
+                    score_complex_dtype=np.complex64,
+                    recon_volume_size=int(np.prod(half_volume_accumulator_shape(recon_shape))),
+                    bpref_device_signature_active=bpref_device_signature_active,
+                    fixed_base_bytes=int(_RELION_EM_COMPACT_K1_FIXED_BASE_GB * 1e9),
+                )
+                if decision.enabled:
+                    safe_batch_sizes_for_half = partial(
+                        _safe_batch_sizes, compact_k1_relion_layout=True,
+                        model_current_size_for_batch=model_size,
+                    )
+                    from recovar.em.scoring.significance import _global_pass1_relion_projector_texture_enabled
+                    if (projector_half.dtype == np.dtype(np.complex64)
+                        and _global_pass1_relion_projector_texture_enabled()
+                        and not os.environ.get("RECOVAR_FIRSTITER_CC_TREE_TOP2_RESCORE_MAX_MARGIN", "").strip()):
+                        significance_safe_batch_sizes_for_half = partial(
+                            safe_batch_sizes_for_half,
+                            score_projector_staging_bytes=int(projector_half.nbytes),
+                        )
+                    logger.info(
+                        "Compact firstiter K1 batch planning: model_size=%d deferred=%s coarse_staging=%d",
+                        model_size, decision.deferred_firstiter_bpref, projector_half.nbytes,
+                    )
+            from recovar.em.local.local_batch_planning import (
+                local_source_bpref_planning_supported,
+                local_source_bpref_staging_bytes,
+            )
+            if (
+                (use_adaptive or use_local) and not k_class_enabled
+                and not relion_firstiter_cc_this_iter and compact_precision
+                and (local_source_bpref_planning_supported() if use_local
+                     else single_class_bucketed_pass2_selected(firstiter=False))
+                and _host_relion_projector_texture_enabled(
+                    projector_half, r_max=relion_projector_r_max_by_half[k],
+                    padding_factor=PROJECTION_PADDING_FACTOR, allow_float32_cast=True,
+                )
+            ):
+                model_size = int(volume_shape[0] if model_current_size_for_engine is None
+                                 else model_current_size_for_engine)
+                if firstiter_bpref._relion_soft_compact_batch_planning_safe(
+                    source_faithful_spectrum_norm=source_faithful_spectrum_norm,
+                    preserve_bpref_particle_order=parity.preserve_bpref_particle_order,
+                    use_relion_x_half_mstep=_k1_relion_x_half_mstep_enabled(),
+                    relion_cuda_images=parity.image_fourier_backend == "relion_cuda",
+                    projector_half=SimpleNamespace(shape=projector_half.shape, dtype=np.dtype(np.complex64)),
+                    score_complex_dtype=np.complex64,
+                    model_current_size=model_size,
+                    image_size=int(experiment_datasets[k].image_shape[0]),
+                    bpref_device_signature_active=bpref_device_signature_active,
+                ):
+                    local_staging_bytes = 0
+                    if use_local:
+                        local_recon_shape = relion_backprojector_volume_shape(
+                            volume_shape, PADDING_FACTOR, current_size=model_size,
+                        )
+                        local_staging_bytes = local_source_bpref_staging_bytes(
+                            projector_half.shape,
+                            half_volume_accumulator_shape(local_recon_shape),
+                        )
+                    safe_batch_sizes_for_half = partial(
+                        _safe_batch_sizes, compact_k1_relion_layout=True,
+                        compact_k1_relion_score_bpref_overlap=True,
+                        model_current_size_for_batch=model_size,
+                        score_projector_staging_bytes=local_staging_bytes,
+                    )
+                    # Coarse Gaussian backends can retain full-cube staging.
+                    # Their existing conservative callback remains separate.
+                    logger.info("Compact soft K1 planning: model_size=%d local=%s extra_staging_bytes=%d", model_size, use_local, local_staging_bytes)
             if use_adaptive:
                 adaptive_batch_plan = _plan_adaptive_dense_batch_sizes(
                     n_rot=effective_rotations.shape[0],
@@ -2075,7 +2211,8 @@ def refine_single_volume(
                     image_shape=experiment_datasets[k].image_shape,
                     cs_for_engine=cs_for_engine,
                     coarse_cs=coarse_cs,
-                    safe_batch_sizes=_safe_batch_sizes,
+                    significance_safe_batch_sizes=significance_safe_batch_sizes_for_half,
+                    safe_batch_sizes=safe_batch_sizes_for_half,
                 )
                 k_class_image_batch_size = adaptive_batch_plan.pass2_image_batch_size
                 dense_k_class_rotation_block_size = adaptive_batch_plan.pass2_rotation_block_size
@@ -2164,7 +2301,7 @@ def refine_single_volume(
                 logger.info("Skipping E-step/M-step accumulation for empty half-%d dataset", k + 1)
                 n_shells = int(cryo.image_shape[0] // 2 + 1)
                 n_rot_for_stats = int(
-                    rotation_grid_size(local_search_order) if use_local else effective_rotations.shape[0]
+                    rotation_grid_size(local_search_order, **({"symmetry": symmetry} if symmetry != "C1" else {})) if use_local else effective_rotations.shape[0]
                 )
                 empty_k1_x_half_mstep = (
                     (not k_class_enabled)
@@ -2295,12 +2432,13 @@ def refine_single_volume(
                     k_class_enabled=k_class_enabled,
                     collect_local_search_profile=collect_local_search_profile,
                     diagnostic_score_only=bool(debug.stop_after_local_search_score_only),
-                    safe_batch_sizes=_safe_batch_sizes,
+                    safe_batch_sizes=safe_batch_sizes_for_half,
                     outputs=per_half,
                     local_profile_history=history.local_profile_history,
                     relion_projector_half=relion_projector_half_by_half[k],
                     relion_projector_r_max=relion_projector_r_max_by_half[k],
                     source_faithful_spectrum_norm=source_faithful_spectrum_norm,
+                    **({"symmetry": symmetry} if symmetry != "C1" else {}),
                 )
                 ha_k = local_result.ha
                 Ft_y_k = local_result.Ft_y
@@ -2316,6 +2454,7 @@ def refine_single_volume(
                 # Shared dense half-scoring operands; the adaptive branch adds its
                 # pass-1 grid and batch/size overrides.
                 dense_half_kwargs = dict(
+                    **({"symmetry": symmetry} if symmetry != "C1" else {}),
                     bpref_device_signature_active=bpref_device_signature_active,
                     k=k,
                     experiment_dataset=experiment_datasets[k],
@@ -2348,7 +2487,8 @@ def refine_single_volume(
                     relion_firstiter_cc_this_iter=relion_firstiter_cc_this_iter,
                     disable_adjoint_y=debug.disable_adjoint_y,
                     disable_adjoint_ctf=debug.disable_adjoint_ctf,
-                    safe_batch_sizes=_safe_batch_sizes,
+                    safe_batch_sizes=safe_batch_sizes_for_half,
+                    significance_safe_batch_sizes=significance_safe_batch_sizes_for_half,
                     max_significants=adaptive.max_significants,
                     outputs=per_half,
                     preserve_bpref_particle_order=parity.preserve_bpref_particle_order,
@@ -2539,6 +2679,8 @@ def refine_single_volume(
 
         # E-step + per-half M-step accumulators are now both populated.
         _parity_dump.mark_stage(iteration, "e_step")
+        from recovar.cuda_backproject import drain_relion_preprocess_checks
+        drain_relion_preprocess_checks()
         if iter_sig_count_parts:
             iter_sig_counts = np.concatenate(iter_sig_count_parts, axis=0)
         if iter_recorded_sig_count_parts:
@@ -2660,6 +2802,7 @@ def refine_single_volume(
                 ),
             )
 
+        retained_Ft_y_0_device = None
         # RELION's --low_resol_join_halves averages the low-resolution shells of
         # the K=1 half accumulators before the Wiener solve; see
         # join_half_accumulators_at_low_resolution for the rationale and cap.
@@ -2667,7 +2810,7 @@ def refine_single_volume(
             Ft_y_combined = _combine_optional_half_accumulators(Ft_y_0, Ft_y_1, label="Ft_y")
             Ft_ctf_combined = _combine_optional_half_accumulators(Ft_ctf_0, Ft_ctf_1, label="Ft_ctf")
         elif parity.low_resol_join_halves_angstrom is not None and parity.low_resol_join_halves_angstrom > 0:
-            Ft_y_0, Ft_y_1, Ft_ctf_0, Ft_ctf_1 = join_half_accumulators_at_low_resolution(
+            Ft_y_0, Ft_y_1, Ft_ctf_0, Ft_ctf_1, retained_Ft_y_0_device = join_half_accumulators_at_low_resolution(
                 Ft_y_0,
                 Ft_y_1,
                 Ft_ctf_0,
@@ -2679,6 +2822,8 @@ def refine_single_volume(
                 pixel_resolutions=history.pixel_resolutions,
                 current_resolution=getattr(state, "current_resolution", float("inf")),
                 padding_factor=PADDING_FACTOR,
+                preserve_inputs=False,
+                return_retained_first_numerator=True,
             )
 
         # --- RELION-exact M-step ordering ---
@@ -2699,7 +2844,7 @@ def refine_single_volume(
             # code transfer only the slices it actually needs.
             previous_means = [jnp.asarray(mean) if mean is not None else None for mean in means]
         else:
-            previous_means = [np.asarray(mean).copy() if mean is not None else None for mean in means]
+            previous_means = _snapshot_and_release_previous_k1_means(means)
 
         _t_unreg_first = time.time()
         if k_class_enabled:
@@ -2983,6 +3128,9 @@ def refine_single_volume(
                 )
                 mean_signal_variance_per_half.append(mean_signal_variance_k)
                 tau2_update_details_per_half.append(tau2_update_details_k)
+            mean_signal_variance_shells_per_half = [
+                details["prior_shells"] for details in tau2_update_details_per_half
+            ]
             mean_signal_variance = 0.5 * (mean_signal_variance_per_half[0] + mean_signal_variance_per_half[1])
             # Keep the single tau2 diagnostic fields aligned with RELION's half1
             # model.star, which is what the parity diff script reports.
@@ -3021,6 +3169,7 @@ def refine_single_volume(
             mean_signal_variance=mean_signal_variance if k_class_enabled else None,
             mean_signal_variance_shells=mean_signal_variance_shells if k_class_enabled else None,
             mean_signal_variance_per_half=mean_signal_variance_per_half if not k_class_enabled else None,
+            mean_signal_variance_shells_per_half=mean_signal_variance_shells_per_half if not k_class_enabled else None,
             n_classes=n_classes,
             cs=current_size,
             iteration=iteration,
@@ -3037,7 +3186,10 @@ def refine_single_volume(
             relion_width_mask_edge=RELION_WIDTH_MASK_EDGE,
             relion_fmask_edge=RELION_WIDTH_FMASK_EDGE,
             accumulator_volume_shape=mstep_accumulator_shape,
+            **({"retained_Ft_y_0_device": retained_Ft_y_0_device} if retained_Ft_y_0_device is not None else {}),
         )
+        retained_Ft_y_0_device = None
+
 
         # RELION reconstructs the first-iteration CC maps with the untapered
         # updateSSNRarrays tau2.  Only afterwards does
@@ -3117,12 +3269,13 @@ def refine_single_volume(
                 n_classes=n_classes,
                 use_local=use_local,
                 k1_direction_prior_order=k1_direction_prior_order,
-                k1_direction_prior_size=rotation_grid_size(k1_direction_prior_order),
+                k1_direction_prior_size=rotation_grid_size(k1_direction_prior_order, **({"symmetry": symmetry} if symmetry != "C1" else {})),
                 current_healpix_order=current_healpix_order,
-                exhaustive_grid_size=rotation_grid_size(current_healpix_order),
+                exhaustive_grid_size=rotation_grid_size(current_healpix_order, **({"symmetry": symmetry} if symmetry != "C1" else {})),
                 n_effective_rotations=effective_rotations.shape[0],
                 dtype=_dense_global_scoring_dtype(),
                 log=logger,
+                **({"symmetry": symmetry} if symmetry != "C1" else {}),
             )
         history.record_direction_prior(
             class_direction_prior_per_half,
@@ -3199,6 +3352,7 @@ def refine_single_volume(
                 k_class_enabled=k_class_enabled,
                 volume_shape=volume_shape,
                 voxel_size=cryo.voxel_size,
+                **({"symmetry": symmetry} if symmetry != "C1" else {}),
             )
 
         # --- Compute ave_Pmax from the actual E-step maxima ---
@@ -3353,7 +3507,7 @@ def refine_single_volume(
                 trans_idx = hard_assignments[k] % current_translations.shape[0]
                 if use_local:
                     if local_search_rotations is None:
-                        local_grid_metadata = build_local_search_grid_metadata(local_search_order)
+                        local_grid_metadata = build_local_search_grid_metadata(local_search_order, **({"symmetry": symmetry} if symmetry != "C1" else {}))
                         best_rots = _selected_rotation_matrices(
                             rot_idx,
                             None,
@@ -3634,6 +3788,7 @@ def refine_single_volume(
             voxel_size_angstrom=float(cryo.voxel_size if cryo.voxel_size > 0 else 1.0),
             update_sampling=not native_sampling_boundary,
             check_convergence_now=not native_sampling_boundary,
+            **({"symmetry_label": symmetry} if symmetry != "C1" else {}),
         )
         if accuracy_replay.metadata is not None:
             apply_optimiser_convergence_replay(
@@ -3777,7 +3932,7 @@ def refine_single_volume(
         Ft_ctf_0 = Ft_ctf_1 = None
         Ft_y_combined = Ft_ctf_combined = None
         unreg_means = previous_means = None
-        mean_signal_variance_per_half = tau2_update_details_per_half = None
+        mean_signal_variance_per_half = mean_signal_variance_shells_per_half = tau2_update_details_per_half = None
         noise_stats_per_half = noise_stats_per_half_per_class = None
         gc.collect()
         if parse_env_true_flag("RECOVAR_RELION_CLEAR_JAX_CACHES_BETWEEN_ITERS"):
@@ -3979,7 +4134,8 @@ def refine_single_volume(
                         continue
                     _prior_k = np.asarray(_final_replay_priors[_half_idx], dtype=_final_replay_prior_dtype)
                     _prior_order_k = infer_direction_prior_healpix_order(
-                        _prior_k[0] if k_class_enabled else _prior_k
+                        _prior_k[0] if k_class_enabled else _prior_k,
+                        **({"symmetry": symmetry, "expected_order": state.healpix_order} if symmetry != "C1" else {}),
                     )
                     if _prior_order_k != state.healpix_order:
                         _prior_k = remap_half_direction_prior_to_healpix_order(
@@ -3988,6 +4144,7 @@ def refine_single_volume(
                             state.healpix_order,
                             n_classes=n_classes if k_class_enabled else None,
                             dtype=_final_replay_prior_dtype,
+                            **({"symmetry": symmetry} if symmetry != "C1" else {}),
                         )
                         _prior_order_k = state.healpix_order
                     if k_class_enabled:
@@ -4079,7 +4236,8 @@ def refine_single_volume(
         final_current_rotation_eulers = current_rotation_eulers
     else:
         final_current_rotations, final_current_rotation_eulers = sampling._relion_rotation_grid_float32(
-            final_current_healpix_order, dtype=_dense_global_scoring_dtype()
+            final_current_healpix_order, dtype=_dense_global_scoring_dtype(),
+            **({"symmetry": symmetry} if symmetry != "C1" else {}),
         )
     final_effective_rotations = final_current_rotations
     final_effective_rotation_eulers = np.asarray(
@@ -4309,7 +4467,7 @@ def refine_single_volume(
             ),
         )
         use_parent_expanded_final_local = int(state.adaptive_oversampling) > 0
-        if final_effective_rotations.shape[0] != rotation_grid_size(final_local_search_order):
+        if final_effective_rotations.shape[0] != rotation_grid_size(final_local_search_order, **({"symmetry": symmetry} if symmetry != "C1" else {})):
             final_local_search_angular_sampling_deg = relion_angular_sampling_deg(
                 final_local_search_order,
                 adaptive_oversampling=0,
@@ -4493,6 +4651,7 @@ def refine_single_volume(
             dtype=_dense_global_scoring_dtype(),
             log=logger,
             half_index=k,
+            **({"symmetry": symmetry} if symmetry != "C1" else {}),
         )
         final_rotation_log_prior_k = final_half_direction_priors.rotation_log_prior
         final_class_rotation_log_prior_k = final_half_direction_priors.class_rotation_log_prior
@@ -4543,6 +4702,7 @@ def refine_single_volume(
                 local_profile_history=history.local_profile_history,
                 relion_projector_half=final_relion_projector_half_by_half[k],
                 relion_projector_r_max=final_relion_projector_r_max_by_half[k],
+                **({"symmetry": symmetry} if symmetry != "C1" else {}),
             )
         else:
             final_result = _score_half_dense_in_bpref_scope(
@@ -4591,6 +4751,7 @@ def refine_single_volume(
                 debug_iteration=final_sampling_relion_iteration,
                 preserve_bpref_particle_order=parity.preserve_bpref_particle_order,
                 source_faithful_spectrum_norm=source_faithful_spectrum_norm,
+                **({"symmetry": symmetry} if symmetry != "C1" else {}),
             )
         if final_result.best_pose_translations is not None:
             final_result.best_pose_translations = _relion_metadata_translations(

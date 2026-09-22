@@ -53,6 +53,68 @@ static MultidimArray<RFLOAT> numpy_to_real_3d(
 
 
 /**
+ * Apply RELION's exact BackProjector finalisation to supplied accumulators.
+ *
+ * This is a CPU/double oracle for the streamed CUDA implementation.  It
+ * intentionally delegates the science operation to
+ * BackProjector::enforceHermitianSymmetry and
+ * BackProjector::applyPointGroupSymmetry instead of reimplementing either
+ * loop in the binding.
+ */
+static std::tuple<py::array_t<std::complex<double>>, py::array_t<double>>
+apply_point_group_symmetry_to_bpref(
+    py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast> data,
+    py::array_t<double, py::array::c_style | py::array::forcecast> weight,
+    const std::string& symmetry,
+    int ori_size,
+    int padding_factor,
+    int current_size,
+    int r_max,
+    bool enforce_hermitian
+) {
+    auto data_buf = data.request();
+    auto weight_buf = weight.request();
+    if (data_buf.ndim != 3 || weight_buf.ndim != 3)
+        throw std::runtime_error("data and weight must be 3D BPref arrays");
+    for (int axis = 0; axis < 3; ++axis) {
+        if (data_buf.shape[axis] != weight_buf.shape[axis])
+            throw std::runtime_error("data and weight shapes must match");
+    }
+
+    BackProjector bp(ori_size, 3, symmetry, TRILINEAR, (float)padding_factor,
+                     10, 0, 1.9, 15, 2, false);
+    bp.initZeros(current_size);
+    if (ZSIZE(bp.data) != data_buf.shape[0] ||
+        YSIZE(bp.data) != data_buf.shape[1] ||
+        XSIZE(bp.data) != data_buf.shape[2])
+        throw std::runtime_error("input shape does not match RELION BackProjector shape");
+    bp.data = numpy_to_complex_3d(data);
+    bp.weight = numpy_to_real_3d(weight);
+    if (r_max >= 0)
+        bp.r_max = r_max;
+
+    if (enforce_hermitian)
+        bp.enforceHermitianSymmetry();
+    bp.applyPointGroupSymmetry(1);
+
+    const long nz = ZSIZE(bp.data);
+    const long ny = YSIZE(bp.data);
+    const long nx = XSIZE(bp.data);
+    py::array_t<std::complex<double>> data_out({nz, ny, nx});
+    py::array_t<double> weight_out({nz, ny, nx});
+    std::memcpy(
+        data_out.request().ptr,
+        bp.data.data,
+        nz * ny * nx * sizeof(std::complex<double>));
+    std::memcpy(
+        weight_out.request().ptr,
+        bp.weight.data,
+        nz * ny * nx * sizeof(double));
+    return std::make_tuple(data_out, weight_out);
+}
+
+
+/**
  * Backproject a set of 2D Fourier images into 3D, then reconstruct.
  *
  * Takes N images (FFTW half-complex), N rotation matrices, optional
@@ -572,6 +634,23 @@ static py::tuple update_ssnr_arrays(
 
 
 void init_backprojector_bindings(py::module_ &m) {
+    m.def("apply_point_group_symmetry_to_bpref", &apply_point_group_symmetry_to_bpref,
+          py::arg("data"),
+          py::arg("weight"),
+          py::arg("symmetry"),
+          py::arg("ori_size"),
+          py::arg("padding_factor") = 2,
+          py::arg("current_size") = -1,
+          py::arg("r_max") = -1,
+          py::arg("enforce_hermitian") = true,
+          R"doc(
+Apply RELION's BackProjector x=0 and point-group symmetry operations.
+
+data, weight use RELION's compact ``(z, y, xhalf)`` BPref layout.  The
+returned values are sums over symmetry mates, not group averages.  This is a
+CPU/double parity oracle for the CUDA finalizer.
+)doc");
+
     m.def("backproject_and_reconstruct", &backproject_and_reconstruct,
           py::arg("images"),
           py::arg("rotations"),

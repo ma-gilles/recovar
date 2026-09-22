@@ -934,6 +934,14 @@ def test_parse_relion_cli_ini_high_is_none_when_absent_or_disabled():
     assert _parse_relion_cli_ini_high("# --i particles.star --firstiter_cc --ini_high -1 --ctf\n") is None
 
 
+def test_full_refinement_uses_active_relion_max_significants_not_saved_sentinel():
+    source = RUN_FULL_REFINEMENT.read_text()
+
+    assert "resolve_relion_runtime_max_significants" in source
+    assert 'max_significants_resolution["active_max_significants"]' in source
+    assert '"max_significants_resolution": max_significants_resolution' in source
+
+
 def test_firstiter_cc_passes_relion_cli_ini_high_to_refinement_loop():
     """RELION ``--firstiter_cc`` and ``--ini_high`` are distinct knobs.
 
@@ -2330,3 +2338,60 @@ def test_replay_overrides_respect_init_relion_iteration_offset(tmp_path):
         overrides[0]["previous_best_rotation_eulers"][0],
         np.asarray([[10.0, 11.0, 12.0]], dtype=np.float32),
     )
+
+
+def test_fresh_kclass_translation_seed_is_scoped_and_fails_closed():
+    from recovar.em.relion.input_poses import _kclass_firstiter_translation_seed
+    override = {"previous_best_translations": [np.zeros((1, 2)), np.zeros((2, 2))]}
+    assert (
+        _kclass_firstiter_translation_seed(
+            override,
+            n_classes=1,
+            init_relion_iteration=0,
+        )
+        is None
+    )
+    assert (
+        _kclass_firstiter_translation_seed(
+            override,
+            n_classes=4,
+            init_relion_iteration=1,
+        )
+        is None
+    )
+    with pytest.raises(ValueError, match="missing half-2 input origins"):
+        _kclass_firstiter_translation_seed(
+            {"previous_best_translations": [np.zeros((1, 2)), None]},
+            n_classes=4,
+            init_relion_iteration=0,
+        )
+
+
+def test_fresh_kclass_selects_only_run_it000_translations():
+    from recovar.em.relion.input_poses import _kclass_firstiter_translation_seed
+    half1 = np.asarray([[3.9, -0.34], [0.3, -0.34]], dtype=np.float64)
+    # Generic replay extraction currently collapses an empty all-data second
+    # accumulator to (0,); the translation selector restores (0, 2).
+    half2 = np.empty((0,), dtype=np.float64)
+    override = {
+        "previous_best_translations": [half1, half2],
+        "previous_best_rotation_eulers": [
+            np.ones((2, 3), dtype=np.float32),
+            np.empty((0, 3), dtype=np.float32),
+        ],
+        "image_corrections": [np.ones(2), np.empty(0)],
+        "noise_variance": [np.ones(4), np.ones(4)],
+    }
+
+    selected = _kclass_firstiter_translation_seed(
+        override,
+        n_classes=4,
+        init_relion_iteration=0,
+    )
+
+    assert len(selected) == 2
+    assert selected[0].dtype == np.float32
+    assert selected[0].flags.c_contiguous
+    np.testing.assert_array_equal(selected[0], half1.astype(np.float32))
+    assert selected[1].shape == (0, 2)
+    assert selected[0] is not half1

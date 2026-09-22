@@ -158,6 +158,148 @@ def enforce_half_volume_x0(
     )
 
 
+def _validated_relion_right_operators(symmetry_label: str, symmetry_operators):
+    """Return identity-inclusive RELION right operators in source order."""
+
+    from recovar.em.symmetry import parse_rotational_symmetry, rotational_operators
+
+    parsed = parse_rotational_symmetry(symmetry_label)
+    if symmetry_operators is None:
+        operators = rotational_operators(parsed.label, dtype=np.float64)
+    else:
+        operators = np.asarray(symmetry_operators, dtype=np.float64)
+    expected_shape = (parsed.operator_count, 3, 3)
+    if operators.shape != expected_shape:
+        raise ValueError(
+            f"RELION {parsed.label} requires right operators with shape {expected_shape}, "
+            f"got {operators.shape}"
+        )
+    if not np.all(np.isfinite(operators)):
+        raise ValueError(f"RELION {parsed.label} right operators must be finite")
+    if not np.array_equal(operators[0], np.eye(3, dtype=np.float64)):
+        raise ValueError(f"RELION {parsed.label} right operators must contain exact identity first")
+    if not np.allclose(
+        operators @ np.swapaxes(operators, -1, -2),
+        np.eye(3, dtype=np.float64)[None, :, :],
+        rtol=0.0,
+        atol=2e-7,
+    ):
+        raise ValueError(f"RELION {parsed.label} right operators must be orthogonal")
+    if not np.allclose(np.linalg.det(operators), 1.0, rtol=0.0, atol=1e-9):
+        raise ValueError(f"RELION {parsed.label} right operators must be proper rotations")
+    return parsed.label, np.ascontiguousarray(operators)
+
+
+def finalize_half_volume_bpref(
+    Ft_y,
+    Ft_ctf,
+    recon_volume_shape,
+    *,
+    logger: logging.Logger,
+    label: str,
+    symmetry_label: str = "C1",
+    symmetry_operators=None,
+    relion_x_half: bool,
+    force_host: bool | None = None,
+):
+    """Finalize half-volume BPref accumulators before layout conversion.
+
+    C1 deliberately calls the historical x=0 helper verbatim.  This keeps
+    existing C1 output bitwise stable.  Non-C1 currently requires RELION's
+    odd ``(z, y, xhalf)`` BPref layout and uses a streamed CUDA finalizer that
+    fuses x=0 Hermitian enforcement with ordered point-group accumulation.
+    Large float32 accumulators use bounded output ranges copied to host;
+    the complex input stays in place and is never split into device copies.
+    """
+
+    if not isinstance(symmetry_label, str) or not symmetry_label.strip():
+        raise ValueError("symmetry_label must be a nonempty RELION point-group label")
+    normalized_label = symmetry_label.strip().upper()
+    if normalized_label == "C1":
+        if symmetry_operators is not None:
+            identity = np.asarray(symmetry_operators)
+            if identity.shape != (1, 3, 3) or not np.array_equal(identity[0], np.eye(3)):
+                raise ValueError("C1 symmetry_operators must contain exact identity only")
+        return enforce_half_volume_x0(
+            Ft_y,
+            Ft_ctf,
+            recon_volume_shape,
+            logger=logger,
+            label=label,
+            **({"force_host": force_host} if force_host is not None else {}),
+        )
+
+    canonical_label, right_operators = _validated_relion_right_operators(
+        normalized_label,
+        symmetry_operators,
+    )
+    if not relion_x_half:
+        raise NotImplementedError(
+            f"{label} requested {canonical_label} point-group symmetry for a native half-volume "
+            "accumulator; non-C1 reconstruction symmetry requires RELION x-half BPref storage"
+        )
+
+    recon_volume_shape = tuple(int(value) for value in recon_volume_shape)
+    if len(recon_volume_shape) != 3 or len(set(recon_volume_shape)) != 1:
+        raise ValueError(
+            "RELION point-group BPref symmetry requires a cubic accumulator, "
+            f"got {recon_volume_shape}"
+        )
+    if any(value <= 0 or value % 2 == 0 for value in recon_volume_shape):
+        raise ValueError(
+            "RELION point-group BPref symmetry requires an odd positive accumulator grid, "
+            f"got {recon_volume_shape}"
+        )
+
+    data = jnp.asarray(Ft_y).reshape(-1)
+    weight = jnp.asarray(Ft_ctf).reshape(-1)
+    if data.dtype == jnp.dtype(jnp.complex64):
+        operator_dtype = np.float32
+        expected_weight_dtype = jnp.dtype(jnp.float32)
+    elif data.dtype == jnp.dtype(jnp.complex128):
+        operator_dtype = np.float64
+        expected_weight_dtype = jnp.dtype(jnp.float64)
+    else:
+        raise TypeError(
+            "RELION point-group BPref data must be complex64 or complex128, "
+            f"got {data.dtype}"
+        )
+    if weight.dtype != expected_weight_dtype:
+        raise TypeError(
+            "RELION point-group BPref weight precision must match the data component, "
+            f"got data={data.dtype}, weight={weight.dtype}"
+        )
+
+    support_radius = recon_volume_shape[0] // 2 - 1
+    logger.info(
+        "%s M-step: enforcing RELION x=0 and %s point-group symmetry on CUDA "
+        "(operators=%d, support_radius=%d)",
+        label,
+        canonical_label,
+        right_operators.shape[0],
+        support_radius,
+    )
+    from recovar import cuda_backproject
+
+    use_host = (
+        (data.dtype == jnp.dtype(jnp.complex64)
+         and _large_relion_x_half_host_x0_enabled(int(np.prod(recon_volume_shape))))
+        if force_host is None else bool(force_host)
+    )
+    finalize = (
+        cuda_backproject.relion_point_group_symmetrise_bpref_host
+        if use_host else cuda_backproject.relion_point_group_symmetrise_bpref
+    )
+    return finalize(
+        data,
+        weight,
+        jnp.asarray(right_operators, dtype=operator_dtype),
+        recon_volume_shape,
+        support_radius,
+    )
+
+
+
 def half_volume_accumulators_to_full(Ft_y, Ft_ctf, recon_volume_shape):
     """Convert half-volume M-step accumulators back to the public full-volume contract."""
 
@@ -394,3 +536,73 @@ def enforce_relion_half_volume_x0_hermitian_host(volume_flat, full_volume_shape)
     self_partner = (p0[:, None] == i0[:, None]) & (p1[None, :] == i1[None, :])
     vol[:, :, 0] = np.where(self_partner, plane, summed)
     return vol.reshape(-1)
+
+
+def finalize_split_relion_x_half_bpref(
+    Ft_y_real,
+    Ft_y_imag,
+    Ft_ctf,
+    recon_volume_shape,
+    *,
+    logger: logging.Logger,
+    label: str,
+    symmetry_label: str,
+    symmetry_operators=None,
+):
+    """Finalize a deferred RELION BPref while preserving split inputs.
+
+    This is the large-grid continuation of the exact split first-iteration
+    replay.  C1 supplies identity alone and therefore performs only RELION's
+    x=0 enforcement.  Every point group is emitted to bounded host ranges, so
+    no full complex data buffer or full finalized output pair is allocated on
+    the device.
+    """
+
+    canonical_label, right_operators = _validated_relion_right_operators(
+        symmetry_label,
+        symmetry_operators,
+    )
+    recon_volume_shape = tuple(int(value) for value in recon_volume_shape)
+    if len(recon_volume_shape) != 3 or len(set(recon_volume_shape)) != 1:
+        raise ValueError(
+            "RELION point-group BPref symmetry requires a cubic accumulator, "
+            f"got {recon_volume_shape}"
+        )
+    if any(value <= 0 or value % 2 == 0 for value in recon_volume_shape):
+        raise ValueError(
+            "RELION point-group BPref symmetry requires an odd positive accumulator grid, "
+            f"got {recon_volume_shape}"
+        )
+
+    data_real = jnp.asarray(Ft_y_real).reshape(-1)
+    data_imag = jnp.asarray(Ft_y_imag).reshape(-1)
+    weight = jnp.asarray(Ft_ctf).reshape(-1)
+    for field, value in (
+        ("real data", data_real),
+        ("imaginary data", data_imag),
+        ("weight", weight),
+    ):
+        if value.dtype != jnp.dtype(jnp.float32):
+            raise TypeError(
+                f"RELION split point-group {field} accumulator must be float32, got {value.dtype}"
+            )
+
+    support_radius = recon_volume_shape[0] // 2 - 1
+    logger.info(
+        "%s M-step: enforcing RELION x=0 and %s point-group symmetry from split "
+        "accumulators (operators=%d, support_radius=%d)",
+        label,
+        canonical_label,
+        right_operators.shape[0],
+        support_radius,
+    )
+    from recovar import cuda_backproject
+
+    return cuda_backproject.relion_point_group_symmetrise_bpref_split_host(
+        data_real,
+        data_imag,
+        weight,
+        jnp.asarray(right_operators, dtype=np.float32),
+        recon_volume_shape,
+        support_radius,
+    )

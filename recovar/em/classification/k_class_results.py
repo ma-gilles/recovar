@@ -8,6 +8,7 @@ scoring engine or controller.
 
 from __future__ import annotations
 
+import os
 from typing import NamedTuple
 
 import jax
@@ -15,6 +16,9 @@ import jax.numpy as jnp
 import numpy as np
 
 from recovar.em.helpers.types import NoiseStats, RelionStats, make_noise_stats, make_relion_stats
+
+
+_K1_POSE_PUBLISH_DIRECT_ENV = "RECOVAR_K1_POSE_PUBLISH_DIRECT"
 
 
 class KClassEMResult(NamedTuple):
@@ -73,11 +77,33 @@ def _stack_or_none(values):
 
 
 
-def _selected_by_class(per_class_values, class_assignments: np.ndarray):
+def _k1_pose_publish_direct_requested() -> bool:
+    token = os.environ.get(_K1_POSE_PUBLISH_DIRECT_ENV, "0").strip()
+    if token not in {"0", "1"}:
+        raise ValueError(f"{_K1_POSE_PUBLISH_DIRECT_ENV} must be 0 or 1")
+    return token == "1"
+
+
+
+def _selected_by_class(per_class_values, class_assignments: np.ndarray, *, direct_single_class: bool = False):
+    if (
+        direct_single_class
+        and per_class_values is not None
+        and len(per_class_values) == 1
+        and isinstance(class_assignments, np.ndarray)
+        and class_assignments.ndim == 1
+        and np.all(class_assignments == 0)
+    ):
+        # The sole class already has the requested image order. Avoid stacking,
+        # index normalization and a device gather for each changing subset N.
+        value = jnp.asarray(per_class_values[0])
+        if value.ndim > 0 and value.shape[0] == class_assignments.shape[0]:
+            return value
     stacked = _stack_or_none(per_class_values)
     if stacked is None:
         return None
     return _select_stacked_rows_by_class(stacked, np.asarray(class_assignments, dtype=np.int32))
+
 
 
 @jax.jit
@@ -238,6 +264,67 @@ def _assemble_result(
     mstep_full_half_axis: int | None = None,
     mstep_accumulator_shape: tuple[int, int, int] | None = None,
 ) -> KClassEMResult:
+    # Fail before class-indexed gathers: a trailing duplicated class used to be
+    # silently ignored, while a missing row failed later with an opaque index
+    # error and could leave the other class-aligned outputs unchecked.
+    class_log_evidence = np.asarray(class_log_evidence)
+    if class_log_evidence.ndim != 2 or int(class_log_evidence.shape[0]) < 1:
+        raise ValueError(
+            "class_log_evidence must have shape (n_classes, n_images), "
+            f"got {class_log_evidence.shape}",
+        )
+    n_classes, n_images = (int(value) for value in class_log_evidence.shape)
+
+    def _require_class_count(values, name: str) -> None:
+        if len(values) != n_classes:
+            raise ValueError(f"{name} must contain exactly {n_classes} classes, got {len(values)}")
+
+    _require_class_count(Ft_y, "Ft_y")
+    _require_class_count(Ft_ctf, "Ft_ctf")
+    _require_class_count(per_class_stats, "per_class_stats")
+    if new_means is not None:
+        _require_class_count(new_means, "new_means")
+    if noise_stats is not None:
+        _require_class_count(noise_stats, "noise_stats")
+
+    per_class_hard_assignments = np.asarray(per_class_hard_assignments)
+    if per_class_hard_assignments.shape != (n_classes, n_images):
+        raise ValueError(
+            "per_class_hard_assignments must have shape "
+            f"({n_classes}, {n_images}), got {per_class_hard_assignments.shape}",
+        )
+    for class_index, class_stats in enumerate(per_class_stats):
+        best_scores = np.asarray(class_stats.best_log_score_per_image)
+        if best_scores.shape != (n_images,):
+            raise ValueError(
+                f"per_class_stats[{class_index}].best_log_score_per_image must have shape "
+                f"({n_images},), got {best_scores.shape}",
+            )
+
+    best_pose_fields = (
+        per_class_best_pose_rotations,
+        per_class_best_pose_translations,
+        per_class_best_pose_rotation_ids,
+    )
+    if any(values is not None for values in best_pose_fields):
+        if any(values is None for values in best_pose_fields):
+            raise ValueError("per-class best-pose rotations, translations, and rotation IDs must be provided together")
+        for values, name in zip(
+            best_pose_fields,
+            (
+                "per_class_best_pose_rotations",
+                "per_class_best_pose_translations",
+                "per_class_best_pose_rotation_ids",
+            ),
+        ):
+            _require_class_count(values, name)
+            for class_index, class_values in enumerate(values):
+                if int(np.asarray(class_values).shape[0]) != n_images:
+                    raise ValueError(
+                        f"{name}[{class_index}] must have leading image axis {n_images}, "
+                        f"got {np.asarray(class_values).shape}",
+                    )
+
     # Derive the output dtype from the per-class stats' own precision rather
     # than hardcoding float32: threading an explicit dtype/precision_policy
     # parameter through this function's several callers (each several
@@ -337,9 +424,16 @@ def _assemble_result(
         rotation_dtype=rotation_posterior_sums.dtype,
         host_arrays=host_stats_publication,
     )
-    best_pose_rotations = _selected_by_class(per_class_best_pose_rotations, class_assignments)
-    best_pose_translations = _selected_by_class(per_class_best_pose_translations, class_assignments)
-    best_pose_rotation_ids = _selected_by_class(per_class_best_pose_rotation_ids, class_assignments)
+    direct_single_class = _k1_pose_publish_direct_requested()
+    best_pose_rotations = _selected_by_class(
+        per_class_best_pose_rotations, class_assignments, direct_single_class=direct_single_class
+    )
+    best_pose_translations = _selected_by_class(
+        per_class_best_pose_translations, class_assignments, direct_single_class=direct_single_class
+    )
+    best_pose_rotation_ids = _selected_by_class(
+        per_class_best_pose_rotation_ids, class_assignments, direct_single_class=direct_single_class
+    )
     best_pose_eulers_deg = None
     if per_class_best_pose_eulers_deg is not None:
         selected_classes = np.asarray(class_assignments)
@@ -575,6 +669,9 @@ class SparseKClassHostStatistics(NamedTuple):
         log_score_offset,
         use_exact_relion_gaussian,
         per_image_inputs_by_class,
+        best_pair_row=None,
+        best_pair_translation=None,
+        vectorized_stats_replay=False,
     ):
         """Apply one bucket with explicit inputs; never read a loop closure.
 
@@ -592,6 +689,20 @@ class SparseKClassHostStatistics(NamedTuple):
             max_posterior,
             rotation_posterior_sums,
         ) = self
+        for name, value in (
+            ("image_indices", image_indices),
+            ("best_argmax", best_argmax),
+            ("best_log_score", best_log_score_bucket),
+            ("max_posterior", max_posterior_bucket),
+            ("class_log_z", class_log_z),
+            ("probs_sum_t", probs_sum_t_jax),
+        ):
+            shape = np.shape(value)
+            if not shape or shape[0] != int(batch):
+                raise RuntimeError(
+                    f"deferred statistics leaf {name} has shape {shape} but the bucket "
+                    f"has {batch} real images (class {class_index + 1})"
+                )
         actual_counts_arr = np.asarray(actual_counts, dtype=np.int64)
         best_argmax_np = np.asarray(best_argmax, dtype=np.int64)
         best_log_score_np = np.asarray(best_log_score_bucket, dtype=np.float64)
@@ -599,17 +710,16 @@ class SparseKClassHostStatistics(NamedTuple):
         if bucket_uses_compact_pairs:
             safe_best_argmax_np = np.where(has_best_pose_np, best_argmax_np, 0)
             row_index_np = np.arange(batch, dtype=np.int64)
-            pair_local_rotation_row = np.asarray(local_rotation_row, dtype=np.int32)
-            pair_translation_idx = np.asarray(translation_idx, dtype=np.int32)
+            if best_pair_row is None:
+                pair_local_rotation_row = np.asarray(local_rotation_row, dtype=np.int32)
+                pair_translation_idx = np.asarray(translation_idx, dtype=np.int32)
+                best_pair_row = pair_local_rotation_row[row_index_np, safe_best_argmax_np]
+                best_pair_translation = pair_translation_idx[row_index_np, safe_best_argmax_np]
             best_rot_idx = np.where(
-                has_best_pose_np,
-                pair_local_rotation_row[row_index_np, safe_best_argmax_np],
-                0,
+                has_best_pose_np, np.asarray(best_pair_row), 0,
             ).astype(np.int64, copy=False)
             best_trans_idx = np.where(
-                has_best_pose_np,
-                pair_translation_idx[row_index_np, safe_best_argmax_np],
-                0,
+                has_best_pose_np, np.asarray(best_pair_translation), 0,
             ).astype(np.int64, copy=False)
         else:
             best_rot_idx = best_argmax_np // n_fine_trans
@@ -631,6 +741,50 @@ class SparseKClassHostStatistics(NamedTuple):
         )
         class_log_z_np = np.asarray(class_log_z, dtype=np.float64)
         probs_sum_t = np.asarray(probs_sum_t_jax, dtype=np.float64)
+        if vectorized_stats_replay:
+            n_real = int(batch)
+            img = np.asarray(image_indices[:n_real], dtype=np.int64)
+            per_image_inputs = per_image_inputs_by_class[class_index]
+            fine_rot = best_fine_rot_idx[:n_real].astype(np.int64)
+            trans = best_trans_idx[:n_real].astype(np.int64)
+            rot_local = best_rot_idx[:n_real].astype(np.int64)
+            class_hard_assignments[class_index, img] = fine_rot * n_fine_trans + trans
+            rotation_table = per_image_inputs.get("rotation_table") if isinstance(per_image_inputs, dict) else None
+            if rotation_table is not None:
+                best_rotations[class_index][img] = np.asarray(rotation_table)[fine_rot]
+            else:
+                for row, image_idx in enumerate(img.tolist()):
+                    best_rotations[class_index][image_idx] = per_image_inputs["oversampled_rots"][image_idx][int(rot_local[row])]
+            if best_eulers is not None:
+                for row, image_idx in enumerate(img.tolist()):
+                    best_eulers[class_index][image_idx] = per_image_inputs["source_eulers"][image_idx][int(rot_local[row])]
+            best_rotation_indices[class_index][img] = fine_rot
+            finite_z = np.isfinite(class_log_z_np[:n_real])
+            evidence = class_log_z_np[:n_real] + log_score_offset[:n_real]
+            class_log_evidence[class_index, img] = np.where(finite_z, evidence, -np.inf)
+            class_score_log_z[class_index, img] = np.where(
+                finite_z, evidence if use_exact_relion_gaussian else class_log_z_np[:n_real], -np.inf
+            )
+            best_log_score[class_index, img] = best_log_score_np[:n_real] + log_score_offset[:n_real]
+            max_posterior[class_index, img] = max_posterior_np[:n_real]
+            counts = actual_counts_arr[:n_real]
+            active = np.flatnonzero(counts > 0)
+            if active.size:
+                coarse_parts = []
+                prob_parts = []
+                for row in active.tolist():
+                    image_idx = int(img[row])
+                    cnt = int(counts[row])
+                    coarse_parts.append(
+                        per_image_inputs["unique_rot"][image_idx][per_image_inputs["parent_map"][image_idx]]
+                    )
+                    prob_parts.append(probs_sum_t[row, :cnt])
+                np.add.at(
+                    rotation_posterior_sums[class_index],
+                    np.concatenate(coarse_parts).astype(np.int64, copy=False),
+                    np.concatenate(prob_parts),
+                )
+            return
         for row, image_idx in enumerate(image_indices.tolist()):
             r = int(best_rot_idx[row])
             t = int(best_trans_idx[row])
@@ -677,13 +831,15 @@ class DeferredHostUpdates:
     closure. A single oversized record is transferred alone.
     """
 
-    def __init__(self, *, max_records=4, max_bytes=64 * 1024**2):
+    def __init__(self, *, max_records=4, max_bytes=64 * 1024**2, check=False):
         if max_records < 1 or max_bytes < 1:
             raise ValueError("host update limits must be positive")
         self.max_records = max_records
         self.max_bytes = max_bytes
         self.records = []
         self.pending_bytes = 0
+        from recovar.em.diagnostics.deferred_replay import DeferredReplayCheck
+        self.check = DeferredReplayCheck() if check else None
 
     def append(self, update, *, host, device):
         if host.keys() & device.keys():
@@ -691,6 +847,8 @@ class DeferredHostUpdates:
         size = sum(int(value.nbytes) for value in device.values())
         if self.records and self.pending_bytes + size > self.max_bytes:
             self.flush()
+        if self.check is not None:
+            self.check.append(update, host, device)
         self.records.append((update, host, device))
         self.pending_bytes += size
         if len(self.records) >= self.max_records or self.pending_bytes >= self.max_bytes:
@@ -699,14 +857,20 @@ class DeferredHostUpdates:
     def flush(self):
         if not self.records:
             return
-        # Each statistics record has five leaves, so the default group submits
-        # at most20 asynchronous copies rather than an iteration-sized transfer.
+        # Record and byte limits bound each transfer group; optional winning-pair
+        # and score-offset leaves travel with their producing record.
         pulled = jax.device_get([device for _, _, device in self.records])
         records = self.records
+        if self.check is not None:
+            self.check.validate_inputs(records, pulled)
         self.records = []
         self.pending_bytes = 0
-        for (update, host, _), device in zip(records, pulled, strict=True):
+        for position, ((update, host, _), device) in enumerate(zip(records, pulled, strict=True)):
             update(**host, **device)
+            if self.check is not None:
+                self.check.validate_output(position, update, host)
+        if self.check is not None:
+            self.check.finish()
 
 
 class SparseKClassNoiseStatistics(NamedTuple):
@@ -732,13 +896,14 @@ class SparseKClassNoiseStatistics(NamedTuple):
             np.sum(translation_posterior * translation_sqdist_ang, dtype=np.float64)
         )
 
-    def power(self, *, class_index, image_indices, support_mass, weighted_img_shells, weighted_img_per_image):
+    def power(self, *, class_index, image_indices, support_mass, weighted_img_shells, weighted_img_per_image=None, update_norm=True):
         support_mass_np = np.asarray(support_mass, dtype=np.float64)
         self.noise_img_power_total[class_index] += np.asarray(weighted_img_shells, dtype=np.float64)
-        self.noise_norm_correction_total[class_index][image_indices] += np.asarray(
-            weighted_img_per_image,
-            dtype=np.float64,
-        )
+        if update_norm:
+            np.add.at(
+                self.noise_norm_correction_total[class_index], image_indices,
+                np.asarray(weighted_img_per_image, dtype=np.float64),
+            )
         self.noise_sumw_total[class_index] += float(np.sum(support_mass_np, dtype=np.float64))
 
     def scale(self, *, class_index, bucket_group_ids, scale_xa_per_image, scale_aa_per_image):
@@ -755,7 +920,85 @@ class SparseKClassNoiseStatistics(NamedTuple):
 
     def residual(self, *, class_index, image_indices, block_noise_shells, block_norm_residual):
         self.noise_wsum_total[class_index] += np.asarray(block_noise_shells, dtype=np.float64)
-        self.noise_norm_correction_total[class_index][image_indices] += np.asarray(
-            block_norm_residual,
-            dtype=np.float64,
+        np.add.at(
+            self.noise_norm_correction_total[class_index], image_indices,
+            np.asarray(block_norm_residual, dtype=np.float64),
         )
+
+
+@jax.jit
+def _accumulate_noise_totals_device(
+    wsum_total, norm_total, padded_leak, image_indices, n_real_images, block_shells, block_norm_residual
+):
+    """float64 ``wsum += shells`` and ``norm[image] += residual`` on the device.
+
+    The chunk's first ``n_real_images`` indices are unique, so their scatter-add
+    is a plain per-element add and equals the host ``np.add.at`` bit for bit.
+    Image-capacity padding repeats the last real image's index; those rows
+    carry exactly zero residual (zero posterior mass zeroes every term of
+    :func:`_compute_noise_block_and_norm_residual_from_flat_rows_residual_terms`),
+    so the host adds exact zeros for them.  They are routed to an out-of-bounds
+    slot and dropped here (the unique-index promise is undefined for
+    overlapping indices, JAX ``lax.slicing``), and ``padded_leak`` records
+    whether any padded row carried a non-zero residual so the fold can fail
+    closed instead of silently diverging from the host.  A per-row device
+    loop is not used: XLA executes while loops with a host round trip per
+    iteration.
+    """
+
+    wsum_total = wsum_total + jnp.asarray(block_shells, dtype=jnp.float64)
+    residual = jnp.asarray(block_norm_residual, dtype=jnp.float64)
+    rows = jnp.arange(residual.shape[0], dtype=jnp.int32)
+    real = rows < n_real_images
+    out_of_bounds = jnp.int32(norm_total.shape[0])
+    scatter_indices = jnp.where(real, image_indices, out_of_bounds)
+    norm_total = norm_total.at[scatter_indices].add(residual, unique_indices=True, mode="drop")
+    padded_leak = padded_leak | jnp.any(jnp.where(real, False, residual != 0.0))
+    return wsum_total, norm_total, padded_leak
+
+
+class SparseKClassDeviceNoiseTotals:
+    """Keep norm and residual totals on device across bounded host-stat flushes.
+
+    Power and residual contributions enter in their original loop order. These
+    are the existing float64 statistics accumulators, not double EM scoring.
+    The host owner must not mutate these two totals before ``finish``.
+    """
+
+    def __init__(self, host_statistics):
+        self.host = host_statistics
+        self.totals = {}
+        self.snapshots = {}
+
+    def add(self, class_index, image_indices, n_real_images, residual, shells=None):
+        if class_index not in self.totals:
+            wsum = self.host.noise_wsum_total[class_index]
+            norm = self.host.noise_norm_correction_total[class_index]
+            self.snapshots[class_index] = (wsum.copy(), norm.copy())
+            self.totals[class_index] = (
+                jnp.asarray(wsum, dtype=jnp.float64),
+                jnp.asarray(norm, dtype=jnp.float64),
+                jnp.asarray(False),
+            )
+        wsum, norm, leak = self.totals[class_index]
+        self.totals[class_index] = _accumulate_noise_totals_device(
+            wsum, norm, leak, jnp.asarray(image_indices, dtype=jnp.int32),
+            jnp.int32(n_real_images),
+            jnp.zeros_like(wsum) if shells is None else shells, residual,
+        )
+
+    def finish(self):
+        for class_index, values in self.totals.items():
+            wsum, norm, leak = jax.device_get(values)
+            old_wsum, old_norm = self.snapshots[class_index]
+            if not (
+                np.array_equal(self.host.noise_wsum_total[class_index], old_wsum)
+                and np.array_equal(self.host.noise_norm_correction_total[class_index], old_norm)
+            ):
+                raise RuntimeError("host noise totals changed during device accumulation")
+            if bool(leak):
+                raise RuntimeError("padded image row carried non-zero norm residual")
+            self.host.noise_wsum_total[class_index][...] = wsum
+            self.host.noise_norm_correction_total[class_index][...] = norm
+        self.totals.clear()
+        self.snapshots.clear()

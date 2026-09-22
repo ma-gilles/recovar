@@ -118,6 +118,7 @@ def _adaptive_pass2_grids(
     translation_step,
     random_perturbation,
     coarse_rotation_ids,
+    symmetry: str = "C1",
 ) -> _AdaptivePass2Grids:
     """Materialize RELION's two-pass trial grids for the dense adaptive engine.
 
@@ -150,6 +151,7 @@ def _adaptive_pass2_grids(
             if coarse_rotation_ids is not None
             else {}
         ),
+        **({"symmetry": symmetry} if symmetry != "C1" else {}),
     )
     coarse_translation_phase_source = apply_relion_translation_perturbation(
         np.asarray(base_translations, dtype=np.float64),
@@ -285,6 +287,7 @@ def _score_half_dense(
     # the defaults):
     k_class_image_batch_size_override: int | None = None,
     k_class_rotation_block_size_override: int | None = None,
+    significance_safe_batch_sizes=None,
     significance_image_batch_size_override: int | None = None,
     significance_rotation_block_size_override: int | None = None,
     firstiter_coarse_current_size: int | None = None,
@@ -300,6 +303,7 @@ def _score_half_dense(
     preserve_bpref_particle_order: bool = False,
     source_faithful_spectrum_norm: bool = False,
     coarse_scoring_rotations=None,
+    symmetry: str = "C1",
 ) -> HalfScoreResult:
     """Dense (non-local-search) E+M scoring for one half-set.
 
@@ -327,6 +331,14 @@ def _score_half_dense(
     ``refine_single_volume``.
     """
 
+    from recovar.em.symmetry import canonicalize_rotational_symmetry
+
+    symmetry = canonicalize_rotational_symmetry(symmetry)
+    if symmetry != "C1" and int(state.adaptive_oversampling) <= 0:
+        raise NotImplementedError(
+            f"{symmetry} non-adaptive dense reconstruction is unsupported; "
+            "use the adaptive sparse or exact-local RELION x-half M-step"
+        )
     safe_ibs, safe_rbs = safe_batch_sizes(
         effective_rotations.shape[0],
         current_translations.shape[0],
@@ -349,6 +361,8 @@ def _score_half_dense(
         "relion_firstiter_score_mode": firstiter_score_mode_this_iter,
         "relion_firstiter_winner_take_all": firstiter_winner_take_all_this_iter,
     }
+    if symmetry != "C1":
+        em_kwargs["symmetry_label"] = symmetry
     if model_current_size_for_engine is not None:
         em_kwargs["reconstruction_current_size"] = model_current_size_for_engine
     if preserve_bpref_particle_order and k_class_enabled:
@@ -395,6 +409,7 @@ def _score_half_dense(
             "class_log_priors": class_log_priors,
             "image_batch_size": image_batch_size,
             "safe_batch_sizes": safe_batch_sizes,
+            "significance_safe_batch_sizes": significance_safe_batch_sizes,
             "coarse_current_size": firstiter_coarse_current_size,
             "fine_current_size": firstiter_fine_current_size,
             "update_em_kwargs_image_batch_size": firstiter_updates_em_kwargs_ibs,
@@ -409,6 +424,8 @@ def _score_half_dense(
         # default, matching the K=1 parity path. The explicit selector can
         # still choose the dense full-volume path.
         k_class_relion_x_half_mstep = _k_class_relion_x_half_mstep_enabled()
+        if symmetry != "C1" and not k_class_relion_x_half_mstep:
+            raise RuntimeError(f"{symmetry} requires sparse RELION x-half BPref reconstruction")
         em_kwargs["mstep_relion_x_half"] = bool(k_class_relion_x_half_mstep)
         em_kwargs["relion_half_volume_mstep"] = False
         k_class_mstep_full_half_axis_this_score = None
@@ -435,6 +452,7 @@ def _score_half_dense(
                 log_label=firstiter_log_label,
                 coarse_rotation_ids=coarse_rotation_ids,
                 **firstiter_kwargs,
+                **({"symmetry": symmetry} if symmetry != "C1" else {}),
             )
             k_class_mstep_full_half_axis_this_score = k_class_result.mstep_full_half_axis
         elif _dense_uses_adaptive_engine(state.adaptive_oversampling, group_ids_k):
@@ -464,6 +482,7 @@ def _score_half_dense(
                 translation_step=state.translation_step,
                 random_perturbation=random_perturbation,
                 coarse_rotation_ids=coarse_rotation_ids,
+                **({"symmetry": symmetry} if symmetry != "C1" else {}),
             )
             rot_pmap_for_collapse = pass2_grids.rotation_parent_map
             trans_pmap_for_collapse = pass2_grids.translation_parent_map
@@ -480,6 +499,7 @@ def _score_half_dense(
                 coarse_current_size=firstiter_coarse_current_size,
                 fine_current_size=firstiter_fine_current_size,
                 safe_batch_sizes=safe_batch_sizes,
+                significance_safe_batch_sizes=significance_safe_batch_sizes,
             )
             adaptive_em_kwargs["image_batch_size"] = grid_batch_plan.pass2_image_batch_size
             adaptive_em_kwargs["rotation_block_size"] = grid_batch_plan.pass2_rotation_block_size
@@ -495,6 +515,8 @@ def _score_half_dense(
                 adaptive_em_kwargs["rotation_block_size"],
             )
             kclass_sparse_pass2 = _sparse_pass2_selected("RECOVAR_K_CLASS_DENSE_PASS2")
+            if symmetry != "C1" and not kclass_sparse_pass2:
+                raise RuntimeError(f"{symmetry} requires sparse RELION x-half BPref reconstruction")
             adaptive_em_kwargs["sparse_pass2"] = kclass_sparse_pass2
             logger.info(
                 "RELION adaptive K-class routing through run_dense_k_class_em_adaptive "
@@ -633,6 +655,7 @@ def _score_half_dense(
                 ),
                 log_label="K=1 ",
                 **firstiter_kwargs,
+                **({"symmetry": symmetry} if symmetry != "C1" else {}),
             )
         else:
             pass2_grids = _adaptive_pass2_grids(
@@ -644,6 +667,7 @@ def _score_half_dense(
                 translation_step=state.translation_step,
                 random_perturbation=random_perturbation,
                 coarse_rotation_ids=coarse_rotation_ids,
+                **({"symmetry": symmetry} if symmetry != "C1" else {}),
             )
             rot_pmap_for_collapse = pass2_grids.rotation_parent_map
             trans_pmap_for_collapse = pass2_grids.translation_parent_map
@@ -651,6 +675,8 @@ def _score_half_dense(
             fine_rotations_for_pose = pass2_grids.fine_rotations
             adaptive_em_kwargs = dict(em_kwargs)
             k1_sparse_pass2 = _sparse_pass2_selected("RECOVAR_K1_DENSE_PASS2")
+            if symmetry != "C1" and not k1_sparse_pass2:
+                raise RuntimeError(f"{symmetry} requires sparse RELION x-half BPref reconstruction")
             k1_skip_significance_pruning = _k1_skip_significance_pruning_enabled()
             adaptive_em_kwargs["sparse_pass2"] = k1_sparse_pass2
             if group_ids_k is not None:
@@ -759,6 +785,7 @@ def _score_half_dense(
                 translation_step=state.translation_step,
                 random_perturbation=random_perturbation,
                 coarse_rotation_ids=coarse_rotation_ids,
+                **({"symmetry": symmetry} if symmetry != "C1" else {}),
             ).fine_rotations
         fine_rotation_eulers_for_pose = None
         if fine_rotations_for_pose is not None and _parity_dump.is_active():
@@ -920,6 +947,7 @@ def _score_half_local(
     relion_projector_half=None,
     relion_projector_r_max: int | None = None,
     source_faithful_spectrum_norm: bool = False,
+    symmetry: str = "C1",
 ) -> HalfScoreResult:
     """Local-search E+M scoring for one half-set.
 
@@ -1092,7 +1120,7 @@ def _score_half_local(
                 "local_search_order must be >= local_parent_oversampling_order; "
                 f"got {local_search_order} and {local_parent_oversampling_order}",
             )
-        parent_grid_metadata = build_local_search_grid_metadata(parent_order)
+        parent_grid_metadata = build_local_search_grid_metadata(parent_order, **({"symmetry": symmetry} if symmetry != "C1" else {}))
         parent_layout = build_local_hypothesis_layout(
             previous_best_rotation_eulers_k,
             None,
@@ -1165,6 +1193,8 @@ def _score_half_local(
             apply_max_significants_to_support=True,
             score_only=True,
             **common_local_kwargs,
+            **({"symmetry": symmetry} if symmetry != "C1" else {}),
+            batch_size_planner=safe_batch_sizes,
         )
         parent_profile = parent_outputs.profile_summary
         significant_sample_indices = parent_profile["reconstruction_sample_indices_by_image"]
@@ -1206,6 +1236,7 @@ def _score_half_local(
             oversampling_order=int(local_parent_oversampling_order),
             random_perturbation=float(local_search_random_perturbation),
             dtype=fine_local_layout_dtype,
+            **({"symmetry": symmetry} if symmetry != "C1" else {}),
         )
         if local_adaptive_pass2_denominator_mode is not None:
             if local_adaptive_pass2_denominator_mode == "full_parent":
@@ -1224,6 +1255,7 @@ def _score_half_local(
                 oversampling_order=int(local_parent_oversampling_order),
                 random_perturbation=float(local_search_random_perturbation),
                 dtype=fine_local_layout_dtype,
+                **({"symmetry": symmetry} if symmetry != "C1" else {}),
             )
             log_local_denominator_support(
                 logger,
@@ -1302,6 +1334,8 @@ def _score_half_local(
                 ),
                 score_only=True,
                 **common_local_kwargs,
+                **({"symmetry": symmetry} if symmetry != "C1" else {}),
+                batch_size_planner=safe_batch_sizes,
             )
         finally:
             os.environ.update(saved_local_debug_env)
@@ -1378,6 +1412,8 @@ def _score_half_local(
         rotation_grid_mstep_rotations=local_search_mstep_rotations,
         generate_relion_mstep_rotations=True,
         **common_local_kwargs,
+        **({"symmetry": symmetry} if symmetry != "C1" else {}),
+        batch_size_planner=safe_batch_sizes,
     )
     Ft_y_k = local_outputs.Ft_y
     Ft_ctf_k = local_outputs.Ft_ctf

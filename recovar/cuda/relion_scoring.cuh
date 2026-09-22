@@ -2004,7 +2004,10 @@ cudaError_t launch_relion_coarse_normalized_cc_native_texture_pairs_f32(
             packed_pixel_count,
             current_size,
             padding_factor,
-            padded_max_r * padded_max_r,
+            // Match AccProjectorKernel::makeKernel: image support is smaller
+            // than the stored model when firstiter_cc uses a coarse window.
+            (std::min(projector_max_r, current_size / 2) * padding_factor) *
+                (std::min(projector_max_r, current_size / 2) * padding_factor),
             tex_y_init,
             tex_z_init);
     err = cudaGetLastError();

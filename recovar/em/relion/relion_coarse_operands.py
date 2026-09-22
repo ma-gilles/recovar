@@ -671,15 +671,26 @@ def _relion_cc_inverse_power_from_processed(processed_half, score_indices=None):
     )
 
 
-def _infer_relion_coarse_healpix_order(n_rotations: int) -> int | None:
+def _infer_relion_coarse_healpix_order(
+    n_rotations: int,
+    symmetry_label: str = "C1",
+) -> int | None:
     """Infer a complete RELION coarse-grid order, or return ``None``."""
 
     from recovar.em.sampling import rotation_grid_size
 
     for order in range(9):
-        if int(rotation_grid_size(order)) == int(n_rotations):
+        try:
+            grid_size = rotation_grid_size(order, symmetry_label)
+        except ValueError:
+            # Some high-order point groups have an empty ASU on the coarsest
+            # HEALPix grids.  They cannot match this observed rotation count.
+            continue
+        if int(grid_size) == int(n_rotations):
             return order
     return None
+
+
 
 
 def _relion_coarse_pose_tie_break_keys(
@@ -688,10 +699,11 @@ def _relion_coarse_pose_tie_break_keys(
     n_trans: int,
     healpix_order: int,
     coarse_rotation_ids=None,
+    symmetry_label: str = "C1",
 ):
     """Map RECOVAR pose ids to RELION's direction-major coarse order."""
 
-    from recovar.em.sampling import rotation_grid_n_in_planes
+    from recovar.em.sampling import rotation_grid_n_in_planes, rotation_grid_size
 
     candidate_pose_ids = np.asarray(candidate_pose_ids, dtype=np.int64)
     if candidate_pose_ids.ndim != 2:
@@ -711,9 +723,9 @@ def _relion_coarse_pose_tie_break_keys(
         canonical_rotation_ids = coarse_rotation_ids[local_rotation_ids]
 
     healpix_order = int(healpix_order)
-    n_directions = 12 * (4**healpix_order)
     n_psi = int(rotation_grid_n_in_planes(healpix_order))
-    n_rotations = n_directions * n_psi
+    n_rotations = int(rotation_grid_size(healpix_order, symmetry_label))
+    n_directions = n_rotations // n_psi
     if np.any(canonical_rotation_ids < 0) or np.any(canonical_rotation_ids >= n_rotations):
         raise ValueError(
             "canonical coarse rotation ids must index the complete "
@@ -725,6 +737,8 @@ def _relion_coarse_pose_tie_break_keys(
     return relion_rotation_ids * n_trans + candidate_pose_ids % n_trans
 
 
+
+
 def _select_relion_coarse_rescore_winner_slots(
     scores,
     candidate_pose_ids,
@@ -733,6 +747,7 @@ def _select_relion_coarse_rescore_winner_slots(
     healpix_order: int | None,
     coarse_rotation_ids=None,
     score_dtype=np.float32,
+    symmetry_label: str = "C1",
 ):
     """Select maxima, resolving exact score ties in RELION's flat order."""
 
@@ -756,6 +771,7 @@ def _select_relion_coarse_rescore_winner_slots(
             n_trans=n_trans,
             healpix_order=healpix_order,
             coarse_rotation_ids=coarse_rotation_ids,
+            symmetry_label=symmetry_label,
         )
     masked_keys = np.where(tied, tie_break_keys, np.iinfo(np.int64).max)
     return np.argmin(masked_keys, axis=1).astype(np.int32), int(exact_ties)

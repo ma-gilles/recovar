@@ -40,7 +40,6 @@ from scripts.run_multi_iter_parity import (
     replay_previous_relion_iteration,
     resolve_firstiter_cc_mode,
     resolve_relion_final_oracle_paths,
-    retain_group_scale_update_state,
     select_final_replay_override,
     stack_index_from_image_name,
     validate_final_only_replay_args,
@@ -713,26 +712,6 @@ def test_map_relion_scale_groups_to_half_order_rejects_invalid_or_missing_rows()
         map_relion_scale_groups_to_half_order([0], {10: 0}, [10])
     with pytest.raises(ValueError, match="missing particle identity"):
         map_relion_scale_groups_to_half_order([1], {10: 0}, [20])
-
-
-def test_retain_group_scale_update_state_only_omits_terminal_one_step():
-    assert not retain_group_scale_update_state(
-        max_iter=1,
-        skip_final_iteration=True,
-    )
-    assert retain_group_scale_update_state(
-        max_iter=1,
-        skip_final_iteration=False,
-    )
-    assert retain_group_scale_update_state(
-        max_iter=1,
-        skip_final_iteration=True,
-        diagnostic_retain_terminal_state=True,
-    )
-    assert retain_group_scale_update_state(
-        max_iter=2,
-        skip_final_iteration=True,
-    )
 
 
 def test_replay_iteration_helpers_split_previous_vs_control_state():

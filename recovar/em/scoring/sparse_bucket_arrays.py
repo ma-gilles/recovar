@@ -8,10 +8,14 @@ they neither execute scoring nor choose scientific or device policies.
 
 from __future__ import annotations
 
+import logging
+import math
+import os
+
 import numpy as np
 
 from recovar.em.helpers.batch_planning import _plan_consecutive_padded_batches
-from recovar.em.helpers.env_flags import parse_env_flag
+from recovar.em.helpers.env_flags import parse_env_binary_flag, parse_env_flag
 from recovar.em.helpers.shape_buckets import power_of_two_bucket
 from recovar.em.local.local_layout import _exact_bucket_rotation_size
 
@@ -40,6 +44,7 @@ from recovar.em.scoring.compact_candidates import (
     _candidate_mask_to_dense,
     build_compact_pair_index_arrays,
     compact_candidate_indices_in_source_order,
+    compact_pair_index_arrays_device,
 )
 from recovar.em.scoring.significant_samples import ComplementSignificantSampleIndices
 
@@ -51,7 +56,7 @@ _DEFAULT_TAIL_BUCKET_COALESCE_MIN_BUCKET_SIZE = 4096
 def _split_run_into_chunks(run, max_per_chunk):
     """Split one support-size run into consecutive bounded views."""
     cap = max(1, int(max_per_chunk))
-    return [run[start : start + cap] for start in range(0, len(run), cap)]
+    return [run[start:stop] for start, stop in bucket_chunk_bounds(len(run), cap)]
 
 
 def _bucket_pass2_inputs(
@@ -264,12 +269,12 @@ def _bucket_sparse_k_class_pass2_inputs(
                 cap_by_hypotheses,
             ),
         )
-        for start in range(0, bucket_image_indices.shape[0], max_per_chunk):
+        for start, stop in bucket_chunk_bounds(bucket_image_indices.shape[0], max_per_chunk):
             buckets.append(
                 {
                     "bucket_size": bucket_size,
                     "image_indices": np.asarray(
-                        bucket_image_indices[start : start + max_per_chunk],
+                        bucket_image_indices[start:stop],
                         dtype=np.int64,
                     ),
                 }
@@ -375,19 +380,85 @@ def _coalesce_tail_bucket_sizes(
     return assigned_sizes[inverse]
 
 
+_SPARSE_KCLASS_PAIR_BUCKET_QUANTUM_ENV = "RECOVAR_SPARSE_KCLASS_PAIR_BUCKET_QUANTUM"
+_AUTO_COMPACT_PAIR_QUANTUM_MIN = 4096
+_AUTO_COMPACT_PAIR_QUANTUM_MAX = 32768
+_AUTO_COMPACT_PAIR_QUANTUM_MEAN_MULTIPLE = 2.0
+logger = logging.getLogger(__name__)
+
+
+def _compact_pair_bucket_quantum(pair_counts_by_class=None) -> int | None:
+    """Optional coarser quantum for compact pair widths above the engine cap.
+
+    The default ladder steps pair widths by 4096 above the cap, which gave 55
+    distinct widths and 112 distinct bucket shapes in one 100k/256 iteration
+    (job 13807792), each compiling the whole per-class stage chain. With masked
+    pairs skipped by the fused score kernel and the pair-sparse sums, pair
+    padding is nearly free, so ``RECOVAR_SPARSE_KCLASS_PAIR_BUCKET_QUANTUM``
+    (for example 32768) trades a little padding for far fewer programs. Rows are
+    not affected. ``None`` keeps the default ladder.
+
+    ``auto`` picks the quantum per call from the valid-pair counts themselves:
+    the smallest power of two at or above twice the mean valid pairs per
+    image-class, clamped to [4096, 32768]. The two costs a fixed quantum trades
+    move in opposite directions over a run. Early iterations have wide, flat
+    posteriors (mean valid pairs 16446 at iteration 2 of the 100k/256 K=4
+    fixture, job 13905556) and a fine quantum there creates many group shapes
+    to compile: quantum 4096 cost +57 percent at iteration 2 and +27 percent at
+    iteration 3 against 16384 (job 13912594). Late iterations are sparse (mean
+    1371-1654 from iteration 6 on) and a coarse quantum there is mostly
+    padding: 16384 padded 7x the valid pairs at iteration 12 and 4096 was 17
+    percent faster at iterations 12-13. The crossover in those runs sits near a
+    mean of 3000, which twice-the-mean rounded up reproduces: 32768 at
+    iteration 2, 16384 at 3-4, 8192 at 5, 4096 from 6 on.
+    """
+    raw = os.environ.get(_SPARSE_KCLASS_PAIR_BUCKET_QUANTUM_ENV, "").strip()
+    if raw.lower() != "auto":
+        if not raw:
+            return None
+        try:
+            value = int(raw)
+        except ValueError as exc:
+            raise ValueError(f"{_SPARSE_KCLASS_PAIR_BUCKET_QUANTUM_ENV} must be a positive integer, got {raw!r}") from exc
+        if value <= 0:
+            raise ValueError(f"{_SPARSE_KCLASS_PAIR_BUCKET_QUANTUM_ENV} must be a positive integer, got {raw!r}")
+        return value
+    if not pair_counts_by_class:
+        return None
+    valid_counts = np.concatenate([np.asarray(c, dtype=np.int64).reshape(-1) for c in pair_counts_by_class])
+    if valid_counts.size == 0:
+        return None
+    mean_valid = float(np.mean(valid_counts))
+    target = max(1.0, _AUTO_COMPACT_PAIR_QUANTUM_MEAN_MULTIPLE * mean_valid)
+    quantum = 1 << int(math.ceil(math.log2(target)))
+    quantum = int(min(max(quantum, _AUTO_COMPACT_PAIR_QUANTUM_MIN), _AUTO_COMPACT_PAIR_QUANTUM_MAX))
+    logger.info(
+        "sparse K-class compact pairs: auto pair bucket quantum=%d from mean valid pairs/image-class=%.1f",
+        quantum,
+        mean_valid,
+    )
+    return quantum
+
+
 def _compact_pair_fused_bucket_sizes(pair_counts_by_class, *, pair_block_size_for_quantization=5000):
     if not pair_counts_by_class:
         return np.zeros(0, dtype=np.int64), np.zeros(0, dtype=np.int64)
     fused_pair_counts = np.max(np.stack(pair_counts_by_class, axis=0), axis=0)
+    # Resolve the quantum once per plan, not once per image: the accessor reads the
+    # environment and, in auto mode, the whole pair-count distribution.
+    large_bucket_quantum = _compact_pair_bucket_quantum(pair_counts_by_class)
     pair_bucket_sizes = np.asarray(
         [
-            _exact_bucket_rotation_size(int(count), pair_block_size_for_quantization)
+            _exact_bucket_rotation_size(
+                int(count),
+                pair_block_size_for_quantization,
+                large_bucket_quantum=large_bucket_quantum,
+            )
             for count in fused_pair_counts
         ],
         dtype=np.int64,
     )
     return fused_pair_counts, pair_bucket_sizes
-
 
 def _compact_pair_image_mask_for_threshold(
     pair_counts_by_class,
@@ -471,18 +542,207 @@ def _bucket_sparse_k_class_compact_pair_counts(
             int(max_pair_candidates_per_microbatch) // max(1, int(n_classes) * pair_bucket_size),
         )
         max_per_chunk = max(1, min(int(max_images_per_microbatch), cap_by_pairs))
-        for start in range(0, bucket_image_indices.shape[0], max_per_chunk):
+        for start, stop in bucket_chunk_bounds(bucket_image_indices.shape[0], max_per_chunk):
             buckets.append(
                 {
                     "pair_bucket_size": pair_bucket_size,
                     "image_indices": np.asarray(
-                        bucket_image_indices[start : start + max_per_chunk],
+                        bucket_image_indices[start:stop],
                         dtype=np.int64,
                     ),
                 }
             )
     return buckets
 
+
+
+VECTORIZED_HYPOTHESIS_PREP_ENV = "RECOVAR_SPARSE_PASS2_VECTORIZED_HYPOTHESIS_PREP"
+
+
+def vectorized_hypothesis_prep_enabled() -> bool:
+    """Prepare the per-image pass-2 hypotheses for all images at once.
+
+    ``_prepare_per_image_pass2_inputs`` loops over every image in Python
+    (np.unique, boolean child masks, searchsorted, per-image gathers); at
+    100k/256 K=4 that is 34 s of host time per iteration (job 13832892,
+    "hypothesis_prep=34.06s").  The vectorized path builds the same per-image
+    arrays from flat concatenations and hands out views, for the paired
+    RELION fine-grid override with a parent-major fine grid.  Images that need
+    another branch (no samples, complement masks, empty sets) keep the loop.
+    """
+
+    return parse_env_binary_flag(VECTORIZED_HYPOTHESIS_PREP_ENV)
+
+
+def _pow2_at_least(value: int, floor: int) -> int:
+    value = max(int(value), int(floor))
+    return 1 << (value - 1).bit_length()
+
+
+def _fine_children_ranges(fine_parent_np, n_coarse_rot):
+    """``(child_start, child_count)`` per coarse rotation, or ``None`` if not parent-major."""
+
+    fine_parent_np = np.asarray(fine_parent_np, dtype=np.int64)
+    if fine_parent_np.ndim != 1 or (fine_parent_np.size > 1 and np.any(np.diff(fine_parent_np) < 0)):
+        return None
+    child_count = np.bincount(fine_parent_np, minlength=int(n_coarse_rot)).astype(np.int64)
+    child_start = np.concatenate(([0], np.cumsum(child_count)[:-1])).astype(np.int64)
+    return child_start, child_count
+
+
+def _prepare_coarse_images_vectorized(
+    sample_lists,
+    *,
+    n_coarse_rot,
+    n_coarse_trans,
+    n_fine_trans,
+    fine_translation_parent,
+    rotation_log_prior_np,
+    fine_rotations_np,
+    fine_mstep_rotations_np,
+    fine_source_eulers,
+    child_start,
+    child_count,
+    dtype,
+):
+    """Vectorized equivalent of the per-image ``coarse`` branch of the loop.
+
+    Every returned per-image array is a view into one flat array and equals
+    the loop's result element for element (values, dtypes and order); the
+    unique coarse rotations are ascending, the fine rows are the ascending
+    children of those rotations (``np.flatnonzero`` order for a parent-major
+    grid) and ``parent_map`` is the rank of each row's parent.
+    """
+
+    n_images = len(sample_lists)
+    lengths = np.fromiter((int(np.asarray(s).size) for s in sample_lists), dtype=np.int64, count=n_images)
+    flat_sig = (
+        np.concatenate([np.asarray(s, dtype=np.int32).reshape(-1) for s in sample_lists]).astype(np.int64)
+        if n_images
+        else np.zeros(0, dtype=np.int64)
+    )
+    sig_img = np.repeat(np.arange(n_images, dtype=np.int64), lengths)
+    # The loop marks a boolean (coarse rotation, coarse translation) table, so a
+    # significant index listed twice for one image counts once; dedupe here so
+    # the per-pair sample sums below give the loop's ``count`` (lead review
+    # em_clean_vectorized_hypothesis_duplicate_20260913).
+    total_cells = int(n_coarse_rot) * int(n_coarse_trans)
+    cell_keys = sig_img * total_cells + flat_sig
+    if cell_keys.size > 1 and not bool(np.all(np.diff(cell_keys) > 0)):
+        # Only sort when some image lists an index twice or out of order; the
+        # significance pass emits sorted unique indices, so this is the rare path.
+        cell_keys = np.unique(cell_keys)
+        sig_img = cell_keys // total_cells
+        flat_sig = cell_keys % total_cells
+    coarse_rot = flat_sig // int(n_coarse_trans)
+    coarse_trans = flat_sig % int(n_coarse_trans)
+    pair_key, sig_pair = np.unique(sig_img * int(n_coarse_rot) + coarse_rot, return_inverse=True)
+    sig_pair = np.asarray(sig_pair).reshape(-1)
+    pair_img = pair_key // int(n_coarse_rot)
+    pair_urot = pair_key % int(n_coarse_rot)
+    n_pairs = int(pair_key.shape[0])
+    pairs_per_image = np.bincount(pair_img, minlength=n_images).astype(np.int64)
+    pair_starts = np.concatenate(([0], np.cumsum(pairs_per_image)[:-1])).astype(np.int64)
+    pair_rank = np.arange(n_pairs, dtype=np.int64) - np.repeat(pair_starts, pairs_per_image)
+
+    rows_per_pair = child_count[pair_urot]
+    n_rows = int(rows_per_pair.sum())
+    row_pair = np.repeat(np.arange(n_pairs, dtype=np.int64), rows_per_pair)
+    row_starts = np.concatenate(([0], np.cumsum(rows_per_pair)[:-1])).astype(np.int64)
+    row_offset = np.arange(n_rows, dtype=np.int64) - np.repeat(row_starts, rows_per_pair)
+    flat_rot_indices = child_start[pair_urot][row_pair] + row_offset
+    flat_parent_map = pair_rank[row_pair].astype(np.int32)
+    rows_per_image = np.bincount(pair_img, weights=rows_per_pair, minlength=n_images).astype(np.int64)
+
+    # np.take on a contiguous first axis is the fastest host gather for these
+    # (rows, 3, 3) / (rows, 3) tables; the per-image loop gathers the same rows.
+    flat_rots = np.take(np.asarray(fine_rotations_np, dtype=dtype), flat_rot_indices, axis=0)
+    flat_mstep_rots = (
+        None
+        if fine_mstep_rotations_np is None
+        else np.take(np.asarray(fine_mstep_rotations_np, dtype=dtype), flat_rot_indices, axis=0)
+    )
+    flat_eulers = None if fine_source_eulers is None else np.take(np.asarray(fine_source_eulers), flat_rot_indices, axis=0)
+    if rotation_log_prior_np is not None:
+        flat_log_prior = np.take(np.asarray(rotation_log_prior_np, dtype=dtype), pair_urot[row_pair])
+    else:
+        flat_log_prior = np.zeros(n_rows, dtype=dtype)
+
+    coarse_valid_flat = np.zeros((n_pairs, int(n_coarse_trans)), dtype=bool)
+    coarse_valid_flat[sig_pair, coarse_trans] = True
+    ftp = np.asarray(fine_translation_parent, dtype=np.int64).reshape(-1)
+    fine_children_per_coarse_trans = np.bincount(ftp, minlength=int(n_coarse_trans)).astype(np.int64)
+    # Each significant sample is one distinct (coarse rotation, coarse translation)
+    # cell of its image, so the fine-translation children of a pair's valid cells
+    # sum over its samples; exact in float64 for these small integers.
+    valid_fine_per_pair = np.rint(
+        np.bincount(sig_pair, weights=fine_children_per_coarse_trans[coarse_trans], minlength=n_pairs)
+    ).astype(np.int64)
+    counts_per_image = np.rint(
+        np.bincount(pair_img, weights=rows_per_pair * valid_fine_per_pair, minlength=n_images)
+    ).astype(np.int64)
+
+    row_bounds = np.concatenate(([0], np.cumsum(rows_per_image))).astype(np.int64)
+    pair_bounds = np.concatenate(([0], np.cumsum(pairs_per_image))).astype(np.int64)
+    unique_rot_flat = pair_urot.astype(np.int32)
+    out = {
+        "source_eulers": [],
+        "oversampled_rots": [],
+        "oversampled_mstep_rots": [],
+        "parent_map": [],
+        "oversampled_rot_indices": [],
+        "unique_rot": [],
+        "log_prior": [],
+        "candidate_mask": [],
+    }
+    # Flat coarse tables and row parents for the device index builder
+    # (RECOVAR_SPARSE_KCLASS_RESIDENT_HYPOTHESIS_TABLES): one upload per class
+    # and iteration instead of a host (images, cR, cT)/(images, rows) build and
+    # upload per class-chunk. ``token`` identifies this content for the cache.
+    import uuid
+
+    out["_resident"] = {
+        "coarse_valid_flat": coarse_valid_flat,
+        "parent_map_flat": flat_parent_map,
+        "rot_indices_flat": flat_rot_indices.astype(np.int32, copy=False),
+        "pair_bounds": pair_bounds,
+        "row_bounds": row_bounds,
+        "n_coarse_trans": int(n_coarse_trans),
+        "token": uuid.uuid4().hex,
+    }
+    for i in range(n_images):
+        r0, r1 = int(row_bounds[i]), int(row_bounds[i + 1])
+        p0, p1 = int(pair_bounds[i]), int(pair_bounds[i + 1])
+        rots = flat_rots[r0:r1]
+        parent_map = flat_parent_map[r0:r1]
+        out["source_eulers"].append(None if flat_eulers is None else flat_eulers[r0:r1])
+        out["oversampled_rots"].append(rots)
+        out["oversampled_mstep_rots"].append(rots if flat_mstep_rots is None else flat_mstep_rots[r0:r1])
+        out["parent_map"].append(parent_map)
+        out["oversampled_rot_indices"].append(flat_rot_indices[r0:r1])
+        out["unique_rot"].append(unique_rot_flat[p0:p1])
+        out["log_prior"].append(flat_log_prior[r0:r1])
+        out["candidate_mask"].append(
+            SparseCandidateMask(
+                mode="coarse",
+                n_rows=r1 - r0,
+                n_fine_trans=n_fine_trans,
+                parent_map=parent_map,
+                coarse_valid=coarse_valid_flat[p0:p1],
+                fine_translation_parent=fine_translation_parent,
+                count=int(counts_per_image[i]),
+            )
+        )
+    return out
+
+
+def _rotation_table_key(table) -> tuple:
+    """Content key for the device table cache: shape, dtype and a SHA-1 of the bytes."""
+
+    import hashlib
+
+    table = np.ascontiguousarray(table)
+    return (table.shape, str(table.dtype), hashlib.sha1(table.view(np.uint8)).hexdigest())
 
 
 def _prepare_per_image_pass2_inputs(
@@ -501,6 +761,7 @@ def _prepare_per_image_pass2_inputs(
     fine_rotation_parent_override=None,
     relion_parent_execution_order=False,
     dtype: np.dtype = np.float32,
+    symmetry_label: str = "C1",
 ):
     """Compute per-image oversampled rotations / parent maps / candidate masks.
 
@@ -518,7 +779,21 @@ def _prepare_per_image_pass2_inputs(
     ``precision_policy.score_real_dtype`` from the caller so this matches
     ``use_float64_scoring`` instead of always narrowing to float32.
     """
-    from recovar.em.sampling import get_oversampled_rotation_grid_from_samples
+    from recovar.em.sampling import (
+        get_oversampled_rotation_grid_from_samples,
+        rotation_grid_n_in_planes,
+        rotation_grid_size,
+    )
+    from recovar.em.symmetry import canonicalize_rotational_symmetry
+
+    symmetry_label = canonicalize_rotational_symmetry(symmetry_label)
+    if symmetry_label != "C1":
+        expected_coarse_rot = rotation_grid_size(nside_level, symmetry_label)
+        if int(n_coarse_rot) != int(expected_coarse_rot):
+            raise ValueError(
+                f"{symmetry_label} sparse pass-2 coarse rotation count mismatch: "
+                f"{n_coarse_rot} != {expected_coarse_rot}"
+            )
 
     n_images = len(significant_sample_indices)
     per_image_source_eulers = []
@@ -529,6 +804,16 @@ def _prepare_per_image_pass2_inputs(
     per_image_unique_rot = []
     per_image_log_prior = []
     per_image_candidate_mask = []
+    per_image_lists = {
+        "source_eulers": per_image_source_eulers,
+        "oversampled_rots": per_image_oversampled_rots,
+        "oversampled_mstep_rots": per_image_oversampled_mstep_rots,
+        "parent_map": per_image_parent_map,
+        "oversampled_rot_indices": per_image_oversampled_rot_indices,
+        "unique_rot": per_image_unique_rot,
+        "log_prior": per_image_log_prior,
+        "candidate_mask": per_image_candidate_mask,
+    }
     full_unique_rot = np.arange(n_coarse_rot, dtype=np.int32)
     full_support_rotation_cache = None
     full_support_log_prior_cache = None
@@ -586,8 +871,8 @@ def _prepare_per_image_pass2_inputs(
         if not relion_parent_execution_order:
             return rotations, parent_map, rotation_indices, source_eulers
         parent_ids = np.asarray(parent_ids, dtype=np.int64).reshape(-1)
-        n_pixels = 12 * (2 ** int(nside_level)) ** 2
-        n_psi = 6 * 2 ** int(nside_level)
+        n_psi = rotation_grid_n_in_planes(nside_level)
+        n_pixels = int(n_coarse_rot) // int(n_psi)
         if parent_ids.shape != np.asarray(parent_map).shape:
             raise ValueError("RELION parent execution keys must match fine rotations")
         if parent_ids.size and (
@@ -603,7 +888,51 @@ def _prepare_per_image_pass2_inputs(
             None if source_eulers is None else source_eulers[order],
         )
 
+    vectorized_indices = []
+    if (
+        fine_rotations_np is not None
+        and not relion_parent_execution_order
+        and vectorized_hypothesis_prep_enabled()
+    ):
+        children = _fine_children_ranges(fine_parent_np, n_coarse_rot)
+        if children is not None:
+            vectorized_indices = [
+                image_idx
+                for image_idx, sig_samples in enumerate(significant_sample_indices)
+                if sig_samples is not None
+                and not isinstance(sig_samples, ComplementSignificantSampleIndices)
+                and np.asarray(sig_samples).size > 0
+            ]
+    vectorized = None
+    if vectorized_indices:
+        vectorized = _prepare_coarse_images_vectorized(
+            [significant_sample_indices[image_idx] for image_idx in vectorized_indices],
+            n_coarse_rot=n_coarse_rot,
+            n_coarse_trans=n_coarse_trans,
+            n_fine_trans=n_fine_trans,
+            fine_translation_parent=fine_translation_parent,
+            rotation_log_prior_np=rotation_log_prior_np,
+            fine_rotations_np=fine_rotations_np,
+            fine_mstep_rotations_np=fine_mstep_rotations_np,
+            fine_source_eulers=fine_source_eulers,
+            child_start=children[0],
+            child_count=children[1],
+            dtype=dtype,
+        )
+    vectorized_set = set(vectorized_indices)
+    vectorized_position = {image_idx: position for position, image_idx in enumerate(vectorized_indices)}
+    resident_hypothesis = None
+    if vectorized is not None:
+        positions = np.full(n_images, -1, dtype=np.int64)
+        positions[np.asarray(vectorized_indices, dtype=np.int64)] = np.arange(len(vectorized_indices), dtype=np.int64)
+        resident_hypothesis = dict(vectorized.pop("_resident"), positions=positions)
+
     for image_idx, sig_samples in enumerate(significant_sample_indices):
+        if image_idx in vectorized_set:
+            position = vectorized_position[image_idx]
+            for key, values in vectorized.items():
+                per_image_lists[key].append(values[position])
+            continue
         coarse_excluded = None
         if sig_samples is None:
             unique_rot = full_unique_rot
@@ -651,6 +980,7 @@ def _prepare_per_image_pass2_inputs(
                             return_rotation_indices=True,
                             return_source_eulers=True,
                             dtype=dtype,
+                            **({} if symmetry_label == "C1" else {"symmetry": symmetry_label}),
                         )
                     )
                     full_support_rotation_cache = (
@@ -681,6 +1011,7 @@ def _prepare_per_image_pass2_inputs(
                     return_rotation_indices=True,
                     return_source_eulers=True,
                     dtype=dtype,
+                    **({} if symmetry_label == "C1" else {"symmetry": symmetry_label}),
                 )
             )
             oversampled_rots = np.asarray(oversampled_rots, dtype=dtype)
@@ -767,7 +1098,9 @@ def _prepare_per_image_pass2_inputs(
         else:
             coarse_valid = np.zeros((unique_rot.size, n_coarse_trans), dtype=bool)
             coarse_valid[np.searchsorted(unique_rot, coarse_rot), coarse_trans] = True
-            translated_valid = coarse_valid[:, fine_translation_parent]
+            # count = sum over fine rows of the parent coarse row's fine-translation
+            # count; O(cR*T + R) instead of expanding the (R, T) table per image.
+            fine_per_coarse_row = coarse_valid[:, fine_translation_parent].sum(axis=1, dtype=np.int64)
             candidate_mask = SparseCandidateMask(
                 mode="coarse",
                 n_rows=oversampled_rots.shape[0],
@@ -775,7 +1108,7 @@ def _prepare_per_image_pass2_inputs(
                 parent_map=parent_map,
                 coarse_valid=coarse_valid,
                 fine_translation_parent=fine_translation_parent,
-                count=int(translated_valid[parent_map].sum()),
+                count=int(fine_per_coarse_row[parent_map].sum()),
             )
 
         per_image_source_eulers.append(source_eulers)
@@ -788,6 +1121,13 @@ def _prepare_per_image_pass2_inputs(
         per_image_candidate_mask.append(candidate_mask)
 
     assert len(per_image_oversampled_rots) == n_images
+    # Global fine-grid tables (paired override only): every image's rows are
+    # gathers of these by ``oversampled_rot_indices``, so the device can gather
+    # them from one resident copy instead of receiving the rows per chunk.
+    rotation_table = None if fine_rotations_np is None else np.asarray(fine_rotations_np, dtype=dtype)
+    mstep_rotation_table = (
+        None if fine_mstep_rotations_np is None else np.asarray(fine_mstep_rotations_np, dtype=dtype)
+    )
     return {
         "source_eulers": per_image_source_eulers,
         "oversampled_rots": per_image_oversampled_rots,
@@ -797,7 +1137,19 @@ def _prepare_per_image_pass2_inputs(
         "unique_rot": per_image_unique_rot,
         "log_prior": per_image_log_prior,
         "candidate_mask": per_image_candidate_mask,
+        "rotation_table": rotation_table,
+        "rotation_table_key": None if rotation_table is None else _rotation_table_key(rotation_table),
+        "mstep_rotation_table": mstep_rotation_table,
+        "mstep_rotation_table_key": None if mstep_rotation_table is None else _rotation_table_key(mstep_rotation_table),
+        "resident_hypothesis": resident_hypothesis,
+        # One coarse-row capacity for the whole pass: the device index builder
+        # otherwise compiled a family per chunk-wise coarse-row count (census job
+        # 13837258: 28 compiles, 18.7 s). Padded coarse rows are inert.
+        "coarse_rows_capacity": _pow2_at_least(
+            max((int(np.asarray(u).shape[0]) for u in per_image_unique_rot), default=1), 64
+        ),
     }
+
 
 
 def _prepare_per_image_compact_candidate_pairs(per_image_inputs, *, image_mask=None):
@@ -890,17 +1242,52 @@ def _build_compact_pair_bucket_arrays(bucket, compact_inputs):
     }
 
 
-def _build_compact_pair_bucket_arrays_from_per_image_inputs(bucket, per_image_inputs):
+def _build_compact_pair_bucket_arrays_from_per_image_inputs(
+    bucket, per_image_inputs, *, device_index=False, rows_capacity=None, capacity_rows=None
+):
     """Stack/pad compact candidate pairs for one class and bucket on demand."""
 
     pair_bucket_size = int(bucket["pair_bucket_size"])
     image_indices = np.asarray(bucket["image_indices"], dtype=np.int64)
-    index_arrays = build_compact_pair_index_arrays(
-        (per_image_inputs["candidate_mask"][int(image_idx)] for image_idx in image_indices),
-        pair_bucket_size=pair_bucket_size,
-    )
+    n_real = len(image_indices)
+    n_alloc = n_real if capacity_rows is None else max(n_real, int(capacity_rows))
+    padded_image_indices = image_indices
+    if n_alloc > n_real:
+        padded_image_indices = np.concatenate([image_indices, np.repeat(image_indices[-1:], n_alloc - n_real)])
+    # This engine already gathers pair priors from row tables on device. The
+    # device builder therefore needs no separate lazy-table policy or host
+    # materialization of per-pair priors/rotation IDs.
+    masks = [per_image_inputs["candidate_mask"][int(image_idx)] for image_idx in image_indices]
+    index_arrays = None
+    if device_index:
+        resident = None
+        resident_positions = None
+        if resident_hypothesis_tables_enabled() and isinstance(per_image_inputs, dict):
+            candidate = per_image_inputs.get("resident_hypothesis")
+            if candidate is not None:
+                positions = np.asarray(candidate["positions"], dtype=np.int64)[image_indices]
+                if np.all(positions >= 0):
+                    resident, resident_positions = candidate, positions
+        index_arrays = compact_pair_index_arrays_device(
+            masks,
+            pair_bucket_size=pair_bucket_size,
+            rows_capacity=rows_capacity,
+            n_alloc=n_alloc,
+            resident=resident,
+            resident_positions=resident_positions,
+            coarse_rows_capacity=per_image_inputs.get("coarse_rows_capacity"),
+        )
+    if index_arrays is None:
+        index_arrays = build_compact_pair_index_arrays(
+            masks, pair_bucket_size=pair_bucket_size,
+        )
+        index_arrays = {
+            key: _rows_at_capacity(value, n_alloc, False if key == "pair_mask" else 0)
+            for key, value in index_arrays.items()
+            if key != "pair_bucket_size"
+        }
     return {
-        "image_indices": image_indices,
+        "image_indices": padded_image_indices,
         "pair_bucket_size": pair_bucket_size,
         "pair_counts": index_arrays["pair_counts"],
         "local_rotation_row": index_arrays["local_rotation_row"],
@@ -909,27 +1296,249 @@ def _build_compact_pair_bucket_arrays_from_per_image_inputs(bucket, per_image_in
     }
 
 
+BUCKET_ROTATIONS_DEVICE_ENV = "RECOVAR_SPARSE_KCLASS_BUCKET_ROTATIONS_DEVICE"
+ROTATIONS_BY_INDEX_ENV = "RECOVAR_SPARSE_KCLASS_ROTATIONS_BY_INDEX"
+RESIDENT_HYPOTHESIS_TABLES_ENV = "RECOVAR_SPARSE_KCLASS_RESIDENT_HYPOTHESIS_TABLES"
+_ROTATION_TABLE_DEVICE_CACHE: dict = {}
+_RESIDENT_ROW_INDEX_CACHE: dict = {}
+
+
+def bucket_rotations_device_enabled() -> bool:
+    """Assemble the padded ``(images, rows, 3, 3)`` bucket rotations on the device.
+
+    The host otherwise allocates the identity-filled array at the class bucket
+    size and copies every image's rows into it (twice when M-step rotations
+    differ), then uploads it; only the real rows travel with this flag and the
+    device pads them. Values are copied, not recomputed, so the arrays are
+    bit-identical to the host build.
+    """
+    return parse_env_binary_flag(BUCKET_ROTATIONS_DEVICE_ENV)
+
+
+def resident_hypothesis_tables_enabled() -> bool:
+    """Feed the device index builder from device-resident flat hypothesis tables.
+
+    With the vectorized hypothesis preparation the coarse validity table and
+    the row parent map of every image already exist as one flat array per
+    class; the device index builder otherwise rebuilt a padded
+    ``(images, cR, cT)``/``(images, rows)`` pair on the host and uploaded it for
+    every class-chunk (7.7 s of device_put plus the host fill in the 100k/256
+    K=4 iteration 2, job 13834297).  Chunks whose images all took the
+    vectorized path gather those tables on the device instead; values are
+    identical, so the pair index arrays are bit-identical.
+    """
+
+    return parse_env_binary_flag(RESIDENT_HYPOTHESIS_TABLES_ENV)
+
+
+def rotations_by_index_enabled() -> bool:
+    """Gather the padded bucket rotations from a device-resident fine-grid table.
+
+    With ``RECOVAR_SPARSE_KCLASS_BUCKET_ROTATIONS_DEVICE`` the host still
+    concatenates every image's (rows, 3, 3) float32 rows per class-chunk and
+    uploads them (13.6 s of device_put plus ~7 s of host concatenation in the
+    100k/256 K=4 iteration 2, job 13834297).  When the per-image inputs carry
+    the fine-grid table (paired RELION override), the rows are gathers of that
+    table by ``oversampled_rot_indices``; this flag uploads the table once per
+    distinct content and gathers on the device from the padded rotation index
+    array the builder already forms.  Values are copied, so bit-identical.
+    """
+
+    return parse_env_binary_flag(ROTATIONS_BY_INDEX_ENV)
+
+
+def _rotation_table_device(table, key):
+    """Device copy of a fine-grid rotation table, keyed by content (bounded cache)."""
+
+    import jax.numpy as jnp
+
+    cached = _ROTATION_TABLE_DEVICE_CACHE.get(key)
+    if cached is None:
+        if len(_ROTATION_TABLE_DEVICE_CACHE) >= 8:
+            _ROTATION_TABLE_DEVICE_CACHE.clear()
+        cached = jnp.asarray(np.ascontiguousarray(table))
+        _ROTATION_TABLE_DEVICE_CACHE[key] = cached
+    return cached
+
+
+def _padded_rotations_from_table_impl(table, rotation_indices, counts, fill, *, rows):
+    import jax.numpy as jnp
+
+    gathered = jnp.take(table, jnp.clip(rotation_indices, 0, table.shape[0] - 1), axis=0)
+    valid = jnp.arange(rows, dtype=jnp.int32)[None, :] < counts[:, None]
+    return jnp.where(valid[:, :, None, None], gathered, fill[None, None])
+
+
+def _resident_row_indices_device(resident):
+    """Device copy of one class's flat per-row global rotation indices, keyed by prep token."""
+
+    import jax.numpy as jnp
+
+    key = resident["token"]
+    cached = _RESIDENT_ROW_INDEX_CACHE.get(key)
+    if cached is None:
+        if len(_RESIDENT_ROW_INDEX_CACHE) >= 8:
+            _RESIDENT_ROW_INDEX_CACHE.clear()
+        cached = (
+            jnp.asarray(np.asarray(resident["rot_indices_flat"], dtype=np.int32)),
+            jnp.asarray(np.asarray(resident["row_bounds"], dtype=np.int32)),
+        )
+        _RESIDENT_ROW_INDEX_CACHE[key] = cached
+    return cached
+
+
+def _padded_rotations_from_resident_impl(table, rot_flat, row_bounds, positions, counts, fill, *, rows):
+    import jax.numpy as jnp
+
+    safe = jnp.clip(positions, 0, row_bounds.shape[0] - 2)
+    start = row_bounds[safe]
+    offsets = jnp.arange(rows, dtype=jnp.int32)[None, :]
+    valid = offsets < counts[:, None]
+    source = jnp.clip(start[:, None] + offsets, 0, rot_flat.shape[0] - 1)
+    gathered = jnp.take(table, jnp.where(valid, jnp.take(rot_flat, source), 0), axis=0)
+    return jnp.where(valid[:, :, None, None], gathered, fill[None, None])
+
+
+def padded_rotations_from_resident_device(table, table_key, resident, positions, counts, rows, fill):
+    """``(images, rows, 3, 3)`` rotations gathered entirely on the device.
+
+    The per-row global rotation indices live in one resident int32 table per class and
+    iteration, so a chunk uploads only its per-image positions and counts instead of an
+    ``(images, rows)`` index array. At 100k/256 K=4 that index upload was ~17 s of the
+    iteration (job 13838987 stack samples: padded_rotations_from_table_device). Requires
+    every image of the chunk to have come from the vectorized preparation; the values are
+    the same table entries, so the result is bit-identical to the index-array gather.
+    """
+    import jax
+    import jax.numpy as jnp
+
+    fn = padded_rotations_from_resident_device.__dict__.get("_compiled")
+    if fn is None:
+        fn = jax.jit(_padded_rotations_from_resident_impl, static_argnames=("rows",))
+        padded_rotations_from_resident_device.__dict__["_compiled"] = fn
+    rot_flat, row_bounds = _resident_row_indices_device(resident)
+    return fn(
+        _rotation_table_device(table, table_key),
+        rot_flat,
+        row_bounds,
+        jnp.asarray(np.asarray(positions, dtype=np.int32)),
+        jnp.asarray(np.asarray(counts, dtype=np.int32)),
+        jnp.asarray(np.asarray(fill, dtype=table.dtype)),
+        rows=int(rows),
+    )
+
+
+def padded_rotations_from_table_device(table, table_key, rotation_indices, counts, rows, fill):
+    """``(images, rows, 3, 3)`` device rotations gathered from a resident table.
+
+    ``rotation_indices`` is the host ``(images, rows)`` int64 padded index array
+    (zeros beyond ``counts``); padded slots receive ``fill`` (identity).  Equals
+    :func:`padded_rows_from_flat_device` on the concatenated per-image rows.
+    """
+    import jax
+    import jax.numpy as jnp
+
+    fn = padded_rotations_from_table_device.__dict__.get("_compiled")
+    if fn is None:
+        fn = jax.jit(_padded_rotations_from_table_impl, static_argnames=("rows",))
+        padded_rotations_from_table_device.__dict__["_compiled"] = fn
+    table_dev = _rotation_table_device(table, table_key)
+    return fn(
+        table_dev,
+        jnp.asarray(np.asarray(rotation_indices, dtype=np.int32)),
+        jnp.asarray(np.asarray(counts, dtype=np.int32)),
+        jnp.asarray(np.asarray(fill, dtype=table.dtype)),
+        rows=int(rows),
+    )
+
+
+def _flat_rows_quantum(n_rows: int) -> int:
+    n_rows = max(1, int(n_rows))
+    if n_rows <= 4096:
+        return 1 << (n_rows - 1).bit_length()
+    return ((n_rows + 4095) // 4096) * 4096
+
+
+def _padded_rows_from_flat_impl(flat, starts, counts, fill, *, rows):
+    """``out[b, r] = flat[starts[b] + r]`` for ``r < counts[b]``, else ``fill``."""
+    import jax.numpy as jnp
+
+    slots = jnp.arange(int(rows), dtype=jnp.int32)[None, :]
+    src = jnp.clip(starts[:, None] + slots, 0, int(flat.shape[0]) - 1)
+    valid = slots < counts[:, None]
+    gathered = jnp.take(flat, src, axis=0)
+    return jnp.where(valid.reshape(valid.shape + (1,) * (flat.ndim - 1)), gathered, fill)
+
+
+def padded_rows_from_flat_device(per_row_values, counts, rows, fill):
+    """Stack per-image row blocks into a device ``(images, rows, ...)`` array.
+
+    ``per_row_values`` is a sequence of ``(count_i, ...)`` host arrays (one per
+    real image), ``counts`` the ``(images,)`` int vector including capacity rows
+    (zero), ``fill`` the value for padding slots (identity for rotations). One
+    upload of the concatenated real rows, padded to a size ladder so the jitted
+    padder compiles once per ``(images, rows, ladder step)``.
+    """
+    import jax
+    import jax.numpy as jnp
+
+    counts = np.asarray(counts, dtype=np.int32)
+    real = [np.asarray(v) for v in per_row_values]
+    if real:
+        flat = np.concatenate(real, axis=0)
+    else:
+        flat = np.zeros((0,) + np.asarray(fill).shape, dtype=np.asarray(fill).dtype)
+    n_flat = int(flat.shape[0])
+    n_pad = _flat_rows_quantum(n_flat)
+    if n_pad > n_flat:
+        tail = np.empty((n_pad - n_flat,) + flat.shape[1:], dtype=flat.dtype)
+        tail[...] = fill
+        flat = np.concatenate([flat, tail], axis=0)
+    starts = (np.cumsum(counts, dtype=np.int64) - counts).astype(np.int32)
+    fn = padded_rows_from_flat_device.__dict__.get("_compiled")
+    if fn is None:
+        fn = jax.jit(_padded_rows_from_flat_impl, static_argnames=("rows",))
+        padded_rows_from_flat_device.__dict__["_compiled"] = fn
+    return fn(
+        jnp.asarray(flat),
+        jnp.asarray(starts),
+        jnp.asarray(counts),
+        jnp.asarray(np.asarray(fill, dtype=flat.dtype)),
+        rows=int(rows),
+    )
+
+
 def _build_bucket_arrays(
     bucket,
     per_image_inputs,
     n_fine_trans,
     *,
     include_dense_score_fields: bool = True,
+    capacity_rows=None,
+    device_rotations: bool = False,
 ):
     """Stack/pad per-image arrays into batched bucket tensors."""
     bucket_size = int(bucket["bucket_size"])
     image_indices = np.asarray(bucket["image_indices"], dtype=np.int64)
-    batch = int(image_indices.shape[0])
+    n_real = int(image_indices.shape[0])
+    batch = n_real if capacity_rows is None else max(n_real, int(capacity_rows))
+    padded_image_indices = image_indices
+    if batch > n_real:
+        padded_image_indices = np.concatenate([image_indices, np.repeat(image_indices[-1:], batch - n_real)])
 
     # padded_rotations: identity-fill — projection of identity is harmless
     # because we mask via candidate_mask=False everywhere for padded rows.
     rotation_dtype = np.result_type(
         *(np.asarray(per_image_inputs["oversampled_rots"][int(image_idx)]).dtype for image_idx in image_indices)
     )
-    padded_rotations = np.broadcast_to(
-        np.eye(3, dtype=rotation_dtype),
-        (batch, bucket_size, 3, 3),
-    ).copy()
+    padded_rotations = (
+        None
+        if device_rotations
+        else np.broadcast_to(
+            np.eye(3, dtype=rotation_dtype),
+            (batch, bucket_size, 3, 3),
+        ).copy()
+    )
     separate_mstep_rotations = any(
         per_image_inputs["oversampled_mstep_rots"][int(image_idx)]
         is not per_image_inputs["oversampled_rots"][int(image_idx)]
@@ -939,10 +1548,14 @@ def _build_bucket_arrays(
         *(np.asarray(per_image_inputs["oversampled_mstep_rots"][int(image_idx)]).dtype for image_idx in image_indices)
     )
     padded_mstep_rotations = (
-        np.broadcast_to(
-            np.eye(3, dtype=mstep_rotation_dtype),
-            (batch, bucket_size, 3, 3),
-        ).copy()
+        (
+            None
+            if device_rotations
+            else np.broadcast_to(
+                np.eye(3, dtype=mstep_rotation_dtype),
+                (batch, bucket_size, 3, 3),
+            ).copy()
+        )
         if separate_mstep_rotations
         else padded_rotations
     )
@@ -963,9 +1576,10 @@ def _build_bucket_arrays(
         rots = per_image_inputs["oversampled_rots"][image_idx]
         cnt = int(rots.shape[0])
         actual_counts[row] = cnt
-        padded_rotations[row, :cnt] = rots
-        if separate_mstep_rotations:
-            padded_mstep_rotations[row, :cnt] = per_image_inputs["oversampled_mstep_rots"][image_idx]
+        if not device_rotations:
+            padded_rotations[row, :cnt] = rots
+            if separate_mstep_rotations:
+                padded_mstep_rotations[row, :cnt] = per_image_inputs["oversampled_mstep_rots"][image_idx]
         padded_log_prior[row, :cnt] = per_image_inputs["log_prior"][image_idx]
         if include_dense_score_fields:
             padded_candidate_mask[row, :cnt, :] = _candidate_mask_to_dense(
@@ -974,8 +1588,81 @@ def _build_bucket_arrays(
             padded_parent_map[row, :cnt] = per_image_inputs["parent_map"][image_idx]
         padded_rotation_indices[row, :cnt] = per_image_inputs["oversampled_rot_indices"][image_idx]
 
+    rotation_table = per_image_inputs.get("rotation_table") if isinstance(per_image_inputs, dict) else None
+    resident_rows = None
+    if isinstance(per_image_inputs, dict) and resident_hypothesis_tables_enabled():
+        candidate = per_image_inputs.get("resident_hypothesis")
+        if candidate is not None and candidate.get("rot_indices_flat") is not None:
+            row_positions = np.asarray(candidate["positions"], dtype=np.int64)[padded_image_indices[:n_real]]
+            if np.all(row_positions >= 0):
+                resident_rows = (candidate, np.concatenate(
+                    [row_positions, np.full(batch - n_real, -1, dtype=np.int64)]
+                ) if batch > n_real else row_positions)
+    if (
+        device_rotations
+        and rotation_table is not None
+        and np.dtype(rotation_table.dtype) == np.dtype(rotation_dtype)
+        and rotations_by_index_enabled()
+    ):
+        if resident_rows is not None:
+            padded_rotations = padded_rotations_from_resident_device(
+                rotation_table,
+                per_image_inputs["rotation_table_key"],
+                resident_rows[0],
+                resident_rows[1],
+                actual_counts,
+                bucket_size,
+                np.eye(3, dtype=rotation_dtype),
+            )
+        else:
+            padded_rotations = padded_rotations_from_table_device(
+                rotation_table,
+                per_image_inputs["rotation_table_key"],
+                padded_rotation_indices,
+                actual_counts,
+                bucket_size,
+                np.eye(3, dtype=rotation_dtype),
+            )
+        mstep_table = per_image_inputs.get("mstep_rotation_table")
+        if not separate_mstep_rotations:
+            padded_mstep_rotations = padded_rotations
+        elif mstep_table is not None and np.dtype(mstep_table.dtype) == np.dtype(mstep_rotation_dtype):
+            padded_mstep_rotations = padded_rotations_from_table_device(
+                mstep_table,
+                per_image_inputs["mstep_rotation_table_key"],
+                padded_rotation_indices,
+                actual_counts,
+                bucket_size,
+                np.eye(3, dtype=mstep_rotation_dtype),
+            )
+        else:
+            padded_mstep_rotations = padded_rows_from_flat_device(
+                [np.asarray(per_image_inputs["oversampled_mstep_rots"][i], dtype=mstep_rotation_dtype) for i in padded_image_indices[:n_real].tolist()],
+                actual_counts,
+                bucket_size,
+                np.eye(3, dtype=mstep_rotation_dtype),
+            )
+    elif device_rotations:
+        real_images = padded_image_indices[:n_real].tolist()
+        padded_rotations = padded_rows_from_flat_device(
+            [np.asarray(per_image_inputs["oversampled_rots"][i], dtype=rotation_dtype) for i in real_images],
+            actual_counts,
+            bucket_size,
+            np.eye(3, dtype=rotation_dtype),
+        )
+        padded_mstep_rotations = (
+            padded_rows_from_flat_device(
+                [np.asarray(per_image_inputs["oversampled_mstep_rots"][i], dtype=mstep_rotation_dtype) for i in real_images],
+                actual_counts,
+                bucket_size,
+                np.eye(3, dtype=mstep_rotation_dtype),
+            )
+            if separate_mstep_rotations
+            else padded_rotations
+        )
+
     return {
-        "image_indices": image_indices,
+        "image_indices": padded_image_indices,
         "bucket_size": bucket_size,
         "actual_counts": actual_counts,
         "rotations": padded_rotations,
@@ -1010,6 +1697,8 @@ def _build_k_class_bucket_arrays(
     *,
     compact_buckets: bool = False,
     include_dense_score_fields: bool = True,
+    capacity_rows=None,
+    device_rotations: bool = False,
     rotation_block_size_for_quantization=5000,
 ):
     """Build per-class padded arrays for fused sparse K-class pass 2.
@@ -1041,6 +1730,8 @@ def _build_k_class_bucket_arrays(
                 per_image_inputs,
                 n_fine_trans,
                 include_dense_score_fields=include_dense_score_fields,
+                capacity_rows=capacity_rows,
+                device_rotations=device_rotations,
             )
         )
     return class_arrays
@@ -1073,3 +1764,307 @@ def coarse_winner_local_pose_ids(per_image_inputs, coarse_pose_ids, fine_transla
             raise ValueError("coarse winner is missing from selected fine support")
         output[image_index] = r * trans_parents.size + t
     return output
+
+
+def _rows_at_capacity(values, capacity_rows, fill):
+    """Return ``values`` extended along axis 0 to ``capacity_rows`` rows of ``fill`` (or as is)."""
+    values = np.asarray(values)
+    if capacity_rows is None or int(capacity_rows) <= int(values.shape[0]):
+        return values
+    out = np.full((int(capacity_rows),) + values.shape[1:], fill, dtype=values.dtype)
+    out[: values.shape[0]] = values
+    return out
+
+
+
+IMAGE_CAPACITY_ENV = "RECOVAR_SPARSE_PASS2_IMAGE_CAPACITY"
+IMAGE_CAPACITY_FLOOR = 16
+IMAGE_CAPACITY_MAX_GROWTH_ENV = "RECOVAR_SPARSE_PASS2_IMAGE_CAPACITY_MAX_GROWTH"
+DEFAULT_IMAGE_CAPACITY_MAX_GROWTH = 2.0
+
+
+def image_capacity_max_growth() -> float:
+    """Return the largest factor by which the image axis may be padded."""
+
+    raw = os.environ.get(IMAGE_CAPACITY_MAX_GROWTH_ENV)
+    if raw is None or not raw.strip():
+        return DEFAULT_IMAGE_CAPACITY_MAX_GROWTH
+    value = float(raw)
+    if not value >= 1.0:
+        raise ValueError(f"{IMAGE_CAPACITY_MAX_GROWTH_ENV} must be at least 1.0, got {raw!r}")
+    return value
+
+
+def image_capacity_enabled() -> bool:
+    """Return whether bucket image axes are padded to a repeating capacity."""
+
+    return parse_env_binary_flag(IMAGE_CAPACITY_ENV)
+
+
+def quantized_image_capacity(
+    n_images: int,
+    *,
+    max_images: int | None = None,
+    floor: int = IMAGE_CAPACITY_FLOOR,
+    max_growth: float | None = None,
+) -> int:
+    """Round a bucket's image count up to a power of two so shapes repeat.
+
+    Fused K-class pass 2 keys one XLA program per (helper, shape), and the image
+    axis is part of every shape. Measured 2026-09-12 on a 20-iteration exactly-K4
+    run: 128 buckets produced 88 distinct (pair width, rotation rows, images)
+    shapes across 62 distinct image counts, and JAX traced and lowered a program
+    for 5939 distinct keys, executing each exactly once. Quantizing this axis
+    collapses those 88 shapes to 38. Padded rows carry ``pair_mask``/
+    ``candidate_mask`` false, and
+    :func:`_normalize_pass2_pairs_with_log_z` maps an all-masked row to exactly
+    zero probability, so they contribute nothing to any accumulator.
+
+    ``max_images`` is the caller's byte budget for gather, preparation and the
+    dense M step. The capacity never exceeds it: padding past that budget would
+    trade a compile saving for an out-of-memory failure. When no power of two
+    fits, the exact count is returned and that bucket keeps its own shape.
+    """
+
+    n_images = int(n_images)
+    if n_images <= 0:
+        return 0
+    floor = max(1, int(floor))
+    if max_growth is None:
+        max_growth = image_capacity_max_growth()
+    candidate = max(floor, 1 << (n_images - 1).bit_length())
+    if candidate <= n_images:
+        return n_images
+    # Growth bound. Rounding up to a power of two never more than doubles, so this
+    # only bites for a bucket smaller than the floor, and there the absolute row
+    # count stays at the floor -- a handful of rows, whose memory cost is governed
+    # by ``max_images`` whenever a byte budget is known.
+    growth_limit = max(floor, int(float(max_growth) * n_images))
+    if candidate > growth_limit:
+        return n_images
+    if max_images is not None and candidate > max(1, int(max_images)):
+        return n_images
+    return candidate
+
+
+def _pad_rows(values, capacity, fill):
+    """Extend ``values`` along axis 0 to ``capacity`` rows filled with ``fill``."""
+
+    if values is None:
+        return None
+    pad = int(capacity) - int(values.shape[0])
+    if pad <= 0:
+        return values  # device arrays stay on the device when nothing is padded
+    if not isinstance(values, np.ndarray):
+        import jax.numpy as jnp
+        tail = jnp.full((pad,) + values.shape[1:], fill, dtype=values.dtype)
+        return jnp.concatenate([values, tail], axis=0)
+    values = np.asarray(values)
+    tail = np.full((pad,) + values.shape[1:], fill, dtype=values.dtype)
+    return np.concatenate([values, tail], axis=0)
+
+
+def pad_bucket_arrays_to_image_capacity(arrays, capacity):
+    """Pad one class's dense bucket arrays out to a quantized image capacity.
+
+    The padded rows carry ``actual_counts`` zero and ``candidate_mask`` false, which
+    is the same contract the rotation axis already uses for its padding, so they
+    contribute exactly zero to every accumulator. Identity rotations are harmless
+    for the same reason.
+    """
+
+    capacity = int(capacity)
+    if capacity <= int(np.asarray(arrays["image_indices"]).shape[0]):
+        return arrays
+    shared_mstep = arrays["mstep_rotations"] is arrays["rotations"]
+    rotations = _pad_rows(arrays["rotations"], capacity, 0)
+    rotations[int(np.asarray(arrays["rotations"]).shape[0]):] = np.eye(3, dtype=rotations.dtype)
+    padded = dict(arrays)
+    padded["rotations"] = rotations
+    padded["mstep_rotations"] = rotations if shared_mstep else _pad_rows(arrays["mstep_rotations"], capacity, 0)
+    if not shared_mstep:
+        start = int(np.asarray(arrays["mstep_rotations"]).shape[0])
+        padded["mstep_rotations"][start:] = np.eye(3, dtype=padded["mstep_rotations"].dtype)
+    padded["rotation_indices"] = _pad_rows(arrays["rotation_indices"], capacity, 0)
+    padded["actual_counts"] = _pad_rows(arrays["actual_counts"], capacity, 0)
+    padded["log_prior"] = _pad_rows(arrays["log_prior"], capacity, -1e30)
+    padded["row_log_prior"] = _pad_rows(arrays.get("row_log_prior"), capacity, -1e30)
+    padded["candidate_mask"] = _pad_rows(arrays["candidate_mask"], capacity, False)
+    padded["parent_map"] = _pad_rows(arrays["parent_map"], capacity, -1)
+    return padded
+
+
+def pad_compact_pair_arrays_to_image_capacity(pair_arrays, capacity):
+    """Pad one class's compact-pair arrays out to a quantized image capacity.
+
+    Padded rows carry ``pair_counts`` zero and ``pair_mask`` false.
+    ``_normalize_pass2_pairs_with_log_z`` maps an all-masked row to exactly zero
+    probability, so a padded image contributes nothing to the M step, the noise
+    accumulators or the posterior sums.
+    """
+
+    capacity = int(capacity)
+    if capacity <= int(np.asarray(pair_arrays["image_indices"]).shape[0]):
+        return pair_arrays
+    padded = dict(pair_arrays)
+    padded["pair_counts"] = _pad_rows(pair_arrays["pair_counts"], capacity, 0)
+    padded["local_rotation_row"] = _pad_rows(pair_arrays["local_rotation_row"], capacity, 0)
+    padded["translation_idx"] = _pad_rows(pair_arrays["translation_idx"], capacity, 0)
+    padded["rotation_index"] = _pad_rows(pair_arrays.get("rotation_index"), capacity, 0)
+    padded["log_prior"] = _pad_rows(pair_arrays.get("log_prior"), capacity, -1e30)
+    padded["pair_mask"] = _pad_rows(pair_arrays["pair_mask"], capacity, False)
+    return padded
+
+
+def _padded_active_row_count(total: int, n_slots: int, pad_multiple: int) -> int:
+    """The row count :func:`_real_flat_row_indices_from_actual_counts` would pad to."""
+
+    total = int(total)
+    if total <= 0:
+        return 0
+    pad_multiple = max(1, int(pad_multiple))
+    padded_count = ((total + pad_multiple - 1) // pad_multiple) * pad_multiple
+    if pad_multiple > 1:
+        pow2_count = max(pad_multiple, 1 << (padded_count - 1).bit_length())
+        if pow2_count <= padded_count + padded_count // 8:
+            padded_count = pow2_count
+    return min(int(n_slots), padded_count)
+
+
+def _attach_group_static_active_row_targets(
+    execution_buckets,
+    per_image_inputs_by_class,
+    *,
+    pad_multiple: int,
+    rotation_block_size_for_quantization,
+) -> dict:
+    """Store per-class active-row padding targets on every compact-pair bucket.
+
+    Returns planner statistics: groups, chunks, real and padded row totals.
+    """
+
+    row_counts_by_class = [
+        {int(i): int(np.asarray(r).shape[0]) for i, r in per_image_inputs["oversampled_rots"].items()}
+        if isinstance(per_image_inputs["oversampled_rots"], dict)
+        else [int(np.asarray(r).shape[0]) for r in per_image_inputs["oversampled_rots"]]
+        for per_image_inputs in per_image_inputs_by_class
+    ]
+    capacity = image_capacity_enabled()
+    per_bucket = []
+    for bucket in execution_buckets:
+        if str(bucket.get("_execution_mode")) != "compact_pair":
+            per_bucket.append(None)
+            continue
+        image_indices = np.asarray(bucket["image_indices"], dtype=np.int64)
+        forced = bucket.get("class_bucket_sizes")
+        class_sizes = tuple(
+            int(forced[c]) if forced is not None
+            else int(_compact_bucket_size_for_class(bucket, per_image_inputs_by_class[c], rotation_block_size_for_quantization))
+            for c in range(len(per_image_inputs_by_class))
+        )
+        n_images = int(image_indices.size)
+        images_axis = (
+            quantized_image_capacity(n_images, max_images=bucket.get("image_capacity_budget")) if capacity else n_images
+        )
+        totals = tuple(
+            int(sum(min(row_counts_by_class[c][int(i)], class_sizes[c]) for i in image_indices))
+            for c in range(len(class_sizes))
+        )
+        padded = tuple(
+            _padded_active_row_count(totals[c], images_axis * class_sizes[c], pad_multiple) for c in range(len(class_sizes))
+        )
+        key = (int(bucket["_execution_bucket_size"]), class_sizes, int(images_axis))
+        per_bucket.append((key, totals, padded))
+    targets: dict = {}
+    for entry in per_bucket:
+        if entry is None:
+            continue
+        key, _totals, padded = entry
+        current = targets.get(key)
+        targets[key] = padded if current is None else tuple(max(a, b) for a, b in zip(current, padded))
+    real_rows = padded_rows = target_rows = 0
+    chunks = 0
+    for bucket, entry in zip(execution_buckets, per_bucket):
+        if entry is None:
+            continue
+        key, totals, padded = entry
+        bucket["_active_row_pad_targets"] = targets[key]
+        chunks += 1
+        real_rows += sum(totals)
+        padded_rows += sum(padded)
+        target_rows += sum(targets[key])
+    stats = {
+        "groups": len(targets),
+        "chunks": chunks,
+        "real_rows": real_rows,
+        "multiple_padded_rows": padded_rows,
+        "group_static_rows": target_rows,
+    }
+    logger.info(
+        "sparse K-class group-static active rows: %d groups, %d chunks, real rows %d, "
+        "multiple-padded rows %d (+%.1f%%), group-static rows %d (+%.1f%%)",
+        stats["groups"],
+        stats["chunks"],
+        real_rows,
+        padded_rows,
+        100.0 * (padded_rows - real_rows) / max(real_rows, 1),
+        target_rows,
+        100.0 * (target_rows - real_rows) / max(real_rows, 1),
+    )
+    return stats
+
+
+def _group_static_pad_to(bucket_meta, class_index: int) -> int | None:
+    targets = bucket_meta.get("_active_row_pad_targets")
+    if targets is None:
+        return None
+    return int(targets[int(class_index)])
+
+
+LADDER_CHUNKS_ENV = "RECOVAR_SPARSE_PASS2_LADDER_CHUNKS"
+LADDER_CHUNK_FLOOR = 16
+
+def ladder_chunks_enabled() -> bool:
+    """Return whether bucket image lists are split into power-of-two chunks.
+
+    Fused K-class pass 2 compiles one XLA program per helper and bucket shape.
+    Without the ladder each rotation/pair bucket holds however many images
+    fall into it (a different count every iteration), so every bucket of every
+    iteration is a new shape. With the ladder the image axis takes only
+    power-of-two sizes at or above :data:`LADDER_CHUNK_FLOOR` plus one
+    remainder below the floor, so bucket shapes repeat across iterations.
+    Per-image results are unchanged; only the grouping of per-bucket
+    reductions differs.
+    """
+
+    return parse_env_binary_flag(LADDER_CHUNKS_ENV)
+
+def bucket_chunk_bounds(n_images: int, max_per_chunk: int, *, ladder: bool | None = None):
+    """Return ``(start, stop)`` chunk bounds for one bucket's image list.
+
+    Default: consecutive chunks of ``max_per_chunk``. Ladder: greedy powers of
+    two no larger than ``max_per_chunk`` while at least
+    :data:`LADDER_CHUNK_FLOOR` images remain, then one remainder chunk.
+    """
+
+    n_images = int(n_images)
+    max_per_chunk = max(1, int(max_per_chunk))
+    if ladder is None:
+        ladder = ladder_chunks_enabled()
+    if not ladder:
+        return [(start, min(start + max_per_chunk, n_images)) for start in range(0, n_images, max_per_chunk)]
+    largest_power = 1 << (max_per_chunk.bit_length() - 1)
+    bounds = []
+    start = 0
+    while n_images - start >= LADDER_CHUNK_FLOOR:
+        size = min(largest_power, 1 << ((n_images - start).bit_length() - 1))
+        bounds.append((start, start + size))
+        start += size
+    # The remainder must still respect the caller's cap: it is derived from
+    # gather/prepare/dense-M-step byte budgets, so emitting the tail as one
+    # chunk would overshoot them (a cap of 1 image would yield a chunk of 15).
+    while start < n_images:
+        stop = min(start + max_per_chunk, n_images)
+        bounds.append((start, stop))
+        start = stop
+    return bounds

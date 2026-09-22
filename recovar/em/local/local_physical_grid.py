@@ -114,9 +114,12 @@ def _accumulate_relion_vdam_physical_particle_grid(
     serial_particle_accumulation=False,
     runtime_projector_radius=None,
     transaction_queue=None,
+    consume_accumulators=False,
 ):
     """Form and scatter VDAM residuals in physical particle order."""
 
+    if consume_accumulators and (transaction_queue is not None or projector_full is None):
+        raise ValueError("consuming BPref requires an exclusive inline carry without a transaction")
     if max_r is None:
         raise ValueError("RELION VDAM physical particle-grid accumulation requires max_r")
     if transaction_queue is not None and (
@@ -310,7 +313,11 @@ def _accumulate_relion_vdam_physical_particle_grid(
             raise ValueError(
                 "inline RELION VDAM projection requires scoring rotations and projector radius"
             )
-        callback = cuda_backproject.relion_vdam_mstep_fused_projector_x_half
+        callback = (
+            cuda_backproject._relion_vdam_mstep_fused_projector_x_half_consume
+            if consume_accumulators
+            else cuda_backproject.relion_vdam_mstep_fused_projector_x_half
+        )
         if transaction_queue is not None:
             callback = functools.partial(transaction_queue.accumulate, callback)
         Ft_y, Ft_ctf, _ = (
@@ -344,6 +351,7 @@ def _accumulate_relion_vdam_physical_particle_grid(
                 stable_dense_positions=stable_dense_positions,
                 logical_current_size=logical_current_size,
                 runtime_projector_radius=runtime_projector_radius,
+                return_denominator=not consume_accumulators,
             )
         )
     return Ft_y, Ft_ctf

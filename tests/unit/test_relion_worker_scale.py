@@ -1097,7 +1097,7 @@ def test_follower_replay_completion_never_logs_success_for_invalid_accounting(ca
     assert caplog.messages == []
 
 
-def test_only_optics_prefix_scale_stats_are_combined_between_followers():
+def test_all_physical_group_scale_stats_are_combined_between_followers():
     state = make_relion_follower_scale_state(
         n_followers=2,
         group_counts=np.ones(4),
@@ -1112,25 +1112,24 @@ def test_only_optics_prefix_scale_stats_are_combined_between_followers():
         wsum_reference_power=aa,
     )
 
-    # Group 0 is reduced to raw scale 3 on both followers. Group 1 remains
-    # local: raw 5 on follower 1 and the zero-AA default 1 on follower 2.
-    # Follower-local normalization changes absolute values but preserves the
-    # expected within-follower ratios.
+    # RELION 5.0.1 MlWsumModel packs nr_groups XA/AA entries, including
+    # groups beyond nr_optics_groups. Group 1 has data only on follower 1,
+    # but both followers must receive its raw scale 5.
     np.testing.assert_allclose(updated.scales[:, 0] / updated.scales[:, 2], [3.0, 3.0])
     np.testing.assert_allclose(updated.scales[0, 1] / updated.scales[0, 2], 5.0)
-    np.testing.assert_allclose(updated.scales[1, 1] / updated.scales[1, 2], 1.0)
+    np.testing.assert_allclose(updated.scales[1, 1] / updated.scales[1, 2], 5.0)
 
 
-def test_captured_group5989_rank_states_reproduce_runtime_and_star_values():
+def test_historical_group5989_statistics_use_canonical_all_group_reduction():
     n_groups = 10_000
     target_group = 5989
     rank1_avg = 1.0265163330375102
     rank2_avg = 1.026738611317099
     target_raw_rank1 = 1.3489885472342609
 
-    # Construct the smallest homogeneous background whose two independent
-    # follower normalizers equal the captured values while preserving the
-    # observed combined group-0 boundary.
+    # Retain the historical sparse statistics that exposed the old optics-
+    # prefix assumption. The historical independent rank normalizers are
+    # fixture construction inputs, not the canonical 5.0.1 update rule.
     matrix = np.asarray([[n_groups - 1.5, 0.5], [0.5, n_groups - 1.5]])
     rhs = np.asarray(
         [n_groups * rank1_avg - target_raw_rank1, n_groups * rank2_avg - 1.0],
@@ -1158,15 +1157,18 @@ def test_captured_group5989_rank_states_reproduce_runtime_and_star_values():
         wsum_reference_power=aa,
     )
 
+    combined_background = (background_rank1 + background_rank2) / 2.0
+    combined_avg = ((n_groups - 1) * combined_background + target_raw_rank1) / n_groups
+    expected_target = target_raw_rank1 / combined_avg
     np.testing.assert_allclose(
         updated.scales[0, target_group],
-        1.3141423120297953,
+        expected_target,
         rtol=0.0,
         atol=2e-15,
     )
     np.testing.assert_allclose(
         updated.scales[1, target_group],
-        0.973957723005275,
+        expected_target,
         rtol=0.0,
         atol=2e-15,
     )

@@ -9,15 +9,19 @@ from __future__ import annotations
 
 import functools
 import logging
+import time
+from recovar.em.diagnostics.sparse_pass2_dump import _add_sparse_group_timing
 from functools import partial
 from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
 import numpy as np
+from recovar.em.helpers.dtype_policy import audit_operand_precision
 
 from recovar.em.diagnostics import finite_check
 from recovar.em.helpers.dtype_policy import DensePrecisionPolicy
+from recovar.em.helpers.env_flags import parse_env_binary_flag
 from recovar.em.helpers.half_spectrum import make_half_image_weights, make_shell_indices_half
 from recovar.em.helpers.image_shifts import apply_relion_integer_pre_shifts, half_image_phase_factors
 from recovar.em.helpers.preprocessing import (
@@ -194,6 +198,31 @@ def _ctf_over_noise_weighted_pair(processed_score_half_raw, processed_recon_half
     )
 
 
+_SPARSE_PASS2_F64_NOISE_OPERANDS_ENV = "RECOVAR_SPARSE_PASS2_F64_NOISE_OPERANDS"
+
+
+@jax.jit
+def _weighted_ctf_pair(processed_score_half_raw, processed_recon_half_raw, weighted_ctf_half):
+    """Weight score and reconstruction images by ``CTF * Minvsigma2`` in one program."""
+
+    return (
+        processed_score_half_raw * weighted_ctf_half,
+        processed_recon_half_raw * weighted_ctf_half,
+    )
+
+
+def _generic_inverse_noise_operands(noise_variance_half) -> bool:
+    """Use the XFLOAT-reciprocal noise operand on the generic (non-exact) path.
+
+    Only the shared one-dimensional spectrum layout is handled here; per-image
+    noise keeps the historical division so its broadcasting is unchanged.
+    """
+
+    if parse_env_binary_flag(_SPARSE_PASS2_F64_NOISE_OPERANDS_ENV):
+        return False
+    return int(jnp.ndim(noise_variance_half)) == 1
+
+
 @jax.jit
 def _divide_by_safe_ctf(sparse_score_input_half, ctf_half):
     """Divide by the CTF where it is safely non-zero, else pass through."""
@@ -266,6 +295,7 @@ def prepare_unshifted_bucket_operands(
     window_indices=None,
     relion_exact_normalized_cc_operands=False,
     relion_exact_bpref_operands=False,
+    stage_timing=None,
 ) -> UnshiftedBucketOperands:
     """Per-image half of :func:`_prepare_bucket_io`, statement for statement.
 
@@ -278,6 +308,7 @@ def prepare_unshifted_bucket_operands(
     if score_mode not in {"gaussian", "normalized_cc"}:
         raise ValueError(f"score_mode must be 'gaussian' or 'normalized_cc', got {score_mode!r}")
 
+    substage_t0 = time.time()
     image_shape = config.image_shape
     use_normalized_cc = score_mode == "normalized_cc"
     (
@@ -341,10 +372,22 @@ def prepare_unshifted_bucket_operands(
             output_dtype=acc_real_dtype,
         )
         ctf2_score_half = ctf_half**2
+    elif _generic_inverse_noise_operands(noise_variance_half):
+        # Preserve RELION's binary64 reciprocal -> accumulation-precision cast.
+        inverse_noise_half = jnp.reciprocal(
+            jnp.asarray(noise_variance_half, dtype=jnp.float64)
+        ).astype(acc_real_dtype)
+        weighted_ctf_half = ctf_half * inverse_noise_half[None, :]
+        ctf2_over_nv_half = weighted_ctf_half * ctf_half
+        ctf2_score_half = ctf_half**2
     else:
         inverse_noise_half = None
         weighted_ctf_half = None
         ctf2_over_nv_half, ctf2_score_half = _ctf2_over_noise_and_ctf2(ctf_half, noise_variance_half)
+    generic_inverse_noise = inverse_noise_half is not None and not relion_exact_bpref_operands
+
+    _add_sparse_group_timing(stage_timing, "prepare_ctf_noise", time.time() - substage_t0)
+    substage_t0 = time.time()
 
     # Raw processed half-spectrum images (BEFORE any per-image correction).
     # The score path uses masked images iff ``score_with_masked_images`` is True,
@@ -364,6 +407,9 @@ def prepare_unshifted_bucket_operands(
         )
     else:
         processed_recon_half_raw = processed_score_half_raw
+
+    _add_sparse_group_timing(stage_timing, "prepare_image_fft", time.time() - substage_t0)
+    substage_t0 = time.time()
 
     if use_normalized_cc:
         # RELION firstiter_cc uses unweighted image power over the same Fourier
@@ -387,15 +433,20 @@ def prepare_unshifted_bucket_operands(
         norm_half_weights = make_half_image_weights(image_shape)
         batch_norm = _gaussian_batch_norm(
             processed_score_half_raw,
-            inverse_noise_half if relion_exact_bpref_operands else noise_variance_half,
+            inverse_noise_half if inverse_noise_half is not None else noise_variance_half,
             norm_half_weights,
-            multiply_inverse_noise=bool(relion_exact_bpref_operands),
+            multiply_inverse_noise=inverse_noise_half is not None,
         )
 
     if relion_exact_bpref_operands:
         score_weighted_half = processed_score_half_raw * weighted_ctf_half
         recon_weighted_half = processed_recon_half_raw * weighted_ctf_half
         recon_bpref_input_half = processed_recon_half_raw
+    elif generic_inverse_noise:
+        score_weighted_half, recon_weighted_half = _weighted_ctf_pair(
+            processed_score_half_raw, processed_recon_half_raw, weighted_ctf_half,
+        )
+        recon_bpref_input_half = None
     else:
         score_weighted_half, recon_weighted_half = _ctf_over_noise_weighted_pair(
             processed_score_half_raw,
@@ -516,6 +567,8 @@ def prepare_unshifted_bucket_operands(
             ),
             image_ids=image_indices,
         )
+    _add_sparse_group_timing(stage_timing, "prepare_weighting", time.time() - substage_t0)
+    substage_t0 = time.time()
     return UnshiftedBucketOperands(
         image_shape=image_shape,
         use_normalized_cc=use_normalized_cc,
@@ -575,6 +628,8 @@ def _prepare_bucket_io(
     return_shifted_score=True,
     relion_exact_normalized_cc_operands=False,
     relion_exact_bpref_operands=False,
+    return_native_bpref_operands=False,
+    stage_timing=None,
 ):
     """Run preprocessing for a batch of images (translations tiled, CTF/noise ratios).
 
@@ -606,7 +661,9 @@ def _prepare_bucket_io(
         window_indices=window_indices,
         relion_exact_normalized_cc_operands=relion_exact_normalized_cc_operands,
         relion_exact_bpref_operands=relion_exact_bpref_operands,
+        stage_timing=stage_timing,
     )
+    substage_t0 = time.time()
     (
         image_shape,
         use_normalized_cc,
@@ -881,6 +938,8 @@ def _prepare_bucket_io(
         ctf2_over_nv_half = jnp.where(dc_mask[None, :], 0.0, ctf2_over_nv_half)
 
     precision_policy = DensePrecisionPolicy(use_float64_scoring=use_float64_scoring)
+    _add_sparse_group_timing(stage_timing, "prepare_translate", time.time() - substage_t0)
+    substage_t0 = time.time()
     if return_direct_scoring_io and use_normalized_cc:
         inv_xi2 = (1.0 / jnp.maximum(batch_norm, jnp.asarray(1e-30, dtype=batch_norm.dtype))).astype(
             precision_policy.score_real_dtype,
@@ -925,7 +984,7 @@ def _prepare_bucket_io(
             precision_policy.score_complex_dtype,
         )
 
-    return (
+    result = (
         shifted_score_half,
         shifted_recon_half,
         batch_norm,
@@ -948,3 +1007,63 @@ def _prepare_bucket_io(
         inverse_noise_half,
         ctf_half_rfloat,
     )
+
+    if not return_native_bpref_operands:
+        return result
+    if not relion_exact_bpref_operands or score_only:
+        raise ValueError("native BPref operands require reconstruction with exact operands")
+    fft_size = float(np.prod(image_shape))
+    _add_sparse_group_timing(stage_timing, "prepare_window_cast", time.time() - substage_t0)
+    substage_t0 = time.time()
+    audit_operand_precision(
+        precision_policy,
+        {
+            "shifted_score_half": shifted_score_half,
+            "shifted_recon_half": shifted_recon_half,
+            "ctf2_over_nv_half": ctf2_over_nv_half,
+            "ctf2_over_nv_half_with_dc": ctf2_over_nv_half_with_dc,
+            "shifted_score_half_with_dc": shifted_score_half_with_dc,
+            "shifted_corrected_score_half": shifted_corrected_score_half,
+            "direct_score_input": direct_score_input,
+        },
+        where="_prepare_bucket_io",
+    )
+
+    return result + (
+        jnp.asarray(recon_bpref_input_half * np.float32(1.0 / fft_size), dtype=jnp.complex64),
+        jnp.asarray(ctf_half, dtype=jnp.float32),
+        jnp.reciprocal(
+            jnp.asarray(noise_variance_half, dtype=jnp.float64)
+            / np.float64(fft_size * fft_size)
+        ).astype(jnp.float32),
+    )
+
+
+@jax.jit
+def _best_pair_indices_device(best_log_score, best_argmax, local_rotation_row, translation_idx):
+    """Gather the best pair's (row, translation) ids in one program."""
+
+    safe_argmax = jnp.where(jnp.isfinite(best_log_score), best_argmax, 0).astype(jnp.int32)
+    rows = jnp.arange(safe_argmax.shape[0], dtype=jnp.int32)
+    return local_rotation_row[rows, safe_argmax], translation_idx[rows, safe_argmax]
+
+
+@jax.jit
+def _log_score_offset_from_min_diff2_device(global_min_diff2):
+    """float64 ``-min_diff2`` on the device (host path: ``np.asarray(-x, float64)``)."""
+
+    return (-jnp.asarray(global_min_diff2)).astype(jnp.float64)
+
+
+@jax.jit
+def _log_score_offset_from_batch_norm_device(batch_norm):
+    """float64 ``-0.5 * squeeze(batch_norm)`` on the device, host operation order."""
+
+    return -0.5 * jnp.squeeze(batch_norm, axis=1).astype(jnp.float64)
+
+
+@jax.jit
+def _absolute_log_z_to_score_frame_device(absolute_log_evidence, log_score_offset):
+    """``absolute - offset`` in float64 on the device (host: NumPy float64 subtraction)."""
+
+    return jnp.asarray(absolute_log_evidence, dtype=jnp.float64) - log_score_offset

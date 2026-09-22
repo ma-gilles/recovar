@@ -475,8 +475,8 @@ def test_exact_bpref_recon_operand_matches_its_own_translate(
     monkeypatch, custom_cuda_lib, gpu_device, rows_per_block
 ):
     """``relion_exact_bpref_operands`` builds the recon tile with a different
-    primitive: ``relion_translate_bpref_f32`` rounds the imaginary component as
-    ``cosine * v.y + sine * v.x`` and multiplies by the weighted CTF after the
+    primitive: ``relion_translate_bpref_f32`` pins the RELION imaginary FMA
+    ``fma(sine, real, round(cosine * imag))`` and applies weighted CTF after the
     rotation. The kernel must reproduce that tile, not the score one, when the
     weight is supplied -- and the noise tile must stay on the score path."""
 

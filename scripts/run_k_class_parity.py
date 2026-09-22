@@ -333,6 +333,29 @@ def _resolve_firstiter_lowpass_ini_high_angstrom(args, relion_cli_flags: dict[st
     return value if value > 0.0 else None
 
 
+def _resolve_replay_max_significants(
+    *,
+    override: int | None,
+    optimiser_metadata: dict[str, object],
+    target_iteration: int,
+    do_firstiter_cc: bool,
+    n_classes: int,
+    reference_dimension: int = 3,
+) -> dict[str, object]:
+    """Resolve the active cap rather than trusting RELION's saved argument."""
+
+    from recovar.em.relion.relion_metadata import resolve_relion_runtime_max_significants
+
+    return resolve_relion_runtime_max_significants(
+        override=override,
+        optimiser_metadata=optimiser_metadata,
+        target_iteration=target_iteration,
+        do_firstiter_cc=do_firstiter_cc,
+        n_classes=n_classes,
+        reference_dimension=reference_dimension,
+    )
+
+
 def _class_distributions(model) -> np.ndarray:
     classes = model["model_classes"]
     return np.asarray(classes["rlnClassDistribution"], dtype=np.float64)
@@ -969,6 +992,17 @@ def main() -> None:
         help="Posterior mass retained when selecting significant class x pose samples.",
     )
     parser.add_argument(
+        "--max-significants",
+        type=int,
+        default=None,
+        help=(
+            "Override the active coarse significant-pose cap. By default, "
+            "resolve RELION's runtime value from the optimiser; in 3-D "
+            "gradient mode a saved -1 means 100 times the class count. "
+            "Use <=0 to force an uncapped diagnostic."
+        ),
+    )
+    parser.add_argument(
         "--adaptive-2pass",
         action="store_true",
         help=(
@@ -1224,11 +1258,19 @@ def main() -> None:
     tau2_fudge = float(args.tau2_fudge or _scalar(prev_model["model_general"], "rlnTau2FudgeFactor", 4.0))
     particle_diameter = _read_particle_diameter(relion_dir, args.prev_iter)
     relion_cli_flags = _read_relion_optimiser_cli_flags(relion_dir, args.prev_iter)
+    optimiser = read_relion_optimiser_metadata(str(prev_prefix) + "_optimiser.star")
     firstiter_cc_mode = _resolve_firstiter_cc_mode(args, relion_cli_flags)
     firstiter_lowpass_ini_high = _resolve_firstiter_lowpass_ini_high_angstrom(
         args,
         relion_cli_flags,
         firstiter_cc_mode,
+    )
+
+    max_significants = _resolve_replay_max_significants(
+        override=args.max_significants, optimiser_metadata=optimiser,
+        target_iteration=args.target_iter,
+        do_firstiter_cc=bool(relion_cli_flags.get("do_firstiter_cc", False)),
+        n_classes=n_classes,
     )
 
     print(f"RELION K-class replay: K={n_classes}, N={grid_size}, prev={args.prev_iter}, target={args.target_iter}")
@@ -1247,6 +1289,12 @@ def main() -> None:
         f"relion_ini_high={relion_cli_flags.get('ini_high_angstrom')}, "
         f"override={args.firstiter_cc_ini_high_angstrom}, "
         f"effective={firstiter_lowpass_ini_high}"
+    )
+    print(
+        "  max_significants: "
+        f"saved_arg={max_significants['maximum_significants_argument']}, "
+        f"active={max_significants['active_max_significants']}, "
+        f"source={max_significants['source']}, do_grad={max_significants['do_grad']}"
     )
     if firstiter_cc_mode["effective_mode"] == "force" and not firstiter_cc_mode["relion_requested"]:
         print(
@@ -1313,7 +1361,6 @@ def main() -> None:
     sampling = read_relion_sampling_metadata(str(target_prefix) + "_sampling.star")
     healpix_order = int(sampling["healpix_order"])
     star_random_perturbation = float(sampling["random_perturbation"])
-    optimiser = read_relion_optimiser_metadata(str(prev_prefix) + "_optimiser.star")
     random_perturbation, random_perturbation_source = (
         _resolve_target_random_perturbation(
             star_value=star_random_perturbation,
@@ -1546,6 +1593,7 @@ def main() -> None:
             trans_parent_map,
             args.disc_type,
             adaptive_fraction=args.significance_adaptive_fraction,
+            max_significants=int(max_significants["active_max_significants"]),
             coarse_current_size=coarse_engine_current_size,
             fine_current_size=current_size,
             current_size=current_size,
@@ -1598,7 +1646,7 @@ def main() -> None:
             args.disc_type,
             class_log_priors=class_log_priors,
             adaptive_fraction=args.significance_adaptive_fraction,
-            max_significants=-1,
+            max_significants=int(max_significants["active_max_significants"]),
             image_batch_size=significance_support_batch_plan.image_batch_size,
             rotation_block_size=significance_support_batch_plan.rotation_block_size,
             current_size=coarse_engine_current_size if args.adaptive_2pass else current_size,
@@ -1717,7 +1765,7 @@ def main() -> None:
             args.disc_type,
             class_log_priors=class_log_priors,
             adaptive_fraction=args.significance_adaptive_fraction,
-            max_significants=-1,
+            max_significants=int(max_significants["active_max_significants"]),
             image_batch_size=significance_support_batch_plan.image_batch_size,
             rotation_block_size=significance_support_batch_plan.rotation_block_size,
             current_size=current_size,
@@ -1788,6 +1836,7 @@ def main() -> None:
                 # residual high-shell content from the regularization floor that
                 # RELION omits. Passing current_size matches RELION's max_r2 skip.
                 current_size=current_size,
+                accumulator_volume_shape=result.mstep_accumulator_shape,
             ).reshape(-1)
             if apply_firstiter_lowpass:
                 from recovar.em.refinement.mean_helpers import _apply_relion_initial_lowpass_filter
@@ -1936,6 +1985,7 @@ def main() -> None:
             args.relion_native_lane_softmask_reduction
         ),
         "relion_optimiser_cli": relion_cli_flags,
+        "max_significants": max_significants,
         "firstiter_cc_mode": firstiter_cc_mode,
         "firstiter_cc_pass2_only_best_coarse": bool(
             firstiter_cc_mode["emulate"]

@@ -44,9 +44,14 @@ def _select_class_value(value, class_index: int, n_classes: int):
 
 
 def _select_projector_half_for_class(value, class_index: int, n_classes: int):
+    """Select a host view before the consuming engine decides when to upload.
+
+    Preserve existing eager/traced JAX indexing for device-owned callers.
+    Selecting a NumPy class must not implicitly stage every class on device.
+    """
     if value is None:
         return None
-    value_array = jnp.asarray(value)
+    value_array = value if isinstance(value, (np.ndarray, jax.Array, jax.core.Tracer)) else np.asarray(value)
     if value_array.ndim >= 4 and int(value_array.shape[0]) == n_classes:
         return value_array[class_index]
     return value

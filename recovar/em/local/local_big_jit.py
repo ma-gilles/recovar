@@ -1492,7 +1492,7 @@ def _project_local_half_spectrum(
     relion_projector_output_size: int,
     projection_relion_texture_interp: bool | None,
     projection_force_jax: bool,
-    projection_mask_current_image_disk: bool = True,
+    projection_mask_current_image_disk: bool = False,
     use_relion_projector: bool,
     relion_projector_r_max: int,
     projection_padding_factor: int,
@@ -2070,7 +2070,7 @@ def run_local_bucket_big_jit(
     relion_projector_output_size: int,
     projection_relion_texture_interp: bool | None,
     projection_force_jax: bool,
-    projection_mask_current_image_disk: bool = True,
+    projection_mask_current_image_disk: bool = False,
     relion_exact_bpref_operands: bool = False,
     relion_exact_fine_diff2: bool = False,
     use_flat_local_rows: bool = False,
@@ -2926,7 +2926,7 @@ def run_local_bucket_big_jit(
                     direct_highres,
                     current_size=norm_current_size,
                 )
-        direct_candidate_mask = rotation_mask[:, :, None]
+        direct_candidate_mask = jnp.broadcast_to(rotation_mask[:, :, None], direct_diff2.shape)
         if sample_mask is not None:
             direct_candidate_mask = direct_candidate_mask & sample_mask
         direct_scores = _relion_cuda_fine_diff2_to_scores(

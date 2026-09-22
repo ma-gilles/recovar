@@ -3726,3 +3726,137 @@ def _off_grid_so3_rotations() -> np.ndarray:
         )
         matrices.append(np.asarray(rotation_z @ rotation_y @ rotation_x, np.float32))
     return np.stack(matrices)
+
+
+@pytest.mark.gpu
+def test_relion_half_texture_projection_uses_native_rotated_image_radius_cutoff(
+    monkeypatch,
+    custom_cuda_lib,
+    gpu_device,
+):
+    """The rounded outer shell must use RELION's float32/int cutoff."""
+
+    import recovar.cuda_backproject as cuda_backproject
+
+    monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
+    monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
+    monkeypatch.setattr(cuda_backproject, "_cuda_ok", None)
+    projector_max_r = 23
+    projector_size = 2 * projector_max_r + 3
+    projector = np.ones(
+        (projector_size, projector_size, projector_max_r + 2),
+        dtype=np.complex64,
+    )
+    # These two valid float32 rotations straddle RELION's integer-truncated
+    # cutoff for source (ky, kx)=(10, 1), whose exact radius squared is 101.
+    # They are frozen from the admitted EMPIAR-10076 K=4 native operand panel.
+    rotations = np.asarray(
+        [
+            [
+                [-0.60339195, -0.20407803, -0.7708893],
+                [0.3038262, -0.952619, 0.014376025],
+                [-0.7372976, -0.22554199, 0.6368069],
+            ],
+            [
+                [0.3366111, 0.59114784, -0.73296463],
+                [-0.88786924, 0.45852897, -0.037939373],
+                [0.31365776, 0.6635476, 0.6792079],
+            ],
+        ],
+        dtype=np.float32,
+    )
+
+    with jax.default_device(gpu_device):
+        projected = cuda_backproject.relion_projector_half_texture_f32(
+            jnp.asarray(projector),
+            jnp.asarray(rotations),
+            current_size=20,
+            padding_factor=1,
+            projector_max_r=projector_max_r,
+        )
+    projected = np.asarray(projected).reshape(2, 20, 11)
+    assert projected[0, 0, 1] != 0
+    assert projected[1, 0, 1] == 0
+
+
+@pytest.mark.gpu
+def test_relion_half_texture_projection_is_bitwise_invariant_to_host_support_crop(
+    monkeypatch,
+    custom_cuda_lib,
+    gpu_device,
+):
+    """Compacting PPref to every consumed square pixel must preserve bits."""
+
+    import recovar.cuda_backproject as cuda_backproject
+    from recovar.em.helpers.fourier_window import (
+        make_fourier_window_spec,
+    )
+    from recovar.em.helpers.projection import (
+        compact_relion_projector_half_for_centered_indices,
+        compute_relion_projector_projections_block,
+    )
+
+    monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
+    monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
+    monkeypatch.setattr(cuda_backproject, "_cuda_ok", None)
+    image_shape = (16, 16)
+    current_size = 6
+    padding_factor = 2
+    projector_r_max = 7
+    padded_r_max = projector_r_max * padding_factor
+    projector_size = 2 * (padded_r_max + 1) + 1
+    rng = np.random.default_rng(193)
+    projector = (
+        rng.normal(0, 0.02, (projector_size, projector_size, padded_r_max + 2))
+        + 1j * rng.normal(0, 0.02, (projector_size, projector_size, padded_r_max + 2))
+    ).astype(np.complex64)
+    window = make_fourier_window_spec(
+        image_shape,
+        current_size,
+        image_shape[0] * (image_shape[1] // 2 + 1),
+        include_recon_window=False,
+        score_square=True,
+        score_include_dc=True,
+    )
+    compact, compact_r_max = compact_relion_projector_half_for_centered_indices(
+        projector,
+        window.score_indices_np,
+        image_shape,
+        r_max=projector_r_max,
+        padding_factor=padding_factor,
+    )
+    assert compact_r_max == 5
+    assert compact.shape == (23, 23, 12)
+    rotations = _off_grid_so3_rotations()
+
+    common = dict(
+        image_shape=image_shape,
+        padding_factor=padding_factor,
+        centered_rows=True,
+        dense_scale=True,
+        projector_output_size=current_size,
+        pixel_indices=window.score_indices_np,
+        relion_texture_interp=True,
+    )
+    with jax.default_device(gpu_device):
+        full_projection, full_abs2 = compute_relion_projector_projections_block(
+            jnp.asarray(projector),
+            jnp.asarray(rotations),
+            r_max=projector_r_max,
+            **common,
+        )
+        compact_projection, compact_abs2 = compute_relion_projector_projections_block(
+            jnp.asarray(compact),
+            jnp.asarray(rotations),
+            r_max=compact_r_max,
+            **common,
+        )
+
+    np.testing.assert_array_equal(
+        np.asarray(compact_projection).view(np.uint32),
+        np.asarray(full_projection).view(np.uint32),
+    )
+    np.testing.assert_array_equal(
+        np.asarray(compact_abs2).view(np.uint32),
+        np.asarray(full_abs2).view(np.uint32),
+    )

@@ -258,8 +258,6 @@ def resolve_statistics_config(
         default=False,
     )
     cutoff = None if current_size is None else int(current_size) // 2
-    if relion_wavg_atomic_direct_noise and current_size is None:
-        raise ValueError("direct Wavg noise replacement requires current_size")
     return ResidentStatisticsConfig(
         n_shells=int(n_shells),
         n_fine_trans=int(n_fine_trans),
@@ -273,7 +271,7 @@ def resolve_statistics_config(
         use_exact_relion_gaussian=bool(use_exact_relion_gaussian),
         relion_wavg_atomic_direct_noise=bool(relion_wavg_atomic_direct_noise),
         relion_wavg_atomic_scale_aa=bool(relion_wavg_atomic_scale_aa),
-        direct_noise_exclusive_shell_stop=0 if cutoff is None else cutoff + 1,
+        direct_noise_exclusive_shell_stop=int(n_shells) if cutoff is None else cutoff + 1,
         accumulate_scale=bool(accumulate_scale),
     )
 

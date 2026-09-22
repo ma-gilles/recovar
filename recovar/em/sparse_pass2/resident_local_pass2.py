@@ -336,7 +336,7 @@ def compute_local_search_resident(
     projection_relion_texture_interp=None,
     projection_relion_acc_double_floorf_quirk=False,
     projection_force_jax=False,
-    projection_mask_current_image_disk=True,
+    projection_mask_current_image_disk=False,
     relion_projector_half=None,
     relion_projector_r_max=None,
     use_float64_scoring=False,

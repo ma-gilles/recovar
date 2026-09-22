@@ -153,6 +153,8 @@ def read_relion_optimiser_metadata(optimiser_star_path):
 
     return dict(
         random_seed=_grab("rlnRandomSeed", int),
+        current_iteration=_grab("rlnCurrentIteration", int),
+        number_iterations=_grab("rlnNumberOfIterations", int),
         overall_accuracy_rotations=_grab("rlnOverallAccuracyRotations"),
         overall_accuracy_translations_angst=_grab("rlnOverallAccuracyTranslationsAngst"),
         has_converged=_grab("rlnHasConverged", int),
@@ -165,6 +167,11 @@ def read_relion_optimiser_metadata(optimiser_star_path):
         smallest_changes_offsets=_grab("rlnSmallestChangesOffsets"),
         smallest_changes_classes=_grab("rlnSmallestChangesClasses"),
         do_correct_ctf=_grab("rlnDoCorrectCtf", int),
+        gradient_refine=_grab("rlnDoGradientRefine", int),
+        do_grad=_grab("rlnDoStochasticGradientDescent", int),
+        grad_em_iters=_grab("rlnGradEmIters", int),
+        grad_has_converged=_grab("rlnGradHasConverged", int),
+        maximum_significants_arg=_grab("rlnMaximumSignificantPoses", int),
     )
 
 
@@ -252,7 +259,7 @@ def _load_relion_mask_params(optimiser_star_path):
 
 
 def _load_relion_max_significants(optimiser_star_path):
-    """Extract RELION's maximum-significant-poses setting from an optimiser STAR."""
+    """Extract RELION's saved maximum-significant-poses argument from an optimiser STAR."""
     text = Path(optimiser_star_path).read_text(errors="ignore")
 
     match = re.search(r"rlnMaximumSignificantPoses\s+(-?[0-9]+)", text)
@@ -402,3 +409,133 @@ def _particle_identity_rows(particles, *, label: str) -> dict[tuple[int, str], i
     if len(set(identities)) != len(identities):
         raise ValueError(f"{label} contains duplicate rlnImageName/stack identities")
     return {identity: row for row, identity in enumerate(identities)}
+
+
+def relion_do_grad_for_iteration(
+    *,
+    gradient_refine: bool,
+    has_converged: bool,
+    iteration: int,
+    number_iterations: int,
+    grad_em_iters: int,
+    do_firstiter_cc: bool,
+    grad_has_converged: bool,
+) -> bool:
+    """Mirror RELION's per-iteration ``do_grad`` decision.
+
+    RELION recomputes this flag at the start of every optimiser iteration.
+    Keeping the calculation separate from the serialized
+    ``rlnDoStochasticGradientDescent`` value is important: an iteration-0
+    optimiser commonly stores zero there even though iteration 1 will run in
+    gradient mode.
+    """
+
+    if not bool(gradient_refine):
+        return False
+    return not (
+        bool(has_converged)
+        or int(iteration) > int(number_iterations) - int(grad_em_iters)
+        or (bool(do_firstiter_cc) and int(iteration) == 1)
+        or bool(grad_has_converged)
+    )
+
+
+def relion_active_max_significants(
+    maximum_significants_arg: int,
+    *,
+    do_grad: bool,
+    n_classes: int,
+    reference_dimension: int = 3,
+) -> int:
+    """Resolve RELION's active coarse significant-pose cap.
+
+    ``rlnMaximumSignificantPoses`` stores the user argument, not necessarily
+    the value used by the expectation step.  When that argument is ``-1`` and
+    gradient refinement is active, RELION substitutes 5 poses per class for
+    2-D references or 100 poses per class for 3-D references.
+    """
+
+    maximum_significants_arg = int(maximum_significants_arg)
+    n_classes = int(n_classes)
+    reference_dimension = int(reference_dimension)
+    if n_classes < 1:
+        raise ValueError(f"n_classes must be positive, got {n_classes}")
+    if reference_dimension not in {2, 3}:
+        raise ValueError(
+            "reference_dimension must be 2 or 3, "
+            f"got {reference_dimension}"
+        )
+    if maximum_significants_arg != -1:
+        return maximum_significants_arg
+    if not bool(do_grad):
+        return -1
+    per_class = 5 if reference_dimension == 2 else 100
+    return per_class * n_classes
+
+
+def resolve_relion_runtime_max_significants(
+    *,
+    override: int | None,
+    optimiser_metadata: dict[str, object],
+    target_iteration: int,
+    do_firstiter_cc: bool,
+    n_classes: int,
+    reference_dimension: int = 3,
+) -> dict[str, object]:
+    """Resolve an optimiser argument into the cap used by one RELION iteration.
+
+    An explicit override is an active-value override, so ``-1`` can still be
+    used to request an uncapped diagnostic. Without an override, the function
+    mirrors RELION's gradient control flow and automatic per-class cap.
+    """
+
+    gradient_refine = bool(optimiser_metadata.get("gradient_refine") or False)
+    if gradient_refine:
+        number_iterations = optimiser_metadata.get("number_iterations")
+        if number_iterations is None:
+            raise ValueError(
+                "Gradient replay requires rlnNumberOfIterations in the RELION optimiser"
+            )
+        grad_em_iters = optimiser_metadata.get("grad_em_iters")
+        do_grad = relion_do_grad_for_iteration(
+            gradient_refine=True,
+            has_converged=bool(optimiser_metadata.get("has_converged") or False),
+            iteration=int(target_iteration),
+            number_iterations=int(number_iterations),
+            grad_em_iters=1 if grad_em_iters is None else int(grad_em_iters),
+            do_firstiter_cc=bool(do_firstiter_cc),
+            grad_has_converged=bool(
+                optimiser_metadata.get("grad_has_converged") or False
+            ),
+        )
+    else:
+        do_grad = False
+
+    saved_argument = optimiser_metadata.get("maximum_significants_arg")
+    if override is not None:
+        active = int(override)
+        source = "cli_override"
+    else:
+        argument = -1 if saved_argument is None else int(saved_argument)
+        active = relion_active_max_significants(
+            argument,
+            do_grad=do_grad,
+            n_classes=n_classes,
+            reference_dimension=reference_dimension,
+        )
+        source = (
+            "relion_gradient_runtime_default"
+            if argument == -1 and do_grad
+            else "relion_optimiser_argument"
+        )
+
+    return {
+        "maximum_significants_argument": (
+            None if saved_argument is None else int(saved_argument)
+        ),
+        "active_max_significants": int(active),
+        "source": source,
+        "gradient_refine": bool(gradient_refine),
+        "do_grad": bool(do_grad),
+        "target_iteration": int(target_iteration),
+    }

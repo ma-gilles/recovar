@@ -1883,3 +1883,65 @@ def test_relion_vdam_mstep_sums_labels_the_nyquist_row_as_relion_does(
     np.testing.assert_allclose(summed[2:], packed[2:], rtol=3e-6, atol=3e-6)
     for row in (0, 1):
         assert abs(summed[row] - packed[row]) > 1e-3 * abs(images[0, row])
+
+
+@pytest.mark.gpu
+def test_relion_translate_bpref_f32_matches_native_captured_bits(
+    monkeypatch,
+    custom_cuda_lib,
+    gpu_device,
+):
+    import recovar.cuda_backproject as cuda_backproject
+
+    monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
+    monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
+    monkeypatch.setattr(cuda_backproject, "_cuda_ok", None)
+
+    image_shape = (256, 256)
+    pixel_indices = np.asarray(
+        [13031, 13160, 13161, 13167],
+        dtype=np.int32,
+    )
+    image_words = np.asarray(
+        [
+            [3263777648, 1133111626],
+            [3272549528, 1090742966],
+            [1127815781, 1125080211],
+            [3252159688, 1125857107],
+        ],
+        dtype=np.uint32,
+    )
+    images = (
+        image_words[:, 0].view(np.float32)
+        + np.complex64(1j) * image_words[:, 1].view(np.float32)
+    ).astype(np.complex64)[None, :]
+    weighted_ctf = np.asarray(
+        [[3106311266, 3108593774, 3108351983, 3104897938]],
+        dtype=np.uint32,
+    ).view(np.float32)
+    angles = np.asarray([[3168013433, 3176042026]], dtype=np.uint32).view(
+        np.float32
+    )
+    expected_words = np.asarray(
+        [
+            [1027138631, 3125411712],
+            [1008901170, 1020422283],
+            [1013229036, 3173746131],
+            [1017732809, 3152071391],
+        ],
+        dtype=np.uint32,
+    )
+
+    with jax.default_device(gpu_device):
+        actual = cuda_backproject.relion_translate_bpref_f32(
+            jnp.asarray(images),
+            jnp.asarray(weighted_ctf),
+            jnp.asarray(angles),
+            jnp.asarray(pixel_indices),
+            image_shape,
+        )
+    actual_words = (
+        np.asarray(actual)[0].view(np.float32).view(np.uint32).reshape(-1, 2)
+    )
+
+    np.testing.assert_array_equal(actual_words, expected_words)

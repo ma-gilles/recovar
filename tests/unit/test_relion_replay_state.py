@@ -448,3 +448,72 @@ def test_final_reference_substitution_rejects_invalid_boundary_and_maps(refs, so
             k_class_enabled=kclass,
             logger=relion_replay_module.logger,
         )
+
+
+@pytest.mark.parametrize("source", ["explicit", "model_file"])
+@pytest.mark.parametrize("symmetry", ["C1", "C4"])
+@pytest.mark.parametrize("n_classes", [1, 4])
+def test_replay_keeps_prior_grid_identity_across_sampling_change(
+    monkeypatch, tmp_path, source, symmetry, n_classes,
+):
+    """The scorer resets an old-grid prior, as RELION updateAngularSampling does."""
+    from recovar.em.sampling import rotation_grid_size, rotation_grid_n_in_planes
+
+    old_order, new_order = 1, 2
+    count = rotation_grid_size(old_order, symmetry) // rotation_grid_n_in_planes(old_order)
+    prior = np.zeros(count, dtype=np.float32)
+    prior[:2] = [0.75, 0.25]
+    if n_classes > 1:
+        prior = np.stack([np.roll(prior, k) for k in range(n_classes)])
+    explicit = {"direction_prior": [prior, prior.copy()]} if source == "explicit" else None
+    if source == "model_file":
+        monkeypatch.setattr(relion_replay_module, "read_relion_sampling_metadata", lambda path: {
+            "healpix_order": new_order, "offset_range": 2.0, "offset_step": 2.0,
+            "random_perturbation": 0.0, "perturbation_factor": 0.0,
+        })
+        for half in [1, 2]:
+            (tmp_path / f"run_it001_half{half}_model.star").touch()
+        monkeypatch.setattr(relion_replay_module, "read_relion_direction_prior", lambda *a, **kw: prior.copy())
+        monkeypatch.setattr(relion_replay_module, "read_relion_direction_priors", lambda *a, **kw: prior.copy())
+    global_priors, global_orders = [None, None], [None, None]
+    class_priors, class_orders = [None, None], [None, None]
+    relion_replay_module.apply_iter_replay_overrides(
+        iter_replay_override=explicit,
+        perturb_replay_relion_dir=str(tmp_path) if source == "model_file" else None,
+        init_relion_iteration=0, iteration=1,
+        state=SimpleNamespace(
+            healpix_order=new_order, max_healpix_order=3, auto_local_healpix_order=4,
+            do_local_search=False, translation_range=1.0, translation_step=1.0,
+        ), cs=32,
+        cryo=SimpleNamespace(voxel_size=2.0),
+        k_class_enabled=n_classes > 1, n_classes=n_classes,
+        relion_half_inputs=HalfInputState.from_initial_values(
+            previous_best_translations=None, previous_best_rotation_eulers=None,
+            image_corrections=None, scale_corrections=None,
+        ),
+        previous_best_rotations=[None, None], noise_variance_per_half=[None, None],
+        noise_variance=None, previous_noise_radial_per_half=[None, None],
+        previous_noise_radial=None, current_sigma_offset_angstrom=1.0,
+        class_direction_prior_per_half=class_priors,
+        class_direction_prior_order_per_half=class_orders,
+        global_direction_prior_per_half=global_priors,
+        global_direction_prior_order_per_half=global_orders, symmetry=symmetry,
+    )
+    loaded = class_priors if n_classes > 1 else global_priors
+    orders = class_orders if n_classes > 1 else global_orders
+    assert orders == [old_order, old_order]
+    for value in loaded:
+        assert value.shape == prior.shape
+        np.testing.assert_array_equal(value, prior)
+    for half in range(2):
+        result = orientation_priors_module.relion_direction_log_priors_for_half(
+            use_local=False, scoring_healpix_order=new_order, n_classes=n_classes,
+            class_direction_prior=class_priors[half],
+            class_direction_prior_order=class_orders[half],
+            global_direction_prior=global_priors[half],
+            global_direction_prior_order=global_orders[half],
+            sealed_sampling_state=None, dtype=np.float32,
+            log=relion_replay_module.logger, half_index=half, symmetry=symmetry,
+        )
+        assert result.rotation_log_prior is None
+        assert result.class_rotation_log_prior is None

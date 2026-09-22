@@ -965,7 +965,8 @@ def test_adaptive_k_class_firstiter_override_redecodes_best_pose_details(monkeyp
     np.testing.assert_allclose(np.asarray(result.best_pose_translations), fine_translations[[0, 1]])
 
 
-def test_firstiter_score_probe_uses_joint_significance(monkeypatch):
+@pytest.mark.parametrize("projection_double", [False, True])
+def test_firstiter_score_probe_uses_joint_significance(monkeypatch, projection_double):
     from recovar.em.scoring import significance as significance_module
 
     calls = []
@@ -1022,6 +1023,7 @@ def test_firstiter_score_probe_uses_joint_significance(monkeypatch):
         relion_firstiter_winner_take_all=True,
         rotation_log_prior=np.asarray([0.0, -1.0, -2.0, -3.0, -4.0], dtype=np.float32),
         translation_log_prior=np.asarray([0.0, -0.5, -1.0], dtype=np.float32),
+        use_float64_projections=projection_double,
         current_size=26,
         image_batch_size=7,
         rotation_block_size=5,
@@ -1030,6 +1032,7 @@ def test_firstiter_score_probe_uses_joint_significance(monkeypatch):
     )
 
     assert len(calls) == 1
+    assert calls[0]["use_float64_projections"] is projection_double
     assert calls[0]["score_mode"] == "normalized_cc"
     assert calls[0]["collect_significance"] is False
     assert calls[0]["return_class_best"] is True
@@ -2262,3 +2265,299 @@ def test_read_relion_direction_priors_reads_all_classes(tmp_path):
         rtol=0.0,
         atol=0.0,
     )
+
+
+def _k4_assembly_inputs():
+    n_classes = 4
+    n_images = 4
+    class_probabilities = np.full((n_classes, n_images), 0.05, dtype=np.float64)
+    np.fill_diagonal(class_probabilities, 0.85)
+    class_log_evidence = np.log(class_probabilities)
+    per_class_stats = tuple(
+        make_relion_stats(
+            log_evidence_per_image=jnp.asarray(class_log_evidence[class_index], dtype=jnp.float32),
+            best_log_score_per_image=jnp.asarray(
+                class_log_evidence[class_index] - 0.25,
+                dtype=jnp.float32,
+            ),
+            max_posterior_per_image=jnp.ones(n_images, dtype=jnp.float32),
+            rotation_posterior_sums=jnp.full(3, class_index + 1, dtype=jnp.float32),
+        )
+        for class_index in range(n_classes)
+    )
+    per_class_hard = np.stack(
+        [100 * class_index + np.arange(n_images, dtype=np.int32) for class_index in range(n_classes)],
+    )
+    per_class_best_rotations = tuple(
+        np.broadcast_to(
+            np.eye(3, dtype=np.float32) * (class_index + 1),
+            (n_images, 3, 3),
+        ).copy()
+        for class_index in range(n_classes)
+    )
+    per_class_best_translations = tuple(
+        np.stack(
+            [
+                np.full(n_images, class_index, dtype=np.float32),
+                np.arange(n_images, dtype=np.float32),
+            ],
+            axis=1,
+        )
+        for class_index in range(n_classes)
+    )
+    per_class_best_rotation_ids = tuple(
+        10 * class_index + np.arange(n_images, dtype=np.int32)
+        for class_index in range(n_classes)
+    )
+    return {
+        "class_log_evidence": class_log_evidence,
+        "new_means": None,
+        "Ft_y": [np.full(2, class_index + 1j, dtype=np.complex64) for class_index in range(n_classes)],
+        "Ft_ctf": [np.full(2, class_index + 1, dtype=np.float32) for class_index in range(n_classes)],
+        "per_class_hard_assignments": per_class_hard,
+        "per_class_stats": per_class_stats,
+        "noise_stats": None,
+        "per_class_best_pose_rotations": per_class_best_rotations,
+        "per_class_best_pose_translations": per_class_best_translations,
+        "per_class_best_pose_rotation_ids": per_class_best_rotation_ids,
+    }
+
+
+def test_k4_assembly_matches_float64_joint_posterior_and_all_class_pose_winners():
+    inputs = _k4_assembly_inputs()
+    result = _assemble_result(**inputs)
+
+    expected_responsibilities = np.exp(inputs["class_log_evidence"])
+    np.testing.assert_allclose(
+        np.asarray(result.class_responsibilities),
+        expected_responsibilities,
+        rtol=0.0,
+        atol=5e-8,
+    )
+    np.testing.assert_allclose(
+        np.sum(np.asarray(result.class_responsibilities), axis=0),
+        np.ones(4),
+        rtol=0.0,
+        atol=5e-8,
+    )
+    np.testing.assert_array_equal(np.asarray(result.class_assignments), np.arange(4, dtype=np.int32))
+    np.testing.assert_array_equal(np.asarray(result.pose_assignments), [0, 101, 202, 303])
+    np.testing.assert_array_equal(np.asarray(result.best_pose_rotation_ids), [0, 11, 22, 33])
+    np.testing.assert_array_equal(
+        np.asarray(result.best_pose_translations),
+        np.asarray([[0, 0], [1, 1], [2, 2], [3, 3]], dtype=np.float32),
+    )
+    np.testing.assert_allclose(np.asarray(result.class_posterior_sums), np.ones(4), rtol=0.0, atol=5e-8)
+    np.testing.assert_allclose(
+        np.asarray(result.stats.max_posterior_per_image),
+        np.full(4, 0.85 * np.exp(-0.25)),
+        rtol=2e-7,
+        atol=5e-8,
+    )
+    np.testing.assert_array_equal(np.asarray(result.stats.rotation_posterior_sums), np.full(3, 10.0))
+
+
+def test_k4_assembly_rejects_missing_or_duplicated_class_rows():
+    missing = _k4_assembly_inputs()
+    missing["per_class_stats"] = missing["per_class_stats"][:-1]
+    with pytest.raises(ValueError, match="per_class_stats must contain exactly 4 classes, got 3"):
+        _assemble_result(**missing)
+
+    duplicated = _k4_assembly_inputs()
+    duplicated["Ft_y"] = [*duplicated["Ft_y"], duplicated["Ft_y"][-1]]
+    with pytest.raises(ValueError, match="Ft_y must contain exactly 4 classes, got 5"):
+        _assemble_result(**duplicated)
+
+
+def test_local_k4_probe_is_score_only_and_preserves_all_class_pose_winners(monkeypatch):
+    import recovar.em.classification.k_class as k_class_module
+
+    n_classes = 4
+    n_images = 4
+    dataset = type("Dataset", (), {"n_images": n_images, "n_units": n_images})()
+    means = jnp.zeros((n_classes, 4), dtype=jnp.complex64)
+    noise_variance = jnp.ones(4, dtype=jnp.float32)
+    local_layout = LocalHypothesisLayout(
+        n_global_rotations=1,
+        n_pixels=1,
+        n_psi=1,
+        rotation_offsets=np.arange(n_images + 1, dtype=np.int64),
+        rotation_ids_flat=np.zeros(n_images, dtype=np.int32),
+        rotations_flat=np.broadcast_to(np.eye(3, dtype=np.float32), (n_images, 3, 3)).copy(),
+        rotation_log_priors_flat=np.zeros(n_images, dtype=np.float32),
+        rotation_counts=np.ones(n_images, dtype=np.int32),
+        translation_grid=np.zeros((1, 2), dtype=np.float32),
+        translation_log_priors=np.zeros((n_images, 1), dtype=np.float32),
+    )
+    probabilities = np.full((n_classes, n_images), 0.05, dtype=np.float64)
+    np.fill_diagonal(probabilities, 0.85)
+    log_evidence = np.log(probabilities)
+    calls = []
+
+    def fake_run_local_em_exact(*_args, **kwargs):
+        class_index = len(calls) % n_classes
+        calls.append(kwargs)
+        stats = make_relion_stats(
+            log_evidence_per_image=jnp.asarray(log_evidence[class_index], dtype=jnp.float32),
+            best_log_score_per_image=jnp.asarray(log_evidence[class_index] - 0.25, dtype=jnp.float32),
+            max_posterior_per_image=jnp.ones(n_images, dtype=jnp.float32),
+            rotation_posterior_sums=jnp.full(1, class_index + 1, dtype=jnp.float32),
+        )
+        return LocalEMResult(
+            jnp.full(4, class_index + 1j, dtype=jnp.complex64),
+            jnp.full(4, class_index + 1, dtype=jnp.float32),
+            jnp.asarray(100 * class_index + np.arange(n_images), dtype=jnp.int32),
+            stats,
+        )
+
+    monkeypatch.setattr(k_class_module, "run_local_em_exact", fake_run_local_em_exact)
+
+    result = run_local_k_class_em(
+        dataset,
+        means,
+        noise_variance,
+        local_layout,
+        "linear_interp",
+        image_batch_size=n_images,
+        rotation_block_size=1,
+        current_size=None,
+        mstep_subtract_ctf_projection=True,
+        mstep_relion_x_half=True,
+        return_half_volume_accumulators=True,
+    )
+
+    assert len(calls) == 2 * n_classes
+    assert [bool(call.get("score_only", False)) for call in calls] == [True] * n_classes + [False] * n_classes
+    assert all(call["disable_adjoint_y"] and call["disable_adjoint_ctf"] for call in calls[:n_classes])
+    assert all("disable_adjoint_y" not in call and "disable_adjoint_ctf" not in call for call in calls[n_classes:])
+    for option in (
+        "mstep_subtract_ctf_projection",
+        "mstep_relion_x_half",
+        "return_half_volume_accumulators",
+    ):
+        assert all(call[option] is False for call in calls[:n_classes])
+        assert all(call[option] is True for call in calls[n_classes:])
+    np.testing.assert_allclose(
+        np.sum(np.asarray(result.class_responsibilities), axis=0),
+        np.ones(n_images),
+        rtol=0.0,
+        atol=5e-8,
+    )
+    np.testing.assert_array_equal(np.asarray(result.class_assignments), np.arange(n_classes, dtype=np.int32))
+    np.testing.assert_array_equal(np.asarray(result.pose_assignments), [0, 101, 202, 303])
+
+
+@pytest.mark.parametrize("texture_interp", [True, False])
+def test_firstiter_score_probe_compacts_relion_projector_on_host(
+    monkeypatch,
+    caplog,
+    texture_interp,
+):
+    from recovar.em.scoring import significance as significance_module
+
+    calls = []
+
+    class TinyDataset:
+        n_units = 2
+        image_shape = (16, 16)
+
+    def fake_compute_significance(*args, **kwargs):
+        calls.append(kwargs)
+        return (
+            None,
+            None,
+            None,
+            np.zeros(TinyDataset.n_units, dtype=np.int32),
+            None,
+            {
+                "coarse_selector_audit": _control_coarse_selector_audit("normalized_cc", 1),
+                "class_log_evidence_per_image": np.zeros((1, TinyDataset.n_units)),
+                "class_hard_assignments": np.zeros((1, TinyDataset.n_units), dtype=np.int32),
+                "class_best_log_score_per_image": np.zeros(
+                    (1, TinyDataset.n_units),
+                    dtype=np.float32,
+                ),
+                "class_assignments": np.zeros(TinyDataset.n_units, dtype=np.int32),
+            },
+        )
+
+    monkeypatch.setattr(
+        significance_module,
+        "_compute_k_class_significance_batched",
+        fake_compute_significance,
+    )
+    caplog.set_level("INFO", logger=k_class_module.__name__)
+    padding_factor = 2
+    projector_r_max = 6
+    padded_r_max = padding_factor * projector_r_max
+    projector_size = 2 * (padded_r_max + 1) + 1
+    projector = np.arange(
+        projector_size * projector_size * (padded_r_max + 2),
+        dtype=np.float32,
+    ).reshape(1, projector_size, projector_size, padded_r_max + 2).astype(np.complex64)
+
+    k_class_module._run_dense_k_class_score_probe(
+        TinyDataset(),
+        jnp.zeros((1, 4), dtype=jnp.complex64),
+        jnp.ones(4, dtype=jnp.float32),
+        jnp.ones(1, dtype=jnp.float32),
+        np.zeros((1, 3, 3), dtype=np.float32),
+        np.zeros((1, 2), dtype=np.float32),
+        "linear_interp",
+        class_log_priors=np.zeros(1, dtype=np.float64),
+        relion_firstiter_score_mode="normalized_cc",
+        relion_firstiter_winner_take_all=True,
+        current_size=6,
+        half_spectrum_scoring=True,
+        projection_padding_factor=padding_factor,
+        coarse_relion_projector_texture_interp=texture_interp,
+        relion_projector_half=projector,
+        relion_projector_r_max=projector_r_max,
+    )
+
+    assert len(calls) == 1
+    compact = calls[0]["relion_projector_half"]
+    if not texture_interp:
+        assert compact is projector
+        assert calls[0]["relion_projector_r_max"] == projector_r_max
+        assert "RELION firstiter-CC coarse PPref host compaction" not in caplog.text
+        return
+    assert isinstance(compact, np.ndarray)
+    assert compact.flags.c_contiguous
+    assert not np.shares_memory(compact, projector)
+    # The 6x4 normalized-CC square reaches (ky, kx)=(3, 3), whose
+    # radius-squared is 18.  The strict enclosing integer radius is 5.
+    assert calls[0]["relion_projector_r_max"] == 5
+    assert compact.shape == (23, 23, 12)
+    np.testing.assert_array_equal(compact, projector[0, 2:25, 2:25, :12])
+    assert projector.shape == (1, 27, 27, 14)
+    assert (
+        "RELION firstiter-CC coarse PPref host compaction: "
+        "r_max=6->5 shape=(27, 27, 14)->(23, 23, 12)"
+    ) in caplog.text
+
+
+def test_relion_projector_compaction_rejects_post_transfer_jax_array():
+    from recovar.em.helpers.projection import (
+        compact_relion_projector_half_for_centered_indices,
+    )
+
+    projector = jnp.zeros((27, 27, 14), dtype=jnp.complex64)
+    with pytest.raises(TypeError, match="NumPy host array"):
+        compact_relion_projector_half_for_centered_indices(
+            projector,
+            np.asarray([8 * 9 + 3], dtype=np.int32),
+            (16, 16),
+            r_max=6,
+            padding_factor=2,
+        )
+    projector_host = np.zeros((27, 27, 14), dtype=np.complex64)
+    for invalid_image_shape in ((15, 16), (16, 14)):
+        with pytest.raises(ValueError, match="positive even square"):
+            compact_relion_projector_half_for_centered_indices(
+                projector_host,
+                np.asarray([0], dtype=np.int32),
+                invalid_image_shape,
+                r_max=6,
+                padding_factor=2,
+            )

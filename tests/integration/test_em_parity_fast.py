@@ -696,7 +696,9 @@ def test_em_parity_fast_kclass_nonadaptive_replay(tmp_path):
     strict matched-state parity.
     """
     _assert_parity_ancestors_or_skip()
-    relion_dir, dispatch_args = k4_oracle(1, 0)
+    # Canonical RELION GPU rejects firstiter_cc at OS0. This existing case
+    # remains cross-grid regression coverage against its OS1 reference.
+    relion_dir, dispatch_args = k4_oracle(1, 1)
     _require_fixture(REFINE_SCRIPT, K4_FIXTURE_DIR, relion_dir, K4_DATA_STAR)
 
     output_dir = tmp_path / "kclass_strict"

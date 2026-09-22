@@ -44,7 +44,7 @@ import jax.numpy as jnp
 import jaxlib
 import numpy as np
 
-from recovar.em.relion import relion_metadata
+from recovar.em.relion import input_poses, relion_metadata
 from recovar.em.diagnostics import parity_dump, relion_replay
 from recovar.em.helpers import iteration_history
 from recovar import utils
@@ -1656,7 +1656,14 @@ def _maybe_apply_relion_image_mask(ds, args, *, sealed_optimiser_star=None):
 
 def _parse_args(argv=None):
     _assert_expected_repo_imports()
+    from recovar.em.symmetry import canonicalize_rotational_symmetry
+
     parser = argparse.ArgumentParser(description="Run full EM refinement on synthetic data")
+    input_poses._add_initial_pose_source_argument(parser)
+    parser.add_argument(
+        "--sym", default="C1", type=canonicalize_rotational_symmetry,
+        help="RELION proper rotational point group: Cn, Dn, T, O, or I/I1/I2/I3/I4.",
+    )
     parser.add_argument(
         "--data_dir",
         default="/scratch/gpfs/GILLES/mg6942/tmp/em_profile/data",
@@ -1717,8 +1724,12 @@ def _parse_args(argv=None):
         "--max_significants",
         type=int,
         default=None,
-        help="Max significant samples per image. Use <=0 for RELION-style uncapped mode. "
-        "If omitted, read _rlnMaximumSignificantPoses from the optimiser STAR.",
+        help=(
+            "Active maximum significant samples per image. Use <=0 for an "
+            "uncapped diagnostic. If omitted, resolve RELION's runtime value "
+            "from the optimiser STAR; in 3-D gradient mode a saved -1 means "
+            "100 times the class count."
+        ),
     )
     parser.add_argument(
         "--tau2_fudge",
@@ -2279,6 +2290,8 @@ def main():
     frozen_boundary = None
     fixed_diagnostic_source_paths = None
     if args.frozen_boundary_dir is not None:
+        if args.sym != "C1":
+            raise SystemExit("frozen-boundary schemas v2/v3 currently support C1 only")
         if args.n_classes != 1:
             raise SystemExit("--frozen-boundary-dir is K=1-only")
         if int(args.max_iter) != 1 or not bool(args.skip_final_iteration):
@@ -2924,12 +2937,12 @@ def main():
         fixed_diagnostic_source_paths=fixed_diagnostic_source_paths,
     )
     relion_firstiter_ini_high_angstrom = None
+    relion_optimiser_metadata = None
     if optimiser_star is not None:
         from recovar.em.relion.relion_metadata import read_relion_optimiser_metadata
 
-        expected_accuracy_do_ctf_correction = read_relion_optimiser_metadata(
-            optimiser_star,
-        ).get("do_correct_ctf")
+        relion_optimiser_metadata = read_relion_optimiser_metadata(optimiser_star)
+        expected_accuracy_do_ctf_correction = relion_optimiser_metadata.get("do_correct_ctf")
         if expected_accuracy_do_ctf_correction is not None:
             expected_accuracy_do_ctf_correction = bool(expected_accuracy_do_ctf_correction)
             logger.info(
@@ -2952,17 +2965,58 @@ def main():
                     float(relion_firstiter_ini_high_angstrom),
                     optimiser_star,
                 )
-    if args.max_significants is None and optimiser_star is not None:
-        relion_max_significants = relion_metadata._load_relion_max_significants(optimiser_star)
-        if relion_max_significants is not None:
-            args.max_significants = relion_max_significants
-            logger.info(
-                "Using RELION max_significants from %s: %d",
-                optimiser_star,
-                args.max_significants,
+    max_significants_resolution = None
+    if optimiser_star is not None and relion_optimiser_metadata is not None:
+        from recovar.em.relion.relion_metadata import resolve_relion_runtime_max_significants
+
+        optimiser_max_significants = relion_optimiser_metadata.get(
+            "maximum_significants_arg"
+        )
+        if optimiser_max_significants is None:
+            optimiser_max_significants = relion_metadata._load_relion_max_significants(optimiser_star)
+            relion_optimiser_metadata = dict(relion_optimiser_metadata)
+            relion_optimiser_metadata["maximum_significants_arg"] = (
+                optimiser_max_significants
             )
+        max_significants_resolution = resolve_relion_runtime_max_significants(
+            override=args.max_significants,
+            optimiser_metadata=relion_optimiser_metadata,
+            target_iteration=int(args.init_relion_iteration) + 1,
+            do_firstiter_cc=bool(args.firstiter_cc),
+            n_classes=int(args.n_classes),
+            reference_dimension=3,
+        )
+        args.max_significants = int(
+            max_significants_resolution["active_max_significants"]
+        )
+        logger.info(
+            "RELION max_significants: saved_arg=%s active=%d source=%s "
+            "do_grad=%s (from %s)",
+            max_significants_resolution["maximum_significants_argument"],
+            args.max_significants,
+            max_significants_resolution["source"],
+            max_significants_resolution["do_grad"],
+            optimiser_star,
+        )
     if args.max_significants is None:
         args.max_significants = 500
+        max_significants_resolution = {
+            "maximum_significants_argument": None,
+            "active_max_significants": 500,
+            "source": "recovar_default",
+            "gradient_refine": False,
+            "do_grad": False,
+            "target_iteration": int(args.init_relion_iteration) + 1,
+        }
+    elif max_significants_resolution is None:
+        max_significants_resolution = {
+            "maximum_significants_argument": None,
+            "active_max_significants": int(args.max_significants),
+            "source": "cli_override",
+            "gradient_refine": False,
+            "do_grad": False,
+            "target_iteration": int(args.init_relion_iteration) + 1,
+        }
 
     # ---- Load initial volume ----
     # CANONICAL recovar idiom for loading a volume: load_mrc + get_dft3.
@@ -3171,7 +3225,26 @@ def main():
         max_healpix_order_source,
     )
 
-    n_rotations = rotation_grid_size(rotation_grid_order)
+    from recovar.em.symmetry import (
+        canonicalize_rotational_symmetry,
+        parse_rotational_symmetry,
+        relion_point_group_code,
+        symmetry_operator_sha256,
+    )
+
+    symmetry = canonicalize_rotational_symmetry(args.sym)
+    parsed_symmetry = parse_rotational_symmetry(symmetry)
+    symmetry_point_group, symmetry_point_group_order = relion_point_group_code(symmetry)
+    symmetry_provenance = {
+        "label": symmetry,
+        "family": parsed_symmetry.family,
+        "operator_count": int(parsed_symmetry.operator_count),
+        "operator_sha256": symmetry_operator_sha256(symmetry),
+        "relion_point_group": int(symmetry_point_group),
+        "relion_point_group_order": int(symmetry_point_group_order),
+    }
+    n_rotations = rotation_grid_size(rotation_grid_order, **({"symmetry": symmetry} if symmetry != "C1" else {}))
+    logger.info("Symmetry provenance: %s", symmetry_provenance)
     translations = get_translation_grid(args.offset_range, args.offset_step).astype(np.float32)
     logger.info("Rotation grid: %d rotations (healpix_order=%d)", n_rotations, rotation_grid_order)
     logger.info(
@@ -3288,6 +3361,7 @@ def main():
     else:
         init_PS_source = jnp.asarray(init_vol_ft)
     init_PS = average_over_shells(jnp.abs(init_PS_source) ** 2, ds.volume_shape)
+    del init_PS_source
     from recovar import utils
 
     init_prior = utils.make_radial_image(init_PS, ds.volume_shape, extend_last_frequency=True)
@@ -3509,6 +3583,7 @@ def main():
         HalfOverlapOptions,
         RefinementBatching,
         RefinementOptions,
+        SymmetryOptions,
         RefinementSchedule,
         RelionParityOptions,
         ReplayState,
@@ -3657,6 +3732,8 @@ def main():
     # large pre-centering offsets on real data; omitting them makes iter-1
     # search around zero and changes the hard firstiter-CC winners even though
     # the starting reference and Pmax values appear to match.
+    kclass_firstiter_translations = None
+    kclass_firstiter_translation_path = None
     if args.relion_init_dir is not None and _replay_complete_initial_particle_state(
         args.n_classes,
         args.init_relion_iteration,
@@ -3720,10 +3797,38 @@ def main():
                 args.relion_init_dir,
             )
     elif args.relion_init_dir is not None and int(args.n_classes) > 1:
-        logger.info(
-            "STRICT-PARITY: Class3D first iteration uses a fresh global search; "
-            "not replaying run_it000 input poses/corrections",
-        )
+        if int(args.init_relion_iteration) == 0:
+            initial_overrides = relion_replay._build_replay_iteration_overrides(
+                args.relion_init_dir,
+                half1_idx,
+                half2_idx,
+                0,
+                ds_voxel=ds.voxel_size,
+                ds_grid=ds.grid_size,
+                include_normcorr=False,
+                init_relion_iteration=0,
+                particle_names=our_names,
+                include_initial_state=True,
+                strict=True,
+            )
+            kclass_firstiter_translations = input_poses._kclass_firstiter_translation_seed(
+                initial_overrides[0],
+                n_classes=args.n_classes,
+                init_relion_iteration=args.init_relion_iteration,
+            )
+            kclass_firstiter_translation_path = (
+                Path(args.relion_init_dir).expanduser().resolve() / "run_it000_data.star"
+            )
+            logger.info(
+                "STRICT-PARITY: Class3D first iteration keeps run_it000 input "
+                "origins for FFT pre-shifting while orientations, corrections, "
+                "priors, and noise remain fresh",
+            )
+        else:
+            logger.info(
+                "STRICT-PARITY: Class3D restart does not consume fresh-run "
+                "run_it000 particle state",
+            )
 
     relion_projector_replay_slot = None
     relion_projector_source_manifest_sha256 = None
@@ -3860,6 +3965,27 @@ def main():
         "unseeded" if effective_perturb_seed is None else str(effective_perturb_seed),
         " (explicit)" if args.perturb_seed is not None else " (from --seed)",
     )
+    has_competing_initial_pose_source = bool(
+        frozen_boundary is not None
+        or args.init_previous_best_poses_npz is not None
+        or args.relion_init_dir is not None
+        or args.perturb_replay_relion_dir is not None
+    )
+    try:
+        use_input_star_pose_seed = input_poses._resolve_input_star_pose_seed(
+            args.initial_pose_source,
+            n_classes=args.n_classes,
+            init_relion_iteration=args.init_relion_iteration,
+            has_relion_half_sets=args.relion_half_sets is not None,
+            has_competing_pose_source=has_competing_initial_pose_source,
+            diagnostic_single_half=args.diagnostic_single_half,
+        )
+    except ValueError as exc:
+        raise SystemExit(f"Invalid initial pose source: {exc}") from exc
+
+    resolved_initial_pose_source = "diagnostic_replay" if has_competing_initial_pose_source else "none"
+    initial_pose_source_path = None
+    initial_pose_source_sha256 = None
     init_previous_best_poses = None
     if frozen_boundary is not None:
         init_previous_best_poses = {
@@ -3880,6 +4006,49 @@ def main():
             "Diagnostic local-search seed: loaded previous best poses from %s (iter=%s; half sizes=%s)",
             args.init_previous_best_poses_npz,
             init_previous_best_poses["iteration"],
+            [
+                int(arr.shape[0])
+                for arr in init_previous_best_poses["previous_best_rotation_eulers"]
+            ],
+        )
+
+    elif kclass_firstiter_translations is not None:
+        init_previous_best_poses = {
+            "iteration": "000_translation_only",
+            "previous_best_rotation_eulers": [None, None],
+            "previous_best_translations": kclass_firstiter_translations,
+        }
+        resolved_initial_pose_source = "relion_run_it000_translations"
+        initial_pose_source_path = kclass_firstiter_translation_path
+        initial_pose_source_sha256 = _sha256_file(initial_pose_source_path)
+        logger.info(
+            "Production fresh Class3D translation initialization: source=%s "
+            "sha256=%s half_sizes=%s (orientations intentionally unset)",
+            initial_pose_source_path,
+            initial_pose_source_sha256,
+            [int(arr.shape[0]) for arr in kclass_firstiter_translations],
+        )
+    elif use_input_star_pose_seed:
+        input_pose_path = (Path(args.data_dir) / "particles.star").resolve()
+        try:
+            init_previous_best_poses = input_poses._load_input_star_previous_best_poses(
+                our_particles,
+                relion_particles,
+                half1_idx,
+                half2_idx,
+                voxel_size=ds.voxel_size,
+            )
+        except (TypeError, ValueError) as exc:
+            raise SystemExit(f"Invalid input-STAR pose initialization: {exc}") from exc
+        resolved_initial_pose_source = "input_star"
+        initial_pose_source_path = input_pose_path
+        initial_pose_source_sha256 = _sha256_file(input_pose_path)
+        logger.info(
+            "Production fresh-run pose initialization: source=%s sha256=%s "
+            "translation_units=%s half_sizes=%s",
+            input_pose_path,
+            initial_pose_source_sha256,
+            init_previous_best_poses["translation_units"],
             [
                 int(arr.shape[0])
                 for arr in init_previous_best_poses["previous_best_rotation_eulers"]
@@ -3908,11 +4077,12 @@ def main():
 
     result = refine_single_volume(
         experiment_datasets=experiment_datasets,
-        init_volume=jnp.asarray(init_vol_ft),
+        init_volume=init_vol_ft,
         init_noise_variance=noise_variance,
         init_mean_variance=mean_variance,
         translations=translations_jnp,
         options=RefinementOptions(
+            symmetry=SymmetryOptions(point_group=symmetry),
             disc_type=os.environ.get("RECOVAR_DISC_TYPE_OVERRIDE", "linear_interp"),
             schedule=RefinementSchedule(
                 max_iter=args.max_iter,
@@ -4079,6 +4249,10 @@ def main():
         timing_rows = parity_dump._collect_timing_rows(timing_dir_path)
         timing_summary = parity_dump._summarize_timing_rows(timing_rows)
         profile_summary = {
+            "symmetry": symmetry_provenance,
+            "initial_pose_source_requested": args.initial_pose_source,
+            "initial_pose_source_resolved": resolved_initial_pose_source,
+            "initial_pose_source_sha256": initial_pose_source_sha256,
             "profile_only": True,
             "stop_after_local_search_score_only": bool(result.get("stop_after_local_search_score_only", False)),
             "git_commit": git_head_or_none(),
@@ -4102,6 +4276,7 @@ def main():
             "auto_local_healpix_order": int(args.auto_local_healpix_order),
             "adaptive_oversampling": int(args.adaptive_oversampling),
             "max_significants": int(args.max_significants),
+            "max_significants_resolution": max_significants_resolution,
             "diagnostic_single_half": bool(args.diagnostic_single_half),
             "setup_phase_seconds": setup_phase_seconds,
             "local_profile_rows": local_profile_rows,
@@ -4166,6 +4341,16 @@ def main():
 
     # ---- Save results ----
     save_dict = {
+        "symmetry_label": np.asarray(symmetry),
+        "symmetry_family": np.asarray(parsed_symmetry.family),
+        "symmetry_operator_count": np.int64(parsed_symmetry.operator_count),
+        "symmetry_operator_sha256": np.asarray(symmetry_provenance["operator_sha256"]),
+        "symmetry_relion_point_group": np.int64(symmetry_point_group),
+        "symmetry_relion_point_group_order": np.int64(symmetry_point_group_order),
+        "initial_pose_source_requested": np.asarray(args.initial_pose_source),
+        "initial_pose_source_resolved": np.asarray(resolved_initial_pose_source),
+        "initial_pose_source_path": np.asarray(str(initial_pose_source_path or "")),
+        "initial_pose_source_sha256": np.asarray(initial_pose_source_sha256 or ""),
         "relion_particle_shuffle": np.asarray(args.relion_particle_shuffle),
         "initial_noise_bootstrap": np.asarray(args.initial_noise_bootstrap),
         "relion_fresh_particle_order_applied": np.bool_(use_fresh_auto_refine_order),
@@ -4187,6 +4372,17 @@ def main():
         "voxel_size": ds.voxel_size,
         "adaptive_oversampling": args.adaptive_oversampling,
         "max_significants": args.max_significants,
+        "max_significants_argument": (
+            np.nan
+            if max_significants_resolution["maximum_significants_argument"] is None
+            else int(max_significants_resolution["maximum_significants_argument"])
+        ),
+        "max_significants_source": np.asarray(
+            str(max_significants_resolution["source"])
+        ),
+        "max_significants_do_grad": np.bool_(
+            bool(max_significants_resolution["do_grad"])
+        ),
         "offset_sigma_angstrom": args.offset_sigma_angstrom,
         "tau2_fudge": np.float64(effective_tau2_fudge),
         "tau2_fudge_source": np.asarray(tau2_fudge_source),
@@ -4476,6 +4672,7 @@ def main():
             "auto_local_healpix_order": int(args.auto_local_healpix_order),
             "adaptive_oversampling": int(args.adaptive_oversampling),
             "max_significants": int(args.max_significants),
+            "max_significants_resolution": max_significants_resolution,
             "setup_phase_seconds": setup_phase_seconds,
             "local_profile_rows": local_profile_rows,
             "global_profile_rows": global_profile_rows,

@@ -2406,7 +2406,17 @@ def test_relion_x_half_bp_per_particle_launch_preserves_ownership_and_order(monk
         calls.append((np.asarray(half_block).copy(), np.asarray(rotations_block).copy()))
         return volume_in + jnp.sum(jnp.real(half_block))
 
-    monkeypatch.setattr(sparse_pass2_adjoint, "_adjoint_slice_volume_windowed", fake_adjoint_slice_volume_windowed)
+    monkeypatch.setattr(sparse_pass2_adjoint, "_adjoint_slice_volume_windowed_donating", fake_adjoint_slice_volume_windowed)
+
+    def fail_non_donating_adjoint(*args, **kwargs):
+        del args, kwargs
+        pytest.fail("per-particle RELION x-half accumulation must use the donating wrapper")
+
+    monkeypatch.setattr(
+        sparse_pass2_adjoint,
+        "_adjoint_slice_volume_windowed",
+        fail_non_donating_adjoint,
+    )
     y_volume, ctf_volume = bucketed_mod._accumulate_relion_x_half_per_particle_launches(
         values,
         ctf_values,
@@ -9923,3 +9933,492 @@ def test_kclass_raw_bucket_bytes_include_every_padded_class(dtype):
     assert _kclass_raw_diff2_bytes(classes, None, n_fine_trans=3, dtype=dtype) == 165 * itemsize
     # Masked padding occupies storage even though it contributes no probability.
     assert _kclass_raw_diff2_bytes(classes, compact, n_fine_trans=3, dtype=dtype) == 85 * itemsize
+
+
+@pytest.mark.parametrize(
+    ("current_size", "expected_mstep_max_r"),
+    [
+        pytest.param(None, 4.0, id="full-box-sentinel"),
+        pytest.param(6, 3.0, id="reduced-current-size"),
+    ],
+)
+def test_sparse_pass2_native_firstiter_preserves_prefix_and_normalizes_once(
+    monkeypatch,
+    current_size,
+    expected_mstep_max_r,
+):
+    """The production driver launches native groups once and normalizes after both."""
+
+    from recovar import cuda_backproject
+    from recovar.em.sparse_pass2 import firstiter_bpref, sparse_pass2_policy, sparse_pass2_projection_blocks
+    from recovar.em.diagnostics import bpref_diagnostics
+    from recovar.em.relion import relion_ctf
+    from recovar.em.sparse_pass2 import (
+        sparse_pass2_bucketed as bucketed_mod,
+    )
+
+    dataset = MockDataset(n_images=2, seed=20260830)
+
+    class _Backend:
+        relion_fourier_backend = "relion_cuda"
+
+    dataset.image_source.backend = _Backend()
+
+    def process_images_half(batch, apply_image_mask=False, **kwargs):
+        processed = _raw_real_process_half(
+            batch,
+            apply_image_mask=apply_image_mask,
+        )
+        normalization = kwargs.get("relion_normalization_factors")
+        if normalization is None:
+            return processed
+        return processed * jnp.asarray(normalization, dtype=jnp.float32)[:, None]
+
+    dataset.process_images_half = process_images_half
+
+    for name in (
+        "RECOVAR_BPREF_DEVICE_SIGNATURE_DUMP_DIR",
+        "RECOVAR_BPREF_CONTRIBUTION_DUMP_DIR",
+        "RECOVAR_BPREF_MEMBERSHIP_DUMP_DIR",
+        "RECOVAR_BPREF_ACCUMULATOR_DELTA_DUMP_DIR",
+        "RECOVAR_PASS2_DUMP_DIR",
+        "RECOVAR_RELION_X_HALF_SEQUENTIAL_TRANSLATION_REDUCTION",
+        "RECOVAR_RELION_X_HALF_BP_PER_PARTICLE_LAUNCH",
+        "RECOVAR_RELION_X_HALF_BP_FUSED_ATOMICS",
+        "RECOVAR_BPREF_HIGH_PRECISION_OPERAND_BUNDLE",
+        sparse_pass2_policy._BPREF_EXECUTION_ORDER_LOCAL_FILE_ENV,
+        sparse_pass2_policy._BPREF_REVERSE_PHYSICAL_ORDER_ENV,
+        sparse_pass2_policy._BPREF_EXECUTION_BATCH_CONSECUTIVE_EQUAL_SUPPORT_ENV,
+        sparse_pass2_policy._BPREF_EXECUTION_GROUP_BY_BUCKET_SIZE_ENV,
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv(sparse_pass2_policy._BPREF_EXECUTION_ORDER_CHUNK_SIZE_ENV, "1")
+
+    n_half = IMAGE_SHAPE[0] * (IMAGE_SHAPE[1] // 2 + 1)
+    monkeypatch.setattr(
+        relion_ctf,
+        "_relion_exact_ctf_half_from_source_star",
+        lambda _dataset, indices, _image_shape: jnp.ones(
+            (len(indices), n_half),
+            dtype=jnp.float64,
+        ),
+    )
+    monkeypatch.setattr(
+        bucketed_mod,
+        "_relion_cuda_score_translation_angles_if_available",
+        lambda translations, _image_shape, **_kwargs: jnp.zeros(
+            (len(translations), 2),
+            dtype=jnp.float32,
+        ),
+    )
+
+    def fake_translate_bpref(images, weights, angles, _pixel_indices, _image_shape):
+        return jnp.repeat(
+            jnp.asarray(images) * jnp.asarray(weights),
+            int(angles.shape[0]),
+            axis=0,
+        )
+
+    def fake_translate_score(images, angles, _pixel_indices, _image_shape):
+        return jnp.repeat(jnp.asarray(images), int(angles.shape[0]), axis=0)
+
+    monkeypatch.setattr(
+        cuda_backproject,
+        "relion_translate_bpref_f32",
+        fake_translate_bpref,
+    )
+    monkeypatch.setattr(
+        cuda_backproject,
+        "relion_translate_score_f32",
+        fake_translate_score,
+    )
+
+    def fake_projector(_projector, rotations, image_shape, **kwargs):
+        pixel_indices = kwargs.get("pixel_indices")
+        n_projection_pixels = (
+            n_half if pixel_indices is None else int(np.asarray(pixel_indices).size)
+        )
+        row = jnp.linspace(
+            0.25,
+            1.25,
+            n_projection_pixels,
+            dtype=jnp.float32,
+        ).astype(
+            jnp.complex64,
+        )
+        projections = jnp.broadcast_to(
+            row,
+            (int(rotations.shape[0]), n_projection_pixels),
+        )
+        projection_abs2 = (
+            jnp.abs(projections) ** 2 if kwargs.get("return_abs2", True) else None
+        )
+        assert tuple(image_shape) == IMAGE_SHAPE
+        return projections, projection_abs2
+
+    monkeypatch.setattr(
+        sparse_pass2_projection_blocks,
+        "_compute_relion_projector_projections_block",
+        fake_projector,
+    )
+
+    events = []
+    def accumulate(images, ctf, noise, posterior, rotations, counts, local_ids, original_ids,
+                   data, weight, **kwargs):
+        assert images.dtype == jnp.complex64
+        assert ctf.dtype == noise.dtype == jnp.float32
+        assert kwargs['max_r'] == expected_mstep_max_r
+        assert list(local_ids) == list(original_ids)
+        events.extend(int(x) for x in original_ids)
+        return data + np.float32(32), weight + np.float32(2048)
+
+    def finalize(data, weight, shape, **kwargs):
+        assert events == [0, 1]
+        np.testing.assert_array_equal(np.asarray(data), np.full(data.shape, -1, dtype=np.complex64))
+        np.testing.assert_array_equal(np.asarray(weight), np.ones(weight.shape, dtype=np.float32))
+        return data, weight
+
+    monkeypatch.setattr(firstiter_bpref, '_accumulate_relion_firstiter_bpref_fused', accumulate)
+    monkeypatch.setattr(bucketed_mod, 'finalize_half_volume_bpref', finalize)
+    monkeypatch.setattr(bucketed_mod, 'relion_x_half_accumulators_to_public_layout', lambda d, w, s: (d, w))
+
+    monkeypatch.setattr(bucketed_mod, "_cached_score_rotation_chunk_size_for_pass", lambda _size: 1)
+    monkeypatch.setattr(bucketed_mod, "_projection_rotation_chunk_size", lambda **_kw: 1)
+    fine_rotations = np.repeat(np.eye(3, dtype=np.float32)[None], 2, axis=0)
+    bpref_diagnostics.set_bpref_contribution_dump_context(iteration=1, half=1)
+    try:
+        result = compute_pass2_stats_sparse(
+            experiment_dataset=dataset,
+            volume=_hermitian_volume(VOLUME_SHAPE, seed=20260831),
+            mean_variance=jnp.ones(VOLUME_SIZE, dtype=jnp.float32),
+            noise_variance=jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
+            translations=jnp.zeros((1, 2), dtype=jnp.float32),
+            significant_sample_indices=[
+                np.asarray([0, 1], dtype=np.int32),
+                np.asarray([0, 1], dtype=np.int32),
+            ],
+            nside_level=0,
+            disc_type="linear_interp",
+            oversampling_order=0,
+            current_size=current_size,
+            half_spectrum_scoring=True,
+            fine_rotations_override=fine_rotations,
+            fine_rotation_parent_override=np.asarray([0, 1], dtype=np.int64),
+            fine_translations_override=np.zeros((1, 2), dtype=np.float32),
+            fine_translation_parent_override=np.asarray([0], dtype=np.int32),
+            relion_x_half_mstep=True,
+            relion_firstiter_winner_take_all=True,
+            relion_exact_fine_gaussian=False,
+            relion_projector_half=np.zeros((3, 3, 2), dtype=np.complex64),
+            relion_projector_r_max=IMAGE_SHAPE[0] // 2,
+            preserve_bpref_particle_order=True,
+            source_faithful_spectrum_norm=True,
+        )
+    finally:
+        bpref_diagnostics.clear_bpref_contribution_dump_context()
+
+    assert events == [0, 1]
+    np.testing.assert_array_equal(
+        np.asarray(result[0]),
+        np.full(result[0].shape, -1.0 + 0.0j, dtype=np.complex64),
+    )
+    np.testing.assert_array_equal(
+        np.asarray(result[1]),
+        np.ones(result[1].shape, dtype=np.float32),
+    )
+
+
+
+@pytest.mark.parametrize(
+    ("current_size", "expected_mstep_max_r"),
+    [
+        pytest.param(None, 4.0, id="full-box-sentinel"),
+        pytest.param(6, 3.0, id="reduced-current-size"),
+    ],
+)
+@pytest.mark.parametrize("persistent_owner", [False, True], ids=["device-copy", "persistent"])
+def test_sparse_pass2_deferred_firstiter_bpref_runs_full_driver_lifecycle(
+    monkeypatch,
+    persistent_owner,
+    current_size,
+    expected_mstep_max_r,
+):
+    """The K=1 driver must stage every score group before releasing and replaying."""
+
+    from recovar import cuda_backproject
+    from recovar.em.sparse_pass2 import dispatch as sparse_dispatch
+    from recovar.em.sparse_pass2 import firstiter_bpref, sparse_pass2_policy, sparse_pass2_projection_blocks
+    from recovar.em.diagnostics import bpref_diagnostics
+    from recovar.em.relion import relion_ctf
+    from recovar.em.sparse_pass2 import (
+        sparse_pass2_bucketed as bucketed_mod,
+    )
+
+    dataset = MockDataset(n_images=2, seed=20260830)
+
+    class _Backend:
+        relion_fourier_backend = "relion_cuda"
+
+    dataset.image_source.backend = _Backend()
+
+    def process_images_half(batch, apply_image_mask=False, **kwargs):
+        processed = _raw_real_process_half(
+            batch,
+            apply_image_mask=apply_image_mask,
+        )
+        normalization = kwargs.get("relion_normalization_factors")
+        if normalization is None:
+            return processed
+        return processed * jnp.asarray(normalization, dtype=jnp.float32)[:, None]
+
+    dataset.process_images_half = process_images_half
+
+    for name in (
+        "RECOVAR_BPREF_DEVICE_SIGNATURE_DUMP_DIR",
+        "RECOVAR_BPREF_CONTRIBUTION_DUMP_DIR",
+        "RECOVAR_BPREF_MEMBERSHIP_DUMP_DIR",
+        "RECOVAR_BPREF_ACCUMULATOR_DELTA_DUMP_DIR",
+        "RECOVAR_PASS2_DUMP_DIR",
+        "RECOVAR_RELION_X_HALF_SEQUENTIAL_TRANSLATION_REDUCTION",
+        "RECOVAR_RELION_X_HALF_BP_PER_PARTICLE_LAUNCH",
+        "RECOVAR_RELION_X_HALF_BP_FUSED_ATOMICS",
+        "RECOVAR_BPREF_HIGH_PRECISION_OPERAND_BUNDLE",
+        sparse_pass2_policy._BPREF_EXECUTION_ORDER_LOCAL_FILE_ENV,
+        sparse_pass2_policy._BPREF_REVERSE_PHYSICAL_ORDER_ENV,
+        sparse_pass2_policy._BPREF_EXECUTION_BATCH_CONSECUTIVE_EQUAL_SUPPORT_ENV,
+        sparse_pass2_policy._BPREF_EXECUTION_GROUP_BY_BUCKET_SIZE_ENV,
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv(firstiter_bpref._RELION_FIRSTITER_DEFERRED_BPREF_ENV, "1")
+    monkeypatch.setenv(sparse_pass2_policy._BPREF_EXECUTION_ORDER_CHUNK_SIZE_ENV, "1")
+
+    n_half = IMAGE_SHAPE[0] * (IMAGE_SHAPE[1] // 2 + 1)
+    monkeypatch.setattr(
+        relion_ctf,
+        "_relion_exact_ctf_half_from_source_star",
+        lambda _dataset, indices, _image_shape: jnp.ones(
+            (len(indices), n_half),
+            dtype=jnp.float64,
+        ),
+    )
+    monkeypatch.setattr(
+        bucketed_mod,
+        "_relion_cuda_score_translation_angles_if_available",
+        lambda translations, _image_shape, **_kwargs: jnp.zeros(
+            (len(translations), 2),
+            dtype=jnp.float32,
+        ),
+    )
+
+    def fake_translate_bpref(images, weights, angles, _pixel_indices, _image_shape):
+        return jnp.repeat(
+            jnp.asarray(images) * jnp.asarray(weights),
+            int(angles.shape[0]),
+            axis=0,
+        )
+
+    def fake_translate_score(images, angles, _pixel_indices, _image_shape):
+        return jnp.repeat(jnp.asarray(images), int(angles.shape[0]), axis=0)
+
+    monkeypatch.setattr(
+        cuda_backproject,
+        "relion_translate_bpref_f32",
+        fake_translate_bpref,
+    )
+    monkeypatch.setattr(
+        cuda_backproject,
+        "relion_translate_score_f32",
+        fake_translate_score,
+    )
+
+    def fake_projector(_projector, rotations, image_shape, **kwargs):
+        pixel_indices = kwargs.get("pixel_indices")
+        n_projection_pixels = (
+            n_half if pixel_indices is None else int(np.asarray(pixel_indices).size)
+        )
+        row = jnp.linspace(
+            0.25,
+            1.25,
+            n_projection_pixels,
+            dtype=jnp.float32,
+        ).astype(
+            jnp.complex64,
+        )
+        projections = jnp.broadcast_to(
+            row,
+            (int(rotations.shape[0]), n_projection_pixels),
+        )
+        projection_abs2 = (
+            jnp.abs(projections) ** 2 if kwargs.get("return_abs2", True) else None
+        )
+        assert tuple(image_shape) == IMAGE_SHAPE
+        return projections, projection_abs2
+
+    monkeypatch.setattr(
+        sparse_pass2_projection_blocks,
+        "_compute_relion_projector_projections_block",
+        fake_projector,
+    )
+
+    events = []
+    if persistent_owner:
+        class Texture:
+            shape = (3, 3, 2)
+            dtype = np.dtype(np.complex64)
+            closed = False
+            def close(self):
+                if not self.closed:
+                    events.append('texture_close')
+                    self.closed = True
+        texture = Texture()
+        monkeypatch.setattr(sparse_dispatch, '_open_persistent_relion_projector_texture', lambda *_a, **_kw: texture)
+    original_stage = firstiter_bpref._stage_deferred_firstiter_bpref_batch
+
+    def record_stage(**kwargs):
+        events.append("stage")
+        return original_stage(**kwargs)
+
+    def fail_eager_accumulation(*_args, **_kwargs):
+        raise AssertionError("deferred driver executed eager firstiter BPref")
+
+    def record_release(projector_device_buffer, projection_cache):
+        assert (projector_device_buffer is None) == persistent_owner
+        assert projection_cache is not None
+        events.append("release")
+
+    def record_replay(
+        batches,
+        data_volume_real,
+        data_volume_imag,
+        weight_volume,
+        **kwargs,
+    ):
+        assert events == ["stage", "stage"] + (["texture_close"] if persistent_owner else []) + ["release"]
+        assert len(batches) == 2
+        assert [batch.particle_original_indices.item() for batch in batches] == [
+            0,
+            1,
+        ]
+        assert [batch.particle_half_local_indices.item() for batch in batches] == [
+            0,
+            1,
+        ]
+        assert all(batch.actual_counts.item() == 1 for batch in batches)
+        np.testing.assert_array_equal(
+            np.asarray(data_volume_real),
+            np.zeros(data_volume_real.shape, dtype=np.float32),
+        )
+        np.testing.assert_array_equal(
+            np.asarray(data_volume_imag),
+            np.zeros(data_volume_imag.shape, dtype=np.float32),
+        )
+        np.testing.assert_array_equal(
+            np.asarray(weight_volume),
+            np.zeros(weight_volume.shape, dtype=np.float32),
+        )
+        assert tuple(kwargs["physical_image_shape"]) == IMAGE_SHAPE
+        assert np.asarray(kwargs["translation_angles"]).shape == (1, 2)
+        assert kwargs["max_r"] == expected_mstep_max_r
+        events.append("replay")
+        return (
+            jnp.full_like(data_volume_real, np.float32(64.0)),
+            jnp.zeros_like(data_volume_imag),
+            jnp.full_like(weight_volume, np.float32(4096.0)),
+        )
+
+    def record_finalize(
+        data_volume_real,
+        data_volume_imag,
+        weight_volume,
+        _volume_shape,
+        **kwargs,
+    ):
+        np.testing.assert_array_equal(
+            np.asarray(data_volume_real),
+            np.full(data_volume_real.shape, -1.0, dtype=np.float32),
+        )
+        np.testing.assert_array_equal(
+            np.asarray(data_volume_imag),
+            np.zeros(data_volume_imag.shape, dtype=np.float32),
+        )
+        assert kwargs["symmetry_label"] == "C1"
+        events.append("finalize")
+        return jax.lax.complex(data_volume_real, data_volume_imag), weight_volume
+
+    def record_public_layout(data_volume, weight_volume, _volume_shape):
+        events.append("layout")
+        return data_volume, weight_volume
+
+    monkeypatch.setattr(
+        firstiter_bpref,
+        "_stage_deferred_firstiter_bpref_batch",
+        record_stage,
+    )
+    monkeypatch.setattr(
+        firstiter_bpref,
+        "_accumulate_relion_firstiter_bpref_fused",
+        fail_eager_accumulation,
+    )
+    monkeypatch.setattr(
+        firstiter_bpref,
+        "_release_deferred_firstiter_projection_buffers",
+        record_release,
+    )
+    monkeypatch.setattr(
+        firstiter_bpref,
+        "_replay_deferred_firstiter_bpref_batches",
+        record_replay,
+    )
+    monkeypatch.setattr(
+        bucketed_mod,
+        "finalize_split_relion_x_half_bpref",
+        record_finalize,
+    )
+    monkeypatch.setattr(
+        bucketed_mod,
+        "relion_x_half_accumulators_to_public_layout",
+        record_public_layout,
+    )
+
+    fine_rotations = np.eye(3, dtype=np.float32)[None]
+    bpref_diagnostics.set_bpref_contribution_dump_context(iteration=1, half=1)
+    try:
+        result = compute_pass2_stats_sparse(
+            experiment_dataset=dataset,
+            volume=_hermitian_volume(VOLUME_SHAPE, seed=20260831),
+            mean_variance=jnp.ones(VOLUME_SIZE, dtype=jnp.float32),
+            noise_variance=jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
+            translations=jnp.zeros((1, 2), dtype=jnp.float32),
+            significant_sample_indices=[
+                np.asarray([0], dtype=np.int32),
+                np.asarray([0], dtype=np.int32),
+            ],
+            nside_level=0,
+            disc_type="linear_interp",
+            oversampling_order=0,
+            current_size=current_size,
+            half_spectrum_scoring=True,
+            fine_rotations_override=fine_rotations,
+            fine_rotation_parent_override=np.asarray([0], dtype=np.int64),
+            fine_translations_override=np.zeros((1, 2), dtype=np.float32),
+            fine_translation_parent_override=np.asarray([0], dtype=np.int32),
+            relion_x_half_mstep=True,
+            relion_firstiter_winner_take_all=True,
+            relion_exact_fine_gaussian=False,
+            relion_projector_half=np.zeros((3, 3, 2), dtype=np.complex64),
+            relion_projector_r_max=IMAGE_SHAPE[0] // 2,
+            preserve_bpref_particle_order=True,
+            source_faithful_spectrum_norm=True,
+        )
+    finally:
+        bpref_diagnostics.clear_bpref_contribution_dump_context()
+
+    assert events == ["stage", "stage"] + (["texture_close"] if persistent_owner else []) + ["release", "replay", "finalize", "layout"]
+    np.testing.assert_array_equal(
+        np.asarray(result[0]),
+        np.full(result[0].shape, -1.0 + 0.0j, dtype=np.complex64),
+    )
+    np.testing.assert_array_equal(
+        np.asarray(result[1]),
+        np.ones(result[1].shape, dtype=np.float32),
+    )

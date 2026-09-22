@@ -1717,3 +1717,237 @@ def build_bpref_preprocess_capture(
         "image_mask": diagnostic_image_mask,
         "image_mask_mode": diagnostic_image_mask_mode,
     }
+
+
+_BPREF_ACCUMULATOR_DELTA_DUMP_DIR_ENV = "RECOVAR_BPREF_ACCUMULATOR_DELTA_DUMP_DIR"
+
+
+_BPREF_ACCUMULATOR_DELTA_ORIGINAL_INDICES_ENV = (
+    "RECOVAR_BPREF_ACCUMULATOR_DELTA_ORIGINAL_INDICES"
+)
+
+
+_BPREF_ACCUMULATOR_DELTA_ITERATION_ENV = "RECOVAR_BPREF_ACCUMULATOR_DELTA_ITERATION"
+
+
+_BPREF_ACCUMULATOR_DELTA_HALF_ENV = "RECOVAR_BPREF_ACCUMULATOR_DELTA_HALF"
+
+
+_BPREF_ACCUMULATOR_DELTA_MAX_PARTICLES_ENV = (
+    "RECOVAR_BPREF_ACCUMULATOR_DELTA_MAX_PARTICLES"
+)
+
+
+_BPREF_ACCUMULATOR_DELTA_MAX_BYTES_ENV = "RECOVAR_BPREF_ACCUMULATOR_DELTA_MAX_BYTES"
+
+
+def _positive_accumulator_delta_env(name: str) -> int | None:
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        return None
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a positive integer, got {raw!r}") from exc
+    if value <= 0:
+        raise ValueError(f"{name} must be a positive integer, got {raw!r}")
+    return value
+
+
+def _bpref_accumulator_delta_config() -> dict[str, object] | None:
+    """Resolve a bounded, source-row-scoped production accumulator capture."""
+
+    raw_directory = os.environ.get(_BPREF_ACCUMULATOR_DELTA_DUMP_DIR_ENV, "").strip()
+    if not raw_directory:
+        return None
+    directory = Path(raw_directory).expanduser()
+    if not directory.is_absolute() or not directory.is_dir():
+        raise ValueError(
+            f"{_BPREF_ACCUMULATOR_DELTA_DUMP_DIR_ENV} must name an existing absolute directory"
+        )
+    original_indices = parse_env_int_set(
+        _BPREF_ACCUMULATOR_DELTA_ORIGINAL_INDICES_ENV
+    )
+    if not original_indices or min(original_indices) < 0:
+        raise ValueError(
+            f"{_BPREF_ACCUMULATOR_DELTA_ORIGINAL_INDICES_ENV} must contain "
+            "explicit nonnegative source-row indices"
+        )
+    iteration = _positive_accumulator_delta_env(_BPREF_ACCUMULATOR_DELTA_ITERATION_ENV)
+    half = _positive_accumulator_delta_env(_BPREF_ACCUMULATOR_DELTA_HALF_ENV)
+    max_particles = _positive_accumulator_delta_env(
+        _BPREF_ACCUMULATOR_DELTA_MAX_PARTICLES_ENV
+    )
+    max_bytes = _positive_accumulator_delta_env(_BPREF_ACCUMULATOR_DELTA_MAX_BYTES_ENV)
+    if iteration is None or half not in {1, 2}:
+        raise ValueError(
+            "BPref accumulator-delta capture requires a positive iteration and half 1 or 2"
+        )
+    if max_particles is None or max_bytes is None:
+        raise ValueError(
+            "BPref accumulator-delta capture requires explicit positive particle and byte caps"
+        )
+    if len(original_indices) > max_particles:
+        raise ValueError(
+            "BPref accumulator-delta target count exceeds its explicit particle cap"
+        )
+    return {
+        "directory": directory,
+        "original_indices": frozenset(int(value) for value in original_indices),
+        "iteration": int(iteration),
+        "half": int(half),
+        "max_particles": int(max_particles),
+        "max_bytes": int(max_bytes),
+    }
+
+
+def _write_bpref_accumulator_delta_v1(
+    *,
+    config: dict[str, object],
+    original_index: int,
+    particle_launch_ordinal: int,
+    particle_rotation_count: int,
+    before_data: np.ndarray,
+    before_weight: np.ndarray,
+    after_data: np.ndarray,
+    after_weight: np.ndarray,
+    isolated_data: np.ndarray,
+    isolated_weight: np.ndarray,
+    isolated_layout: str,
+    volume_shape,
+    max_r: float | None,
+    operand_bundle: dict[str, np.ndarray] | None = None,
+) -> Path:
+    """Atomically write one production boundary and its zero-prefix replay."""
+
+    before_data = np.asarray(before_data)
+    before_weight = np.asarray(before_weight)
+    after_data = np.asarray(after_data)
+    after_weight = np.asarray(after_weight)
+    isolated_data = np.asarray(isolated_data)
+    isolated_weight = np.asarray(isolated_weight)
+    if not all(
+        array.dtype == np.complex64
+        for array in (before_data, after_data, isolated_data)
+    ):
+        raise RuntimeError("BPref accumulator-delta data arrays must be complex64")
+    if not all(
+        array.dtype == np.float32
+        for array in (before_weight, after_weight, isolated_weight)
+    ):
+        raise RuntimeError("BPref accumulator-delta weight arrays must be float32")
+    if not (
+        before_data.shape
+        == after_data.shape
+        == isolated_data.shape
+        == before_weight.shape
+        == after_weight.shape
+        == isolated_weight.shape
+    ):
+        raise RuntimeError("BPref accumulator-delta stage shapes are inconsistent")
+    operand_bundle = {} if operand_bundle is None else {
+        str(key): np.asarray(value) for key, value in operand_bundle.items()
+    }
+    reserved_keys = {
+        "schema", "iteration", "half", "original_index", "before_data",
+        "before_weight", "after_data", "after_weight", "isolated_data",
+        "isolated_weight",
+    }
+    if reserved_keys.intersection(operand_bundle):
+        raise RuntimeError("BPref accumulator-delta operand keys collide with core fields")
+    artifact_bytes = int(
+        before_data.nbytes
+        + before_weight.nbytes
+        + after_data.nbytes
+        + after_weight.nbytes
+        + isolated_data.nbytes
+        + isolated_weight.nbytes
+        + sum(value.nbytes for value in operand_bundle.values())
+    )
+    if artifact_bytes * int(config["max_particles"]) > int(config["max_bytes"]):
+        raise RuntimeError(
+            "BPref accumulator-delta runtime shape exceeds its explicit byte cap"
+        )
+
+    iteration = int(config["iteration"])
+    half = int(config["half"])
+    path = Path(config["directory"]) / (
+        f"bpref_accumulator_delta_it{iteration:03d}_h{half}_orig{int(original_index):06d}.npz"
+    )
+    temporary = path.with_name(f".{path.name}.tmp.{os.getpid()}")
+    if path.exists() or temporary.exists():
+        raise RuntimeError(
+            f"BPref accumulator-delta capture refuses to overwrite {path}"
+        )
+    image_identity = _bpref_image_identities_for_original_indices(
+        np.asarray([original_index], dtype=np.int64)
+    )[0]
+    with temporary.open("xb") as handle:
+        np.savez(
+            handle,
+            schema=np.asarray("recovar-bpref-accumulator-delta-v2"),
+            iteration=np.int64(iteration),
+            half=np.int64(half),
+            original_index=np.int64(original_index),
+            stack_index_1based=np.int64(original_index + 1),
+            image_identity=np.asarray(image_identity),
+            particle_launch_ordinal=np.int64(particle_launch_ordinal),
+            particle_rotation_count=np.int64(particle_rotation_count),
+            volume_shape=np.asarray(volume_shape, dtype=np.int64),
+            flat_accumulator_size=np.int64(before_data.size),
+            max_r=np.float64(np.nan if max_r is None else max_r),
+            data_dtype=np.asarray("complex64"),
+            weight_dtype=np.asarray("float32"),
+            isolated_layout=np.asarray(isolated_layout),
+            layout=np.asarray("RELION x-half flat C order before public-layout conversion"),
+            before_data=before_data,
+            before_weight=before_weight,
+            after_data=after_data,
+            after_weight=after_weight,
+            isolated_data=isolated_data,
+            isolated_weight=isolated_weight,
+            **operand_bundle,
+        )
+    os.replace(temporary, path)
+    return path
+
+
+
+def _scoped_bpref_diagnostics_active(flags: dict[str, bool]) -> bool:
+    """Return whether a scoped execution diagnostic, not just its target, is active."""
+
+    return any(
+        bool(flags[name])
+        for name in (
+            "sequential_translation_reduction",
+            "per_particle_launches",
+            "fused_atomics",
+            "high_precision_operand_bundle",
+        )
+    )
+
+
+
+def _relion_firstiter_bpref_diagnostics_active(
+    *,
+    bpref_device_signature_active: bool,
+) -> bool:
+    """Resolve the diagnostics that make deferred firstiter BPref unsafe."""
+
+    device_signature_configured = bool(
+        os.environ.get("RECOVAR_BPREF_DEVICE_SIGNATURE_DUMP_DIR", "").strip()
+    )
+    return bool(
+        (device_signature_configured and bpref_device_signature_active)
+        or (
+            os.environ.get("RECOVAR_BPREF_CONTRIBUTION_DUMP_DIR", "").strip()
+            and (bpref_device_signature_active or not device_signature_configured)
+        )
+        or _bpref_membership_dump_requested()
+        or _scoped_bpref_diagnostics_active(
+            _scoped_bpref_diagnostic_flags(active=bpref_device_signature_active)
+        )
+        or os.environ.get(_BPREF_ACCUMULATOR_DELTA_DUMP_DIR_ENV, "").strip()
+        or os.environ.get("RECOVAR_PASS2_DUMP_DIR", "").strip()
+        or os.environ.get("RECOVAR_SPARSE_PASS2_NATIVE_DUMP_DIR", "").strip()
+    )

@@ -13,6 +13,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any, Literal
 
 from recovar.em.helpers.convergence import LOCAL_SEARCH_HEALPIX_ORDER
+from recovar.em.symmetry import canonicalize_rotational_symmetry
 
 
 @dataclass(frozen=True)
@@ -183,6 +184,20 @@ class KClassOptions:
 
 
 @dataclass(frozen=True)
+class SymmetryOptions:
+    """RELION-compatible proper rotational point group."""
+
+    point_group: str = "C1"
+
+    def __post_init__(self):
+        object.__setattr__(
+            self,
+            "point_group",
+            canonicalize_rotational_symmetry(self.point_group),
+        )
+
+
+@dataclass(frozen=True)
 class ReplayState:
     """Per-iteration RELION-replay seed state.
 
@@ -260,6 +275,10 @@ class RefinementOptions:
     # from a 1240 s run. Keep "native" to reproduce a pre-qualification run.
     projector_setup_backend: Literal["native", "jax"] = "jax"
 
+    # Keep new option groups after the historical positional fields so
+    # external positional construction retains its pre-symmetry meaning.
+    symmetry: SymmetryOptions = field(default_factory=SymmetryOptions)
+
 
 def _validate_relion_healpix_orders(orders, *, max_iter, init_healpix_order, max_healpix_order):
     if orders is None:
@@ -313,6 +332,7 @@ __all__ = [
     "ExpectedAccuracyOptions",
     "EngineDebugOptions",
     "KClassOptions",
+    "SymmetryOptions",
     "ReplayState",
     "RefinementBatching",
     "HalfOverlapOptions",

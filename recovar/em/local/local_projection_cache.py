@@ -263,7 +263,7 @@ def build_cache(
     cache_row_capacity: int,
     group_index: int,
     n_groups: int,
-    projection_mask_current_image_disk: bool = True,
+    projection_mask_current_image_disk: bool = False,
 ) -> LocalRelionProjectionCache:
     """Precompute compact RELION projections for one bounded bucket group."""
 
@@ -317,8 +317,8 @@ def build_cache(
     for start in range(0, row_count, chunk_rows):
         stop = min(row_count, start + chunk_rows)
         disk_kwargs = {}
-        if not projection_mask_current_image_disk:
-            disk_kwargs["mask_current_image_disk"] = False
+        if projection_mask_current_image_disk:
+            disk_kwargs["mask_current_image_disk"] = True
         proj_chunk, _ = _compute_relion_projector_projections_block(
             relion_projector_half,
             jnp.asarray(cache_rotations[start:stop], dtype=jnp.float32),

@@ -44,6 +44,11 @@
 #include <cerrno>
 #include <chrono>
 #include <climits>
+#include <atomic>
+#include <condition_variable>
+#include <memory>
+#include <unordered_map>
+#include <utility>
 #include <cmath>
 #include <cstdio>
 #include <cstdint>
@@ -275,6 +280,20 @@ static __device__ __forceinline__ double relion_radius_squared(
     return __fma_rn(rk0, rk0, xy2);
 }
 
+/* Form flattened volume addresses in 64 bits.  A box-800 RELION x-half
+ * accumulator has 1603*1603*802 = 2,060,826,418 complex voxels, which fits
+ * in a signed 32-bit spatial index.  Its interleaved scalar offset does not:
+ * the imaginary component can reach 4,121,652,835.  Keep this address-only
+ * arithmetic separate from the interpolation arithmetic so float operation
+ * order and atomic accumulation topology remain unchanged. */
+static __device__ __forceinline__ int64_t volume_spatial_offset(
+    int i0, int i1, int i2, int stride0, int stride1)
+{
+    return static_cast<int64_t>(i0) * stride0
+         + static_cast<int64_t>(i1) * stride1
+         + static_cast<int64_t>(i2);
+}
+
 #define BLOCK_SIZE 256
 
 /* ================================================================== */
@@ -368,10 +387,11 @@ static __device__ __forceinline__ void scatter_nearest(
             if (!REAL_DATA) val_im *= (T)2;
         }
         if (REAL_DATA) {
-            const int off = i0 * stride0 + i1 * stride1 + hkz;
+            const int64_t off = volume_spatial_offset(i0, i1, hkz, stride0, stride1);
             atomicAdd(&vol[off], val_re);
         } else {
-            const int off = (i0 * stride0 + i1 * stride1 + hkz) * 2;
+            const int64_t off =
+                volume_spatial_offset(i0, i1, hkz, stride0, stride1) * 2;
             atomicAdd(&vol[off],     val_re);
             atomicAdd(&vol[off + 1], val_im);
         }
@@ -387,10 +407,11 @@ static __device__ __forceinline__ void scatter_nearest(
         (unsigned)i1 >= (unsigned)N1 ||
         (unsigned)i2 >= (unsigned)N2_eff) return;
     if (REAL_DATA) {
-        const int off = i0 * stride0 + i1 * stride1 + i2;
+        const int64_t off = volume_spatial_offset(i0, i1, i2, stride0, stride1);
         atomicAdd(&vol[off], val_re);
     } else {
-        const int off = (i0 * stride0 + i1 * stride1 + i2) * 2;
+        const int64_t off =
+            volume_spatial_offset(i0, i1, i2, stride0, stride1) * 2;
         atomicAdd(&vol[off],     val_re);
         atomicAdd(&vol[off + 1], val_im);
     }
@@ -487,10 +508,12 @@ static __device__ __forceinline__ void scatter_trilinear(
                         if (!REAL_DATA) sim *= (T)2;
                     }
                     if (REAL_DATA) {
-                        const int off = sj0 * stride0 + sj1 * stride1 + hkz;
+                        const int64_t off =
+                            volume_spatial_offset(sj0, sj1, hkz, stride0, stride1);
                         atomicAdd(&vol[off], sre);
                     } else {
-                        const int off = (sj0 * stride0 + sj1 * stride1 + hkz) * 2;
+                        const int64_t off =
+                            volume_spatial_offset(sj0, sj1, hkz, stride0, stride1) * 2;
                         atomicAdd(&vol[off],     sre);
                         atomicAdd(&vol[off + 1], sim);
                     }
@@ -530,10 +553,12 @@ static __device__ __forceinline__ void scatter_trilinear(
                 if ((unsigned)j2 >= (unsigned)N2_eff) continue;
                 const T w = ww * w2[d2];
                 if (REAL_DATA) {
-                    const int off = j0 * stride0 + j1 * stride1 + j2;
+                    const int64_t off =
+                        volume_spatial_offset(j0, j1, j2, stride0, stride1);
                     atomicAdd(&vol[off], w * val_re);
                 } else {
-                    const int off = (j0 * stride0 + j1 * stride1 + j2) * 2;
+                    const int64_t off =
+                        volume_spatial_offset(j0, j1, j2, stride0, stride1) * 2;
                     atomicAdd(&vol[off],     w * val_re);
                     atomicAdd(&vol[off + 1], w * val_im);
                 }
@@ -1391,7 +1416,9 @@ batch_backproject_indexed_kernel(
     const int stride1 = N2_eff;
     const int stride0 = N1 * N2_eff;
     const int img_stride = n_images * n_pixels;
-    const int vol_bytes_stride = REAL_DATA ? vol_stride : vol_stride * 2;
+    const int64_t vol_scalar_stride = REAL_DATA
+        ? static_cast<int64_t>(vol_stride)
+        : static_cast<int64_t>(vol_stride) * 2;
 
     bool conj_opt = HALF_IMG && HALF_VOL && !relion_half_backproject
         && (k1_idx > 0 && k1_idx * 2 != full_image_w)
@@ -1423,7 +1450,7 @@ batch_backproject_indexed_kernel(
     }
 
     for (int b = 0; b < batch_size; b++) {
-        T* vol = vols + b * vol_bytes_stride;
+        T* vol = vols + b * vol_scalar_stride;
 
         T val_re, val_im;
         if (REAL_DATA) {
@@ -1649,6 +1676,122 @@ relion_fused_x_half_backproject_kernel(
             signature_neighbor_flags);
     }
 }
+
+__global__ void
+relion_firstiter_bpref_fused_x_half_kernel(
+    const float* __restrict__ image_real,
+    const float* __restrict__ image_imag,
+    const float* __restrict__ translation_x,
+    const float* __restrict__ translation_y,
+    const float* __restrict__ posterior,
+    const float* __restrict__ minvsigma2,
+    const float* __restrict__ ctf,
+    unsigned long translation_num,
+    float significant_weight,
+    float weight_norm,
+    const float* __restrict__ eulers,
+    float* __restrict__ model_real,
+    float* __restrict__ model_imag,
+    float* __restrict__ model_weight,
+    int max_r2,
+    float padding_factor,
+    unsigned img_x,
+    unsigned img_y,
+    unsigned img_xyz,
+    unsigned mdl_x,
+    unsigned mdl_y,
+    int mdl_inity,
+    int mdl_initz)
+{
+    const unsigned tid = threadIdx.x;
+    const unsigned img = blockIdx.x;
+    const int img_y_half = img_y / 2;
+    const int max_r2_vol = max_r2 * padding_factor * padding_factor;
+
+    __shared__ float shared_eulers[9];
+    if (tid < 9) shared_eulers[tid] = eulers[img * 9 + tid];
+    __syncthreads();
+
+    const int pixel_pass_num = (int)ceilf((float)img_xyz / 128.0f);
+    for (unsigned pass = 0; pass < (unsigned)pixel_pass_num; ++pass) {
+        const unsigned pixel = pass * 128U + tid;
+        if (pixel >= img_xyz) continue;
+
+        int x = pixel % img_x;
+        int y = (int)(pixel / img_x);
+        if (y > img_y_half) y -= img_y;
+
+        const float pixel_minvsigma2 = __ldg(&minvsigma2[pixel]);
+        const float pixel_ctf = __ldg(&ctf[pixel]);
+        const float pixel_real = __ldg(&image_real[pixel]);
+        const float pixel_imag = __ldg(&image_imag[pixel]);
+        float Fweight = 0.0f;
+        float real = 0.0f;
+        float imag = 0.0f;
+        for (unsigned long translation = 0; translation < translation_num; ++translation) {
+            float weight = posterior[img * translation_num + translation];
+            if (weight >= significant_weight) {
+                weight = (weight / weight_norm) * pixel_ctf * pixel_minvsigma2;
+                Fweight += weight * pixel_ctf;
+                float sine;
+                float cosine;
+                sincosf(x * translation_x[translation] + y * translation_y[translation],
+                        &sine, &cosine);
+                const float translated_real = cosine * pixel_real - sine * pixel_imag;
+                const float translated_imag = cosine * pixel_imag + sine * pixel_real;
+                real += translated_real * weight;
+                imag += translated_imag * weight;
+            }
+        }
+        if (!(Fweight > 0.0f)) continue;
+
+        float xp = (shared_eulers[0] * x + shared_eulers[1] * y) * padding_factor;
+        float yp = (shared_eulers[3] * x + shared_eulers[4] * y) * padding_factor;
+        float zp = (shared_eulers[6] * x + shared_eulers[7] * y) * padding_factor;
+        if ((xp * xp + yp * yp + zp * zp) > max_r2_vol) continue;
+        if (xp < 0.0f) {
+            xp = -xp;
+            yp = -yp;
+            zp = -zp;
+            imag = -imag;
+        }
+
+        const int x0 = (int)floorf(xp);
+        const float fx = xp - x0;
+        const int x1 = x0 + 1;
+        int y0 = (int)floorf(yp);
+        const float fy = yp - y0;
+        y0 -= mdl_inity;
+        const int y1 = y0 + 1;
+        int z0 = (int)floorf(zp);
+        const float fz = zp - z0;
+        z0 -= mdl_initz;
+        const int z1 = z0 + 1;
+
+        const float mfx = 1.0f - fx;
+        const float mfy = 1.0f - fy;
+        const float mfz = 1.0f - fz;
+
+#define RELION_ADD_NEIGHBOR(Z, Y, X, COEFF) do { \
+        const unsigned offset = (unsigned)(Z) * mdl_x * mdl_y + \
+                                (unsigned)(Y) * mdl_x + (unsigned)(X); \
+        const float coefficient = (COEFF); \
+        atomicAdd(&model_real[offset], coefficient * real); \
+        atomicAdd(&model_imag[offset], coefficient * imag); \
+        atomicAdd(&model_weight[offset], coefficient * Fweight); \
+    } while (0)
+        RELION_ADD_NEIGHBOR(z0, y0, x0, mfz * mfy * mfx);
+        RELION_ADD_NEIGHBOR(z0, y0, x1, mfz * mfy * fx);
+        RELION_ADD_NEIGHBOR(z0, y1, x0, mfz * fy * mfx);
+        RELION_ADD_NEIGHBOR(z0, y1, x1, mfz * fy * fx);
+        RELION_ADD_NEIGHBOR(z1, y0, x0, fz * mfy * mfx);
+        RELION_ADD_NEIGHBOR(z1, y0, x1, fz * mfy * fx);
+        RELION_ADD_NEIGHBOR(z1, y1, x0, fz * fy * mfx);
+        RELION_ADD_NEIGHBOR(z1, y1, x1, fz * fy * fx);
+#undef RELION_ADD_NEIGHBOR
+    }
+}
+
 
 /* ================================================================== */
 /*                    Project kernel                                   */
@@ -2170,6 +2313,586 @@ fill_relion_texture_capacity_kernel(
     }
     real[idx] = value.x;
     imag[idx] = value.y;
+}
+
+__global__ void __launch_bounds__(BLOCK_SIZE)
+fill_relion_half_texture_surface_f32_kernel(
+    const float2* __restrict__ projector_half,
+    cudaSurfaceObject_t surface,
+    int64_t texture_voxels,
+    int tex_x,
+    int tex_y,
+    float projector_scale)
+{
+    const int64_t index =
+        static_cast<int64_t>(blockIdx.x) * BLOCK_SIZE + threadIdx.x;
+    if (index >= texture_voxels) return;
+
+    const int x = static_cast<int>(index % tex_x);
+    const int64_t yz = index / tex_x;
+    const int y = static_cast<int>(yz % tex_y);
+    const int z = static_cast<int>(yz / tex_y);
+    const float2 value = projector_half[index];
+    const float2 scaled = make_float2(
+        __fmul_rn(value.x, projector_scale),
+        __fmul_rn(value.y, projector_scale));
+    surf3Dwrite(scaled, surface, x * static_cast<int>(sizeof(float2)), y, z);
+}
+
+struct RelionHalfTextureF32 {
+    cudaArray_t array = nullptr;
+    cudaSurfaceObject_t surface = 0;
+    cudaTextureObject_t texture = 0;
+};
+
+cudaError_t destroy_relion_half_texture_f32(RelionHalfTextureF32* texture)
+{
+    cudaError_t err = cudaSuccess;
+    if (texture->texture) {
+        const cudaError_t cleanup_err = cudaDestroyTextureObject(texture->texture);
+        if (err == cudaSuccess) err = cleanup_err;
+    }
+    if (texture->surface) {
+        const cudaError_t cleanup_err = cudaDestroySurfaceObject(texture->surface);
+        if (err == cudaSuccess) err = cleanup_err;
+    }
+    if (texture->array) {
+        const cudaError_t cleanup_err = cudaFreeArray(texture->array);
+        if (err == cudaSuccess) err = cleanup_err;
+    }
+    texture->texture = 0;
+    texture->surface = 0;
+    texture->array = nullptr;
+    return err;
+}
+
+cudaError_t synchronize_and_destroy_relion_half_texture_f32(
+    cudaStream_t stream,
+    RelionHalfTextureF32* texture,
+    cudaError_t first_err)
+{
+    cudaError_t err = first_err;
+    if (texture->texture || texture->surface || texture->array) {
+        const cudaError_t sync_err = cudaStreamSynchronize(stream);
+        if (err == cudaSuccess) err = sync_err;
+    }
+    const cudaError_t cleanup_err = destroy_relion_half_texture_f32(texture);
+    if (err == cudaSuccess) err = cleanup_err;
+    return err;
+}
+
+cudaError_t create_relion_half_texture_f32(
+    cudaStream_t stream,
+    const float2* projector_half,
+    int tex_x,
+    int tex_y,
+    int tex_z,
+    float projector_scale,
+    RelionHalfTextureF32* texture)
+{
+    const cudaChannelFormatDesc desc = cudaCreateChannelDesc<float2>();
+    const cudaExtent extent = make_cudaExtent(
+        static_cast<size_t>(tex_x),
+        static_cast<size_t>(tex_y),
+        static_cast<size_t>(tex_z));
+    cudaError_t err = cudaMalloc3DArray(
+        &texture->array,
+        &desc,
+        extent,
+        cudaArraySurfaceLoadStore);
+    if (err != cudaSuccess) {
+        (void)destroy_relion_half_texture_f32(texture);
+        return err;
+    }
+
+    cudaResourceDesc resource;
+    memset(&resource, 0, sizeof(resource));
+    resource.resType = cudaResourceTypeArray;
+    resource.res.array.array = texture->array;
+    err = cudaCreateSurfaceObject(&texture->surface, &resource);
+    if (err != cudaSuccess) {
+        (void)destroy_relion_half_texture_f32(texture);
+        return err;
+    }
+
+    const int64_t texture_voxels =
+        static_cast<int64_t>(tex_x) * tex_y * tex_z;
+    const int64_t block_count =
+        (texture_voxels + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    fill_relion_half_texture_surface_f32_kernel<<<
+        static_cast<unsigned int>(block_count), BLOCK_SIZE, 0, stream>>>(
+            projector_half,
+            texture->surface,
+            texture_voxels,
+            tex_x,
+            tex_y,
+            projector_scale);
+    err = cudaGetLastError();
+    if (err != cudaSuccess) {
+        return synchronize_and_destroy_relion_half_texture_f32(
+            stream,
+            texture,
+            err);
+    }
+
+    cudaTextureDesc texture_desc;
+    memset(&texture_desc, 0, sizeof(texture_desc));
+    texture_desc.filterMode = cudaFilterModeLinear;
+    texture_desc.readMode = cudaReadModeElementType;
+    texture_desc.normalizedCoords = false;
+    texture_desc.addressMode[0] = cudaAddressModeClamp;
+    texture_desc.addressMode[1] = cudaAddressModeClamp;
+    texture_desc.addressMode[2] = cudaAddressModeClamp;
+    err = cudaCreateTextureObject(
+        &texture->texture, &resource, &texture_desc, nullptr);
+    if (err != cudaSuccess) {
+        /* The surface-fill kernel is asynchronous.  If texture creation
+         * fails, wait for that queued writer before destroying its surface
+         * and array.  Preserve the first error while still attempting every
+         * cleanup operation. */
+        return synchronize_and_destroy_relion_half_texture_f32(
+            stream,
+            texture,
+            err);
+    }
+    return cudaSuccess;
+}
+
+/* A supplied host Projector::data slab should not need an equally large JAX
+ * device allocation merely to populate the CUDA array required for hardware
+ * interpolation.  The persistent owner below uploads that host slab once and
+ * reuses its texture across sparse pass-2 buckets.  Handles are monotonic and
+ * resolved through a guarded registry: a compiled FFI executable can retain a
+ * stale handle after explicit destruction, but it can never dereference freed
+ * storage or alias a later owner. */
+struct PersistentRelionHalfTextureF32 {
+    RelionHalfTextureF32 texture;
+    int tex_x = 0;
+    int tex_y = 0;
+    int tex_z = 0;
+    int device = -1;
+
+    std::mutex state_mutex;
+    std::condition_variable state_changed;
+    bool closing = false;
+    int active_calls = 0;
+
+    bool acquire_call()
+    {
+        std::lock_guard<std::mutex> lock(state_mutex);
+        if (closing) return false;
+        ++active_calls;
+        return true;
+    }
+
+    void release_call() noexcept
+    {
+        try {
+            std::lock_guard<std::mutex> lock(state_mutex);
+            --active_calls;
+            if (active_calls == 0) state_changed.notify_all();
+        } catch (...) {
+            /* A mutex failure during process teardown must not cross an FFI
+             * or destructor boundary. */
+        }
+    }
+
+    void wait_until_idle()
+    {
+        std::unique_lock<std::mutex> lock(state_mutex);
+        closing = true;
+        state_changed.wait(lock, [this] { return active_calls == 0; });
+    }
+
+    cudaError_t destroy_owned_texture() noexcept
+    {
+        int original_device = -1;
+        cudaError_t err = cudaGetDevice(&original_device);
+        if (err == cudaSuccess && original_device != device)
+            err = cudaSetDevice(device);
+        if (err == cudaSuccess &&
+            (texture.texture || texture.surface || texture.array))
+            err = cudaDeviceSynchronize();
+        const cudaError_t cleanup_err =
+            destroy_relion_half_texture_f32(&texture);
+        if (err == cudaSuccess) err = cleanup_err;
+        if (original_device >= 0 && original_device != device) {
+            const cudaError_t restore_err = cudaSetDevice(original_device);
+            if (err == cudaSuccess) err = restore_err;
+        }
+        return err;
+    }
+
+    ~PersistentRelionHalfTextureF32()
+    {
+        (void)destroy_owned_texture();
+    }
+};
+
+struct PersistentRelionHalfTextureF32CallGuard {
+    std::shared_ptr<PersistentRelionHalfTextureF32> owner;
+    bool active = false;
+
+    explicit PersistentRelionHalfTextureF32CallGuard(
+        std::shared_ptr<PersistentRelionHalfTextureF32> value)
+        noexcept
+        : owner(std::move(value))
+    {
+        try {
+            active = owner && owner->acquire_call();
+        } catch (...) {
+            active = false;
+        }
+    }
+
+    ~PersistentRelionHalfTextureF32CallGuard()
+    {
+        if (active) owner->release_call();
+    }
+};
+
+static std::mutex persistent_relion_half_texture_f32_mutex;
+static std::unordered_map<
+    uint64_t,
+    std::shared_ptr<PersistentRelionHalfTextureF32>>
+    persistent_relion_half_texture_f32_registry;
+static std::atomic<uint64_t> persistent_relion_half_texture_f32_next_handle{1};
+
+cudaError_t create_relion_half_texture_f32_from_host(
+    const float2* projector_half_host,
+    int tex_x,
+    int tex_y,
+    int tex_z,
+    RelionHalfTextureF32* texture)
+{
+    if (!projector_half_host || !texture ||
+        tex_x <= 0 || tex_y <= 0 || tex_z <= 0)
+        return cudaErrorInvalidValue;
+
+    const cudaChannelFormatDesc desc = cudaCreateChannelDesc<float2>();
+    const cudaExtent extent = make_cudaExtent(
+        static_cast<size_t>(tex_x),
+        static_cast<size_t>(tex_y),
+        static_cast<size_t>(tex_z));
+    cudaError_t err = cudaMalloc3DArray(
+        &texture->array,
+        &desc,
+        extent,
+        cudaArrayDefault);
+    if (err != cudaSuccess) {
+        (void)destroy_relion_half_texture_f32(texture);
+        return err;
+    }
+
+    cudaMemcpy3DParms copy_params;
+    memset(&copy_params, 0, sizeof(copy_params));
+    copy_params.srcPtr = make_cudaPitchedPtr(
+        const_cast<float2*>(projector_half_host),
+        static_cast<size_t>(tex_x) * sizeof(float2),
+        static_cast<size_t>(tex_x),
+        static_cast<size_t>(tex_y));
+    copy_params.dstArray = texture->array;
+    copy_params.extent = extent;
+    copy_params.kind = cudaMemcpyHostToDevice;
+    /* The blocking copy is the ownership boundary.  Python may release its
+     * host view immediately after the create call returns successfully. */
+    err = cudaMemcpy3D(&copy_params);
+    if (err != cudaSuccess) {
+        (void)destroy_relion_half_texture_f32(texture);
+        return err;
+    }
+
+    cudaResourceDesc resource;
+    cudaTextureDesc texture_desc;
+    memset(&resource, 0, sizeof(resource));
+    memset(&texture_desc, 0, sizeof(texture_desc));
+    resource.resType = cudaResourceTypeArray;
+    resource.res.array.array = texture->array;
+    texture_desc.filterMode = cudaFilterModeLinear;
+    texture_desc.readMode = cudaReadModeElementType;
+    texture_desc.normalizedCoords = false;
+    texture_desc.addressMode[0] = cudaAddressModeClamp;
+    texture_desc.addressMode[1] = cudaAddressModeClamp;
+    texture_desc.addressMode[2] = cudaAddressModeClamp;
+    err = cudaCreateTextureObject(
+        &texture->texture,
+        &resource,
+        &texture_desc,
+        nullptr);
+    if (err != cudaSuccess) {
+        (void)destroy_relion_half_texture_f32(texture);
+        return err;
+    }
+    return cudaSuccess;
+}
+
+extern "C" int recovar_relion_persistent_half_texture_f32_create(
+    const void* projector_half_host,
+    int tex_x,
+    int tex_y,
+    int tex_z,
+    int device,
+    float projector_scale,
+    uint64_t* owner_handle)
+{
+    if (!projector_half_host || !owner_handle || projector_scale != 1.0f ||
+        !std::isfinite(projector_scale) ||
+        tex_x <= 0 || tex_y <= 0 || tex_z <= 0 || device < 0)
+        return static_cast<int>(cudaErrorInvalidValue);
+    *owner_handle = 0;
+
+    try {
+        auto owner = std::make_shared<PersistentRelionHalfTextureF32>();
+        owner->tex_x = tex_x;
+        owner->tex_y = tex_y;
+        owner->tex_z = tex_z;
+        owner->device = device;
+
+        int device_count = 0;
+        cudaError_t err = cudaGetDeviceCount(&device_count);
+        if (err != cudaSuccess) return static_cast<int>(err);
+        if (device >= device_count)
+            return static_cast<int>(cudaErrorInvalidDevice);
+        int original_device = -1;
+        err = cudaGetDevice(&original_device);
+        if (err != cudaSuccess) return static_cast<int>(err);
+        if (original_device != device) err = cudaSetDevice(device);
+        if (err == cudaSuccess) {
+            err = create_relion_half_texture_f32_from_host(
+                static_cast<const float2*>(projector_half_host),
+                tex_x,
+                tex_y,
+                tex_z,
+                &owner->texture);
+        }
+        if (original_device != device) {
+            const cudaError_t restore_err = cudaSetDevice(original_device);
+            if (err == cudaSuccess) err = restore_err;
+        }
+        if (err != cudaSuccess) return static_cast<int>(err);
+
+        const uint64_t handle =
+            persistent_relion_half_texture_f32_next_handle.fetch_add(
+                1, std::memory_order_relaxed);
+        if (handle == 0 ||
+            handle > static_cast<uint64_t>(
+                std::numeric_limits<int64_t>::max()))
+            return static_cast<int>(cudaErrorInvalidValue);
+        {
+            std::lock_guard<std::mutex> lock(
+                persistent_relion_half_texture_f32_mutex);
+            const auto inserted =
+                persistent_relion_half_texture_f32_registry.emplace(
+                    handle, owner);
+            if (!inserted.second)
+                return static_cast<int>(cudaErrorInvalidResourceHandle);
+        }
+        *owner_handle = handle;
+        return static_cast<int>(cudaSuccess);
+    } catch (const std::bad_alloc&) {
+        return static_cast<int>(cudaErrorMemoryAllocation);
+    } catch (...) {
+        return static_cast<int>(cudaErrorUnknown);
+    }
+}
+
+extern "C" int recovar_relion_persistent_half_texture_f32_destroy(
+    uint64_t owner_handle)
+{
+    if (owner_handle == 0)
+        return static_cast<int>(cudaErrorInvalidResourceHandle);
+    try {
+        std::shared_ptr<PersistentRelionHalfTextureF32> owner;
+        {
+            std::lock_guard<std::mutex> lock(
+                persistent_relion_half_texture_f32_mutex);
+            const auto found =
+                persistent_relion_half_texture_f32_registry.find(owner_handle);
+            if (found == persistent_relion_half_texture_f32_registry.end())
+                return static_cast<int>(cudaErrorInvalidResourceHandle);
+            owner = found->second;
+            persistent_relion_half_texture_f32_registry.erase(found);
+        }
+        owner->wait_until_idle();
+        return static_cast<int>(owner->destroy_owned_texture());
+    } catch (const std::bad_alloc&) {
+        return static_cast<int>(cudaErrorMemoryAllocation);
+    } catch (...) {
+        return static_cast<int>(cudaErrorUnknown);
+    }
+}
+
+
+
+template <bool HALF_IMG>
+__global__ void __launch_bounds__(BLOCK_SIZE)
+project_relion_half_texture_f32_kernel(
+    cudaTextureObject_t texture,
+    float2* __restrict__ image,
+    const float* __restrict__ rotations,
+    int n_pixels,
+    int image_h,
+    int image_w,
+    int tex_y_init,
+    int tex_z_init,
+    int padding_factor,
+    int max_r2_padded)
+{
+    __shared__ float rotation[6];
+
+    const int image_index = blockIdx.x;
+    const int pixel = blockIdx.y * BLOCK_SIZE + threadIdx.x;
+    if (threadIdx.x < 6)
+        rotation[threadIdx.x] = rotations[image_index * 6 + threadIdx.x];
+    __syncthreads();
+    if (pixel >= n_pixels) return;
+
+    const int row = pixel / image_w;
+    const int column = pixel % image_w;
+    const float source_y = static_cast<float>(
+        row == 0 ? image_h / 2 : row - image_h / 2);
+    const float source_x = HALF_IMG
+        ? static_cast<float>(column)
+        : static_cast<float>(column - image_w / 2);
+
+    const float model_x =
+        (rotation[3] * source_x + rotation[0] * source_y) *
+        static_cast<float>(padding_factor);
+    const float model_y =
+        (rotation[4] * source_x + rotation[1] * source_y) *
+        static_cast<float>(padding_factor);
+    const float model_z =
+        (rotation[5] * source_x + rotation[2] * source_y) *
+        static_cast<float>(padding_factor);
+    const int64_t output_index =
+        static_cast<int64_t>(image_index) * n_pixels + pixel;
+    const float radius_squared =
+        model_x * model_x + model_y * model_y + model_z * model_z;
+    if (!isfinite(radius_squared) || radius_squared >= 2147483648.0f ||
+        static_cast<int>(radius_squared) > max_r2_padded) {
+        image[output_index] = make_float2(0.0f, 0.0f);
+        return;
+    }
+
+    float texture_x = model_x;
+    float texture_y = model_y;
+    float texture_z = model_z;
+    float imag_sign = 1.0f;
+    if (texture_x < 0.0f) {
+        texture_x = -texture_x;
+        texture_y = -texture_y;
+        texture_z = -texture_z;
+        imag_sign = -1.0f;
+    }
+    float2 value = tex3D<float2>(
+        texture,
+        texture_x + 0.5f,
+        texture_y - static_cast<float>(tex_y_init) + 0.5f,
+        texture_z - static_cast<float>(tex_z_init) + 0.5f);
+    value.y *= imag_sign;
+    image[output_index] = value;
+}
+
+cudaError_t launch_relion_projector_half_texture_f32(
+    cudaStream_t stream,
+    const float2* projector_half,
+    float2* image,
+    const float* rotations,
+    int64_t n_images,
+    int64_t image_h,
+    int64_t image_w,
+    int padding_factor,
+    int projector_max_r,
+    float projector_scale)
+{
+    if (n_images == 0 || image_h == 0 || image_w == 0) return cudaSuccess;
+    const int padded_max_r = projector_max_r * padding_factor;
+    const int image_max_r =
+        projector_max_r < image_h / 2 ? projector_max_r : image_h / 2;
+    const int padded_image_max_r = image_max_r * padding_factor;
+    const int tex_x = padded_max_r + 2;
+    const int tex_y = 2 * padded_max_r + 3;
+    const int tex_z = 2 * padded_max_r + 3;
+    const int tex_y_init = -(padded_max_r + 1);
+    const int tex_z_init = -(padded_max_r + 1);
+    const int64_t n_pixels = image_h * image_w;
+    RelionHalfTextureF32 projector_texture;
+    cudaError_t err = create_relion_half_texture_f32(
+        stream,
+        projector_half,
+        tex_x,
+        tex_y,
+        tex_z,
+        projector_scale,
+        &projector_texture);
+    if (err != cudaSuccess) goto cleanup;
+
+    {
+        dim3 grid(
+            static_cast<unsigned int>(n_images),
+            static_cast<unsigned int>((n_pixels + BLOCK_SIZE - 1) / BLOCK_SIZE));
+        dim3 block(BLOCK_SIZE);
+        project_relion_half_texture_f32_kernel<true><<<grid, block, 0, stream>>>(
+            projector_texture.texture,
+            image,
+            rotations,
+            static_cast<int>(n_pixels),
+            static_cast<int>(image_h),
+            static_cast<int>(image_w),
+            tex_y_init,
+            tex_z_init,
+            padding_factor,
+            padded_image_max_r * padded_image_max_r);
+        err = cudaGetLastError();
+        if (err == cudaSuccess) err = cudaStreamSynchronize(stream);
+    }
+
+cleanup:
+    return synchronize_and_destroy_relion_half_texture_f32(
+        stream,
+        &projector_texture,
+        err);
+}
+
+cudaError_t launch_relion_projector_persistent_half_texture_f32(
+    cudaStream_t stream,
+    const PersistentRelionHalfTextureF32& owner,
+    float2* image,
+    const float* rotations,
+    int64_t n_images,
+    int64_t image_h,
+    int64_t image_w,
+    int padding_factor,
+    int projector_max_r)
+{
+    if (n_images == 0 || image_h == 0 || image_w == 0) return cudaSuccess;
+    if (!owner.texture.texture) return cudaErrorInvalidResourceHandle;
+
+    const int padded_max_r = projector_max_r * padding_factor;
+    const int image_max_r =
+        projector_max_r < image_h / 2 ? projector_max_r : image_h / 2;
+    const int padded_image_max_r = image_max_r * padding_factor;
+    const int tex_y_init = -(padded_max_r + 1);
+    const int tex_z_init = -(padded_max_r + 1);
+    const int64_t n_pixels = image_h * image_w;
+    dim3 grid(
+        static_cast<unsigned int>(n_images),
+        static_cast<unsigned int>((n_pixels + BLOCK_SIZE - 1) / BLOCK_SIZE));
+    dim3 block(BLOCK_SIZE);
+    project_relion_half_texture_f32_kernel<true><<<grid, block, 0, stream>>>(
+        owner.texture.texture,
+        image,
+        rotations,
+        static_cast<int>(n_pixels),
+        static_cast<int>(image_h),
+        static_cast<int>(image_w),
+        tex_y_init,
+        tex_z_init,
+        padding_factor,
+        padded_image_max_r * padded_image_max_r);
+    cudaError_t err = cudaGetLastError();
+    if (err == cudaSuccess) err = cudaStreamSynchronize(stream);
+    return err;
 }
 
 template <bool HALF_IMG, bool RUNTIME_RADIUS = false>
@@ -3073,6 +3796,48 @@ cudaError_t launch_relion_fused_x_half_backproject_f64(
     return cudaGetLastError();
 }
 
+cudaError_t launch_relion_firstiter_bpref_fused_x_half(
+    cudaStream_t stream,
+    float* data_volume_real,
+    float* data_volume_imag,
+    float* weight_volume,
+    const float* image_real,
+    const float* image_imag,
+    const float* ctf,
+    const float* minvsigma2,
+    const float* posterior,
+    const float* translation_x,
+    const float* translation_y,
+    const float* native_eulers,
+    float significant_weight,
+    float weight_norm,
+    int64_t n_rotations,
+    int64_t n_translations,
+    int64_t image_h,
+    int64_t image_w,
+    int64_t N0,
+    int64_t N1,
+    int64_t N2,
+    int64_t upsampling,
+    int64_t max_r2_x4)
+{
+    const int N2_eff = (int)(N2 / 2 + 1);
+    dim3 grid((unsigned)n_rotations, 1);
+    dim3 block(128);
+    relion_firstiter_bpref_fused_x_half_kernel<<<grid, block, 0, stream>>>(
+        image_real, image_imag, translation_x, translation_y,
+        posterior, minvsigma2, ctf, (unsigned long)n_translations,
+        significant_weight, weight_norm, native_eulers,
+        data_volume_real, data_volume_imag, weight_volume,
+        (int)(max_r2_x4 / (4 * upsampling * upsampling)), (float)upsampling,
+        (unsigned)image_w, (unsigned)image_h,
+        (unsigned)(image_h * image_w),
+        (unsigned)N2_eff, (unsigned)N1,
+        -(int)(N1 / 2), -(int)(N0 / 2));
+    return cudaGetLastError();
+}
+
+
 cudaError_t launch_relion_fused_x_half_backproject_with_signature(
     cudaStream_t stream,
     float2* data_volume,
@@ -3659,11 +4424,13 @@ batch_backproject_kernel(
     }
 
     /* Volume stride: REAL_DATA uses 1 T per voxel, complex uses 2 */
-    const int vol_bytes_stride = REAL_DATA ? vol_stride : vol_stride * 2;
+    const int64_t vol_scalar_stride = REAL_DATA
+        ? static_cast<int64_t>(vol_stride)
+        : static_cast<int64_t>(vol_stride) * 2;
 
     /* Inner loop over batch — same coords, different volumes and images */
     for (int b = 0; b < batch_size; b++) {
-        T* vol = vols + b * vol_bytes_stride;
+        T* vol = vols + b * vol_scalar_stride;
 
         /* Load pixel — scalar for REAL_DATA, complex pair for complex */
         T val_re, val_im;
@@ -4103,7 +4870,9 @@ __global__ void relion_translate_bpref_f32_kernel(
     float2 value = images[image * pixel_count + pixel_row];
     float factor = weighted_ctf[image * pixel_count + pixel_row];
     float translated_real = cosine * value.x - sine * value.y;
-    float translated_imag = cosine * value.y + sine * value.x;
+    // Pin the RELION BPref translatePixel FMA order (captured-bit oracle).
+    float translated_imag = __fmaf_rn(
+        sine, value.x, __fmul_rn(cosine, value.y));
     weighted_shifted[flat] = make_float2(
         translated_real * factor,
         translated_imag * factor);
@@ -5911,15 +6680,23 @@ ffi::Error RelionVdamMstepFusedProjectorXHalfCommon(
             "BPref particle tail mask requires grouped accumulator-only work "
             "and no parallel/replay/trace or projector capacity");
     const int64_t pixel_count = image_h * image_w;
+    const int64_t logical_projector_size =
+        2 * projector_max_r * projection_padding_factor + 3;
+    const bool direct_half_projector = !capacity_projector &&
+        projector_dims.size() == 3 && logical_projector_size >= 5 &&
+        projector_dims[0] == logical_projector_size &&
+        projector_dims[1] == logical_projector_size &&
+        projector_dims[2] == logical_projector_size / 2 + 1;
     const bool valid_projector = capacity_projector
         ? (projector_dims.size() == 3 && projector_dims[0] >= 5 &&
            projector_dims[0] <= 1025 && projector_dims[0] == projector_dims[1] &&
            (projector_dims[0] & 1) == 1 &&
            projector_dims[2] == projector_dims[0] / 2 + 1 &&
            (projector_dims[0] - 3) % (2 * projection_padding_factor) == 0)
-        : (projector_dims.size() == 3 && projector_dims[0] > 0 &&
-           projector_dims[1] == projector_dims[0] &&
-           projector_dims[2] == projector_dims[0]);
+        : (direct_half_projector ||
+           (projector_dims.size() == 3 && projector_dims[0] > 0 &&
+            projector_dims[1] == projector_dims[0] &&
+            projector_dims[2] == projector_dims[0]));
     if (!valid_projector ||
         image_dims.size() != 2 || image_dims[0] <= 0 || image_dims[1] != pixel_capacity ||
         ctf_dims.size() != 2 || ctf_dims[0] != image_dims[0] || ctf_dims[1] != pixel_capacity ||
@@ -6024,7 +6801,7 @@ ffi::Error RelionVdamMstepFusedProjectorXHalfCommon(
         nullptr,
         runtime_projector_radius == nullptr ? nullptr
             : static_cast<const int32_t*>(runtime_projector_radius->untyped_data()),
-        particle_tail_mask != 0);
+        particle_tail_mask != 0, direct_half_projector);
     if (err != cudaSuccess)
         return ffi::Error::Internal(std::string("CUDA: ") + cudaGetErrorString(err));
     return ffi::Error::Success();
@@ -8625,13 +9402,21 @@ ffi::Error RelionPreprocessRealF32ImplWithReduction(
     float radius,
     float cosine_width,
     int64_t apply_mask,
+    int64_t host_check,
     ffi::AnyBuffer images,
     ffi::AnyBuffer normalization_factors,
     ffi::AnyBuffer integer_shifts,
     ffi::Result<ffi::AnyBuffer> normalized_shifted_out,
     ffi::Result<ffi::AnyBuffer> masked_out,
+    ffi::Result<ffi::AnyBuffer> workspace_out,
+    ffi::Result<ffi::AnyBuffer> invalid_count_out,
     int reduction_mode)
 {
+    if (invalid_count_out->element_type() != ffi::DataType::S32 ||
+        invalid_count_out->dimensions().size() != 1 || invalid_count_out->dimensions()[0] != 1)
+        return ffi::Error::InvalidArgument("RelionPreprocessRealF32: invalid_count must be S32 with shape (1,)");
+    if (host_check != 0 && host_check != 1)
+        return ffi::Error::InvalidArgument("RelionPreprocessRealF32: host_check must be 0 or 1");
     if (images.element_type() != ffi::DataType::F32 ||
         normalization_factors.element_type() != ffi::DataType::F32 ||
         normalized_shifted_out->element_type() != ffi::DataType::F32 ||
@@ -8661,7 +9446,22 @@ ffi::Error RelionPreprocessRealF32ImplWithReduction(
     if (apply_mask != 0 && apply_mask != 1)
         return ffi::Error::InvalidArgument("RelionPreprocessRealF32: apply_mask must be 0 or 1");
 
-    cudaError_t err = launch_relion_preprocess_real_f32(
+    RelionPreprocessScratchLayout layout;
+    cudaError_t err = relion_preprocess_scratch_layout(image_dims[0], reduction_mode, &layout);
+    if (err != cudaSuccess)
+        return ffi::Error::Internal(std::string("CUDA: ") + cudaGetErrorString(err));
+    // XLA provisions the soft-mask workspace as an output buffer sized by the
+    // Python wrapper from the same layout constants; fail closed if it is
+    // smaller than this build's layout (for example a larger CUB temporary).
+    if (workspace_out->element_type() != ffi::DataType::U8 || workspace_out->dimensions().size() != 1)
+        return ffi::Error::InvalidArgument("RelionPreprocessRealF32: workspace must be U8 with shape (bytes,)");
+    size_t workspace_bytes = static_cast<size_t>(workspace_out->dimensions()[0]);
+    if (apply_mask != 0 && workspace_bytes < layout.total_bytes)
+        return ffi::Error::InvalidArgument(
+            "RelionPreprocessRealF32: workspace too small: need " + std::to_string(layout.total_bytes) +
+            " bytes, got " + std::to_string(workspace_bytes));
+    void* scratch_ptr = apply_mask != 0 ? workspace_out->untyped_data() : nullptr;
+    err = launch_relion_preprocess_real_f32(
         stream,
         static_cast<const float*>(images.untyped_data()),
         static_cast<const float*>(normalization_factors.untyped_data()),
@@ -8669,7 +9469,8 @@ ffi::Error RelionPreprocessRealF32ImplWithReduction(
         static_cast<float*>(normalized_shifted_out->untyped_data()),
         static_cast<float*>(masked_out->untyped_data()),
         image_dims[0], static_cast<int>(image_dims[1]), static_cast<int>(image_dims[2]),
-        radius, cosine_width, apply_mask != 0, reduction_mode);
+        radius, cosine_width, apply_mask != 0, reduction_mode, host_check != 0,
+        static_cast<int32_t*>(invalid_count_out->untyped_data()), scratch_ptr, layout);
     if (err != cudaSuccess)
         return ffi::Error::Internal(std::string("CUDA: ") + cudaGetErrorString(err));
     return ffi::Error::Success();
@@ -8680,15 +9481,18 @@ ffi::Error RelionPreprocessRealF32Impl(
     float radius,
     float cosine_width,
     int64_t apply_mask,
+    int64_t host_check,
     ffi::AnyBuffer images,
     ffi::AnyBuffer normalization_factors,
     ffi::AnyBuffer integer_shifts,
     ffi::Result<ffi::AnyBuffer> normalized_shifted_out,
-    ffi::Result<ffi::AnyBuffer> masked_out)
+    ffi::Result<ffi::AnyBuffer> masked_out,
+    ffi::Result<ffi::AnyBuffer> workspace_out,
+    ffi::Result<ffi::AnyBuffer> invalid_count_out)
 {
     return RelionPreprocessRealF32ImplWithReduction(
-        stream, radius, cosine_width, apply_mask, images, normalization_factors,
-        integer_shifts, normalized_shifted_out, masked_out, 0);
+        stream, radius, cosine_width, apply_mask, host_check, images, normalization_factors,
+        integer_shifts, normalized_shifted_out, masked_out, workspace_out, invalid_count_out, 0);
 }
 
 ffi::Error RelionPreprocessRealF32NativeLaneImpl(
@@ -8696,15 +9500,18 @@ ffi::Error RelionPreprocessRealF32NativeLaneImpl(
     float radius,
     float cosine_width,
     int64_t apply_mask,
+    int64_t host_check,
     ffi::AnyBuffer images,
     ffi::AnyBuffer normalization_factors,
     ffi::AnyBuffer integer_shifts,
     ffi::Result<ffi::AnyBuffer> normalized_shifted_out,
-    ffi::Result<ffi::AnyBuffer> masked_out)
+    ffi::Result<ffi::AnyBuffer> masked_out,
+    ffi::Result<ffi::AnyBuffer> workspace_out,
+    ffi::Result<ffi::AnyBuffer> invalid_count_out)
 {
     return RelionPreprocessRealF32ImplWithReduction(
-        stream, radius, cosine_width, apply_mask, images, normalization_factors,
-        integer_shifts, normalized_shifted_out, masked_out, 1);
+        stream, radius, cosine_width, apply_mask, host_check, images, normalization_factors,
+        integer_shifts, normalized_shifted_out, masked_out, workspace_out, invalid_count_out, 1);
 }
 
 ffi::Error RelionPreprocessRealF32NativeAtomicImpl(
@@ -8712,15 +9519,18 @@ ffi::Error RelionPreprocessRealF32NativeAtomicImpl(
     float radius,
     float cosine_width,
     int64_t apply_mask,
+    int64_t host_check,
     ffi::AnyBuffer images,
     ffi::AnyBuffer normalization_factors,
     ffi::AnyBuffer integer_shifts,
     ffi::Result<ffi::AnyBuffer> normalized_shifted_out,
-    ffi::Result<ffi::AnyBuffer> masked_out)
+    ffi::Result<ffi::AnyBuffer> masked_out,
+    ffi::Result<ffi::AnyBuffer> workspace_out,
+    ffi::Result<ffi::AnyBuffer> invalid_count_out)
 {
     return RelionPreprocessRealF32ImplWithReduction(
-        stream, radius, cosine_width, apply_mask, images, normalization_factors,
-        integer_shifts, normalized_shifted_out, masked_out, 2);
+        stream, radius, cosine_width, apply_mask, host_check, images, normalization_factors,
+        integer_shifts, normalized_shifted_out, masked_out, workspace_out, invalid_count_out, 2);
 }
 
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
@@ -8730,9 +9540,12 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Attr<float>("radius")
         .Attr<float>("cosine_width")
         .Attr<int64_t>("apply_mask")
+        .Attr<int64_t>("host_check")
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>()
         .Ret<ffi::AnyBuffer>()
         .Ret<ffi::AnyBuffer>()
 );
@@ -8744,9 +9557,12 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Attr<float>("radius")
         .Attr<float>("cosine_width")
         .Attr<int64_t>("apply_mask")
+        .Attr<int64_t>("host_check")
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>()
         .Ret<ffi::AnyBuffer>()
         .Ret<ffi::AnyBuffer>()
 );
@@ -8758,9 +9574,12 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Attr<float>("radius")
         .Attr<float>("cosine_width")
         .Attr<int64_t>("apply_mask")
+        .Attr<int64_t>("host_check")
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>()
         .Ret<ffi::AnyBuffer>()
         .Ret<ffi::AnyBuffer>()
 );
@@ -9218,6 +10037,132 @@ ffi::Error RelionFusedXHalfBackprojectParticleGridImpl(
     return ffi::Error::Success();
 }
 
+ffi::Error RelionFirstiterBprefFusedXHalfImpl(
+    cudaStream_t stream,
+    int64_t image_h, int64_t image_w,
+    int64_t N0, int64_t N1, int64_t N2,
+    int64_t upsampling, int64_t order,
+    int64_t half_volume, int64_t half_image, int64_t full_image_w,
+    int64_t max_r2_x4,
+    float significant_weight,
+    float weight_norm,
+    ffi::AnyBuffer image_real,
+    ffi::AnyBuffer image_imag,
+    ffi::AnyBuffer ctf,
+    ffi::AnyBuffer minvsigma2,
+    ffi::AnyBuffer posterior,
+    ffi::AnyBuffer translation_x,
+    ffi::AnyBuffer translation_y,
+    ffi::AnyBuffer native_eulers,
+    ffi::AnyBuffer data_volume_real_in,
+    ffi::AnyBuffer data_volume_imag_in,
+    ffi::AnyBuffer weight_volume_in,
+    ffi::Result<ffi::AnyBuffer> data_volume_real_out,
+    ffi::Result<ffi::AnyBuffer> data_volume_imag_out,
+    ffi::Result<ffi::AnyBuffer> weight_volume_out)
+{
+    if (image_real.element_type() != ffi::DataType::F32 ||
+        image_imag.element_type() != ffi::DataType::F32 ||
+        ctf.element_type() != ffi::DataType::F32 ||
+        minvsigma2.element_type() != ffi::DataType::F32 ||
+        posterior.element_type() != ffi::DataType::F32 ||
+        translation_x.element_type() != ffi::DataType::F32 ||
+        translation_y.element_type() != ffi::DataType::F32 ||
+        native_eulers.element_type() != ffi::DataType::F32 ||
+        data_volume_real_in.element_type() != ffi::DataType::F32 ||
+        data_volume_imag_in.element_type() != ffi::DataType::F32 ||
+        data_volume_real_out->element_type() != ffi::DataType::F32 ||
+        data_volume_imag_out->element_type() != ffi::DataType::F32 ||
+        weight_volume_in.element_type() != ffi::DataType::F32 ||
+        weight_volume_out->element_type() != ffi::DataType::F32)
+        return ffi::Error::InvalidArgument(
+            "RelionFirstiterBprefFusedXHalf: exact native operands must be float32");
+    if (order != 1 || half_volume != 1 || half_image != 1)
+        return ffi::Error::InvalidArgument(
+            "RelionFirstiterBprefFusedXHalf: requires order=1 and half image/volume");
+    if (N0 <= 0 || N0 != N1 || N1 != N2 || (N2 & 1) == 0)
+        return ffi::Error::InvalidArgument(
+            "RelionFirstiterBprefFusedXHalf: volume must be positive, cubic, and odd-sized");
+    if (image_h <= 0 || image_w != image_h / 2 + 1 || full_image_w != image_h)
+        return ffi::Error::InvalidArgument(
+            "RelionFirstiterBprefFusedXHalf: image attrs must describe a native FFTW half square");
+    if (upsampling <= 0 || max_r2_x4 < 0)
+        return ffi::Error::InvalidArgument(
+            "RelionFirstiterBprefFusedXHalf: requires positive upsampling and an explicit radius");
+
+    const auto image_real_dims = image_real.dimensions();
+    const auto image_imag_dims = image_imag.dimensions();
+    const auto ctf_dims = ctf.dimensions();
+    const auto minv_dims = minvsigma2.dimensions();
+    const auto posterior_dims = posterior.dimensions();
+    const auto translation_x_dims = translation_x.dimensions();
+    const auto translation_y_dims = translation_y.dimensions();
+    const auto euler_dims = native_eulers.dimensions();
+    const int64_t n_pixels = image_h * image_w;
+    if (image_real_dims.size() != 1 || image_imag_dims.size() != 1 ||
+        ctf_dims.size() != 1 || minv_dims.size() != 1 ||
+        image_real_dims[0] != n_pixels || image_imag_dims[0] != n_pixels ||
+        ctf_dims[0] != n_pixels || minv_dims[0] != n_pixels)
+        return ffi::Error::InvalidArgument(
+            "RelionFirstiterBprefFusedXHalf: image/CTF/noise rows must match the dense FFTW square");
+    if (posterior_dims.size() != 2 || posterior_dims[0] <= 0 || posterior_dims[1] <= 0)
+        return ffi::Error::InvalidArgument(
+            "RelionFirstiterBprefFusedXHalf: posterior must be a nonempty rotation/translation matrix");
+    if (translation_x_dims.size() != 1 || translation_y_dims.size() != 1 ||
+        translation_x_dims[0] != posterior_dims[1] ||
+        translation_y_dims[0] != posterior_dims[1])
+        return ffi::Error::InvalidArgument(
+            "RelionFirstiterBprefFusedXHalf: split translation arrays have wrong shape");
+    if (euler_dims.size() != 2 || euler_dims[0] != posterior_dims[0] || euler_dims[1] != 9)
+        return ffi::Error::InvalidArgument(
+            "RelionFirstiterBprefFusedXHalf: native Euler matrices must have shape (n_rotations, 9)");
+    if (!std::isfinite(significant_weight) || !std::isfinite(weight_norm) ||
+        weight_norm <= 0.0f)
+        return ffi::Error::InvalidArgument(
+            "RelionFirstiterBprefFusedXHalf: scalar attributes are invalid");
+
+    const int64_t expected_volume_size = N0 * N1 * (N2 / 2 + 1);
+    const auto data_real_in_dims = data_volume_real_in.dimensions();
+    const auto data_imag_in_dims = data_volume_imag_in.dimensions();
+    const auto weight_in_dims = weight_volume_in.dimensions();
+    const auto data_real_out_dims = data_volume_real_out->dimensions();
+    const auto data_imag_out_dims = data_volume_imag_out->dimensions();
+    const auto weight_out_dims = weight_volume_out->dimensions();
+    if (data_real_in_dims.size() != 1 || data_imag_in_dims.size() != 1 ||
+        weight_in_dims.size() != 1 || data_real_out_dims.size() != 1 ||
+        data_imag_out_dims.size() != 1 || weight_out_dims.size() != 1 ||
+        data_real_in_dims[0] != expected_volume_size ||
+        data_imag_in_dims[0] != expected_volume_size ||
+        weight_in_dims[0] != expected_volume_size ||
+        data_real_out_dims[0] != expected_volume_size ||
+        data_imag_out_dims[0] != expected_volume_size ||
+        weight_out_dims[0] != expected_volume_size)
+        return ffi::Error::InvalidArgument(
+            "RelionFirstiterBprefFusedXHalf: accumulator sizes do not match the half volume");
+
+    cudaError_t err = launch_relion_firstiter_bpref_fused_x_half(
+        stream,
+        static_cast<float*>(data_volume_real_out->untyped_data()),
+        static_cast<float*>(data_volume_imag_out->untyped_data()),
+        static_cast<float*>(weight_volume_out->untyped_data()),
+        static_cast<const float*>(image_real.untyped_data()),
+        static_cast<const float*>(image_imag.untyped_data()),
+        static_cast<const float*>(ctf.untyped_data()),
+        static_cast<const float*>(minvsigma2.untyped_data()),
+        static_cast<const float*>(posterior.untyped_data()),
+        static_cast<const float*>(translation_x.untyped_data()),
+        static_cast<const float*>(translation_y.untyped_data()),
+        static_cast<const float*>(native_eulers.untyped_data()),
+        significant_weight,
+        weight_norm,
+        posterior_dims[0], posterior_dims[1], image_h, image_w,
+        N0, N1, N2, upsampling, max_r2_x4);
+    if (err != cudaSuccess)
+        return ffi::Error::Internal(std::string("CUDA: ") + cudaGetErrorString(err));
+    return ffi::Error::Success();
+}
+
+
 ffi::Error RelionFusedXHalfBackprojectSignatureImpl(
     cudaStream_t stream,
     int64_t image_h, int64_t image_w,
@@ -9591,6 +10536,39 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
 );
 
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    RelionFirstiterBprefFusedXHalf, RelionFirstiterBprefFusedXHalfImpl,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Attr<int64_t>("image_h")
+        .Attr<int64_t>("image_w")
+        .Attr<int64_t>("N0")
+        .Attr<int64_t>("N1")
+        .Attr<int64_t>("N2")
+        .Attr<int64_t>("upsampling")
+        .Attr<int64_t>("order")
+        .Attr<int64_t>("half_volume")
+        .Attr<int64_t>("half_image")
+        .Attr<int64_t>("full_image_w")
+        .Attr<int64_t>("max_r2_x4")
+        .Attr<float>("significant_weight")
+        .Attr<float>("weight_norm")
+        .Arg<ffi::AnyBuffer>()           /* image_real */
+        .Arg<ffi::AnyBuffer>()           /* image_imag */
+        .Arg<ffi::AnyBuffer>()           /* ctf */
+        .Arg<ffi::AnyBuffer>()           /* minvsigma2 */
+        .Arg<ffi::AnyBuffer>()           /* posterior */
+        .Arg<ffi::AnyBuffer>()           /* translation_x */
+        .Arg<ffi::AnyBuffer>()           /* translation_y */
+        .Arg<ffi::AnyBuffer>()           /* native_eulers */
+        .Arg<ffi::AnyBuffer>()           /* data_volume_real_in */
+        .Arg<ffi::AnyBuffer>()           /* data_volume_imag_in */
+        .Arg<ffi::AnyBuffer>()           /* weight_volume_in */
+        .Ret<ffi::AnyBuffer>()           /* data_volume_real_out (aliased) */
+        .Ret<ffi::AnyBuffer>()           /* data_volume_imag_out (aliased) */
+        .Ret<ffi::AnyBuffer>()           /* weight_volume_out (aliased) */
+);
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
     RelionFusedXHalfBackprojectSignature, RelionFusedXHalfBackprojectSignatureImpl,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
@@ -9631,6 +10609,218 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Ret<ffi::AnyBuffer>()           /* operand_shadow_canonical_rotation_keys */
         .Ret<ffi::AnyBuffer>()           /* operand_shadow_signature_row_indices */
 );
+
+struct RelionHalfTextureGeometry {
+    int64_t padded_max_r;
+    int64_t projector_size;
+    int64_t projector_half_x;
+    int64_t image_pixels;
+};
+
+bool validate_relion_half_texture_geometry(
+    int64_t current_size,
+    int64_t padding_factor,
+    int64_t projector_max_r,
+    RelionHalfTextureGeometry* geometry)
+{
+    const int64_t int_max =
+        static_cast<int64_t>(std::numeric_limits<int>::max());
+    /* Every launcher stores the squared padded radius in an int and forms
+     * texture y/z as 2 * padded_max_r + 3.  Validate against the tighter
+     * radius-square limit before evaluating either product. */
+    constexpr int64_t max_padded_radius_with_int_square = 46340;
+    if (current_size <= 0 || current_size > int_max ||
+        padding_factor <= 0 || padding_factor > int_max ||
+        projector_max_r <= 0 || projector_max_r > int_max ||
+        projector_max_r >
+            max_padded_radius_with_int_square / padding_factor)
+        return false;
+
+    const int64_t padded_max_r = projector_max_r * padding_factor;
+    if (padded_max_r > (int_max - 3) / 2) return false;
+    const int64_t image_half_x = current_size / 2 + 1;
+    if (current_size > int_max / image_half_x) return false;
+
+    geometry->padded_max_r = padded_max_r;
+    geometry->projector_size = 2 * padded_max_r + 3;
+    geometry->projector_half_x = padded_max_r + 2;
+    geometry->image_pixels = current_size * image_half_x;
+    return true;
+}
+
+ffi::Error RelionProjectorHalfTextureF32Impl(
+    cudaStream_t stream,
+    int64_t current_size,
+    int64_t padding_factor,
+    int64_t projector_max_r,
+    float projector_scale,
+    ffi::AnyBuffer projector_half,
+    ffi::AnyBuffer rotations,
+    ffi::Result<ffi::AnyBuffer> output)
+{
+    if (projector_half.element_type() != ffi::DataType::C64 ||
+        output->element_type() != ffi::DataType::C64)
+        return ffi::Error::InvalidArgument(
+            "RelionProjectorHalfTextureF32: projector/output must be C64");
+    if (rotations.element_type() != ffi::DataType::F32)
+        return ffi::Error::InvalidArgument(
+            "RelionProjectorHalfTextureF32: rotations must be F32");
+
+    const auto projector_dims = projector_half.dimensions();
+    const auto rotation_dims = rotations.dimensions();
+    const auto output_dims = output->dimensions();
+    RelionHalfTextureGeometry geometry;
+    const int64_t int_max = static_cast<int64_t>(std::numeric_limits<int>::max());
+    if (!validate_relion_half_texture_geometry(
+            current_size, padding_factor, projector_max_r, &geometry) ||
+        !std::isfinite(projector_scale) ||
+        projector_dims.size() != 3 ||
+        projector_dims[0] != geometry.projector_size ||
+        projector_dims[1] != geometry.projector_size ||
+        projector_dims[2] != geometry.projector_half_x ||
+        rotation_dims.size() != 2 || rotation_dims[0] <= 0 ||
+        rotation_dims[0] > int_max || rotation_dims[1] != 6 ||
+        output_dims.size() != 2 || output_dims[0] != rotation_dims[0] ||
+        output_dims[1] != geometry.image_pixels)
+        return ffi::Error::InvalidArgument(
+            "RelionProjectorHalfTextureF32: inconsistent operand shapes");
+
+    cudaError_t err = launch_relion_projector_half_texture_f32(
+        stream,
+        reinterpret_cast<const float2*>(projector_half.untyped_data()),
+        reinterpret_cast<float2*>(output->untyped_data()),
+        static_cast<const float*>(rotations.untyped_data()),
+        rotation_dims[0],
+        current_size,
+        current_size / 2 + 1,
+        static_cast<int>(padding_factor),
+        static_cast<int>(projector_max_r),
+        projector_scale);
+    if (err != cudaSuccess)
+        return ffi::Error::Internal(
+            std::string("CUDA: ") + cudaGetErrorString(err));
+    return ffi::Error::Success();
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    RelionProjectorHalfTextureF32,
+    RelionProjectorHalfTextureF32Impl,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Attr<int64_t>("current_size")
+        .Attr<int64_t>("padding_factor")
+        .Attr<int64_t>("projector_max_r")
+        .Attr<float>("projector_scale")
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>()
+);
+
+ffi::Error RelionProjectorPersistentHalfTextureF32Impl(
+    cudaStream_t stream,
+    int64_t current_size,
+    int64_t padding_factor,
+    int64_t projector_max_r,
+    ffi::AnyBuffer owner_handle_buffer,
+    ffi::AnyBuffer rotations,
+    ffi::Result<ffi::AnyBuffer> output)
+{
+    if (owner_handle_buffer.element_type() != ffi::DataType::U64)
+        return ffi::Error::InvalidArgument(
+            "RelionProjectorPersistentHalfTextureF32: owner handle must be U64");
+    if (rotations.element_type() != ffi::DataType::F32)
+        return ffi::Error::InvalidArgument(
+            "RelionProjectorPersistentHalfTextureF32: rotations must be F32");
+    if (output->element_type() != ffi::DataType::C64)
+        return ffi::Error::InvalidArgument(
+            "RelionProjectorPersistentHalfTextureF32: output must be C64");
+
+    const auto handle_dims = owner_handle_buffer.dimensions();
+    const auto rotation_dims = rotations.dimensions();
+    const auto output_dims = output->dimensions();
+    RelionHalfTextureGeometry geometry;
+    const int64_t int_max = static_cast<int64_t>(std::numeric_limits<int>::max());
+    if (handle_dims.size() != 0 ||
+        !validate_relion_half_texture_geometry(
+            current_size, padding_factor, projector_max_r, &geometry) ||
+        rotation_dims.size() != 2 || rotation_dims[0] <= 0 ||
+        rotation_dims[0] > int_max || rotation_dims[1] != 6 ||
+        output_dims.size() != 2 || output_dims[0] != rotation_dims[0] ||
+        output_dims[1] != geometry.image_pixels)
+        return ffi::Error::InvalidArgument(
+            "RelionProjectorPersistentHalfTextureF32: inconsistent operands");
+
+    uint64_t owner_handle = 0;
+    cudaError_t err = cudaMemcpyAsync(
+        &owner_handle,
+        owner_handle_buffer.untyped_data(),
+        sizeof(owner_handle),
+        cudaMemcpyDeviceToHost,
+        stream);
+    if (err == cudaSuccess) err = cudaStreamSynchronize(stream);
+    if (err != cudaSuccess)
+        return ffi::Error::Internal(
+            std::string("CUDA: ") + cudaGetErrorString(err));
+
+    std::shared_ptr<PersistentRelionHalfTextureF32> owner;
+    try {
+        std::lock_guard<std::mutex> lock(
+            persistent_relion_half_texture_f32_mutex);
+        const auto found =
+            persistent_relion_half_texture_f32_registry.find(owner_handle);
+        if (found == persistent_relion_half_texture_f32_registry.end())
+            return ffi::Error::InvalidArgument(
+                "RelionProjectorPersistentHalfTextureF32: owner handle is not live");
+        owner = found->second;
+    } catch (...) {
+        return ffi::Error::Internal(
+            "RelionProjectorPersistentHalfTextureF32: registry lookup failed");
+    }
+    PersistentRelionHalfTextureF32CallGuard call_guard(owner);
+    if (!call_guard.active)
+        return ffi::Error::InvalidArgument(
+            "RelionProjectorPersistentHalfTextureF32: owner is closing");
+    int current_device = -1;
+    err = cudaGetDevice(&current_device);
+    if (err != cudaSuccess)
+        return ffi::Error::Internal(
+            std::string("CUDA: ") + cudaGetErrorString(err));
+    if (owner->tex_x != geometry.projector_half_x ||
+        owner->tex_y != geometry.projector_size ||
+        owner->tex_z != geometry.projector_size ||
+        owner->device != current_device)
+        return ffi::Error::InvalidArgument(
+            "RelionProjectorPersistentHalfTextureF32: texture geometry/device mismatch");
+
+    err = launch_relion_projector_persistent_half_texture_f32(
+        stream,
+        *owner,
+        reinterpret_cast<float2*>(output->untyped_data()),
+        static_cast<const float*>(rotations.untyped_data()),
+        rotation_dims[0],
+        current_size,
+        current_size / 2 + 1,
+        static_cast<int>(padding_factor),
+        static_cast<int>(projector_max_r));
+    if (err != cudaSuccess)
+        return ffi::Error::Internal(
+            std::string("CUDA: ") + cudaGetErrorString(err));
+    return ffi::Error::Success();
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    RelionProjectorPersistentHalfTextureF32,
+    RelionProjectorPersistentHalfTextureF32Impl,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Attr<int64_t>("current_size")
+        .Attr<int64_t>("padding_factor")
+        .Attr<int64_t>("projector_max_r")
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>()
+);
+
 
 ffi::Error ProjectImpl(
     cudaStream_t stream,
@@ -9834,6 +11024,660 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Arg<ffi::AnyBuffer>()           /* rot     */
         .Ret<ffi::AnyBuffer>()           /* img_out */
 );
+
+/* ================================================================== */
+/*       RELION BPref x=0 + point-group symmetry finalisation          */
+/* ================================================================== */
+
+template <typename T>
+struct RelionSymmetryComplex {
+    T real;
+    T imag;
+};
+
+template <typename T>
+static __device__ __forceinline__ RelionSymmetryComplex<T>
+relion_symmetry_lerp(
+    T fraction,
+    RelionSymmetryComplex<T> low,
+    RelionSymmetryComplex<T> high)
+{
+    return {
+        low.real + (high.real - low.real) * fraction,
+        low.imag + (high.imag - low.imag) * fraction,
+    };
+}
+
+template <typename T>
+static __device__ __forceinline__ T relion_symmetry_lerp(
+    T fraction, T low, T high)
+{
+    return low + (high - low) * fraction;
+}
+
+template <typename T>
+static __device__ __forceinline__ RelionSymmetryComplex<T>
+relion_symmetry_read_data(
+    const T* __restrict__ data,
+    int z_index,
+    int y_index,
+    int x_index,
+    int full_z,
+    int full_y,
+    int x_half)
+{
+    const int64_t index =
+        (static_cast<int64_t>(z_index) * full_y + y_index) * x_half + x_index;
+    RelionSymmetryComplex<T> value = {data[2 * index], data[2 * index + 1]};
+    if (x_index != 0)
+        return value;
+
+    /* BackProjector::enforceHermitianSymmetry sums each x=0 pair and does
+     * not divide by two.  BPref grids are odd, so the partner of direct
+     * index i is N-1-i.  The (z=0,y=0) center is deliberately untouched. */
+    const int partner_z = full_z - 1 - z_index;
+    const int partner_y = full_y - 1 - y_index;
+    if (partner_z == z_index && partner_y == y_index)
+        return value;
+    const int64_t partner_index =
+        (static_cast<int64_t>(partner_z) * full_y + partner_y) * x_half;
+    value.real += data[2 * partner_index];
+    value.imag -= data[2 * partner_index + 1];
+    return value;
+}
+
+template <typename T>
+static __device__ __forceinline__ RelionSymmetryComplex<T>
+relion_symmetry_read_data_split(
+    const T* __restrict__ data_real,
+    const T* __restrict__ data_imag,
+    int z_index,
+    int y_index,
+    int x_index,
+    int full_z,
+    int full_y,
+    int x_half)
+{
+    const int64_t index =
+        (static_cast<int64_t>(z_index) * full_y + y_index) * x_half + x_index;
+    RelionSymmetryComplex<T> value = {data_real[index], data_imag[index]};
+    if (x_index != 0)
+        return value;
+
+    const int partner_z = full_z - 1 - z_index;
+    const int partner_y = full_y - 1 - y_index;
+    if (partner_z == z_index && partner_y == y_index)
+        return value;
+    const int64_t partner_index =
+        (static_cast<int64_t>(partner_z) * full_y + partner_y) * x_half;
+    value.real += data_real[partner_index];
+    value.imag -= data_imag[partner_index];
+    return value;
+}
+
+template <typename T, bool SPLIT_INPUT>
+static __device__ __forceinline__ RelionSymmetryComplex<T>
+relion_symmetry_read_data_layout(
+    const T* __restrict__ data,
+    const T* __restrict__ data_imag,
+    int z_index,
+    int y_index,
+    int x_index,
+    int full_z,
+    int full_y,
+    int x_half)
+{
+    if constexpr (SPLIT_INPUT)
+        return relion_symmetry_read_data_split(
+            data, data_imag, z_index, y_index, x_index, full_z, full_y, x_half);
+    return relion_symmetry_read_data(
+        data, z_index, y_index, x_index, full_z, full_y, x_half);
+}
+
+template <typename T>
+static __device__ __forceinline__ T relion_symmetry_read_weight(
+    const T* __restrict__ weight,
+    int z_index,
+    int y_index,
+    int x_index,
+    int full_z,
+    int full_y,
+    int x_half)
+{
+    const int64_t index =
+        (static_cast<int64_t>(z_index) * full_y + y_index) * x_half + x_index;
+    T value = weight[index];
+    if (x_index != 0)
+        return value;
+    const int partner_z = full_z - 1 - z_index;
+    const int partner_y = full_y - 1 - y_index;
+    if (partner_z == z_index && partner_y == y_index)
+        return value;
+    const int64_t partner_index =
+        (static_cast<int64_t>(partner_z) * full_y + partner_y) * x_half;
+    return value + weight[partner_index];
+}
+
+template <typename T, bool SPLIT_INPUT, bool RANGED_OUTPUT>
+__global__ void __launch_bounds__(BLOCK_SIZE)
+relion_point_group_symmetrise_bpref_kernel(
+    const T* __restrict__ data,
+    const T* __restrict__ data_imag,
+    const T* __restrict__ weight,
+    const T* __restrict__ right_operators,
+    const int64_t* __restrict__ range_start,
+    T* __restrict__ data_out,
+    T* __restrict__ weight_out,
+    int full_z,
+    int full_y,
+    int full_x,
+    int support_radius,
+    int operator_count,
+    int64_t output_count,
+    int64_t voxel_count)
+{
+    const int64_t output_index =
+        static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    if (output_index >= output_count)
+        return;
+    int64_t direct_index = output_index;
+    if constexpr (RANGED_OUTPUT)
+        direct_index = range_start[0] + output_index;
+    if (direct_index < 0 || direct_index >= voxel_count) {
+        data_out[2 * output_index] = static_cast<T>(0);
+        data_out[2 * output_index + 1] = static_cast<T>(0);
+        weight_out[output_index] = static_cast<T>(0);
+        return;
+    }
+
+    const int x_half = full_x / 2 + 1;
+    const int x_index = static_cast<int>(direct_index % x_half);
+    const int64_t yz_index = direct_index / x_half;
+    const int y_index = static_cast<int>(yz_index % full_y);
+    const int z_index = static_cast<int>(yz_index / full_y);
+
+    const int x_logical = x_index;
+    const int y_logical = y_index - full_y / 2;
+    const int z_logical = z_index - full_z / 2;
+
+    /* RELION initialises sum_data/sum_weight by copying the x=0-enforced
+     * source.  Keep that identity contribution even outside rmax2. */
+    RelionSymmetryComplex<T> data_sum = relion_symmetry_read_data_layout<T, SPLIT_INPUT>(
+        data, data_imag, z_index, y_index, x_index, full_z, full_y, x_half);
+    T weight_sum = relion_symmetry_read_weight(
+        weight, z_index, y_index, x_index, full_z, full_y, x_half);
+
+    const int64_t radius_squared =
+        static_cast<int64_t>(x_logical) * x_logical +
+        static_cast<int64_t>(y_logical) * y_logical +
+        static_cast<int64_t>(z_logical) * z_logical;
+    const int64_t support_squared =
+        static_cast<int64_t>(support_radius) * support_radius;
+
+    if (radius_squared <= support_squared) {
+        const T x = static_cast<T>(x_logical);
+        const T y = static_cast<T>(y_logical);
+        const T z = static_cast<T>(z_logical);
+
+        /* Operator zero is identity and was copied above.  Stream through
+         * RELION's remaining SymList order without rotated-volume copies. */
+        for (int operator_index = 1; operator_index < operator_count; ++operator_index) {
+            const T* R = right_operators + static_cast<int64_t>(operator_index) * 9;
+            T xp = x * R[0] + y * R[1] + z * R[2];
+            T yp = x * R[3] + y * R[4] + z * R[5];
+            T zp = x * R[6] + y * R[7] + z * R[8];
+
+            bool conjugate_sample = false;
+            if (xp < static_cast<T>(0)) {
+                xp = -xp;
+                yp = -yp;
+                zp = -zp;
+                conjugate_sample = true;
+            }
+
+            const int x0 = floor_int(xp);
+            const int y0 = floor_int(yp) + full_y / 2;
+            const int z0 = floor_int(zp) + full_z / 2;
+            const int x1 = x0 + 1;
+            const int y1 = y0 + 1;
+            const int z1 = z0 + 1;
+            const T fx = xp - static_cast<T>(x0);
+            const T fy = yp - static_cast<T>(y0 - full_y / 2);
+            const T fz = zp - static_cast<T>(z0 - full_z / 2);
+
+            const RelionSymmetryComplex<T> d000 = relion_symmetry_read_data_layout<T, SPLIT_INPUT>(
+                data, data_imag, z0, y0, x0, full_z, full_y, x_half);
+            const RelionSymmetryComplex<T> d001 = relion_symmetry_read_data_layout<T, SPLIT_INPUT>(
+                data, data_imag, z0, y0, x1, full_z, full_y, x_half);
+            const RelionSymmetryComplex<T> d010 = relion_symmetry_read_data_layout<T, SPLIT_INPUT>(
+                data, data_imag, z0, y1, x0, full_z, full_y, x_half);
+            const RelionSymmetryComplex<T> d011 = relion_symmetry_read_data_layout<T, SPLIT_INPUT>(
+                data, data_imag, z0, y1, x1, full_z, full_y, x_half);
+            const RelionSymmetryComplex<T> d100 = relion_symmetry_read_data_layout<T, SPLIT_INPUT>(
+                data, data_imag, z1, y0, x0, full_z, full_y, x_half);
+            const RelionSymmetryComplex<T> d101 = relion_symmetry_read_data_layout<T, SPLIT_INPUT>(
+                data, data_imag, z1, y0, x1, full_z, full_y, x_half);
+            const RelionSymmetryComplex<T> d110 = relion_symmetry_read_data_layout<T, SPLIT_INPUT>(
+                data, data_imag, z1, y1, x0, full_z, full_y, x_half);
+            const RelionSymmetryComplex<T> d111 = relion_symmetry_read_data_layout<T, SPLIT_INPUT>(
+                data, data_imag, z1, y1, x1, full_z, full_y, x_half);
+
+            const RelionSymmetryComplex<T> dx00 = relion_symmetry_lerp(fx, d000, d001);
+            const RelionSymmetryComplex<T> dx01 = relion_symmetry_lerp(fx, d100, d101);
+            const RelionSymmetryComplex<T> dx10 = relion_symmetry_lerp(fx, d010, d011);
+            const RelionSymmetryComplex<T> dx11 = relion_symmetry_lerp(fx, d110, d111);
+            const RelionSymmetryComplex<T> dxy0 = relion_symmetry_lerp(fy, dx00, dx10);
+            const RelionSymmetryComplex<T> dxy1 = relion_symmetry_lerp(fy, dx01, dx11);
+            RelionSymmetryComplex<T> sample = relion_symmetry_lerp(fz, dxy0, dxy1);
+            if (conjugate_sample)
+                sample.imag = -sample.imag;
+            data_sum.real += sample.real;
+            data_sum.imag += sample.imag;
+
+            const T w000 = relion_symmetry_read_weight(
+                weight, z0, y0, x0, full_z, full_y, x_half);
+            const T w001 = relion_symmetry_read_weight(
+                weight, z0, y0, x1, full_z, full_y, x_half);
+            const T w010 = relion_symmetry_read_weight(
+                weight, z0, y1, x0, full_z, full_y, x_half);
+            const T w011 = relion_symmetry_read_weight(
+                weight, z0, y1, x1, full_z, full_y, x_half);
+            const T w100 = relion_symmetry_read_weight(
+                weight, z1, y0, x0, full_z, full_y, x_half);
+            const T w101 = relion_symmetry_read_weight(
+                weight, z1, y0, x1, full_z, full_y, x_half);
+            const T w110 = relion_symmetry_read_weight(
+                weight, z1, y1, x0, full_z, full_y, x_half);
+            const T w111 = relion_symmetry_read_weight(
+                weight, z1, y1, x1, full_z, full_y, x_half);
+            const T wx00 = relion_symmetry_lerp(fx, w000, w001);
+            const T wx01 = relion_symmetry_lerp(fx, w100, w101);
+            const T wx10 = relion_symmetry_lerp(fx, w010, w011);
+            const T wx11 = relion_symmetry_lerp(fx, w110, w111);
+            const T wxy0 = relion_symmetry_lerp(fy, wx00, wx10);
+            const T wxy1 = relion_symmetry_lerp(fy, wx01, wx11);
+            weight_sum += relion_symmetry_lerp(fz, wxy0, wxy1);
+        }
+    }
+
+    data_out[2 * output_index] = data_sum.real;
+    data_out[2 * output_index + 1] = data_sum.imag;
+    weight_out[output_index] = weight_sum;
+}
+
+template <typename T>
+static cudaError_t launch_relion_point_group_symmetrise_bpref(
+    cudaStream_t stream,
+    const T* data,
+    const T* weight,
+    const T* right_operators,
+    T* data_out,
+    T* weight_out,
+    int full_z,
+    int full_y,
+    int full_x,
+    int support_radius,
+    int operator_count)
+{
+    const int64_t voxel_count =
+        static_cast<int64_t>(full_z) * full_y * (full_x / 2 + 1);
+    const int64_t block_count = (voxel_count + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    relion_point_group_symmetrise_bpref_kernel<T, false, false>
+        <<<static_cast<unsigned int>(block_count), BLOCK_SIZE, 0, stream>>>(
+            data,
+            nullptr,
+            weight,
+            right_operators,
+            nullptr,
+            data_out,
+            weight_out,
+            full_z,
+            full_y,
+            full_x,
+            support_radius,
+            operator_count,
+            voxel_count,
+            voxel_count);
+    return cudaGetLastError();
+}
+
+template <typename T, bool SPLIT_INPUT = true>
+static cudaError_t launch_relion_point_group_symmetrise_bpref_split_range(
+    cudaStream_t stream,
+    const T* data_real,
+    const T* data_imag,
+    const T* weight,
+    const T* right_operators,
+    const int64_t* range_start,
+    T* data_out,
+    T* weight_out,
+    int full_z,
+    int full_y,
+    int full_x,
+    int support_radius,
+    int operator_count,
+    int64_t output_count)
+{
+    const int64_t voxel_count =
+        static_cast<int64_t>(full_z) * full_y * (full_x / 2 + 1);
+    const int64_t block_count = (output_count + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    relion_point_group_symmetrise_bpref_kernel<T, SPLIT_INPUT, true>
+        <<<static_cast<unsigned int>(block_count), BLOCK_SIZE, 0, stream>>>(
+            data_real,
+            data_imag,
+            weight,
+            right_operators,
+            range_start,
+            data_out,
+            weight_out,
+            full_z,
+            full_y,
+            full_x,
+            support_radius,
+            operator_count,
+            output_count,
+            voxel_count);
+    return cudaGetLastError();
+}
+
+ffi::Error RelionPointGroupSymmetriseBprefImpl(
+    cudaStream_t stream,
+    int64_t full_z,
+    int64_t full_y,
+    int64_t full_x,
+    int64_t support_radius,
+    ffi::AnyBuffer data,
+    ffi::AnyBuffer weight,
+    ffi::AnyBuffer right_operators,
+    ffi::Result<ffi::AnyBuffer> data_out,
+    ffi::Result<ffi::AnyBuffer> weight_out)
+{
+    const auto data_dims = data.dimensions();
+    const auto weight_dims = weight.dimensions();
+    const auto operator_dims = right_operators.dimensions();
+    const auto data_out_dims = data_out->dimensions();
+    const auto weight_out_dims = weight_out->dimensions();
+    if (data_dims.size() != 1 || weight_dims.size() != 1 ||
+        data_out_dims.size() != 1 || weight_out_dims.size() != 1 ||
+        data_dims[0] != weight_dims[0] || data_dims[0] != data_out_dims[0] ||
+        data_dims[0] != weight_out_dims[0])
+        return ffi::Error::InvalidArgument(
+            "RelionPointGroupSymmetriseBpref: data and weight must be matching flat buffers");
+    if (operator_dims.size() != 3 || operator_dims[0] < 1 ||
+        operator_dims[1] != 3 || operator_dims[2] != 3)
+        return ffi::Error::InvalidArgument(
+            "RelionPointGroupSymmetriseBpref: operators must have shape (n,3,3)");
+    if (full_z <= 0 || full_y <= 0 || full_x <= 0 ||
+        full_z != full_y || full_z != full_x || (full_x % 2) == 0)
+        return ffi::Error::InvalidArgument(
+            "RelionPointGroupSymmetriseBpref: full BPref dimensions must be equal positive odd values");
+    if (full_z > std::numeric_limits<int>::max() ||
+        operator_dims[0] > std::numeric_limits<int>::max())
+        return ffi::Error::InvalidArgument(
+            "RelionPointGroupSymmetriseBpref: dimensions exceed CUDA integer bounds");
+    const int64_t expected_voxels = full_z * full_y * (full_x / 2 + 1);
+    if (data_dims[0] != expected_voxels)
+        return ffi::Error::InvalidArgument(
+            "RelionPointGroupSymmetriseBpref: flat accumulator size does not match full dimensions");
+    const int64_t maximum_supported_radius = full_x / 2 - 1;
+    if (support_radius < 0 || support_radius > maximum_supported_radius)
+        return ffi::Error::InvalidArgument(
+            "RelionPointGroupSymmetriseBpref: support radius must leave one interpolation voxel");
+
+    cudaError_t err;
+    if (data.element_type() == ffi::DataType::C64 &&
+        data_out->element_type() == ffi::DataType::C64 &&
+        weight.element_type() == ffi::DataType::F32 &&
+        weight_out->element_type() == ffi::DataType::F32 &&
+        right_operators.element_type() == ffi::DataType::F32) {
+        err = launch_relion_point_group_symmetrise_bpref<float>(
+            stream,
+            static_cast<const float*>(data.untyped_data()),
+            static_cast<const float*>(weight.untyped_data()),
+            static_cast<const float*>(right_operators.untyped_data()),
+            static_cast<float*>(data_out->untyped_data()),
+            static_cast<float*>(weight_out->untyped_data()),
+            static_cast<int>(full_z),
+            static_cast<int>(full_y),
+            static_cast<int>(full_x),
+            static_cast<int>(support_radius),
+            static_cast<int>(operator_dims[0]));
+    } else if (data.element_type() == ffi::DataType::C128 &&
+               data_out->element_type() == ffi::DataType::C128 &&
+               weight.element_type() == ffi::DataType::F64 &&
+               weight_out->element_type() == ffi::DataType::F64 &&
+               right_operators.element_type() == ffi::DataType::F64) {
+        err = launch_relion_point_group_symmetrise_bpref<double>(
+            stream,
+            static_cast<const double*>(data.untyped_data()),
+            static_cast<const double*>(weight.untyped_data()),
+            static_cast<const double*>(right_operators.untyped_data()),
+            static_cast<double*>(data_out->untyped_data()),
+            static_cast<double*>(weight_out->untyped_data()),
+            static_cast<int>(full_z),
+            static_cast<int>(full_y),
+            static_cast<int>(full_x),
+            static_cast<int>(support_radius),
+            static_cast<int>(operator_dims[0]));
+    } else {
+        return ffi::Error::InvalidArgument(
+            "RelionPointGroupSymmetriseBpref: expected C64/F32/F32 or C128/F64/F64 buffers");
+    }
+    if (err != cudaSuccess)
+        return ffi::Error::Internal(std::string("CUDA: ") + cudaGetErrorString(err));
+    return ffi::Error::Success();
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    RelionPointGroupSymmetriseBpref, RelionPointGroupSymmetriseBprefImpl,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Attr<int64_t>("full_z")
+        .Attr<int64_t>("full_y")
+        .Attr<int64_t>("full_x")
+        .Attr<int64_t>("support_radius")
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>());
+
+ffi::Error RelionPointGroupSymmetriseBprefSplitRangeImpl(
+    cudaStream_t stream,
+    int64_t full_z,
+    int64_t full_y,
+    int64_t full_x,
+    int64_t support_radius,
+    ffi::AnyBuffer data_real,
+    ffi::AnyBuffer data_imag,
+    ffi::AnyBuffer weight,
+    ffi::AnyBuffer right_operators,
+    ffi::AnyBuffer range_start,
+    ffi::Result<ffi::AnyBuffer> data_out,
+    ffi::Result<ffi::AnyBuffer> weight_out)
+{
+    const auto data_real_dims = data_real.dimensions();
+    const auto data_imag_dims = data_imag.dimensions();
+    const auto weight_dims = weight.dimensions();
+    const auto operator_dims = right_operators.dimensions();
+    const auto range_start_dims = range_start.dimensions();
+    const auto data_out_dims = data_out->dimensions();
+    const auto weight_out_dims = weight_out->dimensions();
+    if (data_real_dims.size() != 1 || data_imag_dims.size() != 1 ||
+        weight_dims.size() != 1 ||
+        data_real_dims[0] != data_imag_dims[0] ||
+        data_real_dims[0] != weight_dims[0])
+        return ffi::Error::InvalidArgument(
+            "RelionPointGroupSymmetriseBprefSplitRange: split inputs must be matching flat buffers");
+    if (data_out_dims.size() != 1 || weight_out_dims.size() != 1 ||
+        data_out_dims[0] <= 0 || data_out_dims[0] != weight_out_dims[0])
+        return ffi::Error::InvalidArgument(
+            "RelionPointGroupSymmetriseBprefSplitRange: outputs must be matching nonempty flat ranges");
+    if (range_start_dims.size() != 1 || range_start_dims[0] != 1 ||
+        range_start.element_type() != ffi::DataType::S64)
+        return ffi::Error::InvalidArgument(
+            "RelionPointGroupSymmetriseBprefSplitRange: range_start must be one int64 value");
+    if (operator_dims.size() != 3 || operator_dims[0] < 1 ||
+        operator_dims[1] != 3 || operator_dims[2] != 3)
+        return ffi::Error::InvalidArgument(
+            "RelionPointGroupSymmetriseBprefSplitRange: operators must have shape (n,3,3)");
+    if (full_z <= 0 || full_y <= 0 || full_x <= 0 ||
+        full_z != full_y || full_z != full_x || (full_x % 2) == 0)
+        return ffi::Error::InvalidArgument(
+            "RelionPointGroupSymmetriseBprefSplitRange: full BPref dimensions must be equal positive odd values");
+    if (full_z > std::numeric_limits<int>::max() ||
+        operator_dims[0] > std::numeric_limits<int>::max())
+        return ffi::Error::InvalidArgument(
+            "RelionPointGroupSymmetriseBprefSplitRange: dimensions exceed CUDA integer bounds");
+    const int64_t expected_voxels = full_z * full_y * (full_x / 2 + 1);
+    if (data_real_dims[0] != expected_voxels || data_out_dims[0] > expected_voxels)
+        return ffi::Error::InvalidArgument(
+            "RelionPointGroupSymmetriseBprefSplitRange: input or range size does not match full dimensions");
+    const int64_t maximum_supported_radius = full_x / 2 - 1;
+    if (support_radius < 0 || support_radius > maximum_supported_radius)
+        return ffi::Error::InvalidArgument(
+            "RelionPointGroupSymmetriseBprefSplitRange: support radius must leave one interpolation voxel");
+    if (data_real.element_type() != ffi::DataType::F32 ||
+        data_imag.element_type() != ffi::DataType::F32 ||
+        weight.element_type() != ffi::DataType::F32 ||
+        right_operators.element_type() != ffi::DataType::F32 ||
+        data_out->element_type() != ffi::DataType::C64 ||
+        weight_out->element_type() != ffi::DataType::F32)
+        return ffi::Error::InvalidArgument(
+            "RelionPointGroupSymmetriseBprefSplitRange: expected F32/F32/F32/F32/S64 inputs and C64/F32 outputs");
+
+    cudaError_t err = launch_relion_point_group_symmetrise_bpref_split_range<float>(
+        stream,
+        static_cast<const float*>(data_real.untyped_data()),
+        static_cast<const float*>(data_imag.untyped_data()),
+        static_cast<const float*>(weight.untyped_data()),
+        static_cast<const float*>(right_operators.untyped_data()),
+        static_cast<const int64_t*>(range_start.untyped_data()),
+        static_cast<float*>(data_out->untyped_data()),
+        static_cast<float*>(weight_out->untyped_data()),
+        static_cast<int>(full_z),
+        static_cast<int>(full_y),
+        static_cast<int>(full_x),
+        static_cast<int>(support_radius),
+        static_cast<int>(operator_dims[0]),
+        static_cast<int64_t>(data_out_dims[0]));
+    if (err != cudaSuccess)
+        return ffi::Error::Internal(std::string("CUDA: ") + cudaGetErrorString(err));
+    return ffi::Error::Success();
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    RelionPointGroupSymmetriseBprefSplitRange,
+    RelionPointGroupSymmetriseBprefSplitRangeImpl,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Attr<int64_t>("full_z")
+        .Attr<int64_t>("full_y")
+        .Attr<int64_t>("full_x")
+        .Attr<int64_t>("support_radius")
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>());
+
+ffi::Error RelionPointGroupSymmetriseBprefComplexRangeImpl(
+    cudaStream_t stream,
+    int64_t full_z,
+    int64_t full_y,
+    int64_t full_x,
+    int64_t support_radius,
+    ffi::AnyBuffer data_real,
+    ffi::AnyBuffer weight,
+    ffi::AnyBuffer right_operators,
+    ffi::AnyBuffer range_start,
+    ffi::Result<ffi::AnyBuffer> data_out,
+    ffi::Result<ffi::AnyBuffer> weight_out)
+{
+    const auto data_real_dims = data_real.dimensions();
+    const auto weight_dims = weight.dimensions();
+    const auto operator_dims = right_operators.dimensions();
+    const auto range_start_dims = range_start.dimensions();
+    const auto data_out_dims = data_out->dimensions();
+    const auto weight_out_dims = weight_out->dimensions();
+    if (data_real_dims.size() != 1 ||
+        weight_dims.size() != 1 ||
+        data_real_dims[0] != weight_dims[0])
+        return ffi::Error::InvalidArgument(
+            "RelionPointGroupSymmetriseBprefComplexRange: complex/weight inputs must be matching flat buffers");
+    if (data_out_dims.size() != 1 || weight_out_dims.size() != 1 ||
+        data_out_dims[0] <= 0 || data_out_dims[0] != weight_out_dims[0])
+        return ffi::Error::InvalidArgument(
+            "RelionPointGroupSymmetriseBprefComplexRange: outputs must be matching nonempty flat ranges");
+    if (range_start_dims.size() != 1 || range_start_dims[0] != 1 ||
+        range_start.element_type() != ffi::DataType::S64)
+        return ffi::Error::InvalidArgument(
+            "RelionPointGroupSymmetriseBprefComplexRange: range_start must be one int64 value");
+    if (operator_dims.size() != 3 || operator_dims[0] < 1 ||
+        operator_dims[1] != 3 || operator_dims[2] != 3)
+        return ffi::Error::InvalidArgument(
+            "RelionPointGroupSymmetriseBprefComplexRange: operators must have shape (n,3,3)");
+    if (full_z <= 0 || full_y <= 0 || full_x <= 0 ||
+        full_z != full_y || full_z != full_x || (full_x % 2) == 0)
+        return ffi::Error::InvalidArgument(
+            "RelionPointGroupSymmetriseBprefComplexRange: full BPref dimensions must be equal positive odd values");
+    if (full_z > std::numeric_limits<int>::max() ||
+        operator_dims[0] > std::numeric_limits<int>::max())
+        return ffi::Error::InvalidArgument(
+            "RelionPointGroupSymmetriseBprefComplexRange: dimensions exceed CUDA integer bounds");
+    const int64_t expected_voxels = full_z * full_y * (full_x / 2 + 1);
+    if (data_real_dims[0] != expected_voxels || data_out_dims[0] > expected_voxels)
+        return ffi::Error::InvalidArgument(
+            "RelionPointGroupSymmetriseBprefComplexRange: input or range size does not match full dimensions");
+    const int64_t maximum_supported_radius = full_x / 2 - 1;
+    if (support_radius < 0 || support_radius > maximum_supported_radius)
+        return ffi::Error::InvalidArgument(
+            "RelionPointGroupSymmetriseBprefComplexRange: support radius must leave one interpolation voxel");
+    if (data_real.element_type() != ffi::DataType::C64 ||
+        weight.element_type() != ffi::DataType::F32 ||
+        right_operators.element_type() != ffi::DataType::F32 ||
+        data_out->element_type() != ffi::DataType::C64 ||
+        weight_out->element_type() != ffi::DataType::F32)
+        return ffi::Error::InvalidArgument(
+            "RelionPointGroupSymmetriseBprefComplexRange: expected C64/F32/F32/S64 inputs and C64/F32 outputs");
+
+    cudaError_t err = launch_relion_point_group_symmetrise_bpref_split_range<float, false>(
+        stream,
+        static_cast<const float*>(data_real.untyped_data()),
+        nullptr,
+        static_cast<const float*>(weight.untyped_data()),
+        static_cast<const float*>(right_operators.untyped_data()),
+        static_cast<const int64_t*>(range_start.untyped_data()),
+        static_cast<float*>(data_out->untyped_data()),
+        static_cast<float*>(weight_out->untyped_data()),
+        static_cast<int>(full_z),
+        static_cast<int>(full_y),
+        static_cast<int>(full_x),
+        static_cast<int>(support_radius),
+        static_cast<int>(operator_dims[0]),
+        static_cast<int64_t>(data_out_dims[0]));
+    if (err != cudaSuccess)
+        return ffi::Error::Internal(std::string("CUDA: ") + cudaGetErrorString(err));
+    return ffi::Error::Success();
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    RelionPointGroupSymmetriseBprefComplexRange,
+    RelionPointGroupSymmetriseBprefComplexRangeImpl,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Attr<int64_t>("full_z")
+        .Attr<int64_t>("full_y")
+        .Attr<int64_t>("full_x")
+        .Attr<int64_t>("support_radius")
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>());
 
 ffi::Error RelionWavgRotationAtomicTripletAddF32Impl(
     cudaStream_t stream,
@@ -10754,6 +12598,209 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Arg<ffi::AnyBuffer>()
         .Ret<ffi::AnyBuffer>()
         .Ret<ffi::AnyBuffer>());
+
+// Flat real-row form of the pair-sparse dual weighted sums: one output row per
+// listed (batch, rotation) pair instead of the padded [B, R, N] layout. At
+// 100k/256 K=4 about 71 % of the padded rows are padding (mean local rotation
+// count 559 in buckets of up to a few thousand rows), and the padded kernel spent
+// most of its threads and all of its output bandwidth on them. Each listed row
+// accumulates its pairs in the same order with the same fma as the padded
+// kernel, so out[f] is bit-identical to the padded output at (row_batch[f],
+// row_rotation[f]).
+template <typename T>
+__global__ void dual_weighted_sums_pairs_rows_f32_kernel(
+    const float* pair_probabilities,
+    const int32_t* pair_translations,
+    const int32_t* row_offsets,
+    const int32_t* row_batch,
+    const int32_t* row_rotation,
+    const vec2_t<T>* values,
+    vec2_t<T>* output,
+    int64_t batch_size,
+    int64_t rotation_count,
+    int64_t translation_count,
+    int64_t pair_count,
+    int64_t pixel_count,
+    int64_t row_count,
+    int64_t pixel_blocks)
+{
+    const int64_t flat_row = static_cast<int64_t>(blockIdx.x) / pixel_blocks;
+    const int64_t pixel =
+        (static_cast<int64_t>(blockIdx.x) % pixel_blocks) * blockDim.x + threadIdx.x;
+    if (flat_row >= row_count || pixel >= pixel_count) return;
+    const int64_t batch = row_batch[flat_row];
+    const int64_t rotation = row_rotation[flat_row];
+    T sum_real = static_cast<T>(0);
+    T sum_imag = static_cast<T>(0);
+    if (batch >= 0 && batch < batch_size && rotation >= 0 && rotation < rotation_count) {
+        const int64_t offset_base = batch * (rotation_count + 1) + rotation;
+        int64_t start = row_offsets[offset_base];
+        int64_t end = row_offsets[offset_base + 1];
+        if (start < 0) start = 0;
+        if (end > pair_count) end = pair_count;
+        const int64_t pair_base = batch * pair_count;
+        const int64_t value_base = batch * translation_count * pixel_count + pixel;
+        for (int64_t pair = start; pair < end; ++pair) {
+            const float weight = pair_probabilities[pair_base + pair];
+            if (weight == 0.0f) continue;
+            const int64_t translation = pair_translations[pair_base + pair];
+            if (translation < 0 || translation >= translation_count) continue;
+            const vec2_t<T> value = values[value_base + translation * pixel_count];
+            sum_real = dual_weighted_fma(weight, value.x, sum_real);
+            sum_imag = dual_weighted_fma(weight, value.y, sum_imag);
+        }
+    }
+    output[flat_row * pixel_count + pixel] = make_v2(sum_real, sum_imag);
+}
+
+template <typename T>
+cudaError_t launch_dual_weighted_sums_pairs_rows_f32(
+    cudaStream_t stream,
+    const float* pair_probabilities,
+    const int32_t* pair_translations,
+    const int32_t* row_offsets,
+    const int32_t* row_batch,
+    const int32_t* row_rotation,
+    const vec2_t<T>* first_values,
+    const vec2_t<T>* second_values,
+    vec2_t<T>* first_output,
+    vec2_t<T>* second_output,
+    int64_t batch_size,
+    int64_t rotation_count,
+    int64_t translation_count,
+    int64_t pair_count,
+    int64_t row_count,
+    int64_t first_pixel_count,
+    int64_t second_pixel_count)
+{
+    constexpr int threads = 256;
+    if (row_count <= 0) return cudaSuccess;
+    const int64_t first_pixel_blocks = (first_pixel_count + threads - 1) / threads;
+    const int64_t second_pixel_blocks = (second_pixel_count + threads - 1) / threads;
+    const int64_t first_blocks = row_count * first_pixel_blocks;
+    const int64_t second_blocks = row_count * second_pixel_blocks;
+    if (first_blocks > static_cast<int64_t>(std::numeric_limits<int>::max()) ||
+        second_blocks > static_cast<int64_t>(std::numeric_limits<int>::max()))
+        return cudaErrorInvalidConfiguration;
+    dual_weighted_sums_pairs_rows_f32_kernel<T><<<static_cast<int>(first_blocks), threads, 0, stream>>>(
+        pair_probabilities, pair_translations, row_offsets, row_batch, row_rotation,
+        first_values, first_output, batch_size, rotation_count, translation_count,
+        pair_count, first_pixel_count, row_count, first_pixel_blocks);
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess) return err;
+    dual_weighted_sums_pairs_rows_f32_kernel<T><<<static_cast<int>(second_blocks), threads, 0, stream>>>(
+        pair_probabilities, pair_translations, row_offsets, row_batch, row_rotation,
+        second_values, second_output, batch_size, rotation_count, translation_count,
+        pair_count, second_pixel_count, row_count, second_pixel_blocks);
+    return cudaGetLastError();
+}
+
+ffi::Error DualWeightedSumsPairsRowsF32Impl(
+    cudaStream_t stream,
+    ffi::AnyBuffer pair_probabilities,
+    ffi::AnyBuffer pair_translations,
+    ffi::AnyBuffer row_offsets,
+    ffi::AnyBuffer row_batch,
+    ffi::AnyBuffer row_rotation,
+    ffi::AnyBuffer first_values,
+    ffi::AnyBuffer second_values,
+    ffi::Result<ffi::AnyBuffer> first_output,
+    ffi::Result<ffi::AnyBuffer> second_output)
+{
+    const auto value_type = first_values.element_type();
+    if (pair_probabilities.element_type() != ffi::DataType::F32 ||
+        pair_translations.element_type() != ffi::DataType::S32 ||
+        row_offsets.element_type() != ffi::DataType::S32 ||
+        row_batch.element_type() != ffi::DataType::S32 ||
+        row_rotation.element_type() != ffi::DataType::S32 ||
+        (value_type != ffi::DataType::C64 && value_type != ffi::DataType::C128) ||
+        second_values.element_type() != value_type ||
+        first_output->element_type() != value_type ||
+        second_output->element_type() != value_type)
+        return ffi::Error::InvalidArgument(
+            "DualWeightedSumsPairsRowsF32: expected F32 pair probabilities, S32 pair "
+            "translations, row offsets and row lists, and matching C64/C128 values/outputs");
+    const auto probability_dims = pair_probabilities.dimensions();
+    const auto translation_dims = pair_translations.dimensions();
+    const auto offset_dims = row_offsets.dimensions();
+    const auto row_batch_dims = row_batch.dimensions();
+    const auto row_rotation_dims = row_rotation.dimensions();
+    const auto first_dims = first_values.dimensions();
+    const auto second_dims = second_values.dimensions();
+    const auto first_output_dims = first_output->dimensions();
+    const auto second_output_dims = second_output->dimensions();
+    if (probability_dims.size() != 2 || translation_dims.size() != 2 ||
+        offset_dims.size() != 2 || row_batch_dims.size() != 1 || row_rotation_dims.size() != 1 ||
+        first_dims.size() != 3 || second_dims.size() != 3 ||
+        first_output_dims.size() != 2 || second_output_dims.size() != 2 ||
+        probability_dims[0] <= 0 || probability_dims[1] <= 0 ||
+        translation_dims[0] != probability_dims[0] ||
+        translation_dims[1] != probability_dims[1] ||
+        offset_dims[0] != probability_dims[0] || offset_dims[1] < 2 ||
+        row_rotation_dims[0] != row_batch_dims[0] ||
+        first_dims[0] != probability_dims[0] || second_dims[0] != probability_dims[0] ||
+        first_dims[1] != second_dims[1] || first_dims[1] <= 0 ||
+        first_dims[2] <= 0 || second_dims[2] <= 0 ||
+        first_output_dims[0] != row_batch_dims[0] ||
+        first_output_dims[1] != first_dims[2] ||
+        second_output_dims[0] != row_batch_dims[0] ||
+        second_output_dims[1] != second_dims[2])
+        return ffi::Error::InvalidArgument(
+            "DualWeightedSumsPairsRowsF32: inconsistent [B,P], [B,R+1], [F], [B,T,N] and [F,N] shapes");
+    const int64_t batch_size = probability_dims[0];
+    const int64_t pair_count = probability_dims[1];
+    const int64_t rotation_count = offset_dims[1] - 1;
+    const int64_t translation_count = first_dims[1];
+    const int64_t row_count = row_batch_dims[0];
+    cudaError_t err;
+    if (value_type == ffi::DataType::C64) {
+        err = launch_dual_weighted_sums_pairs_rows_f32<float>(
+            stream,
+            static_cast<const float*>(pair_probabilities.untyped_data()),
+            static_cast<const int32_t*>(pair_translations.untyped_data()),
+            static_cast<const int32_t*>(row_offsets.untyped_data()),
+            static_cast<const int32_t*>(row_batch.untyped_data()),
+            static_cast<const int32_t*>(row_rotation.untyped_data()),
+            reinterpret_cast<const float2*>(first_values.untyped_data()),
+            reinterpret_cast<const float2*>(second_values.untyped_data()),
+            reinterpret_cast<float2*>(first_output->untyped_data()),
+            reinterpret_cast<float2*>(second_output->untyped_data()),
+            batch_size, rotation_count, translation_count, pair_count, row_count,
+            first_dims[2], second_dims[2]);
+    } else {
+        err = launch_dual_weighted_sums_pairs_rows_f32<double>(
+            stream,
+            static_cast<const float*>(pair_probabilities.untyped_data()),
+            static_cast<const int32_t*>(pair_translations.untyped_data()),
+            static_cast<const int32_t*>(row_offsets.untyped_data()),
+            static_cast<const int32_t*>(row_batch.untyped_data()),
+            static_cast<const int32_t*>(row_rotation.untyped_data()),
+            reinterpret_cast<const double2*>(first_values.untyped_data()),
+            reinterpret_cast<const double2*>(second_values.untyped_data()),
+            reinterpret_cast<double2*>(first_output->untyped_data()),
+            reinterpret_cast<double2*>(second_output->untyped_data()),
+            batch_size, rotation_count, translation_count, pair_count, row_count,
+            first_dims[2], second_dims[2]);
+    }
+    if (err != cudaSuccess)
+        return ffi::Error::Internal(std::string("CUDA: ") + cudaGetErrorString(err));
+    return ffi::Error::Success();
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    DualWeightedSumsPairsRowsF32, DualWeightedSumsPairsRowsF32Impl,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>());
+
 
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
     ProjectIndexed, ProjectIndexedImpl,

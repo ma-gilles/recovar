@@ -135,3 +135,28 @@ def test_gpu_invalid_image_radius_is_nan(radius):
         image_r_max=jnp.int32(radius),
     )
     assert np.isnan(np.asarray(result)).all()
+
+
+def test_canonical_default_can_be_explicitly_overridden(monkeypatch):
+    monkeypatch.delenv("RECOVAR_K1_COARSE_ROTATED_RADIUS", raising=False)
+    assert significance._coarse_rotated_radius_enabled(default=True)
+    monkeypatch.setenv("RECOVAR_K1_COARSE_ROTATED_RADIUS", "0")
+    assert not significance._coarse_rotated_radius_enabled(default=True)
+
+
+@pytest.mark.parametrize("active_size", [None, 26])
+def test_default_texture_passes_active_image_radius_to_kernel(monkeypatch, active_size):
+    calls = []
+
+    def projected(half, rotations, radius, **kwargs):
+        calls.append(int(kwargs["image_r_max"]))
+        return jnp.ones((1, 32 * 17), dtype=jnp.complex64)
+
+    monkeypatch.setattr(cb, "project_relion_half_capacity", projected)
+    result = projection._project_relion_projector_texture(
+        jnp.ones((33, 33, 17), dtype=jnp.complex64),
+        jnp.asarray(_ROTATION), (32, 32), r_max=15,
+        projector_output_size=32, current_image_mask_size=active_size,
+    )
+    assert calls == [16 if active_size is None else 13]
+    np.testing.assert_array_equal(np.asarray(result), np.ones((1, 32 * 17), np.complex64))

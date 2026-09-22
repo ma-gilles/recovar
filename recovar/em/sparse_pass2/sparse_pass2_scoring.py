@@ -18,6 +18,7 @@ import numpy as np
 from recovar.em.helpers.deterministic_reduce import deterministic_reductions_enabled
 from recovar.em.helpers.env_flags import parse_env_flag
 from recovar.em.helpers.half_spectrum import bin_shell_values_jax
+from recovar.em.sparse_pass2.sparse_pass2_posterior import _logsumexp_pass2_pairs_score_only
 
 _RELION_FINE_DIFF2_FUSED_FFI_ENV = "RECOVAR_RELION_FINE_DIFF2_FUSED_FFI"
 
@@ -811,9 +812,15 @@ def _relion_powerclass_highres_xi2_half_to_norm_units(highres_xi2_half, image_sh
     image_height = int(image_shape[0])
     image_width = int(image_shape[1])
     highres = jnp.asarray(highres_xi2_half)
+    return _powerclass_norm_units_jit(highres, float((image_height * image_width) ** 2))
+
+
+@partial(jax.jit, static_argnums=(1,))
+def _powerclass_norm_units_jit(highres, pixel_count_sq: float):
+    """Convert norm units in one program, preserving the rounding barrier."""
     highres = highres * jnp.asarray(2.0, dtype=highres.dtype)
     highres = jax.lax.optimization_barrier(highres)
-    return highres * jnp.asarray((image_height * image_width) ** 2, dtype=highres.dtype)
+    return highres * jnp.asarray(pixel_count_sq, dtype=highres.dtype)
 
 
 @partial(jax.jit, static_argnames=("image_shape", "current_size"))
@@ -1490,6 +1497,7 @@ def _score_pass2_pairs_relion_gpu_diff2_raw_fused_translate(
     highres_xi2_half=None,  # (B,) float32 powerClass tail already divided by two
     *,
     current_size,
+    logical_current_size=None,
 ):
     """Return positive float32 RELION costs for compact pairs without gathers.
 
@@ -1502,6 +1510,9 @@ def _score_pass2_pairs_relion_gpu_diff2_raw_fused_translate(
     (``candidate_mask & isfinite``). Valid pairs are bit-identical to the gathered CUDA pairs kernel;
     the JAX emulation may differ by a few float32 ULP. Jitted so the index glue and the weight product compile
     once per bucket shape instead of one eager program each.
+
+    With logical_current_size, current_size is the physical capacity and the
+    runtime kernel reads only the exact logical prefix of the packed operands.
     """
     from recovar import cuda_backproject
 
@@ -1523,6 +1534,18 @@ def _score_pass2_pairs_relion_gpu_diff2_raw_fused_translate(
         if highres_xi2_half is None
         else jnp.asarray(highres_xi2_half, dtype=jnp.float32)
     )
+    if logical_current_size is not None:
+        return cuda_backproject.relion_fine_diff2_fused_translate_runtime_pairs_f32(
+            proj_half.reshape(batch * n_rows, n_pixels),
+            jnp.asarray(unshifted_corrected, dtype=jnp.complex64),
+            jnp.asarray(translation_angles, dtype=jnp.float32),
+            weights,
+            safe_rotation_row,
+            safe_translation_idx,
+            jnp.asarray(relion_full_to_compact, dtype=jnp.int32),
+            jnp.asarray(logical_current_size, dtype=jnp.int32),
+            initial_diff2,
+        )
     return cuda_backproject.relion_fine_diff2_fused_translate_pairs_f32(
         proj_half.reshape(batch * n_rows, n_pixels),
         jnp.asarray(unshifted_corrected, dtype=jnp.complex64),
@@ -1660,3 +1683,73 @@ def _score_pass2_pairs_normalized_cc(
     scores = (-0.5 * cross) / denom
     scores = jnp.where(pair_mask, scores, -jnp.inf)
     return jnp.where(jnp.isfinite(scores), scores, -jnp.inf)
+
+
+@partial(jax.jit, static_argnames=("current_size", "logical_current_size", "score_real_dtype"))
+def _fused_chunk_scores_and_log_z(
+    unshifted_corrected,
+    corr_img_score,
+    half_weights,
+    translation_angles,
+    relion_full_to_compact,
+    highres_xi2_half,
+    proj_half_by_class,
+    local_rotation_row_by_class,
+    translation_idx_by_class,
+    pair_mask_by_class,
+    rotation_log_prior_by_class,
+    translation_log_prior_by_class,
+    *,
+    current_size,
+    logical_current_size,
+    score_real_dtype,
+):
+    """Score K classes of one compact-pair chunk in one program (see ``fused_chunk_enabled``).
+
+    Returns ``(scores_by_class, class_log_z_by_class, global_min_diff2)`` exactly
+    as the chunk loop forms them: raw fused-translate diff2 per class, the finite
+    common minimum over classes, RELION's XFLOAT diff2-to-score conversion against
+    that minimum, and the per-class log normalizer over valid pairs.
+    """
+
+    raw_by_class = [
+        _score_pass2_pairs_relion_gpu_diff2_raw_fused_translate(
+            unshifted_corrected,
+            corr_img_score,
+            proj_half,
+            half_weights,
+            translation_angles,
+            local_rotation_row,
+            translation_idx,
+            pair_mask,
+            relion_full_to_compact,
+            highres_xi2_half,
+            current_size=current_size,
+            logical_current_size=logical_current_size,
+        )
+        for proj_half, local_rotation_row, translation_idx, pair_mask in zip(
+            proj_half_by_class, local_rotation_row_by_class, translation_idx_by_class, pair_mask_by_class, strict=True
+        )
+    ]
+    partition_minima = tuple(
+        _relion_cuda_fine_partition_diff2_min_or_inf(raw, mask)
+        for raw, mask in zip(raw_by_class, pair_mask_by_class, strict=True)
+    )
+    global_min_diff2 = _relion_cuda_fine_finite_common_min(partition_minima)
+    scores_by_class = [
+        _relion_cuda_fine_diff2_to_scores(
+            jnp.asarray(raw, dtype=score_real_dtype),
+            rotation_log_prior,
+            translation_log_prior,
+            pair_mask,
+            min_diff2=global_min_diff2,
+        )
+        for raw, rotation_log_prior, translation_log_prior, pair_mask in zip(
+            raw_by_class, rotation_log_prior_by_class, translation_log_prior_by_class, pair_mask_by_class, strict=True
+        )
+    ]
+    class_log_z_by_class = [
+        _logsumexp_pass2_pairs_score_only(score, pair_mask)
+        for score, pair_mask in zip(scores_by_class, pair_mask_by_class, strict=True)
+    ]
+    return scores_by_class, class_log_z_by_class, global_min_diff2

@@ -110,6 +110,22 @@ angular_step = 360 / (6 * 2**order) degrees
 `get_relion_rotation_grid` constructs the grid from the RELION binding.
 RECOVAR's grid indexing is psi-slow and direction-fast. Preserve index order
 when comparing hard assignments; equal sets of rotations are insufficient.
+K1/K4 coarse significance forwards the explicit projection precision option
+before uploading the supplied projector slab. Production selects complex64;
+double scoring or projection diagnostics retain complex128. The original host
+setup array is preserved. Direct significance callers that omit the projection
+option retain their legacy input precision. A float32 score array alone does
+not establish float32 projection arithmetic.
+
+Numbered replay retains the source sampling order of a learned direction prior
+in [`apply_iter_replay_overrides`](../../recovar/em/diagnostics/relion_replay.py).
+When that order differs from the scoring grid,
+[`relion_direction_log_priors_for_half`](../../recovar/em/helpers/orientation_priors.py)
+uses a uniform prior, matching RELION's `updateAngularSampling` reset. Remapping
+the old distribution and labeling it with the new order would incorrectly
+preserve learned directional preferences after a grid change. The file and
+explicit-override routes share this rule for K1 and K4.
+
 The source Euler and matrix precision can also matter at score ties.
 
 For oversampling level `s`, `get_oversampled_rotation_grid_from_samples`
@@ -179,6 +195,17 @@ Hermitian full-image inner-product weights are separate conventions. Gaussian
 RELION scoring masks redundant centered `kx=0` rows; normalized-CC callers can
 retain them. Changing these weights is a numerical change, not a missing
 optimization to enable during cleanup.
+
+For bounded normalized-CC rescoring, the stored projector radius and the
+current image radius are distinct. The native rescorer in
+[`relion_scoring.cuh`](../../recovar/cuda/relion_scoring.cuh),
+`launch_relion_coarse_normalized_cc_native_texture_pairs_f32`, preserves the
+model-sized texture but limits rotated frequency support to
+`min(projector_max_r, current_size // 2)`. This follows RELION 5.0.1's
+`AccProjectorKernel::makeKernel`; using the model radius alone admits extra
+frequencies when first-iteration scoring uses a smaller window. The exact
+pixel-count regression is
+[`test_native_cc_rescore_limits_support_to_current_image`](../../tests/unit/test_normalized_cc_replay.py).
 
 ## 4. Dense, adaptive and local execution
 
@@ -272,6 +299,19 @@ shape: padding and current-size backprojector grids change their dimensions.
 [`mean_helpers.py`](../../recovar/em/refinement/mean_helpers.py) owns
 `compute_unregularized_halfmaps_and_align_signs` and
 `_reconstruct_and_postprocess_means`.
+For K-class refinement, regularized and diagnostic unregularized maps retain
+the sign determined by the image/CTF convention. They are not negated to match
+the previous reference: a weak class can have unreliable overlap. Both half
+slots share the reconstructed class stack. K1 retains its existing sign
+continuity check.
+The EM reconstruction wrapper explicitly selects FFT computation precision from
+its numerator accumulator: complex64 for the float32 path, complex128 for a
+double diagnostic. `post_process_from_filter_v2` accepts `fft_compute_dtype`
+at both transform boundaries; deliberate higher-precision Wiener denominator
+and gridding calculations retain their existing arithmetic. The shared helper's
+unspecified option preserves legacy behavior for non-EM callers. Returned dtype
+alone is not evidence of transform precision; regression checks inspect both
+FFT operations as well as analytic DC normalization in full and packed layouts.
 [`noise_updates.py`](../../recovar/em/refinement/noise_updates.py) owns
 `update_posterior_noise_variance`, `update_c1_sigma_offset_from_posterior`
 and the half-set noise helpers.
@@ -355,3 +395,16 @@ alongside final-map, accuracy, wall-time and memory comparisons.
 Hierarchical candidate propagation and multiple local-search centers remain
 future engine design questions. They would change search support, state and
 memory requirements and need their own scientific validation after this cleanup.
+
+## BPref translation arithmetic
+
+The float32 BPref translation computes the imaginary component as
+`fma(sine, real, round(cosine * imag))`, matching captured RELION output bits.
+[`relion_translate_bpref_f32_kernel`](../../recovar/cuda/cuda_backproject.cu)
+and the fused [`translate_rotate_bpref_f32`](../../recovar/cuda/relion_translate_sum.cuh)
+use that same explicit operand order; weighted CTF multiplication follows the
+complex rotation. The positive-Nyquist coordinate mapping is unchanged.
+[`test_relion_translate_bpref_f32_matches_native_captured_bits`](../../tests/unit/test_cuda_relion_translation.py)
+is the independent captured-bit guard; the fused translation-sum tests compare
+against the standalone primitive. These checks do not establish full trajectory
+or performance equivalence.

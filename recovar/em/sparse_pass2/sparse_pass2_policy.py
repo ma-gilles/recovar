@@ -737,3 +737,99 @@ def _resolve_bpref_execution_modes(
             production_firstiter_xhalf_topology or (diagnostic_per_particle and not shadow_only)
         ),
     }
+
+
+_SPARSE_KCLASS_GROUP_STATIC_ACTIVE_ROWS_ENV = "RECOVAR_SPARSE_KCLASS_GROUP_STATIC_ACTIVE_ROWS"
+
+
+def group_static_active_rows_enabled() -> bool:
+    """Pad every chunk's active-row selection to its group's maximum.
+
+    The active-row helpers (`_select_active_flat_rows_jit`, `_select_active_flat_values_jit`)
+    and the adjoint they feed compile once per distinct row count. That count is
+    the sum of the chunk's per-image rotation rows, padded to
+    ``RECOVAR_SPARSE_KCLASS_ACTIVE_ROW_PAD_MULTIPLE``, so it differs between chunks
+    of the same group: 190 distinct selection shapes against 24 groups in one
+    100k/256 K=4 iteration, 760 of its 2384 compile events (compile inventory, job
+    13927046), about 32 s of the 127 s an iteration spends compiling (sampled
+    job 13923173). The per-image row counts are host metadata known before the
+    loop, so the padded count of every chunk can be computed at planning time and
+    each chunk padded to the maximum of its group (same execution width, same
+    per-class bucket sizes, same quantized image capacity). Padded slots repeat
+    the first index under a zero mask exactly as the multiple padding does, so
+    every accumulator is unchanged; the cost is the extra masked rows through the
+    gather and the adjoint, which the planner logs as a fraction of the real rows.
+    """
+
+    return parse_env_flag(_SPARSE_KCLASS_GROUP_STATIC_ACTIVE_ROWS_ENV, default=False)
+
+
+_SPARSE_KCLASS_STABLE_WINDOWS_ENV = "RECOVAR_SPARSE_KCLASS_STABLE_WINDOWS"
+
+
+def stable_windows_enabled() -> bool:
+    """Run the compact pass-2 engine inside stable physical Fourier-window classes.
+
+    Every per-chunk program of this engine is shaped by the pixel count of the
+    current Fourier window, and RELION's ``current_size`` changes every
+    iteration, so nothing compiled in one iteration is reused in the next:
+    1000-1850 programs per iteration at 100k/256 K=4 (compile inventory, job
+    13927046), about a third of the late-iteration loop (sampled job 13923173).
+    The K=1 local engine solved this with
+    ``fourier_window.make_stable_fourier_window_shape_plan``: the exact logical
+    window is the prefix of a physical capacity rounded to a quantum-8 ladder,
+    runtime-bound CUDA kernels stop at the logical count, and JAX reductions see
+    zero weight and the shell sentinel on the tail. This flag applies the same
+    plan here: scores come from the runtime pair kernel and are bit-identical;
+    the noise, scale and norm terms and the adjoint see the tail as inert.
+    Requires the fused-translate Gaussian scorer; other score modes keep the
+    logical window. Default off.
+    """
+
+    return parse_env_flag(_SPARSE_KCLASS_STABLE_WINDOWS_ENV, default=False)
+
+
+_SPARSE_KCLASS_FUSED_CHUNK_ENV = "RECOVAR_SPARSE_KCLASS_FUSED_CHUNK"
+
+
+def fused_chunk_enabled() -> bool:
+    """Run the per-chunk score stage of the compact engine as one compiled program.
+
+    The chunk loop dispatches about forty programs per chunk shape, and every
+    chunk shape of an iteration is new (compile inventory, job 13927046; stable
+    windows, job 13952468), so compile and dispatch cost scale with the program
+    count. Step 1 of the fused chunk program: per-class fused-translate raw
+    diff2, the joint minimum over classes, the score conversion and the per-class
+    log normalizers run inside one ``jax.jit`` per chunk shape instead of about
+    ten, and the raw diff2 tensors stay on the device (K x images x pairs float32,
+    a few MB at production sizes) instead of being staged through the host between
+    the class loop and the joint minimum. Same kernels in the same order, so the
+    scores are bit-identical to the loop. Applies to compact-pair chunks scored
+    by the exact RELION Gaussian with the fused-translate kernel and no pass-2
+    dumps or compact-pair checks; other chunks keep the loop. Default off.
+    """
+
+    return parse_env_flag(_SPARSE_KCLASS_FUSED_CHUNK_ENV, default=False)
+
+
+def vectorized_stats_replay_enabled() -> bool:
+    """Opt in to donor source-order vectorized host statistics updates."""
+    return parse_env_flag("RECOVAR_SPARSE_KCLASS_VECTORIZED_STATS_REPLAY", default=False)
+
+
+def deferred_host_statistics_mode():
+    """Select immediate, bounded deferred or diagnostic shadow replay.
+
+    The current engine defaults to bounded deferral; retain that default.
+    """
+    name = "RECOVAR_SPARSE_KCLASS_DEFERRED_HOST_STATS"
+    mode = os.environ.get(name, "1").strip().lower()
+    if mode not in {"0", "1", "check"}:
+        raise ValueError(f"{name} must be 0, 1 or check")
+    return mode
+
+
+def sparse_kclass_pipeline_depth():
+    """Number of deferred buckets between dependency waits; zero disables waits."""
+    depth = parse_env_nonnegative_int("RECOVAR_SPARSE_KCLASS_PIPELINE_DEPTH")
+    return 4 if depth is None else int(depth)

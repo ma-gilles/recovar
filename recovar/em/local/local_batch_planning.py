@@ -15,12 +15,15 @@ import subprocess
 import jax
 import numpy as np
 
+from recovar.em.helpers.env_flags import parse_env_nonnegative_int
 from recovar.em.helpers.deterministic_reduce import deterministic_reductions_enabled
 from recovar.em.local.local_layout import (
     LocalHypothesisLayout,
     _exact_bucket_rotation_size,
     _exact_local_large_bucket_quantum,
 )
+
+from recovar.em.sparse_pass2 import sparse_pass2_budget as _sparse_pass2_budget
 
 logger = logging.getLogger(__name__)
 
@@ -109,23 +112,34 @@ def _visible_gpu_memory_bytes() -> int | None:
 
 
 def _exact_local_runtime_free_memory_bytes() -> int | None:
-    """Return allocator bytes not currently live on the first local GPU."""
+    """Return a conservative live free-memory estimate for the selected GPU.
 
+    Some H100 runs expose no JAX allocator statistics.  Keep the physical
+    ``nvidia-smi`` signal as a fallback so the score-only pre-window cap still
+    engages there; when both probes work, use the smaller value.
+    """
+
+    allocator_free_bytes = None
     try:
         devices = jax.local_devices()
-        if not devices:
-            return None
-        stats = devices[0].memory_stats()
+        stats = devices[0].memory_stats() if devices else None
     except Exception:
-        return None
-    if not stats:
-        return None
-    bytes_limit = stats.get("bytes_limit")
-    bytes_in_use = stats.get("bytes_in_use")
-    if bytes_limit is None or bytes_in_use is None:
-        return None
-    free_bytes = int(bytes_limit) - int(bytes_in_use)
-    return free_bytes if free_bytes > 0 else None
+        stats = None
+    if stats:
+        bytes_limit = stats.get("bytes_limit")
+        bytes_in_use = stats.get("bytes_in_use")
+        if bytes_limit is not None and bytes_in_use is not None:
+            free_bytes = int(bytes_limit) - int(bytes_in_use)
+            if free_bytes > 0:
+                allocator_free_bytes = free_bytes
+
+    physical_free_bytes = _sparse_pass2_budget._device_free_memory_bytes()
+    candidates = [
+        int(value)
+        for value in (allocator_free_bytes, physical_free_bytes)
+        if value is not None and int(value) > 0
+    ]
+    return min(candidates) if candidates else None
 
 
 def _exact_local_default_target_row_pixels(*, allow_high_memory_default: bool = True) -> int:
@@ -520,3 +534,105 @@ def prepare_reconstruction_groups(
             "reconstruction_group_ids is required when reconstruction_group_count is not one"
         )
     return reconstruction_group_ids_np, resolved_reconstruction_group_count
+
+
+EXACT_LOCAL_BIG_JIT_MAX_BUCKET_ROTATIONS_ENV = "RECOVAR_EXACT_LOCAL_BIG_JIT_MAX_BUCKET_ROTATIONS"
+
+
+def _exact_local_big_jit_max_bucket_rotations() -> int | None:
+    """Optional fused-program ceiling; wider exact neighborhoods use split execution."""
+    value = parse_env_nonnegative_int(EXACT_LOCAL_BIG_JIT_MAX_BUCKET_ROTATIONS_ENV)
+    return None if value in {None, 0} else int(value)
+
+
+def _exact_local_score_only_preprocess_image_batch_size(
+    requested_image_batch_size: int,
+    *,
+    image_shape: tuple[int, int],
+    n_trans: int,
+    score_complex_dtype,
+    runtime_free_memory_bytes: int | None = None,
+) -> int:
+    """Cap score-only image batches for the pre-window translation tile.
+
+    The split exact-local preprocessing path applies translation phases to the
+    complete rFFT half image before selecting the active Fourier window.  Its
+    live complex tile is therefore ``images * translations * n_half`` even
+    when the later score tensor is much smaller.  Keep that tile within the
+    same bounded share of runtime-free memory as the score workspace.
+    """
+
+    requested = max(1, int(requested_image_batch_size))
+    if runtime_free_memory_bytes is None:
+        runtime_free_memory_bytes = _exact_local_runtime_free_memory_bytes()
+    if runtime_free_memory_bytes is None:
+        return requested
+    n_half = int(image_shape[0]) * (int(image_shape[1]) // 2 + 1)
+    bytes_per_image = int(
+        np.ceil(
+            max(1, int(n_trans))
+            * max(1, n_half)
+            * np.dtype(score_complex_dtype).itemsize
+            * EXACT_LOCAL_SCORE_TILE_LIVE_FACTOR
+        )
+    )
+    image_cap = int(
+        int(runtime_free_memory_bytes)
+        * EXACT_LOCAL_SCORE_TILE_FREE_MEMORY_FRACTION
+        // max(1, bytes_per_image)
+    )
+    return int(max(1, min(requested, image_cap)))
+
+
+def local_source_bpref_staging_bytes(projector_half_shape, accumulator_half_shape):
+    """Additional pending bytes beyond the global texture/BPref-pair budget.
+
+    For the float32, non-capacity K1 source-faithful local route, the global
+    estimate already counts one C64 texture slab and one C64/F32 accumulator
+    pair. Retain the conservative legacy reserve: a full C64 projector cube,
+    two slab-sized native copies, and two additional C64/F32 pairs for output
+    and conversion workspace. The qualified logical-half consuming route now
+    removes the cube, linear texture scratch and separate output pair; this
+    reserve intentionally remains larger until controller-level qualification
+    establishes safe batch headroom. Alternate shapes can still use the legacy
+    route. Projector and accumulator geometries may differ.
+
+    This is allocation accounting, not a route selector or measured peak.
+    The caller must separately qualify lifetime, precision, capacity mode and
+    the live-memory sampling boundary. Batch/image workspaces remain covered
+    by the enclosing planner; do not apply this to diagnostic F64 execution.
+    """
+    def half_voxels(shape):
+        shape = tuple(shape)
+        if (
+            len(shape) != 3
+            or any(int(x) != x or x <= 0 for x in shape)
+            or shape[0] != shape[1]
+            or shape[0] % 2 != 1
+            or shape[2] != shape[0] // 2 + 1
+        ):
+            raise ValueError("expected positive odd (pad, pad, pad//2+1) half shape")
+        return int(shape[0]) * int(shape[1]) * int(shape[2])
+
+    projector_voxels = half_voxels(projector_half_shape)
+    accumulator_voxels = half_voxels(accumulator_half_shape)
+    full_projector_bytes = int(projector_half_shape[0]) ** 3 * np.dtype(np.complex64).itemsize
+    native_staging_bytes = 2 * projector_voxels * np.dtype(np.complex64).itemsize
+    accumulator_workspace_bytes = 2 * accumulator_voxels * (
+        np.dtype(np.complex64).itemsize + np.dtype(np.float32).itemsize
+    )
+    return full_projector_bytes + native_staging_bytes + accumulator_workspace_bytes
+
+
+def local_source_bpref_planning_supported():
+    """Keep alternate local allocation topologies on the legacy estimate."""
+    names = (
+        "RECOVAR_EXACT_LOCAL_PROJECTOR_CAPACITY",
+        "RECOVAR_EXACT_LOCAL_BPREF_PROJECTOR_CAPACITY",
+        "RECOVAR_EXACT_LOCAL_BPREF_TRANSACTION",
+        "RECOVAR_EXACT_LOCAL_BPREF_PARTICLE_CAPACITY",
+        "RECOVAR_DISABLE_LOCAL_BIG_JIT",
+        "RECOVAR_VDAM_EXTERNAL_HOST_REPLAY_LIBRARY",
+        "RECOVAR_EXACT_LOCAL_PROCESSED_HALF_CACHE_MAX_GB",
+    )
+    return not any(os.environ.get(name, "").strip().lower() not in {"", "0", "false", "off", "no"} for name in names)

@@ -273,11 +273,20 @@ Read these from the RELION fixture and the dataset:
 1. Direction priors come from `model_pdf_orient_class_N`.
 2. Class priors come from `model_classes`, for K-class runs.
 3. Translation priors come from the previous model's `rlnSigmaOffsetsAngst`.
-4. Pixel-space translation prior replay uses:
+4. InitialModel's accelerated coarse translation prior uses RELION's mixed-unit arithmetic:
 
 ```text
--0.5 * ||t_px||^2 * pixel_size^4 / sigma_offset_A^2
+-0.5 * ||round(old_offset_px) + t_px * pixel_size - prior_offset||^2
+     * pixel_size^2 / sigma_offset_A^2
 ```
+
+With zero old and prior offsets this reduces to the `pixel_size^4` formula.
+The host calculation preserves RFLOAT precision and casts its result to float32;
+production scoring remains float32. Each oversampled translation inherits its
+coarse parent's prior, rather than evaluating the prior at the child coordinate.
+Image pre-shifts and offset-variance statistics retain their separate conventions.
+See [`_translation_log_prior`](../../recovar/em/vdam/native_sampling.py) and
+[`_dense_estep_config`](../../recovar/em/vdam/dense_adapter.py).
 
 ### E-step pass 1
 

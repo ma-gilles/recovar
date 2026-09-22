@@ -18,12 +18,21 @@ unchanged. Crop, current-image mask, pixel gather, dense scaling, magnitude
 squared and scoring remain in their original order. This is neither a precision
 repair nor a scientific-policy change.
 
-The candidate does not persist textures across batches; each call still owns
-allocation, staging and destruction inside the existing native transaction.
-Historical persistent texture recovery remains separate resource-lifetime work.
-No new native symbols, automatic rebuilding or shared-library replacement is
-required by this candidate; a qualification must pin a library already exporting
-`ProjectRelionHalfRuntime` and fail closed if it is absent.
+The reconciliation candidate additionally supports direct half-storage textures
+for large fixed geometry and a persistent texture owned by a bucketed K1 call.
+Eligible host complex64 projectors are uploaded once; the owner closes before
+deferred backprojection replay and finalization, with dispatch cleanup covering
+exceptions. Double scoring retains its previous route. Persistent textures
+cannot be combined with runtime capacity or radius overrides. The existing
+capacity route and native ABI remain unchanged.
+
+The additional routes require the isolated half-texture and persistent-texture
+entry points, pinned in the reconciliation's `cuda_texture_v1` library.
+Ownership and routing coverage lives in
+[`test_relion_persistent_texture.py`](../../tests/unit/test_relion_persistent_texture.py).
+Incremental GPU comparisons establish bitwise projection and squared-amplitude
+equality for tested inputs. The large-grid routing guard does not allocate a
+full box and does not establish full-size memory or trajectory qualification.
 
 Focused coverage is in
 [`test_em_half_texture_staging.py`](../../tests/unit/test_em_half_texture_staging.py),

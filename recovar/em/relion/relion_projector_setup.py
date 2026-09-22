@@ -267,6 +267,20 @@ def reference_to_relion_projector_half_maps_and_power(
     )
 
 
+def cast_relion_projector_for_execution(projector_half, *, use_float64_projections=False):
+    """Select EM projection precision without changing the setup array.
+
+    Cast host slabs before upload, including their optional class axis. Double
+    projection is an explicit diagnostic; production projection uses complex64.
+    """
+    if projector_half is None:
+        return None
+    dtype = np.complex128 if use_float64_projections else np.complex64
+    if isinstance(projector_half, np.ndarray):
+        return projector_half.astype(dtype, copy=False)
+    return jnp.asarray(projector_half, dtype=dtype)
+
+
 def prepare_local_projector_slab(projector_half, *, path_label="local RELION projector path"):
     """Return one (z, y, x_half) slab, preserving the input's JAX dtype.
 

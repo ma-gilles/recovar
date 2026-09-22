@@ -41,6 +41,14 @@ def adjoint_slice_volume_windowed(
     )
 
 
+# Same arithmetic, explicit consumption of the accumulator for single-owner updates.
+adjoint_slice_volume_windowed_donating = jax.jit(
+    adjoint_slice_volume_windowed.__wrapped__,
+    static_argnums=(4, 5, 6, 7, 8, 9, 10),
+    donate_argnums=(3,),
+)
+
+
 @partial(jax.jit, static_argnums=(4, 5, 6, 7, 8, 9, 10))
 def _batch_adjoint_slice_volume_windowed(
     windowed_halves,

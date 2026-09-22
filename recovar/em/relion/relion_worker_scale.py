@@ -1,11 +1,9 @@
 """Strict RELION MPI-follower group-scale emulation.
 
-RELION's segmented ``MlWsumModel::pack`` path uses the optics-group count
-when packing group-scale XA/AA statistics.  In an all-data Class3D run with
-more scale groups than optics groups, only the leading optics-group-sized
-prefix is MPI-reduced; the remaining scale statistics and resulting scale
-vectors stay follower-local.  These helpers reproduce that behavior without
-leaking it into ordinary RECOVAR refinement.
+RELION 5.0.1 reduces XA/AA statistics for every physical scale group in both
+single and segmented MPI messages. Optics groups index noise spectra and do
+not limit this reduction. The helpers retain follower dispatch and restart
+state without changing ordinary RECOVAR refinement.
 
 Expectation ownership is *not* a static equal partition.  RELION's leader
 hands each next ``--pool`` chunk to whichever follower requests work next.
@@ -1039,7 +1037,7 @@ def update_relion_follower_scales(
     relion_firstiter_cc_this_iter: bool = False,
     scale_relaxation_mu: float = 0.0,
 ) -> RelionFollowerScaleState:
-    """Apply RELION's follower-local scale update and segmented-pack boundary."""
+    """Reduce all physical-group statistics, then apply RELION scale updates."""
 
     if relion_firstiter_cc_this_iter:
         return state
@@ -1052,12 +1050,11 @@ def update_relion_follower_scales(
     if np.any(~np.isfinite(xa)) or np.any(~np.isfinite(aa)) or np.any(aa < 0.0):
         raise ValueError("scale XA/AA must be finite and AA must be non-negative")
 
-    combined_count = min(int(state.n_optics_groups), state.n_groups)
-    if combined_count:
-        xa_combined = np.sum(xa[:, :combined_count], axis=0)
-        aa_combined = np.sum(aa[:, :combined_count], axis=0)
-        xa[:, :combined_count] = xa_combined[None, :]
-        aa[:, :combined_count] = aa_combined[None, :]
+    # RELION 5.0.1 MlWsumModel::pack/unpack includes nr_groups entries for
+    # both XA and AA, in both single and segmented messages. Optics groups
+    # index noise spectra; they do not bound physical-group scale reduction.
+    xa[:] = np.sum(xa, axis=0, keepdims=True)
+    aa[:] = np.sum(aa, axis=0, keepdims=True)
 
     target = np.ones_like(xa)
     np.divide(xa, aa, out=target, where=aa > 0.0)

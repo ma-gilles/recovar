@@ -11,6 +11,7 @@ These pin behavior that's load-bearing for InitialModel/VDAM RELION parity:
 from __future__ import annotations
 
 import numpy as np
+import pytest
 from helpers.vdam import bpref_to_run_em_output
 
 from recovar.em.vdam.layout import relion_x_public_output_to_bpref, run_em_output_to_bpref
@@ -164,10 +165,9 @@ def test_run_em_output_to_bpref_round_trip_on_realistic_data():
     np.testing.assert_array_equal(bp_weight, bp_weight_rt, "weight round-trip lossy")
 
 
-def test_run_em_output_to_bpref_accepts_shared_compact_backprojector_cube():
+@pytest.mark.parametrize(("ori_size", "r_max"), [(128, 19), (256, 28)])
+def test_run_em_output_to_bpref_accepts_shared_compact_backprojector_cube(ori_size, r_max):
     """Shared local EM returns a current-size odd BPref cube, not ori_size³."""
-    ori_size = 128
-    r_max = 19
     compact_size = 2 * (r_max + 1) + 1
     rng = np.random.default_rng(17)
     data_cube = (

@@ -65,6 +65,7 @@ def _sparse_pass2_window_setup(
     window_spec_kwargs,
     use_relion_x_half_mstep,
     log_label,
+    window_spec_override=None,
 ) -> _SparsePass2WindowSetup:
     """Build the forward model and score/reconstruction windows of a sparse pass 2.
 
@@ -72,7 +73,8 @@ def _sparse_pass2_window_setup(
     order, so the centred reconstruction indices are converted when that
     layout is active. Windowed prepare is logged once per pass with the
     caller's label. The single-class and fused K-class sparse scorers share
-    this setup.
+    this setup. A supplied physical window spec retains the same conversion
+    and prepare policy while the caller owns its logical support masks.
     """
 
     config = ForwardModelConfig.from_dataset(
@@ -80,15 +82,17 @@ def _sparse_pass2_window_setup(
         disc_type=disc_type,
         process_fn=experiment_dataset.process_images,
     )
-    window_spec = make_fourier_window_spec(
-        image_shape,
-        current_size,
-        n_half,
-        reconstruction_current_size=mstep_current_size,
-        square=square_window,
-        include_recon_window=True,
-        **window_spec_kwargs,
-    )
+    window_spec = window_spec_override
+    if window_spec is None:
+        window_spec = make_fourier_window_spec(
+            image_shape,
+            current_size,
+            n_half,
+            reconstruction_current_size=mstep_current_size,
+            square=square_window,
+            include_recon_window=True,
+            **window_spec_kwargs,
+        )
     use_window = window_spec.use_window
     recon_window_indices = window_spec.recon_indices
     relion_x_half_recon_indices = None

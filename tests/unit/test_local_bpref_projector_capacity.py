@@ -61,14 +61,11 @@ def test_actual_late_eligibility_guard(source_faithful, score_only):
     exec(code, environment)
 
 
-def _run_actual_projector_selection(monkeypatch, enabled):
+def _run_actual_projector_selection(monkeypatch, enabled, shared_capacity=True):
     """Execute only the engine's projector-preparation statements, unchanged."""
     function = _engine_tree()
     materialize = next(node for node in ast.walk(function) if isinstance(node, ast.If)
-                       and any(isinstance(n, ast.Assign) and isinstance(n.value, ast.Call)
-                               and isinstance(n.value.func, ast.Name)
-                               and n.value.func.id == "relion_projector_half_to_texture_full"
-                               for n in node.body))
+                       and ast.unparse(node.test) == "source_faithful_bpref and (not score_only) and (not bpref_projector_capacity_enabled)")
     start = next(i for i, node in enumerate(function.body) if isinstance(node, ast.Assign)
                  and any(isinstance(t, ast.Name) and t.id == "local_projection_half_arg" for t in node.targets))
     finish = next(i for i in range(start, len(function.body)) if isinstance(function.body[i], ast.If)
@@ -93,14 +90,15 @@ def _run_actual_projector_selection(monkeypatch, enabled):
     monkeypatch.setattr(projection, "relion_projector_half_to_texture_full", materialize_full)
     monkeypatch.setattr(projection, "prepare_relion_projector_capacity", prepare)
     namespace = dict(source_faithful_bpref=True, score_only=False, bpref_projector_capacity_enabled=enabled,
-                     projector_capacity_enabled=True, relion_projector_half_big_jit=logical,
+                     projector_capacity_enabled=shared_capacity, relion_projector_half_big_jit=logical,
                      relion_projector_r_max_big_jit=2, physical_current_size=8, projection_padding_factor=1,
-                     source_vdam_projector_full=None)
+                     source_vdam_projector_full=None, source_vdam_consume_accumulators=False,
+                     n_classes=1, bpref_transaction_queue=None, os=__import__("os"))
     exec(compile(ast.fix_missing_locations(ast.Module(body=statements, type_ignores=[])), "<engine projector selection>", "exec"), namespace)
-    assert calls == (["prepare"] if enabled else ["full", "prepare"])
-    assert namespace["local_projection_half_arg"] is half
-    assert namespace["local_projection_runtime_radius"] is runtime
-    assert namespace["source_vdam_projector_full"] is (half if enabled else full)
+    assert calls == ((["prepare"] if enabled else ["full", "prepare"]) if shared_capacity else [])
+    assert namespace["local_projection_half_arg"] is (half if shared_capacity else logical)
+    assert namespace["local_projection_runtime_radius"] is (runtime if shared_capacity else None)
+    assert namespace["source_vdam_projector_full"] is (half if enabled else full if shared_capacity else logical)
     assert namespace["source_vdam_projector_static_radius"] == (0 if enabled else 2)
     assert namespace["source_vdam_projector_runtime_radius"] is (runtime if enabled else None)
     return namespace
@@ -182,3 +180,19 @@ def test_both_engine_accumulator_calls_bind_the_selected_projector():
         assert options["projector_full"] == "source_vdam_projector_full"
         assert options["projector_r_max"] == "source_vdam_projector_static_radius"
         assert options["runtime_projector_radius"] == "source_vdam_projector_runtime_radius"
+
+
+def test_logical_noncapacity_projector_reuses_slab_and_exclusive_carry(monkeypatch):
+    monkeypatch.delenv("RECOVAR_VDAM_EXTERNAL_HOST_REPLAY_LIBRARY", raising=False)
+    selected = _run_actual_projector_selection(monkeypatch, False, shared_capacity=False)
+    assert selected["source_vdam_consume_accumulators"] is True
+
+
+@pytest.mark.parametrize("projector,queue", [(None, None), (object(), object())])
+def test_consuming_carry_rejects_unsupported_ownership_before_cuda(projector, queue):
+    with pytest.raises(ValueError, match="exclusive inline carry"):
+        engine._accumulate_relion_vdam_physical_particle_grid(
+            *([None] * 10), projector_full=projector, transaction_queue=queue,
+            consume_accumulators=True, pixel_indices=None, image_shape=(32,32),
+            volume_shape=(11,11,11), max_r=4,
+        )

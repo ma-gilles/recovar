@@ -317,3 +317,17 @@ def custom_cuda_lib():
     if lib_path is None:
         pytest.skip(f"Could not build RECOVAR custom CUDA test library{_custom_cuda_test_error_detail()}")
     yield lib_path
+
+
+@pytest.fixture(autouse=True)
+def _strict_em_operand_precision(monkeypatch):
+    """Fail tests that carry EM operands wider than the precision policy.
+
+    Production EM precision is float32; a single float64 factor upstream can
+    silently promote reconstruction and M-step rows with no visible effect on
+    results. Production only warns (see
+    ``recovar.em.helpers.dtype_policy``); tests are strict
+    unless a test opts out by setting the variable itself.
+    """
+
+    monkeypatch.setenv("RECOVAR_EM_OPERAND_PRECISION_CHECK", "raise")

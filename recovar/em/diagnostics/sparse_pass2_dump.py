@@ -9,6 +9,8 @@ it changes production arithmetic.
 from __future__ import annotations
 
 import logging
+import time
+import jax.numpy as jnp
 from pathlib import Path
 
 from recovar.em.diagnostics import pass2 as pass2_diagnostics
@@ -86,6 +88,8 @@ def _k1_pass2_dump_progress(
 def _add_sparse_group_timing(group_timing: dict[str, float] | None, key: str, elapsed_s: float) -> None:
     if group_timing is None:
         return
+    # With the sync knob the stage also absorbs the GPU work it dispatched.
+    elapsed_s = float(elapsed_s) + _group_timing_device_barrier_s()
     group_timing[key] = group_timing.get(key, 0.0) + float(elapsed_s)
 
 
@@ -106,13 +110,32 @@ def _log_sparse_kclass_group_timing(
     mstep_adjoint_s = group_timing.get("mstep_adjoint", 0.0)
     noise_s = group_timing.get("noise", 0.0)
     stats_s = group_timing.get("stats", 0.0)
+    prepare_substages = " ".join(
+        f"{key}={group_timing.get(key, 0.0):.2f}s"
+        for key in (
+            "prepare_ctf_noise",
+            "prepare_image_fft",
+            "prepare_weighting",
+            "prepare_translate",
+            "prepare_window_cast",
+            "score_projection_barrier",
+            "mstep_active_row_sync",
+            "noise_sums",
+            "noise_power_shells",
+            "noise_scale_correction",
+            "build_kclass_arrays",
+            "build_compact_pairs",
+            "pipeline_throttle",
+            "chunk_total",
+        )
+    )
     total_profiled_s = build_s + fetch_s + prepare_s + score_s + mstep_noise_stats_s
     logger.info(
         "Sparse fused K-class pass-2 bucket group timing: mode=%s %s=%d "
         "build=%.2fs fetch=%.2fs prepare=%.2fs score=%.2fs "
         "mstep_noise_stats=%.2fs mstep_weighted_sums=%.2fs "
         "mstep_adjoint=%.2fs noise=%.2fs stats=%.2fs "
-        "total_profiled=%.2fs wall=%.2fs",
+        "total_profiled=%.2fs wall=%.2fs %s",
         group_key[0],
         group_key[1],
         group_key[2],
@@ -127,6 +150,7 @@ def _log_sparse_kclass_group_timing(
         stats_s,
         total_profiled_s,
         float(wall_s),
+        prepare_substages,
     )
 
 
@@ -194,3 +218,30 @@ def _prioritize_stopped_pass2_dump_buckets(
         len(remaining),
     )
     return requested + remaining
+
+
+_SPARSE_KCLASS_GROUP_TIMING_SYNC_ENV = "RECOVAR_SPARSE_KCLASS_GROUP_TIMING_SYNC"
+_GROUP_TIMING_SYNC_STATE: dict[str, object] = {}
+
+def _group_timing_device_barrier_s() -> float:
+    """Wait on a default-stream diagnostic token; return the wait in seconds.
+
+    Diagnostic only (``RECOVAR_SPARSE_KCLASS_GROUP_TIMING_SYNC=1``). JAX
+    dispatches asynchronously, so a host-side stage timer otherwise charges
+    the GPU work of one stage to whichever later stage first pulls a value.
+    The donor uses a tiny computation as a default compute-stream fence.
+    This does not establish completion of unrelated custom streams.
+    """
+    enabled = _GROUP_TIMING_SYNC_STATE.get("enabled")
+    if enabled is None:
+        enabled = parse_env_flag(_SPARSE_KCLASS_GROUP_TIMING_SYNC_ENV, default=False)
+        _GROUP_TIMING_SYNC_STATE["enabled"] = enabled
+    if not enabled:
+        return 0.0
+    token = _GROUP_TIMING_SYNC_STATE.get("token")
+    if token is None:
+        token = jnp.asarray(0.0, dtype=jnp.float32)
+        _GROUP_TIMING_SYNC_STATE["token"] = token
+    t0 = time.time()
+    (token + jnp.float32(1.0)).block_until_ready()
+    return time.time() - t0

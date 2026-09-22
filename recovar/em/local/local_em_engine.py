@@ -58,6 +58,7 @@ from recovar.em.helpers.half_spectrum import (
 from recovar.em.helpers.half_volume_mstep import (
     crop_relion_x_half_accumulator,
     enforce_half_volume_x0,
+    finalize_half_volume_bpref,
     half_volume_accumulator_shape,
     half_volume_accumulators_to_full,
     relion_backprojector_volume_shape,
@@ -106,6 +107,9 @@ from recovar.em.local.local_backprojection import (
     flatten_bucket_rows,
 )
 from recovar.em.local.local_batch_planning import (
+    _exact_local_runtime_free_memory_bytes,
+    _exact_local_score_only_preprocess_image_batch_size,
+    _exact_local_big_jit_max_bucket_rotations,
     _exact_local_effective_max_hypotheses_per_microbatch,
     _exact_local_microbatch_env_overridden,
     _exact_local_xhalf_auto_microbatch_boost,
@@ -394,7 +398,7 @@ def run_local_em_exact(
     projection_relion_texture_interp: bool | None = None,
     projection_relion_acc_double_floorf_quirk: bool = False,
     projection_force_jax: bool = False,
-    projection_mask_current_image_disk: bool = True,
+    projection_mask_current_image_disk: bool = False,
     relion_exact_bpref_operands: bool = False,
     relion_exact_fine_diff2: bool = False,
     relion_wavg_sequential_cuda: bool | None = None,
@@ -448,6 +452,7 @@ def run_local_em_exact(
     return_reconstruction_sample_indices: bool = False,
     return_significant_counts: bool = False,
     score_only: bool = False,
+    symmetry_label: str = "C1",
     _fixed_capacity_bundle: _FixedCapacityLocalExecutionBundle | None = None,
     _fixed_capacity_enabled: bool = False,
     _fixed_capacity_class_count: int | None = None,
@@ -861,7 +866,8 @@ def run_local_em_exact(
     if return_half_volume_accumulators and mstep_relion_x_half:
         raise ValueError("return_half_volume_accumulators only supports native half-volume accumulators")
 
-    if projection_padding_factor > 1:
+    use_relion_projector = relion_projector_half is not None
+    if projection_padding_factor > 1 and not use_relion_projector:
         from recovar.reconstruction.relion_functions import pad_volume_for_projection
 
         mean_for_proj, proj_volume_shape = pad_volume_for_projection(
@@ -881,6 +887,11 @@ def run_local_em_exact(
         use_float64_normalization=use_float64_normalization,
     )
     mean_for_proj = precision_policy.cast_projection_volume(mean_for_proj)
+    from recovar.em.relion.relion_projector_setup import cast_relion_projector_for_execution
+
+    relion_projector_half = cast_relion_projector_for_execution(
+        relion_projector_half, use_float64_projections=use_float64_projections,
+    )
 
     if mstep_relion_x_half:
         # RELION BPref::initZeros(current_size) sizes the accumulator from the
@@ -983,8 +994,11 @@ def run_local_em_exact(
     projection_kwargs["relion_acc_double_floorf_quirk"] = projection_relion_acc_double_floorf_quirk
     projection_kwargs["force_jax"] = bool(projection_force_jax)
     projection_kwargs["mask_current_image_disk"] = bool(projection_mask_current_image_disk)
-    projection_mode = _local_projection_mode(window_spec, projection_kwargs, relion_projector_half)
-    if relion_projector_half is not None:
+    projection_mode = _local_projection_mode(
+        window_spec, projection_kwargs,
+        relion_projector_half,
+    )
+    if use_relion_projector:
         validate_local_relion_projector_window(window_spec, image_shape)
 
     half_weights = make_scoring_half_image_weights(
@@ -1131,7 +1145,7 @@ def run_local_em_exact(
         or return_noise_split
     )
     can_defer_local_noise_projection = (
-        relion_projector_half is None
+        not use_relion_projector
         and not bool(projection_kwargs.get("relion_texture_interp", False))
         and not bool(projection_kwargs.get("force_jax", False))
         and _indexed_projection_available()
@@ -1212,6 +1226,9 @@ def run_local_em_exact(
     big_jit_bucket_count = 0
     sparse_big_jit_bucket_count = 0
     big_jit_debug_bucket_count = 0
+    big_jit_wide_bucket_split_count = 0
+    big_jit_wide_bucket_max_rotations = 0
+    big_jit_max_bucket_rotations = _exact_local_big_jit_max_bucket_rotations()
     sparse_adjoint_chunk_count = 0
     sparse_adjoint_target_rows = parse_env_nonnegative_int(EXACT_LOCAL_SPARSE_ADJOINT_TARGET_ROWS_ENV) or 0
     total_local_rotations = int(local_layout.total_local_rotations)
@@ -1299,7 +1316,7 @@ def run_local_em_exact(
     # buckets at 256 OOMed at both 2x and 1.25x in c180 probes. Keep the default
     # conservative and allow explicit experiments through the x-half env knob.
     allow_microbatch_auto_boost = True
-    xhalf_bpref_mstep = bool(relion_projector_half is not None and mstep_relion_x_half and not score_only)
+    xhalf_bpref_mstep = bool(use_relion_projector and mstep_relion_x_half and not score_only)
     xhalf_auto_microbatch_boost = _exact_local_xhalf_auto_microbatch_boost() if xhalf_bpref_mstep else None
     xhalf_full_bpref_mstep = bool(
         xhalf_bpref_mstep and int(recon_volume_shape[0]) >= (2 * int(image_shape[0]) + 1)
@@ -1336,6 +1353,30 @@ def run_local_em_exact(
         )
     else:
         sizing_layout = local_layout
+    runtime_free_memory_bytes = _exact_local_runtime_free_memory_bytes() if score_only else None
+    score_only_image_batch_size = (
+        _exact_local_score_only_preprocess_image_batch_size(
+            image_batch_size,
+            image_shape=image_shape,
+            n_trans=n_trans,
+            score_complex_dtype=precision_policy.score_complex_dtype,
+            runtime_free_memory_bytes=runtime_free_memory_bytes,
+        )
+        if score_only
+        else int(image_batch_size)
+    )
+    if score_only_image_batch_size < int(image_batch_size):
+        full_half_pixels = int(image_shape[0]) * (int(image_shape[1]) // 2 + 1)
+        logger.info(
+            "Exact local score-only pre-window translation cap: image_batch_size=%d -> %d "
+            "(n_trans=%d full_half_pixels=%d runtime_free=%.2f GiB)",
+            int(image_batch_size),
+            int(score_only_image_batch_size),
+            int(n_trans),
+            int(full_half_pixels),
+            0.0 if runtime_free_memory_bytes is None else runtime_free_memory_bytes / float(1024**3),
+        )
+    image_batch_size = int(score_only_image_batch_size)
     max_hypotheses_per_microbatch = _exact_local_effective_max_hypotheses_per_microbatch(
         max_hypotheses_per_microbatch,
         n_windowed,
@@ -1349,6 +1390,7 @@ def run_local_em_exact(
         auto_boost_factor=xhalf_auto_microbatch_boost,
         allow_high_memory_default=not xhalf_bpref_mstep,
         score_only=score_only,
+        runtime_free_memory_bytes=runtime_free_memory_bytes,
     )
     if xhalf_bpref_mstep:
         uncapped_hypotheses_per_microbatch = int(max_hypotheses_per_microbatch)
@@ -1633,7 +1675,6 @@ def run_local_em_exact(
         and n_images > 0
         and local_support_rows >= int(np.ceil(max(n_images, 1) / EXACT_LOCAL_BIG_JIT_MIN_SIGNIFICANT_ROW_FRACTION))
     )
-    use_relion_projector = relion_projector_half is not None
     compact_relion_projector_big_jit = bool(use_relion_projector and window_spec.use_window)
     disable_big_jit_buckets = os.environ.get("RECOVAR_DISABLE_LOCAL_BIG_JIT", "").lower() in {
         "1",
@@ -1715,6 +1756,7 @@ def run_local_em_exact(
     relion_projection_cache_max_estimated_gb = 0.0
     relion_projection_cache_id_map_rows = 0
     source_vdam_projector_full = None
+    source_vdam_consume_accumulators = False
     big_jit_projection_pixel_count = int(window_spec.n_projection)
     if use_relion_projector:
         if relion_projector_r_max is None:
@@ -1755,9 +1797,23 @@ def run_local_em_exact(
         if source_faithful_bpref and not score_only and not bpref_projector_capacity_enabled:
             from recovar.em.helpers.projection import relion_projector_half_to_texture_full
 
-            source_vdam_projector_full = relion_projector_half_to_texture_full(
-                relion_projector_half_big_jit
+            logical_pad = 2 * relion_projector_r_max_big_jit * projection_padding_factor + 3
+            source_vdam_consume_accumulators = bool(
+                n_classes == 1 and bpref_transaction_queue is None
+                and not projector_capacity_enabled
+                and relion_projector_half_big_jit.shape == (
+                    logical_pad, logical_pad, logical_pad // 2 + 1
+                )
+                and not os.environ.get("RECOVAR_VDAM_EXTERNAL_HOST_REPLAY_LIBRARY", "").strip()
             )
+            if source_vdam_consume_accumulators:
+                # Ft_y/Ft_ctf are this engine's exclusive carry, replaced by
+                # every native result. Diagnostics below keep non-consuming calls.
+                source_vdam_projector_full = relion_projector_half_big_jit
+            else:
+                source_vdam_projector_full = relion_projector_half_to_texture_full(
+                    relion_projector_half_big_jit
+                )
     # Keep logical inputs above unchanged for BPref and the legacy projection cache.
     local_projection_half_arg = relion_projector_half_big_jit
     local_projection_static_radius = relion_projector_r_max_big_jit
@@ -1987,6 +2043,25 @@ def run_local_em_exact(
             use_big_jit_buckets
             and not (debug_score_dump_force_split and debug_score_dump_bucket_matches)
         )
+        wide_bucket_split = bool(
+            use_big_jit_buckets_for_bucket
+            and big_jit_max_bucket_rotations is not None
+            and int(bucket.bucket_rotation_count) > big_jit_max_bucket_rotations
+        )
+        if wide_bucket_split:
+            big_jit_wide_bucket_split_count += 1
+            big_jit_wide_bucket_max_rotations = max(
+                big_jit_wide_bucket_max_rotations,
+                int(bucket.bucket_rotation_count),
+            )
+            logger.info(
+                "Exact local wide bucket using split route: images=%d "
+                "bucket_rot=%d big_jit_max_bucket_rotations=%d",
+                int(batch_size),
+                int(bucket.bucket_rotation_count),
+                int(big_jit_max_bucket_rotations),
+            )
+            use_big_jit_buckets_for_bucket = False
         need_local_recon_projection_for_bucket = bool(
             need_local_recon_projection
             or (
@@ -3911,6 +3986,7 @@ def run_local_em_exact(
                         Ft_y,
                         Ft_ctf,
                         transaction_queue=bpref_transaction_queue,
+                        consume_accumulators=source_vdam_consume_accumulators,
                         projector_full=source_vdam_projector_full,
                         scoring_rotations=_particle_slice(
                             packed_rotations_np, particle_start, particle_stop
@@ -4457,7 +4533,7 @@ def run_local_em_exact(
                     )
                     noise_projection_pixels = (
                         int(n_half)
-                        if relion_projector_half is not None
+                        if use_relion_projector
                         else int(n_recon_pixels)
                     )
                     chunk_rows = min(
@@ -5746,7 +5822,7 @@ def run_local_em_exact(
             if proj_for_noise is None:
                 packed_rotation_count = int(packed_rotations_np.shape[1])
                 n_recon_pixels = window_spec.n_recon if window_spec.use_window else int(n_half)
-                noise_projection_pixels = int(n_half) if relion_projector_half is not None else int(n_recon_pixels)
+                noise_projection_pixels = int(n_half) if use_relion_projector else int(n_recon_pixels)
                 chunk_rows = min(
                     packed_rotation_count,
                     _packed_noise_projection_chunk_rows(noise_projection_pixels, batch_size=batch_size),
@@ -5890,8 +5966,21 @@ def run_local_em_exact(
         )
         timing.host_stats_s += time.time() - host_stats_t0
         local_progress.mark_bucket_done(bucket)
-        if debug_score_dump_force_split and debug_score_dump_bucket_matches:
+        release_split_bucket_intermediates = bool(
+            wide_bucket_split
+            or (debug_score_dump_force_split and debug_score_dump_bucket_matches)
+        )
+        if release_split_bucket_intermediates:
             cleanup_t0 = time.time()
+            if wide_bucket_split:
+                # Finish loop-carried work before releasing this bucket's
+                # projection buffers. Otherwise the next allocation overlaps
+                # both projection working sets at high resolution.
+                _block_until_ready(
+                    Ft_y, Ft_ctf, noise_wsum, noise_img_power,
+                    noise_a2, noise_xa, noise_scale_xa, noise_scale_aa,
+                    noise_sigma2_offset, noise_sumw,
+                )
             shifted_half = None
             shifted_recon_half = None
             shifted_score = None
@@ -5910,7 +5999,8 @@ def run_local_em_exact(
             reconstruction_sample_mask = None
             reconstruction_rotation_mask = None
             gc.collect()
-            jax.clear_caches()
+            if debug_score_dump_force_split and debug_score_dump_bucket_matches:
+                jax.clear_caches()
             timing.host_stats_s += time.time() - cleanup_t0
 
     if bpref_transaction_queue is not None:
@@ -5936,14 +6026,18 @@ def run_local_em_exact(
                     logical_recon_volume_shape,
                 )
                 final_recon_volume_shape = logical_recon_volume_shape
-            data, weight = enforce_half_volume_x0(
-                data,
-                weight,
-                final_recon_volume_shape,
-                logger=logger,
-                label=label,
-                force_host=host_accumulator_finalize,
-            )
+            if symmetry_label == "C1":
+                data, weight = enforce_half_volume_x0(
+                    data, weight, final_recon_volume_shape,
+                    logger=logger, label=label, force_host=host_accumulator_finalize,
+                )
+            else:
+                data, weight = finalize_half_volume_bpref(
+                    data, weight, final_recon_volume_shape,
+                    logger=logger, label=label, symmetry_label=symmetry_label,
+                    relion_x_half=bool(mstep_relion_x_half),
+                    force_host=host_accumulator_finalize,
+                )
             if return_half_volume_accumulators:
                 return data, weight
             if mstep_relion_x_half:
@@ -6073,6 +6167,15 @@ def run_local_em_exact(
             "big_jit_bucket_count": np.int32(big_jit_bucket_count),
             "sparse_big_jit_bucket_count": np.int32(sparse_big_jit_bucket_count),
             "big_jit_debug_bucket_count": np.int32(big_jit_debug_bucket_count),
+            "big_jit_max_bucket_rotations": np.int32(
+                -1 if big_jit_max_bucket_rotations is None else big_jit_max_bucket_rotations
+            ),
+            "big_jit_wide_bucket_split_count": np.int32(
+                big_jit_wide_bucket_split_count
+            ),
+            "big_jit_wide_bucket_max_rotations": np.int32(
+                big_jit_wide_bucket_max_rotations
+            ),
             "score_only": np.asarray(score_only),
             "fused_score_mstep_enabled": np.asarray(fused_score_mstep_enabled),
             "defer_local_noise_projection": np.asarray(defer_local_noise_projection),

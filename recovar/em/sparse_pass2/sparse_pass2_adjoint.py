@@ -8,6 +8,8 @@ projection-gather budget split of compact-pair buckets.
 
 from __future__ import annotations
 
+from recovar.em.helpers.adjoint import adjoint_slice_volume_windowed_donating as _adjoint_slice_volume_windowed_donating
+
 import functools
 import logging
 
@@ -20,7 +22,7 @@ from recovar.em.helpers.adjoint import adjoint_slice_volume_half as _adjoint_sli
 from recovar.em.helpers.adjoint import adjoint_slice_volume_windowed as _adjoint_slice_volume_windowed
 from recovar.em.helpers.env_flags import parse_env_flag
 from recovar.em.local.local_layout import _exact_bucket_rotation_size
-from recovar.em.scoring.sparse_bucket_arrays import _compact_bucket_size_for_class
+from recovar.em.scoring.sparse_bucket_arrays import _compact_bucket_size_for_class, bucket_chunk_bounds, ladder_chunks_enabled
 from recovar.em.sparse_pass2.sparse_pass2_budget import (
     _complex_counterpart_real_dtype,
     _dtype_itemsize,
@@ -279,7 +281,7 @@ def _accumulate_relion_x_half_per_particle_launches(
                 max_r=max_r,
             )
         else:
-            y_volume = _adjoint_slice_volume_windowed(
+            y_volume = _adjoint_slice_volume_windowed_donating(
                 particle_values,
                 window_indices,
                 particle_rotations,
@@ -292,7 +294,7 @@ def _accumulate_relion_x_half_per_particle_launches(
                 max_r,
                 True,
             )
-            ctf_volume = _adjoint_slice_volume_windowed(
+            ctf_volume = _adjoint_slice_volume_windowed_donating(
                 particle_ctf_values,
                 window_indices,
                 particle_rotations,
@@ -561,8 +563,14 @@ def _split_compact_pair_buckets_by_projection_gather_budget(
     prob_dtype=np.float64,
     max_prepare_images_per_microbatch: int | None = None,
     rotation_block_size_for_quantization: int,
+    skip_diff2_gather_budget: bool = False,
 ):
-    """Split compact-pair execution buckets by gather/prep/dense-M-step memory."""
+    """Split compact-pair execution buckets by gather/prep/dense-M-step memory.
+
+    ``skip_diff2_gather_budget`` drops the ``(B, P, N)`` diff2-gather term from
+    the per-image footprint; the fused translate route never allocates it, so
+    its chunks are bounded by the projection rows and the M-step only.
+    """
 
     group_by_rotation_signature = parse_env_flag(
         _SPARSE_KCLASS_GROUP_PAIR_BUCKETS_BY_ROTATION_SIGNATURE_ENV,
@@ -574,7 +582,7 @@ def _split_compact_pair_buckets_by_projection_gather_budget(
         and max_prepare_images_per_microbatch is None
         and max_dense_mstep_bytes is None
     ):
-        return list(compact_buckets)
+        return _ladder_rechunk_buckets(list(compact_buckets))
     ungrouped_bucket_count = len(compact_buckets)
     original_pair_bucket_max_images: dict[int, int] = {}
     for bucket in compact_buckets:
@@ -662,7 +670,7 @@ def _split_compact_pair_buckets_by_projection_gather_budget(
         else max(1, int(max_prepare_images_per_microbatch))
     )
     if max_gather_bytes is None and max_prepare_images is None and max_dense_mstep_bytes is None:
-        return list(compact_buckets)
+        return _ladder_rechunk_buckets(list(compact_buckets))
     row_bytes = _projection_gather_bytes_per_rotation_row(
         n_score_pixels=n_score_pixels,
         n_recon_pixels=n_recon_pixels,
@@ -679,15 +687,23 @@ def _split_compact_pair_buckets_by_projection_gather_budget(
     for bucket in compact_buckets:
         image_indices = np.asarray(bucket["image_indices"], dtype=np.int64)
         original_max_images = max(original_max_images, int(image_indices.size))
-        if image_indices.size <= 1:
-            split_buckets.append(bucket)
-            split_max_images = max(split_max_images, int(image_indices.size))
-            continue
-        max_images = int(image_indices.size)
-        max_images = min(
-            max_images,
-            original_pair_bucket_max_images[int(bucket["pair_bucket_size"])],
+        # How many images this bucket's byte budgets allow, independent of how many it
+        # actually holds. Chunking clamps this by the bucket's own size, but image-axis
+        # capacity quantization pads *towards* it, so it must be computed without that
+        # clamp -- otherwise the budget always equals the bucket size and forbids any
+        # padding. Single-image buckets need it too: they are the ones most worth
+        # padding, and they are also the ones where padding could blow up memory.
+        single_image_bucket = image_indices.size <= 1
+        # Two different limits, deliberately kept apart.  ``chunk_pair_width_limit`` is
+        # "the largest bucket that already existed at this pair width": a chunking
+        # convention, not a memory fact.  ``image_byte_budget`` is the real memory
+        # constraint and is the only thing capacity quantization may pad towards --
+        # measured 2026-09-12, conflating the two throttled padding to 6 of 169 buckets
+        # because most buckets already sit at their pair width's maximum.
+        chunk_pair_width_limit = int(
+            original_pair_bucket_max_images.get(int(bucket["pair_bucket_size"]), int(image_indices.size))
         )
+        image_byte_budget = None
         if max_gather_bytes is not None or max_dense_mstep_bytes is not None:
             if "class_bucket_sizes" in bucket:
                 max_class_bucket_size = max(int(value) for value in bucket["class_bucket_sizes"])
@@ -700,24 +716,50 @@ def _split_compact_pair_buckets_by_projection_gather_budget(
                     )
                     for per_image_inputs in per_image_inputs_by_class
                 )
+        def _tighten(budget, limit):
+            return int(limit) if budget is None else min(int(budget), int(limit))
+
         if max_gather_bytes is not None:
             per_image_bytes = max(1, int(max_class_bucket_size) * row_bytes)
-            max_images = min(max_images, max(1, max_gather_bytes // per_image_bytes))
+            image_byte_budget = _tighten(image_byte_budget, max(1, max_gather_bytes // per_image_bytes))
+            # The diff2 gather is the tensor that actually exhausts memory when the
+            # image axis is padded; bound the capacity budget by it as well.
+            if not skip_diff2_gather_budget:
+                diff2_bytes = _compact_pair_diff2_gather_bytes_per_image(
+                    bucket["pair_bucket_size"], n_score_pixels, projection_complex_dtype
+                )
+                image_byte_budget = _tighten(image_byte_budget, max(1, max_gather_bytes // diff2_bytes))
         if max_dense_mstep_bytes is not None:
             dense_bytes_per_image = max(1, int(max_class_bucket_size) * n_fine_trans_int * prob_item_bytes)
-            max_dense_bytes_per_image = max(max_dense_bytes_per_image, dense_bytes_per_image)
-            max_images = min(max_images, max(1, max_dense_mstep_bytes // dense_bytes_per_image))
+            if not single_image_bucket:
+                max_dense_bytes_per_image = max(max_dense_bytes_per_image, dense_bytes_per_image)
+            image_byte_budget = _tighten(image_byte_budget, max(1, max_dense_mstep_bytes // dense_bytes_per_image))
         if max_prepare_images is not None:
-            max_images = min(max_images, max_prepare_images)
-        if image_indices.size <= max_images:
-            split_buckets.append(bucket)
+            image_byte_budget = _tighten(image_byte_budget, max_prepare_images)
+        if single_image_bucket:
+            single_bucket = dict(bucket)
+            single_bucket["image_capacity_budget"] = image_byte_budget
+            split_buckets.append(single_bucket)
+            split_max_images = max(split_max_images, int(image_indices.size))
+            continue
+        max_images = min(int(image_indices.size), chunk_pair_width_limit)
+        if image_byte_budget is not None:
+            max_images = min(max_images, int(image_byte_budget))
+        chunk_bounds = bucket_chunk_bounds(int(image_indices.size), max_images)
+        # Record the byte budget this bucket was sized against. Image-axis capacity
+        # quantization pads towards it and must never pad past it.
+        if len(chunk_bounds) <= 1:
+            unsplit_bucket = dict(bucket)
+            unsplit_bucket["image_capacity_budget"] = image_byte_budget
+            split_buckets.append(unsplit_bucket)
             split_max_images = max(split_max_images, int(image_indices.size))
             continue
         split_bucket_count += 1
-        for start in range(0, image_indices.size, max_images):
-            chunk = image_indices[start : start + max_images]
+        for start, stop in chunk_bounds:
+            chunk = image_indices[start:stop]
             chunk_bucket = dict(bucket)
             chunk_bucket["image_indices"] = np.asarray(chunk, dtype=np.int64)
+            chunk_bucket["image_capacity_budget"] = image_byte_budget
             split_buckets.append(chunk_bucket)
             split_max_images = max(split_max_images, int(chunk.size))
     if split_bucket_count:
@@ -739,3 +781,34 @@ def _split_compact_pair_buckets_by_projection_gather_budget(
             "unset" if max_prepare_images is None else str(max_prepare_images),
         )
     return split_buckets
+
+
+def _ladder_rechunk_buckets(buckets):
+    """Re-chunk bucket image lists through :func:`bucket_chunk_bounds` (identity unless the ladder is on)."""
+
+    out = []
+    for bucket in buckets:
+        image_indices = np.asarray(bucket["image_indices"], dtype=np.int64)
+        bounds = bucket_chunk_bounds(int(image_indices.size), max(1, int(image_indices.size)))
+        if len(bounds) <= 1:
+            out.append(bucket)
+            continue
+        for start, stop in bounds:
+            chunk_bucket = dict(bucket)
+            chunk_bucket["image_indices"] = np.asarray(image_indices[start:stop], dtype=np.int64)
+            out.append(chunk_bucket)
+    return out
+
+def _compact_pair_diff2_gather_bytes_per_image(pair_bucket_size, n_score_pixels, complex_dtype) -> int:
+    """Device bytes one image costs in the compact-pair diff2 gather.
+
+    ``_score_pass2_pairs_relion_gpu_diff2_raw`` gathers ``(batch, pair_width, pixels)``
+    complex rows twice -- projected references and shifted images -- before the
+    diff2 kernel. This is the largest single tensor of the fused pass 2 and the one
+    that reported ``RESOURCE_EXHAUSTED: 16.30 GiB`` on the 100k/256 K=4 fixture as
+    soon as the image axis was padded (jobs 13797141, 13798264). Any image-axis
+    capacity must therefore be bounded by this footprint, not only by the smaller
+    per-rotation-row projection-gather bytes.
+    """
+
+    return max(1, 2 * int(pair_bucket_size) * int(n_score_pixels) * int(_dtype_itemsize(complex_dtype)))

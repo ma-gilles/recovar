@@ -333,7 +333,7 @@ def run_k1_local_adaptive_pass2(
         relion_f32_fine_posterior=bool(common.get("relion_f32_fine_posterior", False)),
         relion_projector_half=common.get("relion_projector_half"),
         relion_projector_r_max=common.get("relion_projector_r_max"),
-        projection_mask_current_image_disk=bool(common.get("projection_mask_current_image_disk", True)),
+        projection_mask_current_image_disk=bool(common.get("projection_mask_current_image_disk", False)),
         relion_exact_bpref_operands=True,
         relion_exact_fine_diff2=True,
         relion_exact_score_translation=True,

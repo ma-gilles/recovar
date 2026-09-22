@@ -39,12 +39,11 @@
 // Two operand conventions.  ``_prepare_bucket_io`` builds the reconstruction
 // tile with ``relion_translate_score_f32`` normally, but with
 // ``relion_translate_bpref_f32`` when the exact RELION BPref operands are
-// selected: that primitive writes the imaginary component as
-// ``cosine * v.y + sine * v.x`` instead of ``sine * v.x + cosine * v.y`` and
-// multiplies the rotated value by the weighted CTF afterwards.  The two round
-// differently.  ``recon_weight`` selects the BPref convention for the first
-// operand; the noise operand always uses the score convention, which is what
-// ``shifted_score_half_with_dc`` is built with in both modes.
+// selected: that primitive pins the same complex-rotation FMA order as the
+// score path, then multiplies by the weighted CTF. Applying the weight before
+// versus after rotation can round differently. ``recon_weight`` selects the
+// BPref convention for the first operand; the noise operand always uses the
+// score convention used by ``shifted_score_half_with_dc``.
 //
 // This header is included from cuda_backproject.cu after the anonymous
 // namespace that defines relion_score_translate_f32.
@@ -79,27 +78,9 @@ __device__ __forceinline__ float2 translate_rotate_f32(
     return make_float2(translated_real, translated_imag);
 }
 
-// The rotation and weighting of relion_translate_bpref_f32_kernel, written
-// with rounding intrinsics that reproduce what that kernel actually executes.
-//
-// Its source form is ``cosine * v.x - sine * v.y`` and
-// ``cosine * v.y + sine * v.x``.  Its PTX keeps the real component as
-// ``mul.f32``, ``mul.f32``, ``sub.f32`` -- all fusable, so ptxas contracts
-// them into the same FMA the score primitive writes explicitly -- and already
-// contracts the imaginary one to ``fma.rn(cosine, v.y, mul(sine, v.x))``,
-// whose addend is a product of the other pair than the score primitive's
-// ``fma(sine, v.x, round(cosine * v.y))``.  So the two primitives differ in
-// the imaginary component only, plus this one's post-rotation weighting.
-//
-// Copying the source form into this helper is NOT enough: measured on
-// nvcc 13.3 for compute_80, the same two lines inlined from a helper contract
-// the imaginary component the other way, and half of all output cells then
-// differ from the primitive by a few ulp.  Pinning them with non-fusable
-// intrinsics is also not enough on its own: writing the real component as
-// ``__fsub_rn(__fmul_rn(...), __fmul_rn(...))`` blocks the contraction ptxas
-// performs on the primitive and breaks the other component instead.  Both are
-// therefore pinned to the contracted form, and the unit test asserts bitwise
-// equality against the primitive.
+// Match the standalone BPref primitive, including the captured RELION
+// imaginary-component FMA order. Keep weighting after the complex rotation.
+// See docs/math/relion_refinement_algorithm.md (BPref translation arithmetic).
 __device__ __forceinline__ float2 translate_rotate_bpref_f32(
     float2 value, float sine, float cosine, float factor)
 {
@@ -107,8 +88,8 @@ __device__ __forceinline__ float2 translate_rotate_bpref_f32(
         cosine, value.x,
         -__fmul_rn(sine, value.y));
     const float translated_imag = __fmaf_rn(
-        cosine, value.y,
-        __fmul_rn(sine, value.x));
+        sine, value.x,
+        __fmul_rn(cosine, value.y));
     return make_float2(
         __fmul_rn(translated_real, factor),
         __fmul_rn(translated_imag, factor));

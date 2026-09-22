@@ -23,8 +23,11 @@ Mirrors the per-class needs the upstream ab-initio benchmarking has —
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import json
 import time
+from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -113,6 +116,16 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument("--print_per_shell_fsc", action="store_true")
+    parser.add_argument(
+        "--pair_workers",
+        type=int,
+        default=1,
+        help=(
+            "Number of independent reconstruction/GT class pairs to align concurrently. "
+            "Results are collected in deterministic row-major order; the default of 1 "
+            "preserves the historical serial execution path."
+        ),
+    )
     parser.add_argument("--output_json", default=None, help="Optional JSON path for the report.")
     return parser.parse_args(argv)
 
@@ -311,6 +324,59 @@ def _shell_resolution(shell_index: int, volume_size: int, voxel_size: float) -> 
     return float(volume_size) * float(voxel_size) / float(shell_index)
 
 
+@dataclass(frozen=True)
+class _PairEvaluation:
+    """Compact result for one reconstruction/GT pair.
+
+    ``align_volume_to_reference`` returns the full aligned float64 volume.  The
+    K-class evaluator only needs that array long enough to compute its FSC, so
+    retaining K^2 copies needlessly costs about 4 GiB at K=16 and box 128.
+    This record deliberately keeps only scalar/transform metadata and the FSC.
+    """
+
+    rec_index: int
+    gt_index: int
+    corr: float
+    rotation_matrix: np.ndarray
+    mirror_x: bool
+    sign: int
+    fsc: np.ndarray
+
+
+def _evaluate_pair(
+    pair: tuple[int, int],
+    *,
+    rec_vols: list[np.ndarray],
+    gt_vols: list[np.ndarray],
+    rotations: np.ndarray,
+    args: argparse.Namespace,
+) -> _PairEvaluation:
+    """Align and immediately compact one independent class pair."""
+
+    i, j = pair
+    refine_orders = tuple(int(o) for o in (args.gt_align_refine_orders or [])) or None
+    alignment = align_volume_to_reference(
+        rec_vols[i],
+        gt_vols[j],
+        rotations,
+        score_max_shell=int(args.gt_align_max_shell),
+        allow_mirror=not bool(args.gt_align_no_mirror),
+        allow_sign=bool(args.gt_align_allow_sign),
+        refine_orders=refine_orders,
+        refine_sigma_deg=float(args.gt_align_refine_sigma_deg),
+    )
+    fsc = _fsc(alignment.aligned_volume, gt_vols[j])
+    return _PairEvaluation(
+        rec_index=i,
+        gt_index=j,
+        corr=float(alignment.corr),
+        rotation_matrix=np.asarray(alignment.rotation_matrix, dtype=np.float64).copy(),
+        mirror_x=bool(alignment.mirror_x),
+        sign=int(alignment.sign),
+        fsc=np.asarray(fsc, dtype=np.float64),
+    )
+
+
 def _evaluate_one_set(
     *,
     label: str,
@@ -334,42 +400,59 @@ def _evaluate_one_set(
         f"(coarse HEALPix-{args.gt_align_healpix_order} + refine {refine_orders})...",
         flush=True,
     )
-    alignments: list[list[Any]] = [[None] * K for _ in range(K)]
+    requested_workers = int(getattr(args, "pair_workers", 1))
+    if requested_workers <= 0:
+        raise ValueError(f"pair_workers must be positive, got {requested_workers}")
+    pair_workers = min(requested_workers, K * K)
+    pair_order = [(i, j) for i in range(K) for j in range(K)]
+    alignments: list[list[_PairEvaluation | None]] = [[None] * K for _ in range(K)]
     fsc_table: list[list[np.ndarray]] = [[np.array([])] * K for _ in range(K)]
     t0 = time.time()
-    for i in range(K):
-        for j in range(K):
-            a = align_volume_to_reference(
-                rec_vols[i],
-                gt_vols[j],
-                rotations,
-                score_max_shell=int(args.gt_align_max_shell),
-                allow_mirror=not bool(args.gt_align_no_mirror),
-                allow_sign=bool(args.gt_align_allow_sign),
-                refine_orders=refine_orders,
-                refine_sigma_deg=float(args.gt_align_refine_sigma_deg),
-            )
-            alignments[i][j] = a
-            fsc_table[i][j] = _fsc(a.aligned_volume, gt_vols[j])
+    evaluate = partial(
+        _evaluate_pair,
+        rec_vols=rec_vols,
+        gt_vols=gt_vols,
+        rotations=rotations,
+        args=args,
+    )
+    if pair_workers == 1:
+        results = map(evaluate, pair_order)
+        executor = None
+    else:
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=pair_workers)
+        results = executor.map(evaluate, pair_order)
+    try:
+        # Executor.map yields in input order, so logs and serialized matrices are
+        # stable even when independent pairs finish in a different order.
+        for result in results:
+            i, j = result.rec_index, result.gt_index
+            alignments[i][j] = result
+            fsc_table[i][j] = result.fsc
             print(
                 f"[{label}]     align rec[{i}] -> gt[{j}]: "
-                f"corr={a.corr:.4f} mean_fsc(1-8)={_mean_fsc(fsc_table[i][j], 1, 8):.4f} "
-                f"fsc_auc={_normalized_fsc_auc(fsc_table[i][j]):.4f}",
+                f"corr={result.corr:.4f} mean_fsc(1-8)={_mean_fsc(result.fsc, 1, 8):.4f} "
+                f"fsc_auc={_normalized_fsc_auc(result.fsc):.4f}",
                 flush=True,
             )
+    finally:
+        if executor is not None:
+            executor.shutdown(wait=True, cancel_futures=True)
     print(f"[{label}]   alignment done in {time.time() - t0:.1f}s", flush=True)
 
     assignment = _assignment_summary_from_fsc_table(
         fsc_table, _normalized_class_weights(getattr(args, "class_population", None), K)
     )
     best_perm = assignment["best_perm"]
-    pairwise_corr = np.array([[float(alignments[i][j].corr) for j in range(K)] for i in range(K)])
+    if any(alignment is None for row in alignments for alignment in row):
+        raise RuntimeError("pairwise alignment table is incomplete")
+    compact_alignments = [[alignment for alignment in row if alignment is not None] for row in alignments]
+    pairwise_corr = np.array([[alignment.corr for alignment in row] for row in compact_alignments])
 
     shape = rec_vols[0].shape
     per_class = []
     for i in range(K):
         j = best_perm[i]
-        a = alignments[i][j]
+        a = compact_alignments[i][j]
         fsc = fsc_table[i][j]
         fsc_auc = float(_normalized_fsc_auc(fsc))
         sh05 = int(first_shell_below_threshold(fsc, 0.5))
@@ -389,7 +472,7 @@ def _evaluate_one_set(
                 "resolution_05_A": _shell_resolution(sh05, shape[0], voxel_size),
                 "resolution_0143_A": _shell_resolution(sh143, shape[0], voxel_size),
                 "fsc_vs_gt": [float(v) for v in fsc],
-                "rotation_matrix": np.asarray(a.rotation_matrix).tolist(),
+                "rotation_matrix": a.rotation_matrix.tolist(),
                 "mirror_x": bool(a.mirror_x),
                 "sign": int(a.sign),
             }
@@ -399,6 +482,7 @@ def _evaluate_one_set(
     return {
         "label": label,
         "K": K,
+        "pair_workers": pair_workers,
         "voxel_size": float(voxel_size),
         "best_perm": list(best_perm),
         "best_perm_score_key": str(assignment["best_perm_score_key"]),

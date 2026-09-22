@@ -108,18 +108,44 @@ def _delete_if_jax_array(value):
             pass
 
 
-def _join_half_pair_at_indices_host(values_0, values_1, flat_indices):
-    values_0_np = np.array(jax.device_get(values_0), copy=True)
-    values_1_np = np.array(jax.device_get(values_1), copy=True)
+@functools.partial(jax.jit, donate_argnums=(0,))
+def _scatter_joined_values_into_first_device(values_0, flat_indices, joined_values):
+    """Write host-computed join values while reusing the first device buffer."""
+
+    joined = values_0.reshape(-1).at[flat_indices].set(
+        joined_values,
+        indices_are_sorted=True,
+        unique_indices=True,
+    )
+    return joined.reshape(values_0.shape)
+
+
+def _join_half_pair_at_indices_host(
+    values_0,
+    values_1,
+    flat_indices,
+    *,
+    preserve_inputs=True,
+    retain_first_device=False,
+):
+    values_0_np = np.asarray(jax.device_get(values_0))
+    values_1_np = np.asarray(jax.device_get(values_1))
+    if preserve_inputs or not values_0_np.flags.writeable:
+        values_0_np = np.array(values_0_np, copy=True)
+    if preserve_inputs or not values_1_np.flags.writeable:
+        values_1_np = np.array(values_1_np, copy=True)
     flat_indices_np = np.asarray(jax.device_get(flat_indices), dtype=np.intp)
 
     values_0_flat = values_0_np.reshape(-1)
     values_1_flat = values_1_np.reshape(-1)
     half_scalar = np.asarray(0.5, dtype=values_0_flat.real.dtype)
     if int(flat_indices_np.size) >= int(values_0_flat.size):
-        average = ((values_0_flat + values_1_flat) * half_scalar).astype(values_0_flat.dtype, copy=False)
-        values_0_np = average.reshape(values_0_np.shape)
-        values_1_np = average.reshape(values_1_np.shape).copy()
+        average_at_join = ((values_0_flat + values_1_flat) * half_scalar).astype(
+            values_0_flat.dtype,
+            copy=False,
+        )
+        values_0_np = average_at_join.reshape(values_0_np.shape)
+        values_1_np = average_at_join.reshape(values_1_np.shape).copy()
     else:
         average_at_join = (
             (values_0_flat[flat_indices_np] + values_1_flat[flat_indices_np]) * half_scalar
@@ -127,9 +153,35 @@ def _join_half_pair_at_indices_host(values_0, values_1, flat_indices):
         values_0_flat[flat_indices_np] = average_at_join
         values_1_flat[flat_indices_np] = average_at_join
 
-    _delete_if_jax_array(values_0)
+    retained_first_device = None
+    if retain_first_device and not preserve_inputs:
+        if isinstance(values_0, np.ndarray):
+            logger.info(
+                "Low-resolution half-join reserving joined first numerator on device: "
+                "elements=%d joined=%d dtype=%s",
+                int(values_0_flat.size),
+                int(flat_indices_np.size),
+                values_0_np.dtype,
+            )
+            retained_first_device = jnp.asarray(values_0_np)
+            retained_first_device.block_until_ready()
+        else:
+            logger.info(
+                "Low-resolution half-join retaining first numerator device buffer: "
+                "elements=%d joined=%d dtype=%s",
+                int(values_0_flat.size),
+                int(flat_indices_np.size),
+                values_0.dtype,
+            )
+            retained_first_device = _scatter_joined_values_into_first_device(
+                values_0,
+                jnp.asarray(flat_indices_np, dtype=jnp.int32),
+                jnp.asarray(average_at_join),
+            )
+    else:
+        _delete_if_jax_array(values_0)
     _delete_if_jax_array(values_1)
-    return values_0_np, values_1_np
+    return values_0_np, values_1_np, retained_first_device
 
 
 def _join_half_pair_at_indices(values_0, values_1, flat_indices):
@@ -146,7 +198,12 @@ def _join_half_pair_at_indices(values_0, values_1, flat_indices):
             int(flat_indices.size),
             values_0.dtype,
         )
-        return _join_half_pair_at_indices_host(values_0, values_1, flat_indices)
+        joined_0, joined_1, _ = _join_half_pair_at_indices_host(
+            values_0,
+            values_1,
+            flat_indices,
+        )
+        return joined_0, joined_1
 
     average_at_join = 0.5 * (values_0_flat[flat_indices] + values_1_flat[flat_indices])
     joined_0 = values_0_flat.at[flat_indices].set(average_at_join)
@@ -1094,6 +1151,223 @@ def compute_relion_tau2_from_weights(
     return prior, fsc_clamped, details
 
 
+
+
+_RELION_FSC_PACKED_STREAM_MIN_ELEMENTS = 200_000_000
+
+def _relion_fsc_packed_stream_enabled(half_size):
+    threshold = int(
+        os.environ.get(
+            "RECOVAR_RELION_FSC_PACKED_STREAM_MIN_ELEMENTS",
+            _RELION_FSC_PACKED_STREAM_MIN_ELEMENTS,
+        )
+    )
+    return int(half_size) >= threshold
+
+def _compute_relion_fsc_from_packed_half_streamed(
+    Ft_y_0,
+    Ft_y_1,
+    Ft_ctf_0,
+    Ft_ctf_1,
+    volume_shape,
+    padded_shape,
+    *,
+    padding_factor,
+    r_max,
+):
+    """Reduce native packed-half BPref arrays without expanding full cubes.
+
+    The public packed layout stores the last Fourier axis as an RFFT half,
+    while RELION's logical compact x axis corresponds to public axis zero.
+    The legacy implementation first rebuilt four full padded cubes and then
+    built six more full coordinate/rounded-coordinate cubes.  At box 800
+    that path requires hundreds of GiB of host memory.
+
+    This implementation visits source coefficients in the same logical
+    ``(relion_z, relion_y, relion_x)`` order as the expanded implementation.
+    Source z planes that round to one native z coordinate are reduced
+    together, so every downsampled Fourier cell is completed in exactly one
+    bounded slab.  The final valid native cells are retained in canonical
+    z/y/x order and passed to one shell ``bincount`` per statistic; this
+    avoids changing the last-stage floating-point reduction topology.
+    """
+
+    volume_shape = tuple(int(value) for value in volume_shape)
+    padded_shape = tuple(int(value) for value in padded_shape)
+    half_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(padded_shape)
+    data0_half = np.asarray(Ft_y_0).reshape(half_shape)
+    data1_half = np.asarray(Ft_y_1).reshape(half_shape)
+    weight0_half = np.asarray(Ft_ctf_0).reshape(half_shape)
+    weight1_half = np.asarray(Ft_ctf_1).reshape(half_shape)
+
+    n = int(volume_shape[0])
+    pf = int(padding_factor)
+    half = n // 2
+    max_shell = half if r_max is None else int(r_max)
+    down_radius = max_shell + 1
+    down_size = 2 * down_radius + 1
+    down_xsize = down_size // 2 + 1
+    shell_count = half + 1
+
+    axes = [
+        np.asarray(
+            fourier_transform_utils.get_1d_frequency_grid(size, scaled=False),
+            dtype=np.float64,
+        )
+        for size in padded_shape
+    ]
+    rounded_relion_z = _relion_round_away_from_zero(axes[1] / pf)
+    rounded_relion_y = _relion_round_away_from_zero(axes[2] / pf)
+    rounded_relion_x = _relion_round_away_from_zero(axes[0] / pf)
+    source_z_indices = np.flatnonzero(
+        (rounded_relion_z >= -down_radius) & (rounded_relion_z <= down_radius)
+    ).astype(np.intp, copy=False)
+    source_y_indices = np.flatnonzero(
+        (rounded_relion_y >= -down_radius) & (rounded_relion_y <= down_radius)
+    ).astype(np.intp, copy=False)
+    source_x_indices = np.flatnonzero(
+        (rounded_relion_x >= 0) & (rounded_relion_x < down_xsize)
+    ).astype(np.intp, copy=False)
+
+    n0, n1, n2 = padded_shape
+    ic2 = n2 // 2
+    if n2 % 2 == 0:
+        packed_indices = np.concatenate(
+            [
+                np.arange(ic2, n2, dtype=np.intp),
+                np.asarray([0], dtype=np.intp),
+            ]
+        )
+        redundant_indices = np.arange(1, ic2, dtype=np.intp)
+    else:
+        packed_indices = np.arange(ic2, n2, dtype=np.intp)
+        redundant_indices = np.arange(0, ic2, dtype=np.intp)
+
+    full_to_half = np.full(n2, -1, dtype=np.intp)
+    full_to_half[packed_indices] = np.arange(packed_indices.size, dtype=np.intp)
+    full_to_half[redundant_indices] = ic2 - redundant_indices
+    if np.any(full_to_half < 0):
+        raise RuntimeError(
+            f"Could not map packed half axis for padded shape {padded_shape}"
+        )
+    is_redundant = np.zeros(n2, dtype=bool)
+    is_redundant[redundant_indices] = True
+    partner_i0 = (
+        (n0 - (n0 % 2) - np.arange(n0, dtype=np.intp)) % n0
+    ).astype(np.intp, copy=False)
+    partner_i1 = (
+        (n1 - (n1 % 2) - np.arange(n1, dtype=np.intp)) % n1
+    ).astype(np.intp, copy=False)
+
+    rounded_y_selected = rounded_relion_y[source_y_indices]
+    rounded_x_selected = rounded_relion_x[source_x_indices]
+    local_labels_one_z = (
+        (rounded_y_selected[:, None] + down_radius) * down_xsize
+        + rounded_x_selected[None, :]
+    ).reshape(-1)
+    local_size = down_size * down_xsize
+
+    target_y = np.arange(-down_radius, down_radius + 1, dtype=np.float64)
+    target_x = np.arange(0, down_xsize, dtype=np.float64)
+    target_radius_sq_yx = target_y[:, None] ** 2 + target_x[None, :] ** 2
+    valid_count_by_z = np.asarray(
+        [
+            np.count_nonzero(target_radius_sq_yx + float(z * z) <= float(max_shell * max_shell))
+            for z in range(-down_radius, down_radius + 1)
+        ],
+        dtype=np.int64,
+    )
+    valid_count = int(np.sum(valid_count_by_z, dtype=np.int64))
+    avg0_valid = np.empty(valid_count, dtype=np.complex128)
+    avg1_valid = np.empty(valid_count, dtype=np.complex128)
+    shell_labels = np.empty(valid_count, dtype=np.int64)
+
+    def _gather_full_slab(half_grid, z_indices, *, conjugate):
+        slab = np.empty(
+            (z_indices.size, source_y_indices.size, source_x_indices.size),
+            dtype=half_grid.dtype,
+        )
+        direct_positions = np.flatnonzero(~is_redundant[source_y_indices])
+        if direct_positions.size:
+            source_half_indices = full_to_half[source_y_indices[direct_positions]]
+            direct = half_grid[
+                np.ix_(source_x_indices, z_indices, source_half_indices)
+            ].transpose(1, 2, 0)
+            slab[:, direct_positions, :] = direct
+        redundant_positions = np.flatnonzero(is_redundant[source_y_indices])
+        if redundant_positions.size:
+            source_half_indices = full_to_half[source_y_indices[redundant_positions]]
+            mirrored = half_grid[
+                np.ix_(
+                    partner_i0[source_x_indices],
+                    partner_i1[z_indices],
+                    source_half_indices,
+                )
+            ].transpose(1, 2, 0)
+            if conjugate:
+                mirrored = np.conj(mirrored)
+            slab[:, redundant_positions, :] = mirrored
+        return slab.reshape(-1)
+
+    def _downsample_one_half(data_half, weight_half, z_indices, labels):
+        data_values = _gather_full_slab(data_half, z_indices, conjugate=True)
+        weight_values = _gather_full_slab(weight_half, z_indices, conjugate=True).real
+        sum_weight = np.bincount(labels, weights=weight_values, minlength=local_size)
+        sum_real = np.bincount(labels, weights=data_values.real, minlength=local_size)
+        sum_imag = np.bincount(labels, weights=data_values.imag, minlength=local_size)
+        average = sum_real + 1j * sum_imag
+        nonzero = sum_weight > 0.0
+        average[nonzero] /= sum_weight[nonzero]
+        average[~nonzero] = 0.0
+        return average.reshape((down_size, down_xsize))
+
+    cursor = 0
+    for offset, target_z in enumerate(range(-down_radius, down_radius + 1)):
+        count = int(valid_count_by_z[offset])
+        if count == 0:
+            continue
+        z_indices = source_z_indices[rounded_relion_z[source_z_indices] == target_z]
+        target_valid = target_radius_sq_yx + float(target_z * target_z) <= float(max_shell * max_shell)
+        target_shells = _relion_round_away_from_zero(
+            np.sqrt(target_radius_sq_yx + float(target_z * target_z))
+        )[target_valid]
+        if z_indices.size:
+            labels = np.tile(local_labels_one_z, z_indices.size)
+            avg0 = _downsample_one_half(data0_half, weight0_half, z_indices, labels)
+            avg1 = _downsample_one_half(data1_half, weight1_half, z_indices, labels)
+            avg0_valid[cursor : cursor + count] = avg0[target_valid]
+            avg1_valid[cursor : cursor + count] = avg1[target_valid]
+        else:
+            avg0_valid[cursor : cursor + count] = 0.0
+            avg1_valid[cursor : cursor + count] = 0.0
+        shell_labels[cursor : cursor + count] = target_shells
+        cursor += count
+    if cursor != valid_count:
+        raise RuntimeError(
+            f"Streamed RELION FSC filled {cursor} valid cells; expected {valid_count}"
+        )
+
+    numerator = np.bincount(
+        shell_labels,
+        weights=(np.conj(avg0_valid) * avg1_valid).real,
+        minlength=shell_count,
+    )
+    denom0 = np.bincount(
+        shell_labels,
+        weights=np.abs(avg0_valid) ** 2,
+        minlength=shell_count,
+    )
+    denom1 = np.bincount(
+        shell_labels,
+        weights=np.abs(avg1_valid) ** 2,
+        minlength=shell_count,
+    )
+    fsc = np.zeros(shell_count, dtype=np.float64)
+    nonzero = (denom0 * denom1) > 0.0
+    fsc[nonzero] = numerator[nonzero] / np.sqrt(denom0[nonzero] * denom1[nonzero])
+    fsc[0] = 1.0
+    return fsc, numerator, denom0, denom1
+
 def compute_relion_fsc_from_backprojector(
     Ft_y_0,
     Ft_y_1,
@@ -1135,6 +1409,55 @@ def compute_relion_fsc_from_backprojector(
     full_size = int(np.prod(padded_shape))
     half_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(padded_shape)
     half_size = int(np.prod(half_shape))
+
+    fsc_dtype = jnp.dtype(output_dtype)
+    if fsc_dtype not in (jnp.dtype(jnp.float32), jnp.dtype(jnp.float64)):
+        raise ValueError(f"output_dtype must be float32 or float64, got {output_dtype}")
+    input_sizes = tuple(
+        int(np.size(value)) for value in (Ft_y_0, Ft_y_1, Ft_ctf_0, Ft_ctf_1)
+    )
+    dump_dir = os.environ.get("RECOVAR_MSTEP_FSC_DUMP_DIR")
+    dump_avg = bool(dump_dir) and os.environ.get(
+        "RECOVAR_MSTEP_FSC_DUMP_AVG", ""
+    ).lower() in {"1", "true", "yes", "on"}
+    packed_stream_eligible = (
+        half_size < full_size
+        and input_sizes == (half_size, half_size, half_size, half_size)
+        and _relion_fsc_packed_stream_enabled(half_size)
+    )
+    if packed_stream_eligible and dump_avg:
+        logger.warning(
+            "RELION backprojector average-grid dump requested; using the legacy "
+            "full-expansion FSC diagnostic path"
+        )
+    if packed_stream_eligible and not dump_avg:
+        logger.info(
+            "RELION backprojector FSC using streamed packed-half reduction: "
+            "shape=%s half_elements=%d",
+            padded_shape,
+            half_size,
+        )
+        fsc, numerator, denom0, denom1 = _compute_relion_fsc_from_packed_half_streamed(
+            Ft_y_0,
+            Ft_y_1,
+            Ft_ctf_0,
+            Ft_ctf_1,
+            volume_shape,
+            padded_shape,
+            padding_factor=pf,
+            r_max=r_max,
+        )
+        if dump_dir:
+            pathlib.Path(dump_dir).mkdir(parents=True, exist_ok=True)
+            tag = os.environ.get("RECOVAR_MSTEP_FSC_DUMP_TAG", "recovar")
+            np.savetxt(
+                pathlib.Path(dump_dir) / f"{tag}_downsampled_fsc.txt",
+                np.column_stack(
+                    [np.arange(fsc.size), numerator, denom0, denom1, fsc]
+                ),
+                header="shell num den1 den2 fsc",
+            )
+        return jnp.asarray(fsc, dtype=fsc_dtype)
 
     def _packed_half_to_full_numpy(arr_np):
         """Expand RECOVAR's centered packed half-volume layout on host."""
@@ -1727,6 +2050,8 @@ def join_halves_at_low_resolution(
     low_resol_join_halves_angstrom,
     current_resolution_angstrom=None,
     padding_factor=None,
+    preserve_inputs=True,
+    return_retained_first_numerator=False,
 ):
     """RELION's ``--low_resol_join_halves`` operation on Fourier accumulators.
 
@@ -1787,15 +2112,38 @@ def join_halves_at_low_resolution(
         join radii to accumulator-space coordinates. If omitted, falls back
         to the legacy shape-based inference, which is only reliable for full
         padded accumulators and not current-size BPref grids.
+    preserve_inputs : bool
+        Keep the four input accumulators unchanged. Numbered EM iterations
+        may set this to ``False`` after saving pre-join diagnostics; writable
+        host arrays then update only the joined entries in existing storage,
+        as RELION does. Final all-data reconstruction leaves this enabled
+        because its unfiltered half maps retain the pre-join accumulators.
+    return_retained_first_numerator : bool
+        Internal K=1 memory option. When the large host fallback receives a
+        device-resident first numerator with ``preserve_inputs=False``, append
+        a fifth return value containing that buffer after donating it to an
+        exact sparse scatter of the host-computed joined entries. The four
+        ordinary returns remain host arrays for FSC/tau2. The default keeps the
+        public four-value API.
 
     Returns
     -------
     (Ft_y_0_joined, Ft_y_1_joined, Ft_ctf_0_joined, Ft_ctf_1_joined)
-        New accumulators with the low-resolution shells averaged. Outside
-        the joining sphere they are identical to the inputs.
+        Accumulators with the low-resolution shells averaged. Outside the
+        joining sphere they are identical to the inputs. With
+        ``preserve_inputs=False``, writable host inputs may be returned and
+        updated in place. If ``return_retained_first_numerator=True``, the
+        tuple has a fifth entry as described above, or ``None`` when no device
+        buffer was retained.
     """
+
+    def _format_result(values, retained_first_numerator=None):
+        if return_retained_first_numerator:
+            return (*values, retained_first_numerator)
+        return values
+
     if low_resol_join_halves_angstrom is None or low_resol_join_halves_angstrom <= 0:
-        return Ft_y_0, Ft_y_1, Ft_ctf_0, Ft_ctf_1
+        return _format_result((Ft_y_0, Ft_y_1, Ft_ctf_0, Ft_ctf_1))
 
     # Effective joining resolution: the larger (lower-frequency) of
     # low_resol_join_halves and current_resolution.
@@ -1805,7 +2153,7 @@ def join_halves_at_low_resolution(
 
     lowres_r_max = int(np.ceil(grid_size * voxel_size / myres))
     if lowres_r_max <= 0:
-        return Ft_y_0, Ft_y_1, Ft_ctf_0, Ft_ctf_1
+        return _format_result((Ft_y_0, Ft_y_1, Ft_ctf_0, Ft_ctf_1))
 
     # RELION BackProjector::getLowResDataAndWeight / setLowResDataAndWeight
     # uses squared coordinates, not rounded shell labels:
@@ -1839,7 +2187,7 @@ def join_halves_at_low_resolution(
 
     join_indices_np = _low_resolution_join_flat_indices(volume_shape, half_layout, lowres_r2_max)
     if join_indices_np.size == 0:
-        return Ft_y_0, Ft_y_1, Ft_ctf_0, Ft_ctf_1
+        return _format_result((Ft_y_0, Ft_y_1, Ft_ctf_0, Ft_ctf_1))
 
     max_input_size = max(
         ft_y_size,
@@ -1848,14 +2196,41 @@ def join_halves_at_low_resolution(
         int(np.size(Ft_ctf_1)),
     )
     if _low_resolution_join_host_fallback_enabled_for_size(max_input_size, join_indices_np.size):
+        retain_first_device = (
+            return_retained_first_numerator
+            and not preserve_inputs
+            and padding_factor is not None
+            and int(volume_shape[0]) > int(grid_size) * int(padding_factor)
+        )
         logger.info(
-            "Low-resolution half join using host fallback: size=%d join_voxels=%d",
+            "Low-resolution half join using host fallback: size=%d join_voxels=%d "
+            "preserve_inputs=%s retain_first_device=%s",
             max_input_size,
             int(join_indices_np.size),
+            bool(preserve_inputs),
+            bool(retain_first_device),
         )
-        Ft_y_0_joined, Ft_y_1_joined = _join_half_pair_at_indices_host(Ft_y_0, Ft_y_1, join_indices_np)
-        Ft_ctf_0_joined, Ft_ctf_1_joined = _join_half_pair_at_indices_host(Ft_ctf_0, Ft_ctf_1, join_indices_np)
-        return Ft_y_0_joined, Ft_y_1_joined, Ft_ctf_0_joined, Ft_ctf_1_joined
+        (
+            Ft_y_0_joined,
+            Ft_y_1_joined,
+            retained_first_numerator,
+        ) = _join_half_pair_at_indices_host(
+            Ft_y_0,
+            Ft_y_1,
+            join_indices_np,
+            preserve_inputs=preserve_inputs,
+            retain_first_device=retain_first_device,
+        )
+        Ft_ctf_0_joined, Ft_ctf_1_joined, _ = _join_half_pair_at_indices_host(
+            Ft_ctf_0,
+            Ft_ctf_1,
+            join_indices_np,
+            preserve_inputs=preserve_inputs,
+        )
+        return _format_result(
+            (Ft_y_0_joined, Ft_y_1_joined, Ft_ctf_0_joined, Ft_ctf_1_joined),
+            retained_first_numerator,
+        )
 
     Ft_y_0_arr = jnp.asarray(Ft_y_0)
     Ft_y_1_arr = jnp.asarray(Ft_y_1)
@@ -1866,4 +2241,4 @@ def join_halves_at_low_resolution(
     Ft_y_0_joined, Ft_y_1_joined = _join_half_pair_at_indices(Ft_y_0_arr, Ft_y_1_arr, join_indices)
     Ft_ctf_0_joined, Ft_ctf_1_joined = _join_half_pair_at_indices(Ft_ctf_0_arr, Ft_ctf_1_arr, join_indices)
 
-    return Ft_y_0_joined, Ft_y_1_joined, Ft_ctf_0_joined, Ft_ctf_1_joined
+    return _format_result((Ft_y_0_joined, Ft_y_1_joined, Ft_ctf_0_joined, Ft_ctf_1_joined))

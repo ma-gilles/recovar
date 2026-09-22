@@ -4,6 +4,7 @@ import importlib.util
 import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 
@@ -13,6 +14,174 @@ assert SPEC is not None and SPEC.loader is not None
 summarizer = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = summarizer
 SPEC.loader.exec_module(summarizer)
+
+
+GPU_HEADER = "timestamp, index, name, memory.used [MiB], memory.total [MiB], utilization.gpu [%]\n"
+
+
+def _write_gpu_monitor(path, rows):
+    path.write_text(GPU_HEADER + "\n".join(rows) + "\n")
+
+
+def test_engine_gpu_monitors_and_slurm_resources_are_reported_in_json_and_markdown(tmp_path, monkeypatch):
+    root = tmp_path / "em_kclass"
+    case_root = root / "cases" / "2_k4"
+    case_root.mkdir(parents=True)
+    (root / "case_table.tsv").write_text(
+        "index|name|n_images|grid|case_root|job_id|K\n"
+        f"2|k4|10000|128|{case_root}|222|4\n"
+    )
+    _write_gpu_monitor(
+        case_root / "gpu_monitor.csv",
+        [
+            "2026/09/01 08:36:00.000, 0, NVIDIA H100, 79560 MiB, 81559 MiB, 100 %",
+            "2026/09/01 08:38:00.000, 0, NVIDIA H100, 33000 MiB, 81559 MiB, 98 %",
+        ],
+    )
+    _write_gpu_monitor(
+        case_root / "relion_gpu_monitor.csv",
+        ["2026/09/01 08:36:00.000, 0, NVIDIA H100, 79000 MiB, 81559 MiB, 100 %"],
+    )
+    _write_gpu_monitor(
+        case_root / "recovar_gpu_monitor.csv",
+        [
+            "2026/09/01 08:38:00.000, 0, NVIDIA H100, 17000 MiB, 81559 MiB, 70 %",
+            "2026/09/01 08:38:05.000, 0, NVIDIA H100, 33000 MiB, 81559 MiB, 99 %",
+        ],
+    )
+    accounting = summarizer.SlurmAccounting(
+        job_id="222",
+        state="COMPLETED",
+        exit_code="0:0",
+        elapsed_s=367.0,
+        max_rss_bytes=10 * 1024**3,
+        max_rss_raw="10G",
+        max_rss_job_id="222.batch",
+        node_list="della-test",
+        alloc_tres="cpu=24,gres/gpu=1,mem=256G",
+    )
+    monkeypatch.setattr(summarizer, "collect_slurm_accounting", lambda _cases: {"222": accounting})
+
+    accounting_json = root / "slurm_case_accounting.json"
+    cases = summarizer.discover_cases(
+        [root],
+        max_excerpt_lines=8,
+        slurm_accounting_json_out=accounting_json,
+    )
+
+    assert len(cases) == 1
+    case = cases[0]
+    assert case.legacy_combined_peak_gpu_memory_mib == 79560
+    assert case.relion_peak_gpu_memory_mib == 79000
+    assert case.relion_gpu_memory_source == "relion_gpu_monitor.csv"
+    assert case.recovar_peak_gpu_memory_mib == 33000
+    assert case.recovar_gpu_memory_source == "recovar_gpu_monitor.csv"
+    assert case.slurm_elapsed_s == 367
+    assert case.slurm_max_rss_bytes == 10 * 1024**3
+    assert case.performance_missing_reasons == []
+    assert case.artifacts["slurm_accounting"] == str(accounting_json)
+
+    output_json = root / "summary.json"
+    output_markdown = root / "summary.md"
+    summarizer.write_outputs([root], cases, output_markdown, output_json)
+    payload = json.loads(output_json.read_text())
+    row = payload["cases"][0]
+    assert row["slurm_max_rss_mib"] == 10240
+    assert row["legacy_combined_peak_gpu_memory_mib"] == 79560
+    assert row["relion_peak_gpu_memory_mib"] == 79000
+    assert row["recovar_peak_gpu_memory_mib"] == 33000
+    markdown = output_markdown.read_text()
+    assert "Legacy combined case HBM peak/total MiB" in markdown
+    assert "RECOVAR HBM peak/total MiB" in markdown
+    assert "RELION HBM peak/total MiB" in markdown
+    assert "33000/81559 (recovar_gpu_monitor.csv)" in markdown
+
+
+def test_legacy_combined_monitor_is_split_by_engine_timestamps_without_peak_misattribution(tmp_path, monkeypatch):
+    root = tmp_path / "legacy_kclass"
+    case_root = root / "cases" / "2_k4"
+    (case_root / "relion_ref").mkdir(parents=True)
+    (case_root / "recovar").mkdir()
+    (root / "case_table.tsv").write_text(
+        "index|name|n_images|grid|case_root|job_id|K\n"
+        f"2|k4|10000|128|{case_root}|222|4\n"
+    )
+    _write_gpu_monitor(
+        case_root / "gpu_monitor.csv",
+        [
+            "2026/09/01 08:36:00.000, 0, NVIDIA H100, 79560 MiB, 81559 MiB, 100 %",
+            "2026/09/01 08:38:00.000, 0, NVIDIA H100, 17000 MiB, 81559 MiB, 60 %",
+            "2026/09/01 08:38:10.000, 0, NVIDIA H100, 33000 MiB, 81559 MiB, 99 %",
+        ],
+    )
+    relion_start = summarizer.nvidia_smi_timestamp_epoch("2026/09/01 08:35:50.000")
+    relion_end = summarizer.nvidia_smi_timestamp_epoch("2026/09/01 08:36:20.000")
+    recovar_start = summarizer.nvidia_smi_timestamp_epoch("2026/09/01 08:37:50.000")
+    recovar_end = summarizer.nvidia_smi_timestamp_epoch("2026/09/01 08:38:20.000")
+    (case_root / "relion_ref" / "slurm_walltime.json").write_text(
+        json.dumps({"start_epoch": relion_start, "end_epoch": relion_end, "external_wall_s": 30})
+    )
+    (case_root / "recovar" / "slurm_walltime.json").write_text(
+        json.dumps({"start_epoch": recovar_start, "end_epoch": recovar_end, "external_wall_s": 30})
+    )
+    monkeypatch.setattr(summarizer, "collect_slurm_accounting", lambda _cases: {})
+
+    case = summarizer.discover_cases([root], max_excerpt_lines=8)[0]
+
+    assert case.legacy_combined_peak_gpu_memory_mib == 79560
+    assert case.relion_peak_gpu_memory_mib == 79560
+    assert case.recovar_peak_gpu_memory_mib == 33000
+    assert case.recovar_peak_gpu_memory_mib != case.legacy_combined_peak_gpu_memory_mib
+    assert case.relion_gpu_memory_source == "gpu_monitor.csv filtered by engine slurm_walltime.json"
+    assert case.recovar_gpu_memory_source == "gpu_monitor.csv filtered by engine slurm_walltime.json"
+
+
+def test_collect_slurm_accounting_uses_top_level_elapsed_and_largest_step_maxrss(tmp_path, monkeypatch):
+    case = summarizer.CaseSummary(scratch_root=tmp_path, case_root=tmp_path / "case", job_id="555")
+    stdout = "\n".join(
+        [
+            "555|COMPLETED|0:0|367||della-test|cpu=24,gres/gpu=1,mem=256G|",
+            "555.batch|COMPLETED|0:0|366|12582912K|della-test|cpu=24,gres/gpu=1,mem=256G|",
+            "555.extern|COMPLETED|0:0|367|512M|della-test|cpu=24,gres/gpu=1,mem=256G|",
+        ]
+    )
+    monkeypatch.setattr(
+        summarizer.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout=stdout, stderr=""),
+    )
+
+    record = summarizer.collect_slurm_accounting([case])["555"]
+
+    assert record.state == "COMPLETED"
+    assert record.exit_code == "0:0"
+    assert record.elapsed_s == 367
+    assert record.max_rss_bytes == 12582912 * 1024
+    assert record.max_rss_raw == "12582912K"
+    assert record.max_rss_job_id == "555.batch"
+    assert record.node_list == "della-test"
+    assert record.missing_reasons == []
+
+
+def test_missing_performance_evidence_is_explicit_instead_of_zero_filled(tmp_path, monkeypatch):
+    root = tmp_path / "em_kclass"
+    case_root = root / "cases" / "2_k4"
+    case_root.mkdir(parents=True)
+    (root / "case_table.tsv").write_text(
+        "index|name|n_images|grid|case_root|job_id|K\n"
+        f"2|k4|10000|128|{case_root}|not-submitted|4\n"
+    )
+    monkeypatch.setattr(summarizer, "collect_slurm_accounting", lambda _cases: {})
+
+    case = summarizer.discover_cases([root], max_excerpt_lines=8)[0]
+
+    assert case.legacy_combined_peak_gpu_memory_mib is None
+    assert case.relion_peak_gpu_memory_mib is None
+    assert case.recovar_peak_gpu_memory_mib is None
+    assert any("legacy combined HBM unavailable" in reason for reason in case.performance_missing_reasons)
+    assert any("RELION HBM unavailable" in reason for reason in case.performance_missing_reasons)
+    assert any("RECOVAR HBM unavailable" in reason for reason in case.performance_missing_reasons)
+    assert any("no numeric Slurm job ID" in reason for reason in case.performance_missing_reasons)
 
 
 def test_summarizes_k1_table_complete_failed_and_pending(tmp_path):

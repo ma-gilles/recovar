@@ -48,6 +48,7 @@ def _compute_pass2_stats_sparse_perimage_reference(
     relion_half_volume_mstep=False,
     relion_firstiter_score_mode="gaussian",
     relion_firstiter_winner_take_all=False,
+    symmetry_label: str = "C1",
 ):
     """Per-image reference implementation for sparse pass-2.
 
@@ -73,9 +74,14 @@ def _compute_pass2_stats_sparse_perimage_reference(
             "normalization_other_score_log_z is only implemented for the bucketed sparse pass-2 path",
         )
 
+    if symmetry_label != "C1" and not (disable_adjoint_y and disable_adjoint_ctf):
+        raise NotImplementedError(
+            "Non-C1 reconstruction requires the bucketed RELION x-half BPref route; "
+            "the per-image reference supports non-C1 scoring only"
+        )
     n_images = experiment_dataset.n_units
     n_coarse_trans = int(np.asarray(translations).shape[0])
-    n_coarse_rot = rotation_grid_size(nside_level)
+    n_coarse_rot = rotation_grid_size(nside_level, symmetry_label)
     recon_vol_size = experiment_dataset.volume_size * reconstruction_padding_factor**3
     Ft_y_total = jnp.zeros(recon_vol_size, dtype=experiment_dataset.dtype)
     Ft_ctf_total = jnp.zeros(recon_vol_size, dtype=experiment_dataset.dtype)
@@ -152,6 +158,7 @@ def _compute_pass2_stats_sparse_perimage_reference(
             oversampling_order=oversampling_order,
             random_perturbation=random_perturbation,
             return_rotation_indices=True,
+            **({"symmetry": symmetry_label} if symmetry_label != "C1" else {}),
             dtype=score_dtype,
         )
         oversampled_rots = np.asarray(oversampled_rots, dtype=score_dtype)

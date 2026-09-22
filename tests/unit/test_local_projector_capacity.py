@@ -127,6 +127,9 @@ def test_compact_mapping_scaling_and_runtime_trace(monkeypatch):
         result = projected(physical, jnp.asarray(radius, jnp.int32))
         np.testing.assert_array_equal(np.asarray(result).view(np.uint32), np.asarray(old).view(np.uint32))
     assert len(records) == 1 and records[0][1].shape == () and records[0][1].dtype == jnp.int32
+    radius = records[0][2].pop("image_r_max")
+    assert radius.aval.shape == ()
+    assert radius.aval.dtype == np.dtype(np.int32)
     assert records[0][2] == {"image_shape": (32, 32), "padding_factor": 1}
     assert projected._cache_size() == 1
     expected = np.asarray(crop)[0, [0, 18, 272, 288, 16]] * -(128**2)

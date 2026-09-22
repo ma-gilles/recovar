@@ -26,7 +26,6 @@ from recovar.em.helpers.orientation_priors import (
     normalize_class_direction_prior,
     normalize_class_direction_prior_per_half,
     normalize_direction_prior_per_half,
-    remap_half_direction_prior_to_healpix_order,
 )
 from recovar.em.refinement.half_inputs import (
     HalfInputState,
@@ -1041,6 +1040,7 @@ def apply_iter_replay_overrides(
     preserve_existing_direction_prior: bool = False,
     sealed_sampling_state: dict | None = None,
     dtype: np.dtype = np.float32,
+    symmetry: str = "C1",
 ) -> ReplayOverrideResult:
     """Apply per-iteration replay overrides to the in-flight iteration state.
 
@@ -1324,22 +1324,13 @@ def apply_iter_replay_overrides(
                         if inferred_weights is not None:
                             _replay_class_weights = inferred_weights
                     _relion_direction_prior_order = infer_direction_prior_healpix_order(
-                        _relion_direction_prior[0] if k_class_enabled else _relion_direction_prior
+                        _relion_direction_prior[0] if k_class_enabled else _relion_direction_prior,
+                        **{'symmetry': symmetry, 'expected_order': state.healpix_order} if symmetry != 'C1' else {},
                     )
-                    if _relion_direction_prior_order != state.healpix_order:
-                        logger.info(
-                            "Replay override: remapping half-%d direction prior from healpix_order=%d to %d",
-                            _half_idx + 1,
-                            _relion_direction_prior_order,
-                            state.healpix_order,
-                        )
-                        _relion_direction_prior = remap_half_direction_prior_to_healpix_order(
-                            _relion_direction_prior,
-                            _relion_direction_prior_order,
-                            state.healpix_order,
-                            n_classes=n_classes if k_class_enabled else None,
-                        )
-                        _relion_direction_prior_order = state.healpix_order
+                    # Preserve the source grid identity. The scorer treats a prior
+                    # from another order as uniform, matching RELION
+                    # updateAngularSampling/initialisePdfDirection. Remapping here
+                    # would incorrectly retain learned anisotropy after refinement.
                     if k_class_enabled:
                         class_direction_prior_per_half[_half_idx] = normalize_class_direction_prior(
                             _relion_direction_prior, n_classes,
@@ -1462,22 +1453,14 @@ def apply_iter_replay_overrides(
                 if replay_priors[_half_idx] is None:
                     continue
                 prior_k = np.asarray(replay_priors[_half_idx], dtype=runtime_dtype)
-                prior_order_k = infer_direction_prior_healpix_order(prior_k[0] if k_class_enabled else prior_k)
-                if prior_order_k != state.healpix_order:
-                    logger.info(
-                        "Replay override: remapping provided half-%d direction prior from healpix_order=%d to %d",
-                        _half_idx + 1,
-                        prior_order_k,
-                        state.healpix_order,
-                    )
-                    prior_k = remap_half_direction_prior_to_healpix_order(
-                        prior_k,
-                        prior_order_k,
-                        state.healpix_order,
-                        n_classes=n_classes if k_class_enabled else None,
-                        dtype=runtime_dtype,
-                    )
-                    prior_order_k = state.healpix_order
+                prior_order_k = infer_direction_prior_healpix_order(
+                    prior_k[0] if k_class_enabled else prior_k,
+                    **{'symmetry': symmetry, 'expected_order': state.healpix_order} if symmetry != 'C1' else {},
+                )
+                # Preserve the source grid identity. The scorer treats a prior
+                # from another order as uniform, matching RELION
+                # updateAngularSampling/initialisePdfDirection. Remapping here
+                # would incorrectly retain learned anisotropy after refinement.
                 if k_class_enabled:
                     class_direction_prior_per_half[_half_idx] = normalize_class_direction_prior(
                         prior_k, n_classes, dtype=runtime_dtype

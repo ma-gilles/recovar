@@ -16,6 +16,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from recovar.em.helpers.env_flags import parse_env_flag
+from recovar.em.helpers.deterministic_reduce import add_segment_sum
 from recovar.em.local.local_backprojection import (
     compute_local_ctf_sums_from_probs_sum_t,
     compute_local_mstep_sums,
@@ -454,6 +455,7 @@ def _compact_pair_weighted_rotation_and_image_sums_fused_image_sums(
     return summed, summed_image, ctf_probs, probs_sum_t, translation_posterior
 
 
+@partial(jax.jit, static_argnames=("n_rotation_rows", "n_trans"))
 def _compact_pair_sorted_csr(
     pair_probs,
     local_rotation_row,
@@ -563,8 +565,22 @@ def _compact_pair_weighted_sums_and_noise_native(
     n_rotation_rows: int,
     shell_count: int,
     batch_size: int,
+    flat_rows=None,
+    flat_scale_old_scale=None,
+    flat_scale_pixel_mask=None,
 ):
     """Fuse compact weighted sums with dense noise/norm sufficient statistics."""
+
+    if flat_rows is not None:
+        return _compact_pair_weighted_sums_and_noise_native_flat_rows(
+            pair_probs, local_rotation_row, translation_idx, pair_mask,
+            shifted_recon_split, shifted_image_split, ctf2_over_nv_recon,
+            proj_for_noise, proj_abs2_for_noise, noise_variance_half,
+            shell_indices, flat_rows,
+            n_rotation_rows=n_rotation_rows, shell_count=shell_count,
+            batch_size=batch_size, scale_old_scale=flat_scale_old_scale,
+            scale_pixel_mask=flat_scale_pixel_mask,
+        )
 
     (
         summed,
@@ -686,7 +702,8 @@ def _active_flat_row_indices_from_probs_sum_t(
     return padded_indices, active_mask, active_count
 
 
-def _apply_active_row_mask(values, active_mask):
+@jax.jit
+def _apply_active_row_mask_jit(values, active_mask):
     if active_mask is None:
         return values
     mask = jnp.asarray(active_mask, dtype=jnp.asarray(values).real.dtype)
@@ -695,15 +712,50 @@ def _apply_active_row_mask(values, active_mask):
     return values * mask
 
 
+def _apply_active_row_mask(values, active_mask):
+    if active_mask is None:
+        return values
+    if hasattr(values, "shape") and hasattr(values, "dtype"):
+        return _apply_active_row_mask_jit(values, jnp.asarray(active_mask))
+    mask = jnp.asarray(active_mask, dtype=jnp.asarray(values).real.dtype)
+    while mask.ndim < values.ndim:
+        mask = mask[:, None]
+    return values * mask
+
+
+@jax.jit
+def _select_active_flat_rows_jit(values, flat_rotations, active_indices, active_mask):
+    """Gather + mask the active rows and their rotations in one program.
+
+    The gather, the mask broadcast/multiply and the rotation gather used to be
+    four to six separate executables per class-chunk (perfetto trace, job
+    13832290); each executable costs a launch and a dispatch.
+    """
+    active_values = _gather_active_flat_bucket_rows(values, active_indices)
+    if active_mask is not None:
+        active_values = _apply_active_row_mask_jit(active_values, active_mask)
+    return active_values, flat_rotations[active_indices]
+
+
 def _select_active_flat_rows(values, flat_rotations, active_indices, active_mask=None):
     """Gather active flattened rows with matching rotations."""
 
     if active_indices.size == 0:
         return None, None
-    active_indices_jax = jnp.asarray(active_indices, dtype=jnp.int32)
-    active_values = _gather_active_flat_bucket_rows(values, active_indices_jax)
-    active_values = _apply_active_row_mask(active_values, active_mask)
-    return active_values, flat_rotations[active_indices_jax]
+    return _select_active_flat_rows_jit(
+        values,
+        flat_rotations,
+        jnp.asarray(active_indices, dtype=jnp.int32),
+        None if active_mask is None else jnp.asarray(active_mask),
+    )
+
+
+@jax.jit
+def _select_active_flat_values_jit(values, active_indices, active_mask):
+    active_values = _gather_active_flat_bucket_rows(values, active_indices)
+    if active_mask is not None:
+        active_values = _apply_active_row_mask_jit(active_values, active_mask)
+    return active_values
 
 
 def _select_active_flat_values(values, active_indices, active_mask=None):
@@ -711,12 +763,20 @@ def _select_active_flat_values(values, active_indices, active_mask=None):
 
     if active_indices.size == 0:
         return None
-    active_values = _gather_active_flat_bucket_rows(values, jnp.asarray(active_indices, dtype=jnp.int32))
-    return _apply_active_row_mask(active_values, active_mask)
+    return _select_active_flat_values_jit(
+        values,
+        jnp.asarray(active_indices, dtype=jnp.int32),
+        None if active_mask is None else jnp.asarray(active_mask),
+    )
 
 
+@jax.jit
 def _gather_active_flat_bucket_rows(values, active_indices):
-    """Gather flat row indices without materializing the full flattened bucket."""
+    """Gather flat row indices without materializing the full flattened bucket.
+
+    Jitted: the index split and gather used to cost one eager program each per
+    bucket shape (618 gather compiles in one 100k/256 iteration, job 13807792).
+    """
 
     values = jnp.asarray(values)
     if values.ndim >= 3:
@@ -1087,3 +1147,297 @@ def _rectangular_active_weighted_image_sums_or_none(
         jnp.asarray(grouped_rotation_rows, dtype=jnp.int32),
         jnp.asarray(active_mask),
     )
+
+
+@partial(jax.jit, static_argnames=("n_rotation_rows", "shell_count", "batch_size"))
+def _flat_rows_noise_and_ctf_from_dense_probs(
+    dense_probs,
+    ctf2_over_nv_recon,
+    summed_image_flat,
+    proj_for_noise,
+    proj_abs2_for_noise,
+    noise_variance_half,
+    shell_indices,
+    row_batch,
+    row_rotation,
+    active_mask,
+    *,
+    n_rotation_rows: int,
+    shell_count: int,
+    batch_size: int,
+):
+    """Flat-row CTF sums, posterior reductions and noise terms (same arithmetic as the padded path)."""
+    probs_sum_t = jnp.sum(dense_probs, axis=-1)  # (B, R)
+    translation_posterior = jnp.sum(dense_probs, axis=1)
+    mask = jnp.asarray(active_mask, dtype=ctf2_over_nv_recon.dtype)
+    probs_sum_t_flat = probs_sum_t[row_batch, row_rotation] * mask  # masked rows carry zero mass
+    ctf2_flat = ctf2_over_nv_recon[row_batch]  # (F, N)
+    ctf_probs_flat = jnp.where(
+        probs_sum_t_flat[:, None] != 0.0,
+        probs_sum_t_flat[:, None] * ctf2_flat,
+        0.0,
+    )
+    proj_flat = proj_for_noise[row_batch, row_rotation]
+    proj_abs2_flat = proj_abs2_for_noise[row_batch, row_rotation]
+    block_noise_shells, block_norm_residual = (
+        _compute_noise_block_and_norm_residual_from_flat_rows_residual_terms(
+            proj_flat,
+            proj_abs2_flat,
+            summed_image_flat,
+            ctf_probs_flat,
+            noise_variance_half,
+            shell_indices,
+            row_batch,
+            shell_count=int(shell_count),
+            batch_size=int(batch_size),
+        )
+    )
+    return probs_sum_t, translation_posterior, ctf_probs_flat, block_noise_shells, block_norm_residual
+
+
+def _compact_pair_weighted_sums_and_noise_native_flat_rows(
+    pair_probs,
+    local_rotation_row,
+    translation_idx,
+    pair_mask,
+    shifted_recon_split,
+    shifted_image_split,
+    ctf2_over_nv_recon,
+    proj_for_noise,
+    proj_abs2_for_noise,
+    noise_variance_half,
+    shell_indices,
+    flat_rows,
+    *,
+    n_rotation_rows: int,
+    shell_count: int,
+    batch_size: int,
+    scale_old_scale=None,
+    scale_pixel_mask=None,
+):
+    """Flat real-row form of :func:`_compact_pair_weighted_sums_and_noise_native`.
+
+    Returns ``(summed_flat, summed_image_flat, ctf_probs_flat, probs_sum_t,
+    translation_posterior, block_noise_shells, block_norm_residual,
+    scale_xa_per_image, scale_aa_per_image)`` with the first three as
+    ``[rows, pixel]`` arrays over ``flat_rows``; rows whose mask is false (shape
+    padding) are exactly zero. The per-image group-scale terms are ``None`` unless
+    ``scale_old_scale`` is given.
+    """
+    from recovar.cuda_backproject import dual_weighted_sums_pairs_rows_f32
+
+    row_batch, row_rotation, active_mask = flat_rows
+    n_trans = int(shifted_recon_split.shape[1])
+    dense_probs = _compact_pair_dense_probs(
+        pair_probs,
+        local_rotation_row,
+        translation_idx,
+        pair_mask,
+        n_rotation_rows=n_rotation_rows,
+        n_trans=n_trans,
+    )
+    sorted_probs, sorted_translations, row_offsets = _compact_pair_sorted_csr(
+        pair_probs,
+        local_rotation_row,
+        translation_idx,
+        pair_mask,
+        n_rotation_rows=n_rotation_rows,
+        n_trans=n_trans,
+    )
+    summed_flat, summed_image_flat = dual_weighted_sums_pairs_rows_f32(
+        sorted_probs,
+        sorted_translations,
+        row_offsets,
+        row_batch,
+        row_rotation,
+        shifted_recon_split,
+        shifted_image_split,
+    )
+    summed_flat = _apply_active_row_mask_jit(summed_flat, active_mask)
+    summed_image_flat = _apply_active_row_mask_jit(summed_image_flat, active_mask)
+    (
+        probs_sum_t,
+        translation_posterior,
+        ctf_probs_flat,
+        block_noise_shells,
+        block_norm_residual,
+    ) = _flat_rows_noise_and_ctf_from_dense_probs(
+        dense_probs,
+        ctf2_over_nv_recon,
+        summed_image_flat,
+        proj_for_noise,
+        proj_abs2_for_noise,
+        noise_variance_half,
+        shell_indices,
+        row_batch,
+        row_rotation,
+        active_mask,
+        n_rotation_rows=int(n_rotation_rows),
+        shell_count=int(shell_count),
+        batch_size=int(batch_size),
+    )
+    scale_xa_per_image = scale_aa_per_image = None
+    if scale_old_scale is not None:
+        scale_xa_per_image, scale_aa_per_image = _flat_rows_scale_correction_terms_per_image(
+            proj_for_noise,
+            proj_abs2_for_noise,
+            summed_image_flat,
+            ctf_probs_flat,
+            noise_variance_half,
+            scale_old_scale,
+            None if scale_pixel_mask is None else jnp.asarray(scale_pixel_mask, dtype=bool),
+            row_batch,
+            row_rotation,
+            batch_size=int(batch_size),
+        )
+    return (
+        summed_flat,
+        summed_image_flat,
+        ctf_probs_flat,
+        probs_sum_t,
+        translation_posterior,
+        block_noise_shells,
+        block_norm_residual,
+        scale_xa_per_image,
+        scale_aa_per_image,
+    )
+
+
+@partial(jax.jit, static_argnames=("batch_size",))
+def _flat_rows_scale_correction_terms_per_image(
+    proj_for_noise,
+    proj_abs2_for_noise,
+    summed_flat,
+    ctf_probs_flat,
+    noise_variance_half,
+    old_scale,
+    scale_pixel_mask,
+    row_batch,
+    row_rotation,
+    *,
+    batch_size: int,
+):
+    """Flat-row form of ``compute_scale_correction_terms_per_image`` (same terms, rows summed per image)."""
+    proj_flat = proj_for_noise[row_batch, row_rotation]
+    proj_abs2_flat = proj_abs2_for_noise[row_batch, row_rotation]
+    safe_scale = jnp.maximum(jnp.asarray(old_scale, dtype=proj_abs2_flat.real.dtype), 1e-30)
+    ctf_has_mass = ctf_probs_flat != 0.0
+    if scale_pixel_mask is not None:
+        ctf_has_mass = ctf_has_mass & scale_pixel_mask.reshape(-1)[None, :]
+    ctf_probs_raw = jnp.where(ctf_has_mass, ctf_probs_flat * noise_variance_half[None, :], 0.0)
+    aa_terms = jnp.where(ctf_has_mass, proj_abs2_flat * ctf_probs_raw, 0.0)
+    aa_rows = jnp.sum(aa_terms, axis=1)
+    cross_has_mass = summed_flat != 0.0
+    if scale_pixel_mask is not None:
+        cross_has_mass = cross_has_mass & scale_pixel_mask.reshape(-1)[None, :]
+    cross_terms = jnp.where(cross_has_mass, proj_flat * jnp.conj(summed_flat), 0.0)
+    xa_rows = jnp.sum(noise_variance_half[None, :] * cross_terms.real, axis=1)
+    aa_per_image = add_segment_sum(jnp.zeros(int(batch_size), dtype=aa_rows.dtype), row_batch, aa_rows)
+    xa_per_image = add_segment_sum(jnp.zeros(int(batch_size), dtype=xa_rows.dtype), row_batch, xa_rows)
+    return xa_per_image / safe_scale, aa_per_image / (safe_scale**2)
+
+
+def device_active_row_indices_enabled() -> bool:
+    """Build the active flat-row index vector and mask on the device.
+
+    They are a pure function of the bucket's per-image row counts, which are small
+    host metadata, but the host materialised both ``(active rows,)`` arrays and
+    uploaded them for every selection call: ~17 s of an iteration at 100k/256 K=4
+    (job 13838987 stack samples, ``_select_active_flat_rows`` /
+    ``_select_active_flat_values``). Returning device arrays from the builder makes
+    the later ``jnp.asarray`` calls no-ops, so no call site changes.
+    """
+
+    return parse_env_flag(_SPARSE_KCLASS_DEVICE_ACTIVE_ROW_INDICES_ENV, default=False)
+
+
+@partial(jax.jit, static_argnames=("n_rotation_rows", "padded_count"))
+def _active_flat_row_indices_device(counts, *, n_rotation_rows: int, padded_count: int):
+    """``(padded_count,)`` flat row indices and float32 mask from per-image counts.
+
+    Equals the host construction element for element: image ``b`` contributes its
+    ``counts[b]`` rows ``b * n_rotation_rows + j`` in order, images with zero count
+    contribute nothing (``searchsorted`` on the inclusive prefix ends skips them),
+    and the padded tail is masked to zero. The padded slots' indices are clamped
+    in range; their gathered values are multiplied by a zero mask exactly as the
+    host path's repeated first index is.
+    """
+
+    counts = counts.astype(jnp.int32)
+    ends = jnp.cumsum(counts, dtype=jnp.int32)
+    starts = ends - counts
+    slots = jnp.arange(padded_count, dtype=jnp.int32)
+    row = jnp.minimum(jnp.searchsorted(ends, slots, side="right"), counts.shape[0] - 1)
+    flat = jnp.clip(
+        row * jnp.int32(n_rotation_rows) + (slots - starts[row]),
+        0,
+        counts.shape[0] * n_rotation_rows - 1,
+    )
+    return flat, (slots < ends[-1]).astype(jnp.float32)
+
+
+def _real_flat_row_indices_from_actual_counts(
+    actual_counts,
+    n_rotation_rows: int,
+    *,
+    pad_multiple: int = 1,
+    pad_to: int | None = None,
+) -> tuple[np.ndarray, np.ndarray, int]:
+    """Flat ``(batch, rotation_row)`` indices of the rows an image really owns.
+
+    Rows at or beyond ``actual_counts[b]`` exist only to pad the bucket to its
+    quantized size; their posteriors are exactly zero, so the M-step adjoint can
+    skip them. Unlike :func:`_active_flat_row_indices_from_probs_sum_t` this
+    needs no device-to-host transfer: the counts are host metadata. Padding to
+    ``pad_multiple`` repeats the first index with a zero mask so shapes repeat.
+    """
+    counts = np.asarray(actual_counts, dtype=np.int64).reshape(-1)
+    n_rotation_rows = int(n_rotation_rows)
+    counts = np.clip(counts, 0, n_rotation_rows)
+    total = int(counts.sum())
+    if total == 0:
+        return np.zeros((0,), dtype=np.int32), np.zeros((0,), dtype=np.float32), 0
+    starts = np.concatenate(([0], np.cumsum(counts)[:-1]))
+    real_indices = (
+        np.repeat(np.arange(counts.size, dtype=np.int64) * n_rotation_rows, counts)
+        + np.arange(total, dtype=np.int64)
+        - np.repeat(starts, counts)
+    ).astype(np.int32, copy=False)
+    pad_multiple = max(1, int(pad_multiple))
+    # Power-of-two ladder above the multiple: the linear ladder gave the
+    # active-row selection 84 distinct compiled shapes in one iteration at
+    # 100k/256 K=4 (12 s of XLA compile, census job 13837258). Padded slots
+    # repeat the first index under a zero mask, so only the shape changes.
+    padded_count = ((total + pad_multiple - 1) // pad_multiple) * pad_multiple
+    if pad_multiple > 1:
+        # Snap to a power of two only when it wastes at most an eighth of the rows.
+        # Padded rows are gathered and multiplied through the M step, so an unbounded
+        # snap buys ~12 s of XLA compile with up to 88 % more real work per chunk
+        # (census job 13837258: 28 distinct active-row counts, mean +34 %, max +88 %,
+        # +37 % rows overall).
+        pow2_count = max(pad_multiple, 1 << (padded_count - 1).bit_length())
+        if pow2_count <= padded_count + padded_count // 8:
+            padded_count = pow2_count
+    if pad_to is not None:
+        # Group-static target (see ``group_static_active_rows_enabled``): never below
+        # the multiple padding this chunk would get on its own.
+        padded_count = max(padded_count, int(pad_to))
+    padded_count = min(int(counts.size) * n_rotation_rows, padded_count)
+    if device_active_row_indices_enabled():
+        device_indices, device_mask = _active_flat_row_indices_device(
+            jnp.asarray(counts.astype(np.int32, copy=False)),
+            n_rotation_rows=n_rotation_rows,
+            padded_count=int(max(padded_count, total)),
+        )
+        return device_indices, device_mask, total
+    if padded_count <= total:
+        return real_indices, np.ones((total,), dtype=np.float32), total
+    padded_indices = np.empty((padded_count,), dtype=np.int32)
+    padded_indices[:total] = real_indices
+    padded_indices[total:] = real_indices[0]
+    active_mask = np.zeros((padded_count,), dtype=np.float32)
+    active_mask[:total] = 1.0
+    return padded_indices, active_mask, total
+
+
+_SPARSE_KCLASS_DEVICE_ACTIVE_ROW_INDICES_ENV = "RECOVAR_SPARSE_KCLASS_DEVICE_ACTIVE_ROW_INDICES"

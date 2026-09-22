@@ -75,8 +75,11 @@ def test_builder_preserves_first_rotation_for_id_and_chunk_arguments(monkeypatch
     monkeypatch.setenv(cache.EXACT_LOCAL_RELION_PROJECTION_CACHE_TARGET_ROW_PIXELS_ENV, "3")
     buckets = [bucket([5, 2, -1], image=1), bucket([2, 8], image=2)]
     calls, barriers = [], []
+    owner = object()
 
     def project(projector, rotations, image_shape, **kwargs):
+        assert "persistent_texture" not in kwargs
+        assert projector is owner
         calls.append((np.asarray(rotations).copy(), kwargs))
         return jnp.broadcast_to(rotations[:, 0, 0, None], (len(rotations), 3)).astype(jnp.complex64), None
 
@@ -84,7 +87,7 @@ def test_builder_preserves_first_rotation_for_id_and_chunk_arguments(monkeypatch
     monkeypatch.setattr(cache, "_block_until_ready", lambda *values: barriers.append(len(values)))
     result = cache.build_cache(
         buckets,
-        object(),
+        owner,
         image_shape=(4, 4),
         n_projection_pixels=3,
         relion_projector_r_max=2,
@@ -116,7 +119,7 @@ def test_builder_preserves_first_rotation_for_id_and_chunk_arguments(monkeypatch
         assert kwargs["r_max"] == 2 and kwargs["padding_factor"] == 2
         assert kwargs["return_abs2"] is False and kwargs["centered_rows"] and kwargs["dense_scale"]
         assert kwargs["projector_output_size"] == 4
-        assert kwargs.get("mask_current_image_disk", True) is mask_disk
+        assert kwargs.get("mask_current_image_disk", False) is mask_disk
         np.testing.assert_array_equal(kwargs["pixel_indices"], [7, 0, 7])
 
 

@@ -41,6 +41,7 @@ def build_adaptive_pass2_grids(
     *,
     return_mstep_rotations: bool = False,
     coarse_rotation_ids=None,
+    symmetry: str = "C1",
 ):
     """Build coarse/fine pose grids for ordinary and first-CC adaptive scoring.
 
@@ -101,6 +102,7 @@ def build_adaptive_pass2_grids(
         random_perturbation=float(random_perturbation),
         return_mstep_rotations=return_mstep_rotations,
         dtype=coarse_rotations.dtype,
+        **({} if symmetry == "C1" else {"symmetry": symmetry}),
     )
     fine_rotations, rot_parent_map = fine_rotation_outputs[:2]
     fine_mstep_rotations = fine_rotation_outputs[2] if return_mstep_rotations else None

@@ -30,6 +30,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import weakref
 from contextlib import contextmanager
 from types import ModuleType
 from typing import Tuple
@@ -567,11 +568,23 @@ _TARGET_PROJECT_INDEXED = "cuda_project_indexed"
 _TARGET_BATCH_BACKPROJECT = "cuda_batch_backproject"
 _TARGET_BATCH_BACKPROJECT_INDEXED = "cuda_batch_backproject_indexed"
 _TARGET_PER_IMAGE_BP = "cuda_per_image_bp"
+_TARGET_RELION_PROJECTOR_HALF_TEXTURE_F32 = "cuda_relion_projector_half_texture_f32"
+_TARGET_RELION_PROJECTOR_PERSISTENT_HALF_TEXTURE_F32 = "cuda_relion_projector_persistent_half_texture_f32"
+_TARGET_RELION_FIRSTITER_BPREF_FUSED_X_HALF = "cuda_relion_firstiter_bpref_fused_x_half"
 _TARGET_RELION_FUSED_X_HALF_BP = "cuda_relion_fused_x_half_bp"
 _TARGET_RELION_FUSED_X_HALF_BP_PARTICLE_GRID = (
     "cuda_relion_fused_x_half_bp_particle_grid"
 )
 _TARGET_RELION_FUSED_X_HALF_BP_SIGNATURE = "cuda_relion_fused_x_half_bp_signature"
+_TARGET_RELION_POINT_GROUP_SYMMETRISE_BPREF_COMPLEX_RANGE = (
+    "cuda_relion_point_group_symmetrise_bpref_complex_range"
+)
+_TARGET_RELION_POINT_GROUP_SYMMETRISE_BPREF_SPLIT_RANGE = (
+    "cuda_relion_point_group_symmetrise_bpref_split_range"
+)
+_TARGET_RELION_POINT_GROUP_SYMMETRISE_BPREF = (
+    "cuda_relion_point_group_symmetrise_bpref"
+)
 _TARGET_RELION_PREPROCESS_REAL_F32 = "cuda_relion_preprocess_real_f32"
 _TARGET_RELION_PREPROCESS_REAL_F32_NATIVE_LANE = (
     "cuda_relion_preprocess_real_f32_native_lane"
@@ -718,6 +731,7 @@ _wavg_native_prefix_ffi_registered = False
 
 _TARGET_DUAL_WEIGHTED_SUMS_F32 = "cuda_dual_weighted_sums_f32"
 _TARGET_DUAL_WEIGHTED_SUMS_PAIRS_F32 = "cuda_dual_weighted_sums_pairs_f32"
+_TARGET_DUAL_WEIGHTED_SUMS_PAIRS_ROWS_F32 = "cuda_dual_weighted_sums_pairs_rows_f32"
 
 # Single source of truth: (FFI target name, C symbol exported by libcuda_backproject.so).
 # Used by ``_ensure_ffi`` to register kernels AND by ``_lib_missing_required_symbols``
@@ -733,6 +747,9 @@ _FFI_REGISTRATIONS: tuple[tuple[str, str], ...] = (
     (_TARGET_BATCH_BACKPROJECT_INDEXED, "BatchBackprojectIndexed"),
     (_TARGET_PER_IMAGE_BP, "PerImageBackproject"),
     (_TARGET_RELION_FUSED_X_HALF_BP, "RelionFusedXHalfBackproject"),
+    (_TARGET_RELION_FIRSTITER_BPREF_FUSED_X_HALF, "RelionFirstiterBprefFusedXHalf"),
+    (_TARGET_RELION_PROJECTOR_HALF_TEXTURE_F32, "RelionProjectorHalfTextureF32"),
+    (_TARGET_RELION_PROJECTOR_PERSISTENT_HALF_TEXTURE_F32, "RelionProjectorPersistentHalfTextureF32"),
     (
         _TARGET_RELION_FUSED_X_HALF_BP_PARTICLE_GRID,
         "RelionFusedXHalfBackprojectParticleGrid",
@@ -740,6 +757,18 @@ _FFI_REGISTRATIONS: tuple[tuple[str, str], ...] = (
     (
         _TARGET_RELION_FUSED_X_HALF_BP_SIGNATURE,
         "RelionFusedXHalfBackprojectSignature",
+    ),
+    (
+        _TARGET_RELION_POINT_GROUP_SYMMETRISE_BPREF,
+        "RelionPointGroupSymmetriseBpref",
+    ),
+    (
+        _TARGET_RELION_POINT_GROUP_SYMMETRISE_BPREF_SPLIT_RANGE,
+        "RelionPointGroupSymmetriseBprefSplitRange",
+    ),
+    (
+        _TARGET_RELION_POINT_GROUP_SYMMETRISE_BPREF_COMPLEX_RANGE,
+        "RelionPointGroupSymmetriseBprefComplexRange",
     ),
     (_TARGET_RELION_PREPROCESS_REAL_F32, "RelionPreprocessRealF32"),
     (
@@ -898,6 +927,7 @@ _FFI_REGISTRATIONS: tuple[tuple[str, str], ...] = (
     ),
     (_TARGET_DUAL_WEIGHTED_SUMS_F32, "DualWeightedSumsF32"),
     (_TARGET_DUAL_WEIGHTED_SUMS_PAIRS_F32, "DualWeightedSumsPairsF32"),
+    (_TARGET_DUAL_WEIGHTED_SUMS_PAIRS_ROWS_F32, "DualWeightedSumsPairsRowsF32"),
 )
 
 
@@ -1526,6 +1556,423 @@ def backproject(
         input_output_aliases={2: 0},
         vmap_method="sequential",
     )(images, rot6, volume, **kw)
+
+
+@functools.partial(jax.jit, static_argnums=(3, 4))
+def relion_point_group_symmetrise_bpref(
+    data_volume: jax.Array,
+    weight_volume: jax.Array,
+    right_operators: jax.Array,
+    volume_shape: Tuple[int, int, int],
+    support_radius: int,
+) -> tuple[jax.Array, jax.Array]:
+    """Apply RELION's x=0 and point-group BPref finalisation on CUDA.
+
+    ``data_volume`` and ``weight_volume`` are flat RELION BackProjector
+    accumulators whose logical storage order is ``(z, y, xhalf)``.  The
+    identity-inclusive ``right_operators`` must be in the order returned by
+    RELION's ``SymList``.  Each CUDA thread owns one output voxel and streams
+    over the operators, so this does not materialise one rotated accumulator
+    per symmetry mate.
+
+    The kernel reads the input through RELION's summed (not averaged) x=0
+    Hermitian-plane rule before applying point-group interpolation.  This
+    fuses the two source-ordered operations without a full-size intermediate.
+    Callers implementing C1 compatibility should bypass this primitive and
+    use their pre-existing x=0 path so the historical result remains bitwise
+    unchanged.
+    """
+
+    volume_shape = tuple(int(value) for value in volume_shape)
+    if len(volume_shape) != 3 or len(set(volume_shape)) != 1:
+        raise ValueError(
+            "RELION point-group BPref symmetry requires a cubic 3-D grid, "
+            f"got {volume_shape}"
+        )
+    if any(value <= 0 or value % 2 == 0 for value in volume_shape):
+        raise ValueError(
+            "RELION point-group BPref symmetry requires an odd positive grid, "
+            f"got {volume_shape}"
+        )
+
+    support_radius = int(support_radius)
+    maximum_supported_radius = volume_shape[0] // 2 - 1
+    if support_radius < 0 or support_radius > maximum_supported_radius:
+        raise ValueError(
+            "RELION point-group BPref support radius must leave its one-voxel "
+            f"interpolation margin: got {support_radius} for {volume_shape} "
+            f"(maximum {maximum_supported_radius})"
+        )
+
+    expected_size = int(volume_shape[0] * volume_shape[1] * (volume_shape[2] // 2 + 1))
+    if data_volume.ndim != 1 or data_volume.shape != (expected_size,):
+        raise ValueError(
+            "RELION point-group data accumulator must be flat with shape "
+            f"{(expected_size,)}, got {data_volume.shape}"
+        )
+    if weight_volume.ndim != 1 or weight_volume.shape != (expected_size,):
+        raise ValueError(
+            "RELION point-group weight accumulator must be flat with shape "
+            f"{(expected_size,)}, got {weight_volume.shape}"
+        )
+
+    if data_volume.dtype == jnp.dtype(jnp.complex64):
+        real_dtype = jnp.dtype(jnp.float32)
+    elif data_volume.dtype == jnp.dtype(jnp.complex128):
+        real_dtype = jnp.dtype(jnp.float64)
+    else:
+        raise TypeError(
+            "RELION point-group data accumulator must be complex64 or complex128, "
+            f"got {data_volume.dtype}"
+        )
+    if weight_volume.dtype != real_dtype:
+        raise TypeError(
+            "RELION point-group weight dtype must match the data component dtype, "
+            f"got data={data_volume.dtype}, weight={weight_volume.dtype}"
+        )
+    if right_operators.ndim != 3 or right_operators.shape[1:] != (3, 3):
+        raise ValueError(
+            "RELION point-group operators must have shape (n, 3, 3), "
+            f"got {right_operators.shape}"
+        )
+    if right_operators.shape[0] < 1:
+        raise ValueError("RELION point-group operators must include identity first")
+    if right_operators.dtype != real_dtype:
+        raise TypeError(
+            "RELION point-group operator dtype must match the accumulator component dtype, "
+            f"got operators={right_operators.dtype}, data={data_volume.dtype}"
+        )
+    if jax.default_backend() != "gpu":
+        raise RuntimeError("RELION point-group BPref symmetry requires a JAX GPU backend")
+    if not custom_cuda_requested():
+        raise RuntimeError(
+            "RELION point-group BPref symmetry was requested but custom CUDA is disabled"
+        )
+
+    _ensure_ffi()
+    output_types = (
+        jax.ShapeDtypeStruct(data_volume.shape, data_volume.dtype),
+        jax.ShapeDtypeStruct(weight_volume.shape, weight_volume.dtype),
+    )
+    return jax.ffi.ffi_call(
+        _TARGET_RELION_POINT_GROUP_SYMMETRISE_BPREF,
+        output_types,
+        vmap_method="sequential",
+    )(
+        data_volume,
+        weight_volume,
+        right_operators,
+        full_z=np.int64(volume_shape[0]),
+        full_y=np.int64(volume_shape[1]),
+        full_x=np.int64(volume_shape[2]),
+        support_radius=np.int64(support_radius),
+    )
+
+
+def relion_point_group_symmetrise_bpref_split_host(
+    data_volume_real: jax.Array,
+    data_volume_imag: jax.Array,
+    weight_volume: jax.Array,
+    right_operators: jax.Array,
+    volume_shape: Tuple[int, int, int],
+    support_radius: int,
+    *,
+    chunk_voxels: int | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Symmetrise split float32 BPref accumulators into bounded host chunks.
+
+    The first-iteration replay intentionally retains RELION's separate real,
+    imaginary, and weight accumulators so its atomic prefix stays byte-exact.
+    A full device-side complex interleave would add another complex64 volume
+    at box scale.  This routine instead reuses one bounded CUDA output range,
+    copies each completed range into host complex64/float32 arrays, and never
+    materialises a second full-volume device pair.
+    """
+
+    volume_shape = tuple(int(value) for value in volume_shape)
+    if len(volume_shape) != 3 or len(set(volume_shape)) != 1:
+        raise ValueError(
+            "RELION point-group BPref symmetry requires a cubic 3-D grid, "
+            f"got {volume_shape}"
+        )
+    if any(value <= 0 or value % 2 == 0 for value in volume_shape):
+        raise ValueError(
+            "RELION point-group BPref symmetry requires an odd positive grid, "
+            f"got {volume_shape}"
+        )
+    support_radius = int(support_radius)
+    maximum_supported_radius = volume_shape[0] // 2 - 1
+    if support_radius < 0 or support_radius > maximum_supported_radius:
+        raise ValueError(
+            "RELION point-group BPref support radius must leave its one-voxel "
+            f"interpolation margin: got {support_radius} for {volume_shape} "
+            f"(maximum {maximum_supported_radius})"
+        )
+
+    expected_size = int(volume_shape[0] * volume_shape[1] * (volume_shape[2] // 2 + 1))
+    for label, value in (
+        ("real data", data_volume_real),
+        ("imaginary data", data_volume_imag),
+        ("weight", weight_volume),
+    ):
+        if value.ndim != 1 or value.shape != (expected_size,):
+            raise ValueError(
+                f"RELION split point-group {label} accumulator must be flat with shape "
+                f"{(expected_size,)}, got {value.shape}"
+            )
+        if value.dtype != jnp.dtype(jnp.float32):
+            raise TypeError(
+                f"RELION split point-group {label} accumulator must be float32, "
+                f"got {value.dtype}"
+            )
+    if right_operators.ndim != 3 or right_operators.shape[1:] != (3, 3):
+        raise ValueError(
+            "RELION point-group operators must have shape (n, 3, 3), "
+            f"got {right_operators.shape}"
+        )
+    if right_operators.shape[0] < 1:
+        raise ValueError("RELION point-group operators must include identity first")
+    if right_operators.dtype != jnp.dtype(jnp.float32):
+        raise TypeError(
+            "RELION split point-group operators must be float32, "
+            f"got {right_operators.dtype}"
+        )
+    if jax.default_backend() != "gpu":
+        raise RuntimeError("RELION point-group BPref symmetry requires a JAX GPU backend")
+    if not custom_cuda_requested():
+        raise RuntimeError(
+            "RELION point-group BPref symmetry was requested but custom CUDA is disabled"
+        )
+
+    if chunk_voxels is None:
+        raw_chunk_voxels = os.environ.get(
+            "RECOVAR_RELION_BPREF_SYMMETRY_CHUNK_VOXELS",
+        )
+        chunk_voxels = 16 * 1024 * 1024 if raw_chunk_voxels is None else int(raw_chunk_voxels)
+    chunk_voxels = int(chunk_voxels)
+    if chunk_voxels <= 0:
+        raise ValueError(f"RELION BPref symmetry chunk_voxels must be positive, got {chunk_voxels}")
+    chunk_voxels = min(chunk_voxels, expected_size)
+
+    data_host = np.empty(expected_size, dtype=np.complex64)
+    weight_host = np.empty(expected_size, dtype=np.float32)
+    chunk_count = (expected_size + chunk_voxels - 1) // chunk_voxels
+    logger.info(
+        "RELION split BPref symmetry: voxels=%d chunk_voxels=%d chunks=%d host=%.2f GiB",
+        expected_size,
+        chunk_voxels,
+        chunk_count,
+        (data_host.nbytes + weight_host.nbytes) / float(1024**3),
+    )
+    for chunk_index, start in enumerate(range(0, expected_size, chunk_voxels)):
+        data_chunk, weight_chunk = _relion_point_group_symmetrise_bpref_split_range_static(
+            data_volume_real,
+            data_volume_imag,
+            weight_volume,
+            right_operators,
+            jnp.asarray([start], dtype=jnp.int64),
+            volume_shape,
+            support_radius,
+            chunk_voxels,
+        )
+        data_chunk_host, weight_chunk_host = jax.device_get((data_chunk, weight_chunk))
+        stop = min(start + chunk_voxels, expected_size)
+        valid_count = stop - start
+        np.copyto(data_host[start:stop], np.asarray(data_chunk_host)[:valid_count])
+        np.copyto(weight_host[start:stop], np.asarray(weight_chunk_host)[:valid_count])
+        del data_chunk, weight_chunk, data_chunk_host, weight_chunk_host
+        if chunk_index + 1 == chunk_count or (chunk_index + 1) % 16 == 0:
+            logger.info(
+                "RELION split BPref symmetry progress: chunk=%d/%d voxels=%d/%d",
+                chunk_index + 1,
+                chunk_count,
+                stop,
+                expected_size,
+            )
+    return data_host, weight_host
+
+@functools.partial(jax.jit, static_argnums=(5, 6, 7))
+def _relion_point_group_symmetrise_bpref_split_range_static(
+    data_volume_real: jax.Array,
+    data_volume_imag: jax.Array,
+    weight_volume: jax.Array,
+    right_operators: jax.Array,
+    range_start: jax.Array,
+    volume_shape: Tuple[int, int, int],
+    support_radius: int,
+    range_voxels: int,
+) -> tuple[jax.Array, jax.Array]:
+    """Emit one bounded complex/weight range from full split inputs."""
+
+    _ensure_ffi()
+    output_types = (
+        jax.ShapeDtypeStruct((range_voxels,), jnp.complex64),
+        jax.ShapeDtypeStruct((range_voxels,), jnp.float32),
+    )
+    return jax.ffi.ffi_call(
+        _TARGET_RELION_POINT_GROUP_SYMMETRISE_BPREF_SPLIT_RANGE,
+        output_types,
+        vmap_method="sequential",
+    )(
+        data_volume_real,
+        data_volume_imag,
+        weight_volume,
+        right_operators,
+        range_start,
+        full_z=np.int64(volume_shape[0]),
+        full_y=np.int64(volume_shape[1]),
+        full_x=np.int64(volume_shape[2]),
+        support_radius=np.int64(support_radius),
+    )
+
+
+def relion_point_group_symmetrise_bpref_host(
+    data_volume: jax.Array,
+    weight_volume: jax.Array,
+    right_operators: jax.Array,
+    volume_shape: Tuple[int, int, int],
+    support_radius: int,
+    *,
+    chunk_voxels: int | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Finalize complex64 BPref into bounded host chunks without splitting inputs.
+
+    Keeps the caller's complex accumulator on device and allocates only a
+    bounded complex/weight output range, including the final partial chunk.
+    """
+
+    volume_shape = tuple(int(value) for value in volume_shape)
+    if len(volume_shape) != 3 or len(set(volume_shape)) != 1:
+        raise ValueError(
+            "RELION point-group BPref symmetry requires a cubic 3-D grid, "
+            f"got {volume_shape}"
+        )
+    if any(value <= 0 or value % 2 == 0 for value in volume_shape):
+        raise ValueError(
+            "RELION point-group BPref symmetry requires an odd positive grid, "
+            f"got {volume_shape}"
+        )
+    support_radius = int(support_radius)
+    maximum_supported_radius = volume_shape[0] // 2 - 1
+    if support_radius < 0 or support_radius > maximum_supported_radius:
+        raise ValueError(
+            "RELION point-group BPref support radius must leave its one-voxel "
+            f"interpolation margin: got {support_radius} for {volume_shape} "
+            f"(maximum {maximum_supported_radius})"
+        )
+
+    expected_size = int(volume_shape[0] * volume_shape[1] * (volume_shape[2] // 2 + 1))
+    for label, value in (
+        ("complex data", data_volume),
+        ("weight", weight_volume),
+    ):
+        if value.ndim != 1 or value.shape != (expected_size,):
+            raise ValueError(
+                f"RELION complex point-group {label} accumulator must be flat with shape "
+                f"{(expected_size,)}, got {value.shape}"
+            )
+        expected_dtype = jnp.complex64 if label == "complex data" else jnp.float32
+        if value.dtype != jnp.dtype(expected_dtype):
+            raise TypeError(
+                f"RELION complex point-group {label} accumulator must be {expected_dtype}, "
+                f"got {value.dtype}"
+            )
+    if right_operators.ndim != 3 or right_operators.shape[1:] != (3, 3):
+        raise ValueError(
+            "RELION point-group operators must have shape (n, 3, 3), "
+            f"got {right_operators.shape}"
+        )
+    if right_operators.shape[0] < 1:
+        raise ValueError("RELION point-group operators must include identity first")
+    if right_operators.dtype != jnp.dtype(jnp.float32):
+        raise TypeError(
+            "RELION complex point-group operators must be float32, "
+            f"got {right_operators.dtype}"
+        )
+    if jax.default_backend() != "gpu":
+        raise RuntimeError("RELION point-group BPref symmetry requires a JAX GPU backend")
+    if not custom_cuda_requested():
+        raise RuntimeError(
+            "RELION point-group BPref symmetry was requested but custom CUDA is disabled"
+        )
+
+    if chunk_voxels is None:
+        raw_chunk_voxels = os.environ.get(
+            "RECOVAR_RELION_BPREF_SYMMETRY_CHUNK_VOXELS",
+        )
+        chunk_voxels = 16 * 1024 * 1024 if raw_chunk_voxels is None else int(raw_chunk_voxels)
+    chunk_voxels = int(chunk_voxels)
+    if chunk_voxels <= 0:
+        raise ValueError(f"RELION BPref symmetry chunk_voxels must be positive, got {chunk_voxels}")
+    chunk_voxels = min(chunk_voxels, expected_size)
+
+    data_host = np.empty(expected_size, dtype=np.complex64)
+    weight_host = np.empty(expected_size, dtype=np.float32)
+    chunk_count = (expected_size + chunk_voxels - 1) // chunk_voxels
+    logger.info(
+        "RELION complex BPref symmetry: voxels=%d chunk_voxels=%d chunks=%d host=%.2f GiB",
+        expected_size,
+        chunk_voxels,
+        chunk_count,
+        (data_host.nbytes + weight_host.nbytes) / float(1024**3),
+    )
+    for chunk_index, start in enumerate(range(0, expected_size, chunk_voxels)):
+        data_chunk, weight_chunk = _relion_point_group_symmetrise_bpref_complex_range_static(
+            data_volume,
+            weight_volume,
+            right_operators,
+            jnp.asarray([start], dtype=jnp.int64),
+            volume_shape,
+            support_radius,
+            chunk_voxels,
+        )
+        data_chunk_host, weight_chunk_host = jax.device_get((data_chunk, weight_chunk))
+        stop = min(start + chunk_voxels, expected_size)
+        valid_count = stop - start
+        np.copyto(data_host[start:stop], np.asarray(data_chunk_host)[:valid_count])
+        np.copyto(weight_host[start:stop], np.asarray(weight_chunk_host)[:valid_count])
+        del data_chunk, weight_chunk, data_chunk_host, weight_chunk_host
+        if chunk_index + 1 == chunk_count or (chunk_index + 1) % 16 == 0:
+            logger.info(
+                "RELION complex BPref symmetry progress: chunk=%d/%d voxels=%d/%d",
+                chunk_index + 1,
+                chunk_count,
+                stop,
+                expected_size,
+            )
+    return data_host, weight_host
+
+@functools.partial(jax.jit, static_argnums=(4, 5, 6))
+def _relion_point_group_symmetrise_bpref_complex_range_static(
+    data_volume: jax.Array,
+    weight_volume: jax.Array,
+    right_operators: jax.Array,
+    range_start: jax.Array,
+    volume_shape: Tuple[int, int, int],
+    support_radius: int,
+    range_voxels: int,
+) -> tuple[jax.Array, jax.Array]:
+    """Emit one bounded complex/weight range from full complex input."""
+
+    _ensure_ffi()
+    output_types = (
+        jax.ShapeDtypeStruct((range_voxels,), jnp.complex64),
+        jax.ShapeDtypeStruct((range_voxels,), jnp.float32),
+    )
+    return jax.ffi.ffi_call(
+        _TARGET_RELION_POINT_GROUP_SYMMETRISE_BPREF_COMPLEX_RANGE,
+        output_types,
+        vmap_method="sequential",
+    )(
+        data_volume,
+        weight_volume,
+        right_operators,
+        range_start,
+        full_z=np.int64(volume_shape[0]),
+        full_y=np.int64(volume_shape[1]),
+        full_x=np.int64(volume_shape[2]),
+        support_radius=np.int64(support_radius),
+    )
 
 
 @functools.partial(jax.jit, static_argnums=(2,))
@@ -3075,10 +3522,10 @@ def _run_vdam_external_host_replay_callback(
             )
 
 
-@functools.partial(
-    jax.jit,
-    static_argnums=(10, 11, 12, 13, 14, 21, 22, 23, 24, 25, 26, 27, 28, 32, 33),
-)
+_VDAM_PROJECTOR_STATIC_ARGNUMS = (10, 11, 12, 13, 14, 21, 22, 23, 24, 25, 26, 27, 28, 32, 33)
+
+
+@functools.partial(jax.jit, static_argnums=_VDAM_PROJECTOR_STATIC_ARGNUMS)
 def relion_vdam_mstep_fused_projector_x_half(
     data_volume: jax.Array,
     weight_volume: jax.Array,
@@ -3116,6 +3563,12 @@ def relion_vdam_mstep_fused_projector_x_half(
     particle_tail_mask: bool = False,
 ) -> tuple[jax.Array, jax.Array, jax.Array | None]:
     """Project, form residuals, and scatter VDAM rows in one native launch.
+
+    Without a runtime radius, ``projector_full`` accepts either the legacy cube
+    or a C64 logical half slab of shape ``(pad,pad,pad//2+1)``, where
+    ``pad=2*projector_max_r*projection_padding_factor+3``. The latter writes
+    directly into the same two scalar textures without a full cube or linear
+    staging buffers. The external host replay ABI still requires a cube.
 
     Explicit ``runtime_projector_radius`` opts into fixed projector storage:
     ``projector_full`` then holds a C64 [z,y,x>=0] capacity HALF slab with shape
@@ -3212,16 +3665,24 @@ def relion_vdam_mstep_fused_projector_x_half(
             or os.environ.get(_VDAM_EXTERNAL_HOST_REPLAY_LIBRARY_ENV, "").strip()
         ):
             raise ValueError("BPref projector capacity does not support replay/trace diagnostics")
-    elif (
-        projector_full.dtype != jnp.complex64
-        or projector_full.ndim != 3
-        or projector_full.shape[0] <= 0
-        or projector_full.shape[1:] != (projector_full.shape[0], projector_full.shape[0])
-    ):
-        raise TypeError(
-            "projector_full must be a nonempty complex64 cube, got "
-            f"{projector_full.shape} {projector_full.dtype}"
+    else:
+        # The logical half slab has exactly the same ghost texels as the
+        # full-cube adapter, in the texture's native [z,y,x>=0] order.
+        logical_size = 2 * int(projector_max_r) * int(projection_padding_factor) + 3
+        direct_half = projector_full.shape == (
+            logical_size, logical_size, logical_size // 2 + 1
+        ) and logical_size >= 5
+        full_cube = (
+            projector_full.ndim == 3 and projector_full.shape[0] > 0
+            and projector_full.shape[1:] == (projector_full.shape[0],) * 2
         )
+        if projector_full.dtype != jnp.complex64 or not (direct_half or full_cube):
+            raise TypeError(
+                "projector_full must be a complex64 cube or radius-matched logical half slab, got "
+                f"{projector_full.shape} {projector_full.dtype}"
+            )
+        if direct_half and os.environ.get(_VDAM_EXTERNAL_HOST_REPLAY_LIBRARY_ENV, "").strip():
+            raise ValueError("external host replay requires a full projector cube")
     if (not projector_capacity and int(projector_max_r) <= 0) or int(projection_padding_factor) <= 0:
         raise ValueError("projector radius and projection padding factor must be positive")
     if images.dtype != jnp.complex64:
@@ -3548,6 +4009,16 @@ def relion_vdam_mstep_fused_projector_x_half(
         current_indices = jnp.mod(signed_rows, current_h) * current_w + columns
         compact_denominator = jnp.take(dense_denominator, current_indices, axis=-1)
     return fused_data, fused_weight, compact_denominator
+
+
+# Explicit ownership transfer for the local engine's exclusive accumulator carry.
+# Callers must discard both input arrays after invoking this entry point. Keep
+# the public non-consuming wrapper above unchanged for diagnostics and reuse.
+_relion_vdam_mstep_fused_projector_x_half_consume = jax.jit(
+    relion_vdam_mstep_fused_projector_x_half.__wrapped__,
+    static_argnums=_VDAM_PROJECTOR_STATIC_ARGNUMS,
+    donate_argnums=(0, 1),
+)
 
 
 def _validate_relion_fine_diff2_inputs(
@@ -5915,8 +6386,44 @@ def relion_fine_diff2_pairs_f64(
     )(reference, shifted_image, weight, full_to_compact)
 
 
-@functools.partial(jax.jit, static_argnums=(3, 4, 5, 6, 7))
-def relion_preprocess_real_f32(
+_RELION_PREPROCESS_BLOCK_SIZE = 128      # kRelionPreprocessBlockSize in cuda_backproject.cu
+_RELION_SOFTMASK_BLOCKS = 128            # kRelionSoftMaskBlocks
+_RELION_PREPROCESS_CUB_TEMP_BYTES = 1 << 16  # budget for one small cub::DeviceReduce::Sum
+
+
+def _relion_preprocess_workspace_bytes(
+    batch_size: int,
+    *,
+    native_lane_reduction: bool,
+    native_atomic_reduction: bool,
+) -> int:
+    """Byte size of the soft-mask workspace output, mirroring the C++ scratch layout.
+
+    Per image: two primary sum arrays (one entry per soft-mask block, or per
+    lane for the native-atomic tree) plus, for the lane tree, two lane arrays
+    ahead of the block-by-lane partials; then two floats of reduced sums per
+    image; then the CUB temporary budget.  Each region is 256-byte aligned.
+    The handler recomputes its own layout and fails closed if this is short.
+    """
+
+    if native_lane_reduction:
+        per_image = 2 * _RELION_SOFTMASK_BLOCKS * _RELION_PREPROCESS_BLOCK_SIZE + 2 * _RELION_PREPROCESS_BLOCK_SIZE
+    elif native_atomic_reduction:
+        per_image = 2 * _RELION_PREPROCESS_BLOCK_SIZE
+    else:
+        per_image = 2 * _RELION_SOFTMASK_BLOCKS
+
+    def _align(nbytes: int) -> int:
+        return (nbytes + 255) // 256 * 256
+
+    return (
+        _align(int(batch_size) * per_image * 4)
+        + _align(2 * int(batch_size) * 4)
+        + _align(_RELION_PREPROCESS_CUB_TEMP_BYTES)
+    )
+
+
+def _relion_preprocess_real_f32_impl(
     images: jax.Array,
     normalization_factors: jax.Array,
     integer_shifts: jax.Array,
@@ -5925,19 +6432,9 @@ def relion_preprocess_real_f32(
     apply_mask: bool = True,
     native_lane_reduction: bool = False,
     native_atomic_reduction: bool = False,
-) -> tuple[jax.Array, jax.Array]:
-    """Apply RELION's accelerated float32 real-space preprocessing.
-
-    Returns ``(normalized_shifted, masked)`` so captured operand tests can
-    gate both stored RELION boundaries.  The implementation preserves
-    RELION's separate float32 normalization and zero-filled translation and
-    CUDA ``sqrtf``/``cospif`` mask arithmetic.  The default uses RECOVAR's
-    accepted deterministic block-first addition tree.  The diagnostic-only
-    ``native_lane_reduction`` mode instead deterministically reproduces the
-    native observer's lane-across-blocks tree before its final CUB sum. The
-    diagnostic ``native_atomic_reduction`` mode reproduces RELION's actual
-    schedule-dependent atomic lane accumulation.
-    """
+    host_check: bool = True,
+) -> tuple[jax.Array, jax.Array, jax.Array]:
+    """Traced body of :func:`relion_preprocess_real_f32`; also returns the invalid-image count."""
 
     if jax.default_backend() != "gpu":
         raise RuntimeError("RELION CUDA preprocessing requires a JAX GPU backend")
@@ -5965,6 +6462,17 @@ def relion_preprocess_real_f32(
         raise ValueError("native lane and native atomic reductions are mutually exclusive")
 
     out_type = jax.ShapeDtypeStruct(images.shape, jnp.float32)
+    count_type = jax.ShapeDtypeStruct((1,), jnp.int32)
+    workspace_type = jax.ShapeDtypeStruct(
+        (
+            _relion_preprocess_workspace_bytes(
+                batch_size,
+                native_lane_reduction=native_lane_reduction,
+                native_atomic_reduction=native_atomic_reduction,
+            ),
+        ),
+        jnp.uint8,
+    )
     target = (
         _TARGET_RELION_PREPROCESS_REAL_F32_NATIVE_ATOMIC
         if native_atomic_reduction
@@ -5974,9 +6482,10 @@ def relion_preprocess_real_f32(
             else _TARGET_RELION_PREPROCESS_REAL_F32
         )
     )
-    return jax.ffi.ffi_call(
+    # Result order matches the handler binding: images, masked, workspace, count.
+    normalized_shifted, masked, _workspace, invalid_count = jax.ffi.ffi_call(
         target,
-        (out_type, out_type),
+        (out_type, out_type, workspace_type, count_type),
         vmap_method="sequential",
     )(
         images,
@@ -5985,7 +6494,138 @@ def relion_preprocess_real_f32(
         radius=np.float32(radius),
         cosine_width=np.float32(cosine_width),
         apply_mask=np.int64(int(apply_mask)),
+        host_check=np.int64(int(bool(host_check))),
     )
+    return normalized_shifted, masked, invalid_count
+
+
+_relion_preprocess_real_f32_jit = jax.jit(
+    _relion_preprocess_real_f32_impl, static_argnums=(3, 4, 5, 6, 7, 8)
+)
+
+
+def relion_preprocess_real_f32(
+    images: jax.Array,
+    normalization_factors: jax.Array,
+    integer_shifts: jax.Array,
+    radius: float,
+    cosine_width: float,
+    apply_mask: bool = True,
+    native_lane_reduction: bool = False,
+    native_atomic_reduction: bool = False,
+    deferred_finite_check: bool | None = None,
+) -> tuple[jax.Array, jax.Array]:
+    """Apply RELION's accelerated float32 real-space preprocessing.
+
+    Returns ``(normalized_shifted, masked)`` so captured operand tests can
+    gate both stored RELION boundaries.  The implementation preserves
+    RELION's separate float32 normalization and zero-filled translation and
+    CUDA ``sqrtf``/``cospif`` mask arithmetic.  The default uses RECOVAR's
+    accepted deterministic block-first addition tree.  The diagnostic-only
+    ``native_lane_reduction`` mode instead deterministically reproduces the
+    native observer's lane-across-blocks tree before its final CUB sum. The
+    diagnostic ``native_atomic_reduction`` mode reproduces RELION's actual
+    schedule-dependent atomic lane accumulation.
+
+    The soft-mask launch is batched: the background sums stay on the device
+    and the fill kernel forms the same float32 quotient there, so the masked
+    images are bit-identical to the former per-image launch.  Default failure
+    semantics are unchanged: a mask with no exterior texel, or a non-finite
+    image, fails closed with ``CUDA: invalid argument`` after one per-call
+    read-back of the per-image sums.
+
+    ``deferred_finite_check`` (default from
+    ``RECOVAR_RELION_PREPROCESS_DEFERRED_CHECK``, off) removes that per-call
+    read-back and stream synchronization: the device counts invalid images
+    into a small array that is queued for
+    :func:`drain_relion_preprocess_checks`, which the K-class pass-2 loop
+    calls at every bucket-group boundary and the iteration loop after each
+    E-step.  Until the drain, an invalid image carries NaN in its masked
+    exterior; the drain then raises the same failure, later.
+    """
+
+    if deferred_finite_check is None:
+        deferred_finite_check = relion_preprocess_deferred_check_requested()
+    # A Python queue cannot retain status tracers from the local big JIT.
+    # Keep the native fail-closed check inside that compiled execution.
+    if type(jax.core.trace_ctx.trace).__name__ != "EvalTrace":
+        deferred_finite_check = False
+    normalized_shifted, masked, invalid_count = _relion_preprocess_real_f32_jit(
+        images,
+        normalization_factors,
+        integer_shifts,
+        radius,
+        cosine_width,
+        apply_mask,
+        native_lane_reduction,
+        native_atomic_reduction,
+        not deferred_finite_check,
+    )
+    if deferred_finite_check and apply_mask:
+        _queue_relion_preprocess_check(invalid_count)
+    return normalized_shifted, masked
+
+
+# Tests bypass the JIT through ``__wrapped__`` to exercise the eager guards.
+relion_preprocess_real_f32.__wrapped__ = _relion_preprocess_real_f32_impl
+
+
+RELION_PREPROCESS_DEFERRED_CHECK_ENV = "RECOVAR_RELION_PREPROCESS_DEFERRED_CHECK"
+_RELION_PREPROCESS_PENDING_CHECKS: list[jax.Array] = []
+_RELION_PREPROCESS_PENDING_LOCK = threading.Lock()
+_RELION_PREPROCESS_PENDING_LIMIT = 1024
+
+
+def relion_preprocess_deferred_check_requested() -> bool:
+    """Strict 0/1 read of ``RECOVAR_RELION_PREPROCESS_DEFERRED_CHECK`` (unset is off)."""
+
+    token = os.environ.get(RELION_PREPROCESS_DEFERRED_CHECK_ENV, "0").strip()
+    if token not in {"0", "1"}:
+        raise ValueError(f"{RELION_PREPROCESS_DEFERRED_CHECK_ENV} must be 0 or 1")
+    return token == "1"
+
+
+def _queue_relion_preprocess_check(invalid_count: jax.Array) -> None:
+    """Queue one device invalid-image count; drain when the queue is full."""
+
+    with _RELION_PREPROCESS_PENDING_LOCK:
+        _RELION_PREPROCESS_PENDING_CHECKS.append(invalid_count)
+        full = len(_RELION_PREPROCESS_PENDING_CHECKS) >= _RELION_PREPROCESS_PENDING_LIMIT
+    if full:
+        drain_relion_preprocess_checks()
+
+
+def pending_relion_preprocess_checks() -> int:
+    """Number of queued deferred soft-mask checks (test and diagnostics hook)."""
+
+    with _RELION_PREPROCESS_PENDING_LOCK:
+        return len(_RELION_PREPROCESS_PENDING_CHECKS)
+
+
+def drain_relion_preprocess_checks() -> int:
+    """Wait on every queued deferred soft-mask check and fail closed on invalid images.
+
+    Returns the number of drained checks.  Raises ``RuntimeError`` when any
+    batch contained an image whose soft-mask background weight was
+    non-positive or whose sums were non-finite; this is the deferred form of
+    the ``CUDA: invalid argument`` failure of the synchronous check.
+    """
+
+    with _RELION_PREPROCESS_PENDING_LOCK:
+        pending = list(_RELION_PREPROCESS_PENDING_CHECKS)
+        _RELION_PREPROCESS_PENDING_CHECKS.clear()
+    if not pending:
+        return 0
+    counts = np.asarray(jnp.concatenate(pending)).astype(np.int64)
+    invalid_images = int(counts.sum())
+    if invalid_images:
+        raise RuntimeError(
+            "RELION CUDA preprocessing (deferred check): "
+            f"{invalid_images} image(s) in {int((counts > 0).sum())} batch(es) had a "
+            "non-positive or non-finite soft-mask background"
+        )
+    return len(pending)
+
 
 
 def _backproject_indexed_target(use_relion_block_topology: bool) -> str:
@@ -7831,3 +8471,755 @@ def batch_project(
             relion_texture_interp=relion_texture_interp,
         )
     )(volumes)
+
+
+def relion_firstiter_bpref_fused_x_half(
+    data_volume: jax.Array,
+    weight_volume: jax.Array,
+    image: jax.Array,
+    ctf: jax.Array,
+    minvsigma2: jax.Array,
+    posterior: jax.Array,
+    translation_angles: jax.Array,
+    native_euler_matrices: jax.Array,
+    significant_weight: jax.Array,
+    weight_norm: jax.Array,
+    image_shape: Tuple[int, int],
+    volume_shape: Tuple[int, int, int],
+    max_r: float,
+) -> tuple[jax.Array, jax.Array]:
+    """Dispatch the exact-source kernel with host-known scalar attributes."""
+
+    significant_weight_scalar = float(np.asarray(significant_weight).reshape(()))
+    weight_norm_scalar = float(np.asarray(weight_norm).reshape(()))
+    return _relion_firstiter_bpref_fused_x_half_static(
+        data_volume,
+        weight_volume,
+        image,
+        ctf,
+        minvsigma2,
+        posterior,
+        translation_angles,
+        native_euler_matrices,
+        significant_weight_scalar,
+        weight_norm_scalar,
+        image_shape,
+        volume_shape,
+        max_r,
+    )
+
+
+def relion_firstiter_bpref_fused_x_half_split(
+    data_volume_real: jax.Array,
+    data_volume_imag: jax.Array,
+    weight_volume: jax.Array,
+    image: jax.Array,
+    ctf: jax.Array,
+    minvsigma2: jax.Array,
+    posterior: jax.Array,
+    translation_angles: jax.Array,
+    native_euler_matrices: jax.Array,
+    significant_weight: jax.Array,
+    weight_norm: jax.Array,
+    image_shape: Tuple[int, int],
+    volume_shape: Tuple[int, int, int],
+    max_r: float,
+) -> tuple[jax.Array, jax.Array, jax.Array]:
+    """Dispatch firstiter BPref while retaining its native split accumulators.
+
+    The CUDA target natively aliases separate real, imaginary, and weight
+    ``float32`` arrays.  This entry point lets a memory-constrained replay keep
+    that representation across launches and defer the full-volume complex
+    interleave until all contributions have been accumulated.
+    """
+
+    significant_weight_scalar = float(np.asarray(significant_weight).reshape(()))
+    weight_norm_scalar = float(np.asarray(weight_norm).reshape(()))
+    return _relion_firstiter_bpref_fused_x_half_split_static(
+        data_volume_real,
+        data_volume_imag,
+        weight_volume,
+        image,
+        ctf,
+        minvsigma2,
+        posterior,
+        translation_angles,
+        native_euler_matrices,
+        significant_weight_scalar,
+        weight_norm_scalar,
+        image_shape,
+        volume_shape,
+        max_r,
+    )
+
+
+@functools.partial(jax.jit, static_argnums=(8, 9, 10, 11, 12))
+def _relion_firstiter_bpref_fused_x_half_static(
+    data_volume: jax.Array,
+    weight_volume: jax.Array,
+    image: jax.Array,
+    ctf: jax.Array,
+    minvsigma2: jax.Array,
+    posterior: jax.Array,
+    translation_angles: jax.Array,
+    native_euler_matrices: jax.Array,
+    significant_weight: float,
+    weight_norm: float,
+    image_shape: Tuple[int, int],
+    volume_shape: Tuple[int, int, int],
+    max_r: float,
+) -> tuple[jax.Array, jax.Array]:
+    """Form native-unit firstiter BPref operands and scatter in one CUDA block.
+
+    Inputs are the exact arrays consumed by RELION ``BP.cuh`` after its image
+    crop: one dense current-size FFTW half image, native CTF and Minvsigma2,
+    the rotation/translation posterior matrix, native translation angles, and
+    native Euler matrices.  The output remains in RELION accumulator units;
+    callers must not fold RECOVAR's N²/N⁴ normalization into these operands.
+    """
+
+    expected_volume_size = int(
+        volume_shape[0] * volume_shape[1] * (volume_shape[2] // 2 + 1)
+    )
+    if data_volume.dtype != jnp.dtype(jnp.complex64) or data_volume.shape != (
+        expected_volume_size,
+    ):
+        raise TypeError(
+            "RELION firstiter fused BPref data accumulator must be flat complex64 shape "
+            f"{(expected_volume_size,)}, got {data_volume.shape}/{data_volume.dtype}"
+        )
+    data_volume_real = jnp.real(data_volume).astype(jnp.float32)
+    data_volume_imag = jnp.imag(data_volume).astype(jnp.float32)
+    data_real_out, data_imag_out, weight_out = (
+        _relion_firstiter_bpref_fused_x_half_split_impl(
+            data_volume_real,
+            data_volume_imag,
+            weight_volume,
+            image,
+            ctf,
+            minvsigma2,
+            posterior,
+            translation_angles,
+            native_euler_matrices,
+            significant_weight,
+            weight_norm,
+            image_shape,
+            volume_shape,
+            max_r,
+        )
+    )
+    return jax.lax.complex(data_real_out, data_imag_out), weight_out
+
+
+@functools.partial(
+    jax.jit,
+    static_argnums=(9, 10, 11, 12, 13),
+    donate_argnums=(0, 1, 2),
+)
+def _relion_firstiter_bpref_fused_x_half_split_static(
+    data_volume_real: jax.Array,
+    data_volume_imag: jax.Array,
+    weight_volume: jax.Array,
+    image: jax.Array,
+    ctf: jax.Array,
+    minvsigma2: jax.Array,
+    posterior: jax.Array,
+    translation_angles: jax.Array,
+    native_euler_matrices: jax.Array,
+    significant_weight: float,
+    weight_norm: float,
+    image_shape: Tuple[int, int],
+    volume_shape: Tuple[int, int, int],
+    max_r: float,
+) -> tuple[jax.Array, jax.Array, jax.Array]:
+    """Run the native split firstiter BPref FFI without complex repacking.
+
+    The FFI aliases all three accumulator inputs to its outputs.  Donation is
+    required at this outer JIT boundary as well: without it, XLA preserves the
+    functional input values by copying each box-scale accumulator before the
+    aliased call, defeating the in-place CUDA contract.
+    """
+
+    return _relion_firstiter_bpref_fused_x_half_split_impl(
+        data_volume_real,
+        data_volume_imag,
+        weight_volume,
+        image,
+        ctf,
+        minvsigma2,
+        posterior,
+        translation_angles,
+        native_euler_matrices,
+        significant_weight,
+        weight_norm,
+        image_shape,
+        volume_shape,
+        max_r,
+    )
+
+
+def _relion_firstiter_bpref_fused_x_half_split_impl(
+    data_volume_real: jax.Array,
+    data_volume_imag: jax.Array,
+    weight_volume: jax.Array,
+    image: jax.Array,
+    ctf: jax.Array,
+    minvsigma2: jax.Array,
+    posterior: jax.Array,
+    translation_angles: jax.Array,
+    native_euler_matrices: jax.Array,
+    significant_weight: float,
+    weight_norm: float,
+    image_shape: Tuple[int, int],
+    volume_shape: Tuple[int, int, int],
+    max_r: float,
+) -> tuple[jax.Array, jax.Array, jax.Array]:
+    """Validate and issue the shared three-accumulator firstiter FFI call."""
+
+    _ensure_ffi()
+    _validate_inputs(volume_shape, image_shape, 1, True, True, max_r=max_r)
+    if int(volume_shape[2]) % 2 == 0:
+        raise ValueError(
+            f"RELION firstiter fused BPref requires an odd BPref grid, got {volume_shape}"
+        )
+    expected_pixels = int(image_shape[0] * (image_shape[1] // 2 + 1))
+    expected_volume_size = int(
+        volume_shape[0] * volume_shape[1] * (volume_shape[2] // 2 + 1)
+    )
+    if image.dtype != jnp.dtype(jnp.complex64) or image.shape != (expected_pixels,):
+        raise TypeError(
+            "RELION firstiter fused BPref image must be a dense complex64 FFTW half row, "
+            f"got {image.shape}/{image.dtype}"
+        )
+    for label, value in (("ctf", ctf), ("minvsigma2", minvsigma2)):
+        if value.dtype != jnp.dtype(jnp.float32) or value.shape != (expected_pixels,):
+            raise TypeError(
+                f"RELION firstiter fused BPref {label} must be float32 shape "
+                f"{(expected_pixels,)}, got {value.shape}/{value.dtype}"
+            )
+    if posterior.dtype != jnp.dtype(jnp.float32) or posterior.ndim != 2:
+        raise TypeError(
+            "RELION firstiter fused BPref posterior must be a float32 rotation/translation matrix"
+        )
+    if posterior.shape[0] <= 0 or posterior.shape[1] <= 0:
+        raise ValueError("RELION firstiter fused BPref posterior must be nonempty")
+    if (
+        translation_angles.dtype != jnp.dtype(jnp.float32)
+        or translation_angles.shape != (posterior.shape[1], 2)
+    ):
+        raise TypeError(
+            "RELION firstiter fused BPref translation angles must be float32 shape "
+            f"{(posterior.shape[1], 2)}, got {translation_angles.shape}/{translation_angles.dtype}"
+        )
+    if (
+        native_euler_matrices.dtype != jnp.dtype(jnp.float32)
+        or native_euler_matrices.shape != (posterior.shape[0], 3, 3)
+    ):
+        raise TypeError(
+            "RELION firstiter fused BPref Euler matrices must be native-convention float32 "
+            f"shape {(posterior.shape[0], 3, 3)}, got "
+            f"{native_euler_matrices.shape}/{native_euler_matrices.dtype}"
+        )
+    if not np.isfinite(significant_weight) or not np.isfinite(weight_norm):
+        raise ValueError("RELION firstiter fused BPref scalar attributes must be finite")
+    if weight_norm <= 0.0:
+        raise ValueError("RELION firstiter fused BPref weight norm must be positive")
+    for label, value in (
+        ("real data", data_volume_real),
+        ("imaginary data", data_volume_imag),
+        ("weight", weight_volume),
+    ):
+        if value.dtype != jnp.dtype(jnp.float32) or value.shape != (
+            expected_volume_size,
+        ):
+            raise TypeError(
+                f"RELION firstiter fused BPref {label} accumulator must be flat "
+                f"float32 shape {(expected_volume_size,)}, got {value.shape}/{value.dtype}"
+            )
+
+    kw, _, _ = _ffi_kwargs(image_shape, volume_shape, 1, True, True, max_r)
+    kw["significant_weight"] = np.float32(significant_weight)
+    kw["weight_norm"] = np.float32(weight_norm)
+    out_types = (
+        jax.ShapeDtypeStruct(data_volume_real.shape, data_volume_real.dtype),
+        jax.ShapeDtypeStruct(data_volume_imag.shape, data_volume_imag.dtype),
+        jax.ShapeDtypeStruct(weight_volume.shape, weight_volume.dtype),
+    )
+    data_real_out, data_imag_out, weight_out = jax.ffi.ffi_call(
+        _TARGET_RELION_FIRSTITER_BPREF_FUSED_X_HALF,
+        out_types,
+        input_output_aliases={8: 0, 9: 1, 10: 2},
+        vmap_method="sequential",
+    )(
+        jnp.real(image).astype(jnp.float32),
+        jnp.imag(image).astype(jnp.float32),
+        ctf,
+        minvsigma2,
+        posterior,
+        translation_angles[:, 0],
+        translation_angles[:, 1],
+        native_euler_matrices.reshape(posterior.shape[0], 9),
+        data_volume_real,
+        data_volume_imag,
+        weight_volume,
+        **kw,
+    )
+    return data_real_out, data_imag_out, weight_out
+
+
+def _persistent_relion_half_texture_c_api():
+    lib = _get_lib()
+    create = lib.recovar_relion_persistent_half_texture_f32_create
+    create.argtypes = (
+        ctypes.c_void_p,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_float,
+        ctypes.POINTER(ctypes.c_uint64),
+    )
+    create.restype = ctypes.c_int
+    destroy = lib.recovar_relion_persistent_half_texture_f32_destroy
+    destroy.argtypes = (ctypes.c_uint64,)
+    destroy.restype = ctypes.c_int
+    return create, destroy
+
+
+def _destroy_persistent_relion_half_texture_handle(
+    owner_handle: int,
+    *,
+    raise_on_error: bool,
+) -> None:
+    if not owner_handle:
+        return
+    try:
+        _, destroy = _persistent_relion_half_texture_c_api()
+        status = int(destroy(ctypes.c_uint64(int(owner_handle))))
+    except Exception:
+        if raise_on_error:
+            raise
+        return
+    if status != 0 and raise_on_error:
+        raise RuntimeError(
+            "failed to destroy persistent RELION half texture: "
+            f"CUDA error code {status}"
+        )
+
+
+class RelionPersistentHalfTextureF32:
+    """One host-uploaded RELION ``Projector::data`` texture.
+
+    The input must already be a C-contiguous ``complex64`` host slab.  It is
+    copied synchronously into a CUDA array exactly once; projection calls pass
+    only a dynamic opaque handle plus their rotation rows to XLA FFI.  Handles
+    are never reused by the CUDA registry, so an executable retained in JAX's
+    compilation cache cannot alias a later texture after :meth:`close`.
+    """
+
+    def __init__(
+        self,
+        projector_half: np.ndarray,
+        *,
+        padding_factor: int,
+        projector_max_r: int,
+        projector_scale: float = 1.0,
+        device=None,
+    ) -> None:
+        if not isinstance(projector_half, np.ndarray):
+            raise TypeError(
+                "persistent RELION half texture requires a NumPy host array"
+            )
+        if projector_half.dtype != np.dtype(np.complex64):
+            raise TypeError(
+                "persistent RELION half texture requires complex64 host data, "
+                f"got {projector_half.dtype}"
+            )
+        if projector_half.ndim != 3 or not projector_half.flags.c_contiguous:
+            raise ValueError(
+                "persistent RELION half texture requires a C-contiguous "
+                f"(z, y, x-half) slab, got shape={projector_half.shape} "
+                f"c_contiguous={projector_half.flags.c_contiguous}"
+            )
+        padding_factor = int(padding_factor)
+        projector_max_r = int(projector_max_r)
+        projector_scale = float(projector_scale)
+        if padding_factor <= 0 or projector_max_r <= 0:
+            raise ValueError("padding_factor and projector_max_r must be positive")
+        if projector_scale != 1.0:
+            raise ValueError(
+                "persistent host-uploaded RELION texture is exact only for "
+                f"projector_scale=1.0, got {projector_scale}"
+            )
+        padded_max_r = projector_max_r * padding_factor
+        expected_shape = (
+            2 * padded_max_r + 3,
+            2 * padded_max_r + 3,
+            padded_max_r + 2,
+        )
+        if projector_half.shape != expected_shape:
+            raise ValueError(
+                "persistent RELION half texture geometry mismatch: "
+                f"got {projector_half.shape}, expected {expected_shape}"
+            )
+        if jax.default_backend() != "gpu":
+            raise RuntimeError("persistent RELION half texture requires a JAX GPU backend")
+        if not custom_cuda_requested():
+            raise RuntimeError(
+                "persistent RELION half texture requires the custom CUDA extension"
+            )
+
+        gpu_devices = jax.devices("gpu")
+        if not gpu_devices:
+            raise RuntimeError("persistent RELION half texture requires a JAX GPU device")
+        if device is None:
+            device = gpu_devices[0]
+        if device not in gpu_devices:
+            raise ValueError("persistent RELION half texture device is not a local JAX GPU")
+        device_ordinal = int(
+            getattr(device, "local_hardware_id", getattr(device, "id", -1))
+        )
+        if device_ordinal < 0:
+            raise ValueError("could not resolve the CUDA ordinal for the JAX GPU device")
+
+        _ensure_ffi()
+        create, _ = _persistent_relion_half_texture_c_api()
+        owner_handle = ctypes.c_uint64()
+        status = int(
+            create(
+                projector_half.ctypes.data_as(ctypes.c_void_p),
+                ctypes.c_int(expected_shape[2]),
+                ctypes.c_int(expected_shape[1]),
+                ctypes.c_int(expected_shape[0]),
+                ctypes.c_int(device_ordinal),
+                ctypes.c_float(projector_scale),
+                ctypes.byref(owner_handle),
+            )
+        )
+        if status != 0 or int(owner_handle.value) == 0:
+            raise RuntimeError(
+                "failed to create persistent RELION half texture: "
+                f"CUDA error code {status}"
+            )
+
+        self.shape = tuple(int(value) for value in expected_shape)
+        self.dtype = np.dtype(np.complex64)
+        self.padding_factor = padding_factor
+        self.projector_max_r = projector_max_r
+        self.projector_scale = projector_scale
+        self.device = device
+        self.device_ordinal = device_ordinal
+        self._owner_handle = int(owner_handle.value)
+        self._handle_array = None
+        self._last_output = None
+        self._lock = threading.RLock()
+        try:
+            handle_array = jax.device_put(
+                np.asarray(self._owner_handle, dtype=np.uint64),
+                device,
+            )
+            if handle_array.dtype != jnp.uint64 or handle_array.shape != ():
+                raise RuntimeError(
+                    "persistent RELION texture handles require scalar JAX uint64"
+                )
+            self._handle_array = jax.block_until_ready(handle_array)
+        except Exception:
+            _destroy_persistent_relion_half_texture_handle(
+                self._owner_handle,
+                raise_on_error=False,
+            )
+            self._owner_handle = 0
+            raise
+        self._finalizer = weakref.finalize(
+            self,
+            _destroy_persistent_relion_half_texture_handle,
+            self._owner_handle,
+            raise_on_error=False,
+        )
+
+    @property
+    def closed(self) -> bool:
+        return self._owner_handle == 0
+
+    @property
+    def owner_handle(self) -> int:
+        if self.closed:
+            raise RuntimeError("persistent RELION half texture is closed")
+        return self._owner_handle
+
+
+    def _require_live_geometry(
+        self,
+        *,
+        padding_factor: int,
+        projector_max_r: int,
+    ) -> jax.Array:
+        if self.closed or self._handle_array is None:
+            raise RuntimeError("persistent RELION half texture is closed")
+        if (
+            int(padding_factor) != self.padding_factor
+            or int(projector_max_r) != self.projector_max_r
+        ):
+            raise ValueError(
+                "persistent RELION half texture geometry does not match the "
+                "projection request"
+            )
+        return self._handle_array
+
+    def close(self) -> None:
+        with self._lock:
+            if self.closed:
+                return
+            readiness_error = None
+            if self._last_output is not None:
+                try:
+                    jax.block_until_ready(self._last_output)
+                except Exception as exc:  # still destroy after a failed launch
+                    readiness_error = exc
+            owner_handle = self._owner_handle
+            self._owner_handle = 0
+            self._handle_array = None
+            self._last_output = None
+            self._finalizer.detach()
+            _destroy_persistent_relion_half_texture_handle(
+                owner_handle,
+                raise_on_error=True,
+            )
+            if readiness_error is not None:
+                raise readiness_error
+
+    def __enter__(self):
+        if self.closed:
+            raise RuntimeError("persistent RELION half texture is closed")
+        return self
+
+    def __exit__(self, exc_type, exc, traceback) -> None:
+        self.close()
+
+
+@functools.partial(
+    jax.jit,
+    static_argnames=("current_size", "padding_factor", "projector_max_r"),
+)
+def _relion_projector_persistent_half_texture_f32(
+    owner_handle: jax.Array,
+    rotation_matrices: jax.Array,
+    *,
+    current_size: int,
+    padding_factor: int,
+    projector_max_r: int,
+) -> jax.Array:
+    compact_rotations = _rot_to_compact(rotation_matrices, jnp.float32)
+    output_type = jax.ShapeDtypeStruct(
+        (
+            rotation_matrices.shape[0],
+            current_size * (current_size // 2 + 1),
+        ),
+        jnp.complex64,
+    )
+    return jax.ffi.ffi_call(
+        _TARGET_RELION_PROJECTOR_PERSISTENT_HALF_TEXTURE_F32,
+        output_type,
+        vmap_method="sequential",
+    )(
+        owner_handle,
+        compact_rotations,
+        current_size=np.int64(current_size),
+        padding_factor=np.int64(padding_factor),
+        projector_max_r=np.int64(projector_max_r),
+    )
+
+
+def relion_projector_persistent_half_texture_f32(
+    texture: RelionPersistentHalfTextureF32,
+    rotation_matrices: jax.Array,
+    *,
+    current_size: int,
+    padding_factor: int,
+    projector_max_r: int,
+) -> jax.Array:
+    """Project through one explicitly owned host-uploaded RELION texture."""
+
+    if not isinstance(texture, RelionPersistentHalfTextureF32):
+        raise TypeError("texture must be a RelionPersistentHalfTextureF32")
+    rotation_matrices = jnp.asarray(rotation_matrices)
+    if rotation_matrices.dtype != jnp.float32:
+        raise TypeError(
+            "RELION half-texture rotations must be float32, got "
+            f"{rotation_matrices.dtype}"
+        )
+    if (
+        int(current_size) <= 0
+        or rotation_matrices.ndim != 3
+        or rotation_matrices.shape[0] <= 0
+        or rotation_matrices.shape[1:] != (3, 3)
+    ):
+        raise ValueError(
+            "persistent RELION half-texture projection operands have "
+            f"inconsistent shapes: rotations={rotation_matrices.shape}, "
+            f"current_size={current_size}"
+        )
+    with texture._lock:
+        owner_handle = texture._require_live_geometry(
+            padding_factor=padding_factor,
+            projector_max_r=projector_max_r,
+        )
+        output = _relion_projector_persistent_half_texture_f32(
+            owner_handle,
+            rotation_matrices,
+            current_size=int(current_size),
+            padding_factor=int(padding_factor),
+            projector_max_r=int(projector_max_r),
+        )
+        texture._last_output = output
+        output = jax.block_until_ready(output)
+        texture._last_output = None
+        return output
+
+
+
+
+@functools.partial(
+    jax.jit,
+    static_argnames=(
+        "current_size",
+        "padding_factor",
+        "projector_max_r",
+        "projector_scale",
+    ),
+)
+def relion_projector_half_texture_f32(
+    projector_half: jax.Array,
+    rotation_matrices: jax.Array,
+    *,
+    current_size: int,
+    padding_factor: int,
+    projector_max_r: int,
+    projector_scale: float = 1.0,
+) -> jax.Array:
+    """Project native RELION half storage through one interleaved texture.
+
+    The output is a centered-row, rfft-packed square image for every input
+    rotation. Keeping ``Projector::data`` in ``(z, y, x-half)`` form avoids a
+    full cubic JAX expansion and the split real/imaginary texture staging used
+    by the legacy generic projector.
+    """
+
+    projector_half = jnp.asarray(projector_half)
+    rotation_matrices = jnp.asarray(rotation_matrices)
+    current_size = int(current_size)
+    padding_factor = int(padding_factor)
+    projector_max_r = int(projector_max_r)
+    projector_scale = float(projector_scale)
+    expected_pad = 2 * projector_max_r * padding_factor + 3
+    expected_shape = (
+        expected_pad,
+        expected_pad,
+        projector_max_r * padding_factor + 2,
+    )
+    if projector_half.dtype != jnp.complex64:
+        raise TypeError(
+            f"RELION half-texture projector must be complex64, got {projector_half.dtype}"
+        )
+    if rotation_matrices.dtype != jnp.float32:
+        raise TypeError(
+            "RELION half-texture rotations must be float32, got "
+            f"{rotation_matrices.dtype}"
+        )
+    if (
+        current_size <= 0
+        or padding_factor <= 0
+        or projector_max_r <= 0
+        or projector_half.shape != expected_shape
+        or rotation_matrices.ndim != 3
+        or rotation_matrices.shape[0] <= 0
+        or rotation_matrices.shape[1:] != (3, 3)
+    ):
+        raise ValueError(
+            "RELION half-texture projection operands have inconsistent shapes: "
+            f"projector={projector_half.shape}, expected={expected_shape}, "
+            f"rotations={rotation_matrices.shape}, current_size={current_size}"
+        )
+    if not np.isfinite(projector_scale):
+        raise ValueError(f"projector_scale must be finite, got {projector_scale}")
+    if jax.default_backend() != "gpu":
+        raise RuntimeError("RELION half-texture projection requires a JAX GPU backend")
+    if not custom_cuda_requested():
+        raise RuntimeError(
+            "RELION half-texture projection requires the custom CUDA extension"
+        )
+    _ensure_ffi()
+    compact_rotations = _rot_to_compact(rotation_matrices, jnp.float32)
+    output_type = jax.ShapeDtypeStruct(
+        (
+            rotation_matrices.shape[0],
+            current_size * (current_size // 2 + 1),
+        ),
+        jnp.complex64,
+    )
+    return jax.ffi.ffi_call(
+        _TARGET_RELION_PROJECTOR_HALF_TEXTURE_F32,
+        output_type,
+        vmap_method="sequential",
+    )(
+        projector_half,
+        compact_rotations,
+        current_size=np.int64(current_size),
+        padding_factor=np.int64(padding_factor),
+        projector_max_r=np.int64(projector_max_r),
+        projector_scale=np.float32(projector_scale),
+    )
+
+
+def dual_weighted_sums_pairs_rows_f32(
+    pair_probabilities: jax.Array,
+    pair_translation_ids: jax.Array,
+    row_offsets: jax.Array,
+    row_batch: jax.Array,
+    row_rotation: jax.Array,
+    first_values: jax.Array,
+    second_values: jax.Array,
+) -> tuple[jax.Array, jax.Array]:
+    """Flat real-row form of :func:`dual_weighted_sums_pairs_f32`.
+
+    ``row_batch`` and ``row_rotation`` are ``[rows]`` int32 lists of the
+    ``(batch, rotation row)`` pairs to accumulate; the outputs are
+    ``[rows, pixel]`` and ``out[f]`` is bit-identical to the padded kernel's
+    output at ``(row_batch[f], row_rotation[f])`` (same pair order, same fma).
+    Rows that point outside the bucket produce zeros. Padded rotation rows
+    (about 71 % of the slots at 100k/256 K=4) are never computed or written.
+    """
+    _ensure_ffi()
+    pair_probabilities = jnp.asarray(pair_probabilities)
+    pair_translation_ids = jnp.asarray(pair_translation_ids)
+    row_offsets = jnp.asarray(row_offsets)
+    row_batch = jnp.asarray(row_batch)
+    row_rotation = jnp.asarray(row_rotation)
+    first_values = jnp.asarray(first_values)
+    second_values = jnp.asarray(second_values)
+    if pair_probabilities.dtype != jnp.float32 or pair_probabilities.ndim != 2:
+        raise ValueError("dual_weighted_sums_pairs_rows_f32 expects float32 pair probabilities [batch, pair]")
+    if pair_translation_ids.dtype != jnp.int32 or pair_translation_ids.shape != pair_probabilities.shape:
+        raise ValueError("dual_weighted_sums_pairs_rows_f32 expects int32 pair translations shaped like the probabilities")
+    if row_offsets.dtype != jnp.int32 or row_offsets.ndim != 2 or row_offsets.shape[0] != pair_probabilities.shape[0] or row_offsets.shape[1] < 2:
+        raise ValueError("dual_weighted_sums_pairs_rows_f32 expects int32 row offsets [batch, rotation + 1]")
+    if row_batch.dtype != jnp.int32 or row_rotation.dtype != jnp.int32 or row_batch.ndim != 1 or row_batch.shape != row_rotation.shape:
+        raise ValueError("dual_weighted_sums_pairs_rows_f32 expects int32 row_batch and row_rotation lists of one length")
+    if first_values.dtype not in (jnp.complex64, jnp.complex128) or second_values.dtype != first_values.dtype:
+        raise ValueError("dual_weighted_sums_pairs_rows_f32 expects two complex value arrays of one dtype")
+    for name, values in (("first_values", first_values), ("second_values", second_values)):
+        if values.ndim != 3 or values.shape[0] != pair_probabilities.shape[0] or values.shape[1] != first_values.shape[1]:
+            raise ValueError(
+                f"dual_weighted_sums_pairs_rows_f32 {name} must be [batch, translation, pixel] "
+                f"with the pair batch, got {values.shape}"
+            )
+    rows = int(row_batch.shape[0])
+    output_types = (
+        jax.ShapeDtypeStruct((rows, first_values.shape[2]), first_values.dtype),
+        jax.ShapeDtypeStruct((rows, second_values.shape[2]), second_values.dtype),
+    )
+    return jax.ffi.ffi_call(
+        _TARGET_DUAL_WEIGHTED_SUMS_PAIRS_ROWS_F32,
+        output_types,
+        vmap_method="sequential",
+    )(pair_probabilities, pair_translation_ids, row_offsets, row_batch, row_rotation, first_values, second_values)

@@ -180,7 +180,8 @@ def test_firstiter_cc_adaptive_dispatch_clamps_against_fine_translation_grid(mon
 
 @pytest.mark.parametrize("n_classes", [1, 4], ids=["k1", "k4"])
 @pytest.mark.parametrize("update_batch", [False, True], ids=["keep-batch", "update-batch"])
-def test_firstiter_cc_dispatch_uses_coarse_batch_for_significance(monkeypatch, n_classes, update_batch):
+@pytest.mark.parametrize("separate_coarse", [False, True])
+def test_firstiter_cc_dispatch_uses_coarse_batch_for_significance(monkeypatch, n_classes, update_batch, separate_coarse):
     captured = {}
     dispatch = {}
     original_dispatch = half_scoring._score_kclass_firstiter_cc_pass2
@@ -232,6 +233,10 @@ def test_firstiter_cc_dispatch_uses_coarse_batch_for_significance(monkeypatch, n
         ):
             return 187, 700
         raise AssertionError((n_rot, n_trans, classes, image_shape_for_batch, current_size_for_batch))
+
+    def coarse_planner(*args, **kwargs):
+        fake_safe_batch_sizes(*args, **kwargs)
+        return 133, 333
 
     def fake_adaptive(*args, **kwargs):
         captured.update(kwargs)
@@ -304,6 +309,7 @@ def test_firstiter_cc_dispatch_uses_coarse_batch_for_significance(monkeypatch, n
         disable_adjoint_y=False,
         disable_adjoint_ctf=False,
         safe_batch_sizes=fake_safe_batch_sizes,
+        significance_safe_batch_sizes=coarse_planner if separate_coarse else None,
         max_significants=None,
         outputs=score_outputs.PerHalfOutputs(),
         firstiter_coarse_current_size=40,
@@ -321,10 +327,10 @@ def test_firstiter_cc_dispatch_uses_coarse_batch_for_significance(monkeypatch, n
         (576, 29, n_classes, (256, 256), 40),
     ]
     assert captured["image_batch_size"] == _safe_firstiter_cc_image_batch_size(116, (256, 256))
-    assert captured["significance_image_batch_size"] == 187
+    assert captured["significance_image_batch_size"] == (133 if separate_coarse else 187)
     assert captured["rotation_block_size"] == min(700, _safe_dense_k_class_rotation_block_size(116, captured["image_batch_size"]))
     # K-class applies the existing coarse score-tile cap; K=1 retains its batch.
-    assert captured["significance_rotation_block_size"] == (700 if n_classes == 1 else 368)
+    assert captured["significance_rotation_block_size"] == (333 if separate_coarse else (700 if n_classes == 1 else 368))
     assert captured["bpref_device_signature_active"] is True
     assert captured["debug_iteration"] == 7
     assert np.all(captured["fine_mstep_rotations_override"] == 0.25)

@@ -320,7 +320,11 @@ def _global_reconstruction_probability_thresholds(
     n_classes, n_images = class_log_evidence.shape
     if len(support_values_by_class) != n_classes:
         raise ValueError("support value class count does not match class_log_evidence")
-    thresholds = np.full(n_images, np.inf, dtype=np.float64)
+    # Rows without positive support must reconstruct nothing. Keep the public
+    # exact-local threshold finite while using a value that remains above every
+    # posterior probability after either float32 or float64 device casting.
+    no_support_threshold = float(np.finfo(np.float32).max)
+    thresholds = np.full(n_images, no_support_threshold, dtype=np.float64)
     target = float(adaptive_fraction)
     for image_index in range(n_images):
         values = []
@@ -498,14 +502,24 @@ def _decode_dense_best_pose_details(hard_assignment, rotations: np.ndarray, tran
     )
 
 
-def _infer_healpix_order_from_rotation_count(n_rot: int) -> int:
+def _infer_healpix_order_from_rotation_count(
+    n_rot: int,
+    symmetry_label: str = "C1",
+) -> int:
     from recovar.em.sampling import rotation_grid_size
 
     n_rot = int(n_rot)
     for order in range(16):
-        if rotation_grid_size(order) == n_rot:
+        try:
+            grid_size = rotation_grid_size(order, symmetry_label)
+        except ValueError:
+            continue
+        if grid_size == n_rot:
             return order
-    raise ValueError(f"Cannot infer RELION HEALPix order from {n_rot} rotations")
+    raise ValueError(
+        f"Cannot infer RELION {symmetry_label} HEALPix order from {n_rot} rotations"
+    )
+
 
 
 def _rotation_prior_with_class_log_prior(
@@ -554,10 +568,11 @@ def _run_sparse_k_class_adaptive_pass2(
     n_rot_coarse = int(coarse_rotations_np.shape[0])
     n_coarse_trans = int(coarse_translations_np.shape[0])
     n_fine_trans = int(fine_translations_np.shape[0])
+    symmetry_label = engine_kwargs.get("symmetry_label", "C1")
     healpix_order = (
         int(coarse_healpix_order)
         if coarse_healpix_order is not None
-        else _infer_healpix_order_from_rotation_count(n_rot_coarse)
+        else _infer_healpix_order_from_rotation_count(n_rot_coarse, symmetry_label)
     )
     base_engine_kwargs = dict(engine_kwargs)
     relion_projector_half_by_class = base_engine_kwargs.get("relion_projector_half")
@@ -604,7 +619,7 @@ def _run_sparse_k_class_adaptive_pass2(
         half_spectrum_scoring=bool(base_engine_kwargs.get("half_spectrum_scoring", False)),
         projection_padding_factor=int(base_engine_kwargs.get("projection_padding_factor", 1)),
         projection_mask_current_image_disk=bool(
-            base_engine_kwargs.get("projection_mask_current_image_disk", True)
+            base_engine_kwargs.get("projection_mask_current_image_disk", False)
         ),
         reconstruction_padding_factor=int(base_engine_kwargs.get("reconstruction_padding_factor", 1)),
         image_corrections=base_engine_kwargs.get("image_corrections"),
@@ -655,6 +670,8 @@ def _run_sparse_k_class_adaptive_pass2(
             base_engine_kwargs.get("bpref_device_signature_active", False)
         ),
         source_faithful_spectrum_norm=source_faithful_spectrum_norm,
+        **({"symmetry_label": base_engine_kwargs["symmetry_label"]}
+           if base_engine_kwargs.get("symmetry_label", "C1") != "C1" else {}),
     )
     if n_classes == 1 and base_engine_kwargs.get("relion_f32_normalization_sum_weight") is not None:
         common["relion_f32_normalization_sum_weight"] = base_engine_kwargs["relion_f32_normalization_sum_weight"]
@@ -1114,12 +1131,69 @@ def _run_dense_k_class_joint_firstiter_score_probe(
     """Score RELION firstiter-CC K-class coarse poses in one shared pass."""
 
     from recovar.em.diagnostics.coarse_gaussian_diagnostics import _significance_debug_dump_matches
-    from recovar.em.scoring.significance import _compute_k_class_significance_batched
+    from recovar.em.scoring.significance import (
+        _compute_k_class_significance_batched,
+        _global_pass1_relion_projector_texture_enabled,
+    )
+    from recovar.em.helpers.projection import compact_relion_projector_half_for_centered_indices
 
     means_array = _as_class_means(means_array)
     n_classes = int(means_array.shape[0])
     n_rot = int(np.asarray(rotations).shape[0])
     n_images = _dataset_image_count(experiment_dataset)
+
+    # Keep the full Projector::data host slab for fine scoring, but transfer
+    # only the centered support consumed by this coarse normalized-CC probe.
+    # At box 800, staging the full PPref plus its CUDA texture can otherwise
+    # exhaust an 80-GB device before the first particle is scored.
+    score_projector_half = engine_kwargs.get("relion_projector_half")
+    score_projector_r_max = engine_kwargs.get("relion_projector_r_max")
+    score_texture_interp = engine_kwargs.get(
+        "coarse_relion_projector_texture_interp",
+        False,
+    )
+    if score_texture_interp is None:
+        score_texture_interp = _global_pass1_relion_projector_texture_enabled()
+    if score_projector_half is not None and n_classes == 1 and score_texture_interp:
+        from recovar.em.helpers.fourier_window import make_fourier_window_spec
+
+        image_shape = tuple(int(value) for value in experiment_dataset.image_shape)
+        n_half = image_shape[0] * (image_shape[1] // 2 + 1)
+        score_window = make_fourier_window_spec(
+            image_shape,
+            engine_kwargs.get("current_size"),
+            n_half,
+            square=bool(engine_kwargs.get("square_window", False)),
+            include_recon_window=False,
+            score_square=True,
+            score_include_dc=True,
+        )
+        if score_window.score_indices_np is not None:
+            score_projector_half = _select_projector_half_for_class(
+                score_projector_half,
+                0,
+                1,
+            )
+            original_projector_shape = tuple(int(value) for value in score_projector_half.shape)
+            original_projector_r_max = int(score_projector_r_max)
+            score_projector_half, score_projector_r_max = (
+                compact_relion_projector_half_for_centered_indices(
+                    score_projector_half,
+                    score_window.score_indices_np,
+                    image_shape,
+                    r_max=int(score_projector_r_max),
+                    padding_factor=int(engine_kwargs.get("projection_padding_factor", 1)),
+                )
+            )
+            logger.info(
+                "RELION firstiter-CC coarse PPref host compaction: "
+                "r_max=%d->%d shape=%s->%s allocated=%.4f GiB",
+                original_projector_r_max,
+                int(score_projector_r_max),
+                original_projector_shape,
+                tuple(int(value) for value in score_projector_half.shape),
+                float(score_projector_half.nbytes / 2**30),
+            )
 
     # RELION's iter-1 firstiter_cc path performs WTA on raw normalized-CC
     # scores before the non-firstiter prior-weighting branch is reached.
@@ -1148,8 +1222,9 @@ def _run_dense_k_class_joint_firstiter_score_probe(
         do_gridding_correction=bool(engine_kwargs.get("do_gridding_correction", False)),
         square_window=bool(engine_kwargs.get("square_window", False)),
         use_float64_scoring=bool(engine_kwargs.get("use_float64_scoring", False)),
-        relion_projector_half=engine_kwargs.get("relion_projector_half"),
-        relion_projector_r_max=engine_kwargs.get("relion_projector_r_max"),
+        use_float64_projections=bool(engine_kwargs.get("use_float64_projections", False)),
+        relion_projector_half=score_projector_half,
+        relion_projector_r_max=score_projector_r_max,
         relion_projector_texture_interp=engine_kwargs.get(
             "coarse_relion_projector_texture_interp",
             False,
@@ -1165,6 +1240,7 @@ def _run_dense_k_class_joint_firstiter_score_probe(
         coarse_healpix_order=engine_kwargs.get("coarse_healpix_order"),
         coarse_rotation_ids=engine_kwargs.get("coarse_rotation_ids"),
         translation_phase_source=engine_kwargs.get("translation_phase_source"),
+        **({"symmetry_label": engine_kwargs["symmetry_label"]} if engine_kwargs.get("symmetry_label", "C1") != "C1" else {}),
     )[-1]
     from recovar.em.diagnostics.global_winner_summary import maybe_dump_global_winner_summary
 
@@ -1611,6 +1687,8 @@ def _run_sparse_firstiter_global_winner_subset_pass2(
             pass2_kwargs.get("bpref_device_signature_active", False)
         ),
         source_faithful_spectrum_norm=source_faithful_spectrum_norm,
+        **({"symmetry_label": pass2_kwargs["symmetry_label"]}
+           if pass2_kwargs.get("symmetry_label", "C1") != "C1" else {}),
     )
     _apply_bpref_particle_order_policy(
         common,
@@ -2183,6 +2261,12 @@ def run_local_k_class_em(
         for class_index in range(n_classes):
             class_layout = class_layouts[class_index]
             class_engine_kwargs = _local_engine_kwargs_for_class(base_engine_kwargs, class_index, n_classes)
+            # The normalization probe neither reconstructs nor publishes
+            # accumulators; do not inherit the reconstruction pass's M-step modes.
+            probe_engine_kwargs = dict(class_engine_kwargs)
+            probe_engine_kwargs["mstep_subtract_ctf_projection"] = False
+            probe_engine_kwargs["mstep_relion_x_half"] = False
+            probe_engine_kwargs["return_half_volume_accumulators"] = False
             with score_dump_label(f"probe_class{class_index:03d}", local=True):
                 probe = run_local_em_exact(
                     experiment_dataset,
@@ -2195,10 +2279,11 @@ def run_local_k_class_em(
                     class_log_prior=float(log_priors[class_index]),
                     disable_adjoint_y=True,
                     disable_adjoint_ctf=True,
+                    score_only=True,
                     stats_use_reconstruction_probs=stats_use_reconstruction_probs,
                     return_profile=return_profile or collect_global_reconstruction_threshold,
                     return_reconstruction_probability_values=collect_global_reconstruction_threshold,
-                    **class_engine_kwargs,
+                    **probe_engine_kwargs,
                 )
             class_log_evidence.append(np.asarray(probe.stats.log_evidence_per_image, dtype=np.float64))
             if support_values_by_class is not None:
@@ -2524,6 +2609,33 @@ def run_dense_k_class_em_adaptive(
     # only referenced inside this function.
     from recovar.em.scoring.significance import _compute_k_class_significance_batched
 
+    from recovar.em.symmetry import canonicalize_rotational_symmetry
+
+    symmetry_label = canonicalize_rotational_symmetry(
+        engine_kwargs.get("symmetry_label", "C1")
+    )
+    non_c1_symmetry = symmetry_label != "C1"
+    requested_sparse_pass2 = bool(engine_kwargs.get("sparse_pass2", False))
+    if non_c1_symmetry and not bool(
+        engine_kwargs.get("mstep_relion_x_half", False)
+    ):
+        raise RuntimeError(
+            f"{symmetry_label} adaptive reconstruction requires RELION x-half BPref "
+            "accumulation; full/native-half M-step routes are unsupported"
+        )
+    if non_c1_symmetry and not requested_sparse_pass2:
+        raise RuntimeError(
+            f"{symmetry_label} adaptive reconstruction requires sparse pass 2; "
+            "the dense pass-2 backend cannot apply point-group symmetry"
+        )
+    if non_c1_symmetry and oversampling_order is None:
+        raise ValueError(
+            f"{symmetry_label} adaptive K-class refinement requires explicit "
+            "oversampling_order; symmetry-boundary children do not form a "
+            "complete reduced fine grid, so the order cannot be inferred from "
+            "their count"
+        )
+
     overall_t0 = time.time()
     if relion_projector_half is not None:
         # Keep the supplied PPref available to fine pass 2 after consuming it
@@ -2573,14 +2685,14 @@ def run_dense_k_class_em_adaptive(
     def _resolved_coarse_healpix_order() -> int:
         if coarse_healpix_order is not None:
             return int(coarse_healpix_order)
-        return _infer_healpix_order_from_rotation_count(n_rot_coarse)
+        return _infer_healpix_order_from_rotation_count(n_rot_coarse, symmetry_label)
 
     def _resolved_oversampling_order() -> int:
         if oversampling_order is not None:
             return max(0, int(oversampling_order))
         return max(
             0,
-            _infer_healpix_order_from_rotation_count(n_rot_fine) - _resolved_coarse_healpix_order(),
+            _infer_healpix_order_from_rotation_count(n_rot_fine, symmetry_label) - _resolved_coarse_healpix_order(),
         )
 
     if rot_parent_map_np.shape != (n_rot_fine,):
@@ -2730,6 +2842,7 @@ def run_dense_k_class_em_adaptive(
             do_gridding_correction=engine_kwargs.get("do_gridding_correction", False),
             square_window=engine_kwargs.get("square_window", False),
             use_float64_scoring=engine_kwargs.get("use_float64_scoring", False),
+            use_float64_projections=bool(engine_kwargs.get("use_float64_projections", False)),
             score_mode=engine_kwargs.get("relion_firstiter_score_mode", "gaussian"),
             relion_projector_half=relion_projector_half,
             relion_projector_r_max=relion_projector_r_max,
@@ -2760,6 +2873,7 @@ def run_dense_k_class_em_adaptive(
                 disc_type,
                 class_log_priors=log_priors,
                 **sig_kwargs,
+                **({"symmetry_label": engine_kwargs["symmetry_label"]} if engine_kwargs.get("symmetry_label", "C1") != "C1" else {}),
             )
         if _full_coarse_stats is None or "significant_cutoff_counts" not in _full_coarse_stats:
             raise RuntimeError("K-class significance did not return RELION cutoff-rank counts")
@@ -2925,6 +3039,7 @@ def run_dense_k_class_em_adaptive(
     dense_support_threshold = _positive_k_class_threshold(n_classes, "RECOVAR_K_CLASS_DENSE_PASS2_SUPPORT_FRACTION", 0.50)
     if (
         sparse_pass2_requested
+        and not non_c1_symmetry
         and engine_kwargs.get("relion_projector_half") is None
         and fine_mstep_rotations_np is None
         and dense_support_threshold is not None
@@ -3193,6 +3308,11 @@ def run_dense_k_class_em_adaptive(
             time.time() - overall_t0,
         )
         return _with_significant_counts(result)
+    if non_c1_symmetry:
+        raise RuntimeError(
+            f"{symmetry_label} adaptive reconstruction reached a configuration with no "
+            "sparse RELION x-half pass-2 route; refusing unsymmetrized dense fallback"
+        )
     if not (skip_significance_pruning and global_winner is None):
         pass2_kwargs["class_rotation_translation_mask"] = _ClassFineGridSignificanceMask(
             significant_sample_indices_by_class=sig_sample_indices_by_class,

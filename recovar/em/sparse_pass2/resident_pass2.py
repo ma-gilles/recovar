@@ -320,7 +320,7 @@ def _require(condition: bool, message: str) -> None:
 
 
 def resident_pass2_out_of_scope_reason(
-    *, relion_firstiter_score_mode, relion_firstiter_winner_take_all
+    *, relion_firstiter_score_mode, relion_firstiter_winner_take_all, symmetry_label="C1"
 ) -> str | None:
     """Name the scoring modes the resident driver was never scoped to cover.
 
@@ -333,6 +333,8 @@ def resident_pass2_out_of_scope_reason(
     fallback there would hide a real mismatch.
     """
 
+    if symmetry_label != "C1":
+        return f"{symmetry_label} point-group reconstruction symmetry"
     if relion_firstiter_score_mode != "gaussian":
         return (
             "RELION normalized-CC scoring "
@@ -1148,7 +1150,7 @@ def compute_pass2_stats_resident(
     accumulate_noise,
     half_spectrum_scoring,
     projection_padding_factor,
-    projection_mask_current_image_disk=True,
+    projection_mask_current_image_disk=False,
     reconstruction_padding_factor,
     image_corrections,
     scale_corrections,

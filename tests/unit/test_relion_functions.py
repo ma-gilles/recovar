@@ -427,6 +427,7 @@ def test_zero_tau_fallback_respects_relion_filter_normalization():
     )
 
     expected_fallback = 1.0 / (0.001 * scale * scale)
+    assert regularized.dtype == np.float64
     np.testing.assert_allclose(regularized, 1.0 + expected_fallback, rtol=0, atol=1e-12)
 
 
@@ -1727,3 +1728,1437 @@ def test_post_process_from_filter_v2_half_matches_full_gpu(gpu_device):
         vol_full_real = np.asarray(ftu.get_idft3(jnp.array(out_full.reshape(volume_shape)))).real
         vol_half_real = np.asarray(ftu.get_idft3(jnp.array(out_half.reshape(volume_shape)))).real
     np.testing.assert_allclose(vol_half_real, vol_full_real, atol=1e-4, rtol=1e-4)
+
+
+def test_post_process_large_grid_guard_uses_reconstruction_grid_for_compact_accumulator(
+    tmp_path,
+    monkeypatch,
+):
+    clear_cache = getattr(rf.post_process_from_filter_v2, "clear_cache", None)
+    if callable(clear_cache):
+        clear_cache()
+    monkeypatch.setenv("RECOVAR_RELION_POSTPROCESS_SINGLE_PRECISION_MIN_VOXELS", "1000")
+    monkeypatch.setenv("RECOVAR_RELION_POSTPROCESS_LARGE_GRID_SINGLE_PRECISION", "auto")
+    monkeypatch.setenv("RECOVAR_RELION_WIENER_BOUNDARY_DUMP_DIR", str(tmp_path))
+    monkeypatch.setattr(rf, "_RELION_WIENER_BOUNDARY_DUMP_CALL", 0)
+
+    volume_shape = (8, 8, 8)
+    accumulator_shape = (5, 5, 5)
+    half_shape = (5, 5, 3)
+    ft_ctf = np.ones(half_shape, dtype=np.float32)
+    f_ty = np.zeros(half_shape, dtype=np.complex64)
+    f_ty[2, 2, 0] = 1.0 + 0.25j
+    tau = np.ones(int(np.prod(volume_shape)), dtype=np.float64)
+
+    out = rf.post_process_from_filter_v2(
+        jnp.asarray(ft_ctf),
+        jnp.asarray(f_ty),
+        volume_shape,
+        2,
+        tau=jnp.asarray(tau),
+        use_spherical_mask=False,
+        grid_correct=False,
+        input_half_volume=True,
+        current_size=2,
+        accumulator_volume_shape=accumulator_shape,
+        preserve_output_precision=True,
+    )
+
+    # The compact accumulator has only 125 voxels, but the actual inverse FFT
+    # is 16^3=4096 voxels and must activate the large-grid precision guard.
+    assert np.asarray(out).dtype == np.complex64
+    assert np.all(np.isfinite(np.asarray(out)))
+    with np.load(tmp_path / "recovar_wiener_boundary_0000.npz") as boundary:
+        # Compact Wiener arithmetic remains unchanged; only the operand handed
+        # to the large padded FFT is narrowed.
+        assert boundary["regularized_filter"].dtype == np.float64
+        assert boundary["divided_volume"].dtype == np.complex128
+    if callable(clear_cache):
+        clear_cache()
+
+
+def test_post_process_small_grid_auto_guard_matches_disabled_bitwise(monkeypatch):
+    clear_cache = getattr(rf.post_process_from_filter_v2, "clear_cache", None)
+    volume_shape = (6, 6, 6)
+    n_voxels = int(np.prod(volume_shape))
+    rng = np.random.default_rng(9382)
+    ft_ctf = rng.uniform(0.5, 1.5, n_voxels).astype(np.float32)
+    f_ty = (rng.standard_normal(n_voxels) + 1j * rng.standard_normal(n_voxels)).astype(np.complex64)
+    tau = rng.uniform(0.5, 1.5, n_voxels).astype(np.float64)
+    common = dict(
+        tau=jnp.asarray(tau),
+        use_spherical_mask=False,
+        grid_correct=False,
+        input_half_volume=False,
+        current_size=4,
+        preserve_output_precision=True,
+    )
+
+    monkeypatch.setenv("RECOVAR_RELION_POSTPROCESS_LARGE_GRID_SINGLE_PRECISION", "never")
+    if callable(clear_cache):
+        clear_cache()
+    disabled = np.asarray(
+        rf.post_process_from_filter_v2(
+            jnp.asarray(ft_ctf),
+            jnp.asarray(f_ty),
+            volume_shape,
+            1,
+            **common,
+        )
+    )
+
+    monkeypatch.setenv("RECOVAR_RELION_POSTPROCESS_LARGE_GRID_SINGLE_PRECISION", "auto")
+    monkeypatch.setenv("RECOVAR_RELION_POSTPROCESS_SINGLE_PRECISION_MIN_VOXELS", "1000")
+    if callable(clear_cache):
+        clear_cache()
+    automatic = np.asarray(
+        rf.post_process_from_filter_v2(
+            jnp.asarray(ft_ctf),
+            jnp.asarray(f_ty),
+            volume_shape,
+            1,
+            **common,
+        )
+    )
+
+    assert disabled.dtype == np.complex128
+    np.testing.assert_array_equal(automatic, disabled)
+    if callable(clear_cache):
+        clear_cache()
+
+
+def test_large_accumulator_guard_keeps_scaled_wiener_boundary_single_precision(
+    tmp_path,
+    monkeypatch,
+):
+    clear_cache = getattr(rf.post_process_from_filter_v2, "clear_cache", None)
+    if callable(clear_cache):
+        clear_cache()
+    monkeypatch.setenv("RECOVAR_RELION_POSTPROCESS_SINGLE_PRECISION_MIN_VOXELS", "100")
+    monkeypatch.setenv("RECOVAR_RELION_POSTPROCESS_LARGE_GRID_SINGLE_PRECISION", "auto")
+    monkeypatch.setenv("RECOVAR_RELION_WIENER_BOUNDARY_DUMP_DIR", str(tmp_path))
+    monkeypatch.setattr(rf, "_RELION_WIENER_BOUNDARY_DUMP_CALL", 0)
+
+    volume_shape = (6, 6, 6)
+    n_voxels = int(np.prod(volume_shape))
+    ft_ctf = np.ones(n_voxels, dtype=np.float32)
+    f_ty = np.zeros(n_voxels, dtype=np.complex64)
+    f_ty[n_voxels // 2] = 1.0 + 0.25j
+    tau = np.zeros(n_voxels, dtype=np.float64)
+
+    out = rf.post_process_from_filter_v2(
+        jnp.asarray(ft_ctf),
+        jnp.asarray(f_ty),
+        volume_shape,
+        1,
+        tau=jnp.asarray(tau),
+        use_spherical_mask=False,
+        grid_correct=False,
+        input_half_volume=False,
+        current_size=4,
+        preserve_output_precision=True,
+        relion_filter_scale=float(volume_shape[0] ** 4),
+    )
+
+    assert np.asarray(out).dtype == np.complex64
+    with np.load(tmp_path / "recovar_wiener_boundary_0000.npz") as boundary:
+        assert boundary["regularized_filter"].dtype == np.float32
+        assert boundary["divided_volume"].dtype == np.complex64
+    if callable(clear_cache):
+        clear_cache()
+
+
+@pytest.mark.parametrize(("old_dim", "new_dim"), [(5, 16), (7, 10), (12, 16)])
+def test_relion_direct_fftw_half_padding_matches_centered_path_bitwise(old_dim, new_dim):
+    import recovar.core.fourier_transform_utils as ftu
+
+    rng = np.random.default_rng(803 + old_dim)
+    old_shape = (old_dim, old_dim, old_dim)
+    new_shape = (new_dim, new_dim, new_dim)
+    old_half_shape = ftu.volume_shape_to_half_volume_shape(old_shape)
+    vol_half = (
+        rng.standard_normal(old_half_shape) + 1j * rng.standard_normal(old_half_shape)
+    ).astype(np.complex64)
+
+    centered = rf._relion_window_centered_half_fourier(
+        jnp.asarray(vol_half),
+        old_shape,
+        new_shape,
+    )
+    direct_fftw = rf._relion_pad_centered_half_fourier_to_fftw(
+        jnp.asarray(vol_half),
+        old_shape,
+        new_shape,
+    )
+    shifted_reference = jnp.fft.ifftshift(centered, axes=(0, 1))
+
+    np.testing.assert_array_equal(np.asarray(direct_fftw), np.asarray(shifted_reference))
+    direct_real = rf._relion_idft3_real_from_fftw_half(direct_fftw, new_shape)
+    centered_real = ftu.get_idft3_real(centered, volume_shape=new_shape)
+    np.testing.assert_array_equal(np.asarray(direct_real), np.asarray(centered_real))
+
+
+@pytest.mark.parametrize(("old_dim", "new_dim"), [(11, 8), (11, 9), (12, 8), (12, 9)])
+def test_relion_direct_fftw_half_crop_matches_centered_path_bitwise(old_dim, new_dim):
+    import recovar.core.fourier_transform_utils as ftu
+
+    rng = np.random.default_rng(911 + old_dim + new_dim)
+    old_shape = (old_dim, old_dim, old_dim)
+    new_shape = (new_dim, new_dim, new_dim)
+    old_half_shape = ftu.volume_shape_to_half_volume_shape(old_shape)
+    vol_half = (
+        rng.standard_normal(old_half_shape) + 1j * rng.standard_normal(old_half_shape)
+    ).astype(np.complex64)
+
+    centered = rf._relion_window_centered_half_fourier(
+        jnp.asarray(vol_half),
+        old_shape,
+        new_shape,
+    )
+    direct_fftw = rf._relion_crop_centered_half_fourier_to_fftw(
+        jnp.asarray(vol_half),
+        old_shape,
+        new_shape,
+    )
+    shifted_reference = jnp.fft.ifftshift(centered, axes=(0, 1))
+
+    np.testing.assert_array_equal(np.asarray(direct_fftw), np.asarray(shifted_reference))
+    direct_real = rf._relion_idft3_real_from_fftw_half(direct_fftw, new_shape)
+    centered_real = ftu.get_idft3_real(centered, volume_shape=new_shape)
+    np.testing.assert_array_equal(np.asarray(direct_real), np.asarray(centered_real))
+
+
+@pytest.mark.parametrize(("old_dim", "new_dim"), [(11, 8), (11, 9), (12, 8), (12, 9)])
+def test_relion_host_fftw_half_crop_matches_device_crop_bitwise(old_dim, new_dim):
+    import recovar.core.fourier_transform_utils as ftu
+    from recovar.em.refinement import mean_helpers
+
+    rng = np.random.default_rng(1229 + old_dim + new_dim)
+    old_shape = (old_dim, old_dim, old_dim)
+    new_shape = (new_dim, new_dim, new_dim)
+    old_half_shape = ftu.volume_shape_to_half_volume_shape(old_shape)
+    vol_half = (
+        rng.standard_normal(old_half_shape) + 1j * rng.standard_normal(old_half_shape)
+    ).astype(np.complex64)
+
+    device_crop = np.asarray(
+        rf._relion_crop_centered_half_fourier_to_fftw(
+            jnp.asarray(vol_half),
+            old_shape,
+            new_shape,
+        )
+    )
+    host_crop = mean_helpers._crop_relion_wiener_half_to_fftw_host(
+        vol_half,
+        old_shape,
+        new_shape,
+        rf,
+    )
+
+    np.testing.assert_array_equal(host_crop, device_crop)
+
+
+def test_large_odd_accumulator_crop_routes_directly_to_fftw(monkeypatch):
+    import recovar.core.fourier_transform_utils as ftu
+
+    clear_cache = getattr(rf.post_process_from_filter_v2, "clear_cache", None)
+    if callable(clear_cache):
+        clear_cache()
+    monkeypatch.setenv("RECOVAR_RELION_POSTPROCESS_LARGE_GRID_SINGLE_PRECISION", "always")
+
+    direct_crop = rf._relion_crop_centered_half_fourier_to_fftw
+    calls = []
+
+    def record_direct_crop(vol_half, old_volume_shape, new_volume_shape):
+        calls.append((tuple(old_volume_shape), tuple(new_volume_shape)))
+        return direct_crop(vol_half, old_volume_shape, new_volume_shape)
+
+    def reject_centered_window(*_args, **_kwargs):
+        raise AssertionError("large half-volume crop must not materialize the centered window")
+
+    monkeypatch.setattr(rf, "_relion_crop_centered_half_fourier_to_fftw", record_direct_crop)
+    monkeypatch.setattr(rf, "_relion_window_centered_half_fourier", reject_centered_window)
+
+    volume_shape = (4, 4, 4)
+    accumulator_shape = (11, 11, 11)
+    half_shape = ftu.volume_shape_to_half_volume_shape(accumulator_shape)
+    ft_ctf = jnp.ones(half_shape, dtype=jnp.float32)
+    f_ty = jnp.zeros(half_shape, dtype=jnp.complex64).at[5, 5, 0].set(1.0)
+    tau = jnp.ones(int(np.prod(volume_shape)), dtype=jnp.float32)
+
+    result = rf.post_process_from_filter_v2(
+        ft_ctf.reshape(-1),
+        f_ty.reshape(-1),
+        volume_shape,
+        2,
+        tau=tau,
+        kernel="triangular",
+        use_spherical_mask=False,
+        grid_correct=False,
+        input_half_volume=True,
+        return_real_space=True,
+        accumulator_volume_shape=accumulator_shape,
+    )
+    np.asarray(result)
+
+    assert calls == [(accumulator_shape, (8, 8, 8))]
+    if callable(clear_cache):
+        clear_cache()
+
+
+def test_large_host_staged_pre_ifft_split_matches_monolith_bitwise(monkeypatch):
+    from recovar.core import fourier_transform_utils as ftu
+    from recovar.em.refinement import mean_helpers
+
+    monkeypatch.setenv("RECOVAR_RELION_POSTPROCESS_LARGE_GRID_SINGLE_PRECISION", "always")
+    for compiled in (
+        rf.post_process_from_filter_v2,
+        rf._post_process_from_filter_v2_donate_numerator,
+        rf._regularize_large_relion_half_filter_donate_ctf,
+        rf._divide_large_relion_half_numerator_donate_numerator,
+        rf._finish_large_relion_postprocess_from_unpadded_real,
+        rf._finish_large_relion_postprocess_from_fftw_half,
+    ):
+        clear_cache = getattr(compiled, "clear_cache", None)
+        if callable(clear_cache):
+            clear_cache()
+
+    volume_shape = (4, 4, 4)
+    accumulator_shape = (11, 11, 11)
+    half_shape = ftu.volume_shape_to_half_volume_shape(accumulator_shape)
+    rng = np.random.default_rng(20260831)
+    ft_ctf = rng.uniform(0.5, 1.5, half_shape).astype(np.float32)
+    f_ty = (rng.standard_normal(half_shape) + 1j * rng.standard_normal(half_shape)).astype(np.complex64)
+    tau = rng.uniform(0.5, 1.5, np.prod(volume_shape)).astype(np.float64)
+    common = dict(
+        tau=tau,
+        tau2_fudge=1.0,
+        minres_map=0,
+        current_size=4,
+        accumulator_volume_shape=accumulator_shape,
+        tau_is_1d=False,
+        preserve_output_precision=True,
+        relion_filter_scale=float(volume_shape[0] ** 4),
+    )
+
+    monolithic = np.asarray(
+        rf.post_process_from_filter_v2(
+            ft_ctf,
+            f_ty,
+            volume_shape,
+            2,
+            kernel="triangular",
+            use_spherical_mask=True,
+            grid_correct=True,
+            gridding_correct="radial",
+            kernel_width=1,
+            gridding_padding_factor=1,
+            input_half_volume=True,
+            **common,
+        )
+    )
+    monkeypatch.setenv("RECOVAR_RELION_HOST_IRFFT", "never")
+    device_staged = np.asarray(
+        mean_helpers._reconstruct_volume_eager(
+            ft_ctf,
+            f_ty,
+            volume_shape,
+            2,
+            projection_padding_factor=1,
+            use_spherical_mask=True,
+            grid_correct=True,
+            **common,
+        )
+    )
+    monkeypatch.setenv("RECOVAR_RELION_HOST_IRFFT", "always")
+    host_staged = np.asarray(
+        mean_helpers._reconstruct_volume_eager(
+            ft_ctf,
+            f_ty,
+            volume_shape,
+            2,
+            projection_padding_factor=1,
+            use_spherical_mask=True,
+            grid_correct=True,
+            retained_device_numerator=jnp.asarray(f_ty),
+            **common,
+        )
+    )
+
+    assert device_staged.dtype == np.complex64
+    assert host_staged.dtype == np.complex64
+    np.testing.assert_array_equal(device_staged, monolithic)
+    np.testing.assert_array_equal(host_staged, monolithic)
+
+    for compiled in (
+        rf.post_process_from_filter_v2,
+        rf._post_process_from_filter_v2_donate_numerator,
+        rf._regularize_large_relion_half_filter_donate_ctf,
+        rf._divide_large_relion_half_numerator_donate_numerator,
+        rf._finish_large_relion_postprocess_from_unpadded_real,
+        rf._finish_large_relion_postprocess_from_fftw_half,
+    ):
+        clear_cache = getattr(compiled, "clear_cache", None)
+        if callable(clear_cache):
+            clear_cache()
+
+
+@pytest.mark.parametrize(
+    ("reconstruction_size", "output_size"),
+    [(8, 4), (10, 6), (9, 5), (11, 6)],
+)
+def test_host_irfft_center_crop_matches_jax_without_full_shift(
+    monkeypatch,
+    reconstruction_size,
+    output_size,
+):
+    from recovar.core import fourier_transform_utils as ftu
+    from recovar.core import padding
+    from recovar.em.refinement import mean_helpers
+
+    reconstruction_shape = (reconstruction_size,) * 3
+    output_shape = (output_size,) * 3
+    half_shape = ftu.volume_shape_to_half_volume_shape(reconstruction_shape)
+    rng = np.random.default_rng(20260901 + reconstruction_size)
+    fftw_half = (rng.standard_normal(half_shape) + 1j * rng.standard_normal(half_shape)).astype(np.complex64)
+    expected = np.asarray(
+        padding.unpad_volume_spatial_domain(
+            rf._relion_idft3_real_from_fftw_half(
+                jnp.asarray(fftw_half),
+                reconstruction_shape,
+            ),
+            reconstruction_size - output_size,
+        ),
+    )
+
+    def reject_full_shift(*_args, **_kwargs):
+        raise AssertionError("host crop must not allocate a full shifted real volume")
+
+    monkeypatch.setattr(np.fft, "ifftshift", reject_full_shift)
+    actual = mean_helpers._host_irfft_and_center_crop(
+        fftw_half.copy(),
+        reconstruction_shape,
+        output_shape,
+        workers=1,
+    )
+
+    assert actual.dtype == np.float32
+    assert actual.flags.c_contiguous
+    np.testing.assert_array_equal(actual, expected)
+
+
+def test_host_unpadded_tail_matches_existing_fftw_half_finish_bitwise():
+    from recovar.core import fourier_transform_utils as ftu
+    from recovar.em.refinement import mean_helpers
+
+    for compiled in (
+        rf._finish_large_relion_postprocess_from_unpadded_real,
+        rf._finish_large_relion_postprocess_from_fftw_half,
+    ):
+        clear_cache = getattr(compiled, "clear_cache", None)
+        if callable(clear_cache):
+            clear_cache()
+
+    volume_shape = (4, 4, 4)
+    reconstruction_shape = rf._relion_reconstruction_padded_shape(volume_shape, 2)
+    half_shape = ftu.volume_shape_to_half_volume_shape(reconstruction_shape)
+    rng = np.random.default_rng(20260901)
+    fftw_half = (rng.standard_normal(half_shape) + 1j * rng.standard_normal(half_shape)).astype(np.complex64)
+    common = dict(
+        kernel="triangular",
+        use_spherical_mask=True,
+        grid_correct=True,
+        gridding_correct="radial",
+        kernel_width=1,
+        return_real_space=False,
+        gridding_padding_factor=1,
+    )
+
+    existing = np.asarray(
+        rf._finish_large_relion_postprocess_from_fftw_half(
+            jnp.asarray(fftw_half),
+            volume_shape,
+            2,
+            **common,
+        ),
+    )
+    unpadded_real = mean_helpers._host_irfft_and_center_crop(
+        fftw_half.copy(),
+        reconstruction_shape,
+        volume_shape,
+        workers=1,
+    )
+    host = np.asarray(
+        rf._finish_large_relion_postprocess_from_unpadded_real(
+            unpadded_real,
+            volume_shape,
+            2,
+            **common,
+        ),
+    )
+
+    np.testing.assert_array_equal(host, existing)
+
+    for compiled in (
+        rf._finish_large_relion_postprocess_from_unpadded_real,
+        rf._finish_large_relion_postprocess_from_fftw_half,
+    ):
+        clear_cache = getattr(compiled, "clear_cache", None)
+        if callable(clear_cache):
+            clear_cache()
+
+
+def test_large_host_staged_compact_padding_matches_monolith_bitwise(monkeypatch):
+    """Splitting before a larger iFFT preserves the compact-accumulator result."""
+
+    from recovar.core import fourier_transform_utils as ftu
+    from recovar.em.refinement import mean_helpers
+
+    monkeypatch.setenv("RECOVAR_RELION_POSTPROCESS_LARGE_GRID_SINGLE_PRECISION", "always")
+    volume_shape = (4, 4, 4)
+    accumulator_shape = (5, 5, 5)
+    half_shape = ftu.volume_shape_to_half_volume_shape(accumulator_shape)
+    rng = np.random.default_rng(20260901)
+    ft_ctf = rng.uniform(0.5, 1.5, half_shape).astype(np.float32)
+    f_ty = (
+        rng.standard_normal(half_shape) + 1j * rng.standard_normal(half_shape)
+    ).astype(np.complex64)
+    tau = rng.uniform(0.5, 1.5, np.prod(volume_shape)).astype(np.float64)
+    common = dict(
+        tau=tau,
+        tau2_fudge=1.0,
+        minres_map=0,
+        current_size=2,
+        accumulator_volume_shape=accumulator_shape,
+        tau_is_1d=False,
+        preserve_output_precision=True,
+        relion_filter_scale=float(volume_shape[0] ** 4),
+    )
+
+    monolithic = np.asarray(
+        rf.post_process_from_filter_v2(
+            ft_ctf,
+            f_ty,
+            volume_shape,
+            2,
+            kernel="triangular",
+            use_spherical_mask=True,
+            grid_correct=True,
+            gridding_correct="radial",
+            kernel_width=1,
+            gridding_padding_factor=1,
+            input_half_volume=True,
+            **common,
+        )
+    )
+    staged = np.asarray(
+        mean_helpers._reconstruct_volume_eager(
+            ft_ctf,
+            f_ty,
+            volume_shape,
+            2,
+            projection_padding_factor=1,
+            use_spherical_mask=True,
+            grid_correct=True,
+            **common,
+        )
+    )
+
+    assert staged.dtype == np.complex64
+    np.testing.assert_array_equal(staged, monolithic)
+
+    for compiled in (
+        rf.post_process_from_filter_v2,
+        rf._post_process_from_filter_v2_donate_numerator,
+        rf._finish_large_relion_postprocess_from_fftw_half,
+    ):
+        clear_cache = getattr(compiled, "clear_cache", None)
+        if callable(clear_cache):
+            clear_cache()
+
+
+def test_large_irfft_normalization_boundary_uses_signed_int32_limit():
+    from recovar.em.refinement import mean_helpers
+
+    assert not mean_helpers._large_irfft_requires_explicit_normalization((800, 800, 800))
+    assert mean_helpers._large_irfft_requires_explicit_normalization((1600, 1600, 1600))
+
+
+def test_giant_irfft_host_stage_does_not_require_a_large_accumulator(monkeypatch):
+    """Early box-800 iterations must not bypass explicit iFFT normalization."""
+
+    import recovar.core.fourier_transform_utils as ftu
+    from recovar.em.refinement import mean_helpers
+
+    monkeypatch.delenv("RECOVAR_RELION_POSTPROCESS_LARGE_GRID_SINGLE_PRECISION", raising=False)
+    monkeypatch.delenv("RECOVAR_RELION_POSTPROCESS_SINGLE_PRECISION_MIN_VOXELS", raising=False)
+    volume_shape = (800, 800, 800)
+    accumulator_shape = (127, 127, 127)
+    half_shape = ftu.volume_shape_to_half_volume_shape(accumulator_shape)
+    ft_ctf = np.empty(half_shape, dtype=np.float32)
+    ft_y = np.empty(half_shape, dtype=np.complex64)
+
+    assert not rf._large_grid_postprocess_single_precision_enabled(
+        int(np.prod(accumulator_shape, dtype=np.int64))
+    )
+    assert rf._large_grid_postprocess_single_precision_enabled(
+        int(np.prod(volume_shape, dtype=np.int64)) * 8
+    )
+    assert mean_helpers._should_host_stage_large_relion_ifft(
+        ft_ctf,
+        ft_y,
+        volume_shape,
+        2,
+        accumulator_shape,
+        rf,
+    )
+
+
+def test_compact_device_accumulator_runs_giant_split_and_normalization(monkeypatch, caplog):
+    """A compact device accumulator must still split and normalize a giant iFFT."""
+
+    import recovar.core.fourier_transform_utils as ftu
+    from recovar.em.refinement import mean_helpers
+
+    monkeypatch.setenv("RECOVAR_RELION_POSTPROCESS_LARGE_GRID_SINGLE_PRECISION", "always")
+    monkeypatch.delenv("RECOVAR_RELION_POSTPROCESS_SINGLE_PRECISION_MIN_VOXELS", raising=False)
+    volume_shape = (2, 2, 2)
+    accumulator_shape = (3, 3, 3)
+    reconstruction_shape = (1600, 1600, 1600)
+    half_shape = ftu.volume_shape_to_half_volume_shape(accumulator_shape)
+    ft_ctf = jnp.ones(half_shape, dtype=jnp.float32)
+    ft_y = jnp.ones(half_shape, dtype=jnp.complex64)
+    events = []
+
+    assert rf._large_grid_postprocess_single_precision_enabled(
+        int(np.prod(accumulator_shape, dtype=np.int64))
+    )
+    assert not rf._large_grid_postprocess_is_physically_large(
+        int(np.prod(accumulator_shape, dtype=np.int64))
+    )
+
+    def fake_stage(*args, **kwargs):
+        events.append("stage")
+        assert args[0] is ft_ctf
+        assert args[1] is ft_y
+        assert kwargs["input_half_volume"] is True
+        assert kwargs["return_fftw_half_before_ifft"] is True
+        return jnp.ones((2, 2, 2), dtype=jnp.complex64)
+
+    def fake_finish(value, *_args, **_kwargs):
+        events.append("finish")
+        assert isinstance(value, np.ndarray)
+        assert value.shape == (2, 2, 2)
+        return jnp.asarray([2.0 + 0.0j], dtype=jnp.complex64)
+
+    monkeypatch.setattr(
+        rf,
+        "_relion_reconstruction_padded_shape",
+        lambda *_args, **_kwargs: reconstruction_shape,
+    )
+    monkeypatch.setattr(
+        mean_helpers,
+        "_large_relion_host_irfft_enabled",
+        lambda *_args, **_kwargs: False,
+    )
+    monkeypatch.setattr(rf, "post_process_from_filter_v2", fake_stage)
+    monkeypatch.setattr(
+        rf,
+        "_finish_large_relion_postprocess_from_fftw_half",
+        fake_finish,
+    )
+    caplog.set_level("INFO", logger=mean_helpers.__name__)
+
+    result = mean_helpers._reconstruct_volume_eager(
+        ft_ctf,
+        ft_y,
+        volume_shape,
+        2,
+        tau=jnp.ones(np.prod(volume_shape), dtype=jnp.float32),
+        tau2_fudge=1.0,
+        projection_padding_factor=1,
+        accumulator_volume_shape=accumulator_shape,
+    )
+
+    assert events == ["stage", "finish"]
+    expected = np.asarray(
+        [np.complex64(2.0 / np.prod(reconstruction_shape, dtype=np.int64))],
+    )
+    np.testing.assert_array_equal(np.asarray(result), expected)
+    assert (
+        "RELION split pre-IFFT host boundary: accumulator_shape=(3, 3, 3) "
+        "reconstruction_shape=(1600, 1600, 1600)"
+    ) in caplog.text
+    assert (
+        "RELION large inverse-FFT normalization boundary: "
+        "reconstruction_shape=(1600, 1600, 1600) transform_size=4096000000"
+    ) in caplog.text
+
+
+def test_compact_full_accumulator_repack_matches_historical_path(monkeypatch):
+    """The repack is exact and changes the historical result only at f32 roundoff."""
+
+    import recovar.core.fourier_transform_utils as ftu
+    from recovar.em.refinement import mean_helpers
+
+    monkeypatch.setenv("RECOVAR_RELION_POSTPROCESS_LARGE_GRID_SINGLE_PRECISION", "auto")
+    monkeypatch.setenv("RECOVAR_RELION_POSTPROCESS_SINGLE_PRECISION_MIN_VOXELS", "200")
+    volume_shape = (4, 4, 4)
+    accumulator_shape = (5, 5, 5)
+    half_shape = ftu.volume_shape_to_half_volume_shape(accumulator_shape)
+    rng = np.random.default_rng(20260901)
+    ft_ctf_half = rng.uniform(0.5, 1.5, half_shape).astype(np.float32)
+    ft_y_half = (
+        rng.standard_normal(half_shape) + 1j * rng.standard_normal(half_shape)
+    ).astype(np.complex64)
+    ft_ctf_full = ftu.half_volume_to_full_volume(
+        jnp.asarray(ft_ctf_half),
+        accumulator_shape,
+    ).reshape(-1)
+    ft_y_full = ftu.half_volume_to_full_volume(
+        jnp.asarray(ft_y_half),
+        accumulator_shape,
+    ).reshape(-1)
+    repacked_ctf, repacked_y = mean_helpers._pack_compact_full_accumulators_for_large_relion_ifft(
+        ft_ctf_full,
+        ft_y_full,
+        volume_shape,
+        2,
+        accumulator_shape,
+        rf,
+    )
+    np.testing.assert_array_equal(np.asarray(repacked_ctf), ft_ctf_half.reshape(-1))
+    np.testing.assert_array_equal(np.asarray(repacked_y), ft_y_half.reshape(-1))
+    tau = rng.uniform(0.5, 1.5, np.prod(volume_shape)).astype(np.float64)
+    common = dict(
+        tau=tau,
+        tau2_fudge=1.0,
+        minres_map=0,
+        current_size=2,
+        accumulator_volume_shape=accumulator_shape,
+        tau_is_1d=False,
+        preserve_output_precision=True,
+        relion_filter_scale=float(volume_shape[0] ** 4),
+    )
+
+    historical = np.asarray(
+        rf.post_process_from_filter_v2(
+            ft_ctf_full,
+            ft_y_full,
+            volume_shape,
+            2,
+            kernel="triangular",
+            use_spherical_mask=True,
+            grid_correct=True,
+            gridding_correct="radial",
+            kernel_width=1,
+            gridding_padding_factor=1,
+            **common,
+        )
+    )
+    staged = np.asarray(
+        mean_helpers._reconstruct_volume_eager(
+            ft_ctf_full,
+            ft_y_full,
+            volume_shape,
+            2,
+            projection_padding_factor=1,
+            use_spherical_mask=True,
+            grid_correct=True,
+            **common,
+        )
+    )
+
+    assert staged.dtype == np.complex64
+    np.testing.assert_allclose(staged, historical, rtol=1e-6, atol=2e-7)
+
+
+def test_compact_full_device_accumulator_runs_giant_split_and_normalization(monkeypatch, caplog):
+    """The production full-layout compact accumulator must reach the giant-iFFT split."""
+
+    import recovar.core.fourier_transform_utils as ftu
+    from recovar.em.refinement import mean_helpers
+
+    monkeypatch.setenv("RECOVAR_RELION_POSTPROCESS_LARGE_GRID_SINGLE_PRECISION", "always")
+    monkeypatch.delenv("RECOVAR_RELION_POSTPROCESS_SINGLE_PRECISION_MIN_VOXELS", raising=False)
+    volume_shape = (2, 2, 2)
+    accumulator_shape = (3, 3, 3)
+    reconstruction_shape = (1600, 1600, 1600)
+    half_shape = ftu.volume_shape_to_half_volume_shape(accumulator_shape)
+    ft_ctf_half = jnp.arange(np.prod(half_shape), dtype=jnp.float32).reshape(half_shape)
+    ft_y_half = ft_ctf_half.astype(jnp.complex64) * (1.0 + 2.0j)
+    ft_ctf_full = ftu.half_volume_to_full_volume(ft_ctf_half, accumulator_shape).reshape(-1)
+    ft_y_full = ftu.half_volume_to_full_volume(ft_y_half, accumulator_shape).reshape(-1)
+    events = []
+
+    assert rf._large_grid_postprocess_single_precision_enabled(
+        int(np.prod(accumulator_shape, dtype=np.int64))
+    )
+    assert not rf._large_grid_postprocess_is_physically_large(
+        int(np.prod(accumulator_shape, dtype=np.int64))
+    )
+
+    def fake_stage(ft_ctf, ft_y, *_args, **kwargs):
+        events.append("stage")
+        np.testing.assert_array_equal(np.asarray(ft_ctf), np.asarray(ft_ctf_half).reshape(-1))
+        np.testing.assert_array_equal(np.asarray(ft_y), np.asarray(ft_y_half).reshape(-1))
+        assert kwargs["input_half_volume"] is True
+        assert kwargs["return_fftw_half_before_ifft"] is True
+        return jnp.ones((2, 2, 2), dtype=jnp.complex64)
+
+    def fake_finish(value, *_args, **_kwargs):
+        events.append("finish")
+        assert isinstance(value, np.ndarray)
+        return jnp.asarray([2.0 + 0.0j], dtype=jnp.complex64)
+
+    monkeypatch.setattr(
+        rf,
+        "_relion_reconstruction_padded_shape",
+        lambda *_args, **_kwargs: reconstruction_shape,
+    )
+    monkeypatch.setattr(
+        mean_helpers,
+        "_large_relion_host_irfft_enabled",
+        lambda *_args, **_kwargs: False,
+    )
+    monkeypatch.setattr(rf, "post_process_from_filter_v2", fake_stage)
+    monkeypatch.setattr(
+        rf,
+        "_finish_large_relion_postprocess_from_fftw_half",
+        fake_finish,
+    )
+    caplog.set_level("INFO", logger=mean_helpers.__name__)
+
+    result = mean_helpers._reconstruct_volume_eager(
+        ft_ctf_full,
+        ft_y_full,
+        volume_shape,
+        2,
+        tau=jnp.ones(np.prod(volume_shape), dtype=jnp.float32),
+        tau2_fudge=1.0,
+        projection_padding_factor=1,
+        accumulator_volume_shape=accumulator_shape,
+    )
+
+    assert events == ["stage", "finish"]
+    expected = np.asarray(
+        [np.complex64(2.0 / np.prod(reconstruction_shape, dtype=np.int64))],
+    )
+    np.testing.assert_array_equal(np.asarray(result), expected)
+    assert "RELION giant-iFFT compact full-to-half repack" in caplog.text
+    assert "RELION split pre-IFFT host boundary" in caplog.text
+    assert "RELION large inverse-FFT normalization boundary" in caplog.text
+
+
+def test_large_device_accumulator_does_not_enter_host_staged_split(monkeypatch):
+    """A large device accumulator must use the existing earlier host-offload path."""
+
+    import recovar.core.fourier_transform_utils as ftu
+    from recovar.em.refinement import mean_helpers
+
+    monkeypatch.setenv("RECOVAR_RELION_POSTPROCESS_LARGE_GRID_SINGLE_PRECISION", "always")
+    monkeypatch.setenv("RECOVAR_RELION_POSTPROCESS_SINGLE_PRECISION_MIN_VOXELS", "100")
+    volume_shape = (2, 2, 2)
+    accumulator_shape = (5, 5, 5)
+    half_shape = ftu.volume_shape_to_half_volume_shape(accumulator_shape)
+    ft_ctf = jnp.ones(half_shape, dtype=jnp.float32)
+    ft_y = jnp.ones(half_shape, dtype=jnp.complex64)
+
+    assert rf._large_grid_postprocess_is_physically_large(
+        int(np.prod(accumulator_shape, dtype=np.int64))
+    )
+
+    assert not mean_helpers._should_host_stage_large_relion_ifft(
+        ft_ctf,
+        ft_y,
+        volume_shape,
+        2,
+        accumulator_shape,
+        rf,
+    )
+
+    sentinel = jnp.asarray([3.0 + 0.0j], dtype=jnp.complex64)
+
+    def fake_monolithic(*args, **kwargs):
+        assert args[0] is ft_ctf
+        assert args[1] is ft_y
+        assert "return_fftw_half_before_ifft" not in kwargs
+        return sentinel
+
+    def reject_split(*_args, **_kwargs):
+        raise AssertionError("A large device accumulator must not enter the split path")
+
+    monkeypatch.setattr(rf, "post_process_from_filter_v2", fake_monolithic)
+    monkeypatch.setattr(
+        rf,
+        "_finish_large_relion_postprocess_from_fftw_half",
+        reject_split,
+    )
+    returned = mean_helpers._reconstruct_volume_eager(
+        ft_ctf,
+        ft_y,
+        volume_shape,
+        2,
+        tau=jnp.ones(np.prod(volume_shape), dtype=jnp.float32),
+        tau2_fudge=1.0,
+        projection_padding_factor=1,
+        accumulator_volume_shape=accumulator_shape,
+    )
+
+    assert returned is sentinel
+
+
+def test_large_device_accumulator_normalizes_monolithic_giant_padded_ifft(monkeypatch, caplog):
+    """A physically large device accumulator must not bypass giant-iFFT normalization."""
+
+    import recovar.core.fourier_transform_utils as ftu
+    from recovar.em.refinement import mean_helpers
+
+    monkeypatch.setenv("RECOVAR_RELION_POSTPROCESS_LARGE_GRID_SINGLE_PRECISION", "always")
+    monkeypatch.setenv("RECOVAR_RELION_POSTPROCESS_SINGLE_PRECISION_MIN_VOXELS", "100")
+    volume_shape = (2, 2, 2)
+    accumulator_shape = (5, 5, 5)
+    reconstruction_shape = (1600, 1600, 1600)
+    half_shape = ftu.volume_shape_to_half_volume_shape(accumulator_shape)
+    ft_ctf = jnp.ones(half_shape, dtype=jnp.float32)
+    ft_y = jnp.ones(half_shape, dtype=jnp.complex64)
+    sentinel = jnp.asarray([2.0 + 0.0j], dtype=jnp.complex64)
+
+    assert rf._large_grid_postprocess_is_physically_large(
+        int(np.prod(accumulator_shape, dtype=np.int64))
+    )
+
+    def fake_monolithic(*args, **kwargs):
+        assert args[0] is ft_ctf
+        assert args[1] is ft_y
+        assert "return_fftw_half_before_ifft" not in kwargs
+        return sentinel
+
+    def reject_split(*_args, **_kwargs):
+        raise AssertionError("A large device accumulator must remain on the monolithic path")
+
+    monkeypatch.setattr(
+        rf,
+        "_relion_reconstruction_padded_shape",
+        lambda *_args, **_kwargs: reconstruction_shape,
+    )
+    monkeypatch.setattr(rf, "post_process_from_filter_v2", fake_monolithic)
+    monkeypatch.setattr(
+        rf,
+        "_finish_large_relion_postprocess_from_fftw_half",
+        reject_split,
+    )
+    caplog.set_level("INFO", logger=mean_helpers.__name__)
+
+    assert not mean_helpers._should_host_stage_large_relion_ifft(
+        ft_ctf,
+        ft_y,
+        volume_shape,
+        2,
+        accumulator_shape,
+        rf,
+    )
+    result = mean_helpers._reconstruct_volume_eager(
+        ft_ctf,
+        ft_y,
+        volume_shape,
+        2,
+        tau=jnp.ones(np.prod(volume_shape), dtype=jnp.float32),
+        tau2_fudge=1.0,
+        projection_padding_factor=1,
+        accumulator_volume_shape=accumulator_shape,
+    )
+
+    expected = np.asarray(
+        [np.complex64(2.0 / np.prod(reconstruction_shape, dtype=np.int64))],
+    )
+    np.testing.assert_array_equal(np.asarray(result), expected)
+    assert (
+        "implementation=jax_monolithic_dynamic_scale"
+        in caplog.text
+    )
+
+
+def test_pre_ifft_boundary_accepts_compact_accumulator_for_large_reconstruction(monkeypatch):
+    """Only the padded inverse-FFT grid needs to cross the large-grid threshold."""
+
+    import recovar.core.fourier_transform_utils as ftu
+
+    volume_shape = (4, 4, 4)
+    accumulator_shape = (5, 5, 5)
+    half_shape = ftu.volume_shape_to_half_volume_shape(accumulator_shape)
+    monkeypatch.setenv("RECOVAR_RELION_POSTPROCESS_LARGE_GRID_SINGLE_PRECISION", "always")
+
+    boundary = rf.post_process_from_filter_v2(
+        jnp.ones(half_shape, dtype=jnp.float32),
+        jnp.ones(half_shape, dtype=jnp.complex64),
+        volume_shape,
+        2,
+        tau=jnp.ones(np.prod(volume_shape), dtype=jnp.float32),
+        use_spherical_mask=False,
+        grid_correct=False,
+        input_half_volume=True,
+        accumulator_volume_shape=accumulator_shape,
+        return_fftw_half_before_ifft=True,
+    )
+
+    assert boundary.shape == ftu.volume_shape_to_half_volume_shape((8, 8, 8))
+    assert boundary.dtype == jnp.complex64
+
+
+def test_large_host_staged_irfft_uses_backward_transform_then_dynamic_normalization(monkeypatch):
+    from recovar.em.refinement import mean_helpers
+
+    reconstruction_shape = (1600, 1600, 1600)
+    transform_size = int(np.prod(reconstruction_shape, dtype=np.int64))
+    events = []
+
+    def fake_stage(*_args, **kwargs):
+        events.append("stage")
+        assert kwargs["input_half_volume"] is True
+        assert kwargs["return_fftw_half_before_ifft"] is True
+        return jnp.ones((2, 2, 2), dtype=jnp.complex64)
+
+    def fake_finish(value, *_args, **kwargs):
+        events.append("finish")
+        assert np.asarray(value).shape == (2, 2, 2)
+        assert "inverse_fft_norm" not in kwargs
+        return jnp.asarray([2.0 + 0.0j], dtype=jnp.complex64)
+
+    monkeypatch.setattr(
+        mean_helpers,
+        "_should_host_stage_large_relion_ifft",
+        lambda *_args, **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        mean_helpers,
+        "_large_relion_host_irfft_enabled",
+        lambda *_args, **_kwargs: False,
+    )
+    monkeypatch.setattr(
+        rf,
+        "_relion_reconstruction_padded_shape",
+        lambda *_args, **_kwargs: reconstruction_shape,
+    )
+    monkeypatch.setattr(rf, "post_process_from_filter_v2", fake_stage)
+    monkeypatch.setattr(
+        rf,
+        "_finish_large_relion_postprocess_from_fftw_half",
+        fake_finish,
+    )
+
+    result = mean_helpers._reconstruct_volume_eager(
+        np.ones((2, 2, 2), dtype=np.float32),
+        np.ones((2, 2, 2), dtype=np.complex64),
+        (2, 2, 2),
+        2,
+        tau=np.ones(8, dtype=np.float32),
+        tau2_fudge=1.0,
+        projection_padding_factor=1,
+        accumulator_volume_shape=(3, 3, 3),
+    )
+
+    assert events == ["stage", "finish"]
+    np.testing.assert_allclose(
+        np.asarray(result),
+        np.asarray([2.0 / transform_size], dtype=np.complex64),
+        rtol=0.0,
+        atol=0.0,
+    )
+
+
+def test_large_host_irfft_is_already_normalized(monkeypatch):
+    from recovar.em.refinement import mean_helpers
+
+    reconstruction_shape = (1600, 1600, 1600)
+    events = []
+
+    def fake_stage(*_args, **kwargs):
+        events.append("stage")
+        assert kwargs["input_half_volume"] is True
+        assert kwargs["return_fftw_half_before_ifft"] is True
+        return jnp.ones((2, 2, 2), dtype=jnp.complex64)
+
+    def fake_host_irfft(value, current_reconstruction_shape, output_shape, *, workers):
+        events.append("host_irfft")
+        assert np.asarray(value).shape == (2, 2, 2)
+        assert current_reconstruction_shape == reconstruction_shape
+        assert output_shape == (2, 2, 2)
+        assert workers == 3
+        return np.ones(output_shape, dtype=np.float32)
+
+    def fake_finish(value, *_args, **_kwargs):
+        events.append("finish")
+        assert np.asarray(value).dtype == np.float32
+        return jnp.asarray([2.0 + 0.0j], dtype=jnp.complex64)
+
+    def reject_double_normalization(*_args, **_kwargs):
+        raise AssertionError("SciPy's backward inverse FFT must not be normalized twice")
+
+    monkeypatch.setenv("RECOVAR_RELION_HOST_FFT_WORKERS", "3")
+    monkeypatch.setattr(
+        mean_helpers,
+        "_should_host_stage_large_relion_ifft",
+        lambda *_args, **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        mean_helpers,
+        "_large_relion_host_irfft_enabled",
+        lambda *_args, **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        rf,
+        "_relion_reconstruction_padded_shape",
+        lambda *_args, **_kwargs: reconstruction_shape,
+    )
+    monkeypatch.setattr(rf, "post_process_from_filter_v2", fake_stage)
+    monkeypatch.setattr(mean_helpers, "_host_irfft_and_center_crop", fake_host_irfft)
+    monkeypatch.setattr(
+        rf,
+        "_finish_large_relion_postprocess_from_unpadded_real",
+        fake_finish,
+    )
+    monkeypatch.setattr(
+        mean_helpers,
+        "_normalize_large_irfft_result_donate",
+        reject_double_normalization,
+    )
+
+    result = mean_helpers._reconstruct_volume_eager(
+        np.ones((2, 2, 2), dtype=np.float32),
+        np.ones((2, 2, 2), dtype=np.complex64),
+        (2, 2, 2),
+        2,
+        tau=np.ones(8, dtype=np.float32),
+        tau2_fudge=1.0,
+        projection_padding_factor=1,
+        accumulator_volume_shape=(3, 3, 3),
+    )
+
+    assert events == ["stage", "host_irfft", "finish"]
+    np.testing.assert_array_equal(
+        np.asarray(result),
+        np.asarray([2.0 + 0.0j], dtype=np.complex64),
+    )
+
+
+@pytest.mark.gpu
+def test_large_wiener_host_boundary_donates_numerator_buffer(monkeypatch, gpu_device):
+    import recovar.core.fourier_transform_utils as ftu
+
+    monkeypatch.setenv("RECOVAR_RELION_POSTPROCESS_LARGE_GRID_SINGLE_PRECISION", "always")
+    compiled_fn = rf._post_process_from_filter_v2_donate_numerator
+    clear_cache = getattr(compiled_fn, "clear_cache", None)
+    if callable(clear_cache):
+        clear_cache()
+
+    volume_shape = (4, 4, 4)
+    accumulator_shape = (11, 11, 11)
+    half_shape = ftu.volume_shape_to_half_volume_shape(accumulator_shape)
+    half_size = int(np.prod(half_shape))
+    with jax.default_device(gpu_device):
+        lowered = compiled_fn.lower(
+            jax.ShapeDtypeStruct((half_size,), jnp.float32),
+            jax.ShapeDtypeStruct((half_size,), jnp.complex64),
+            volume_shape,
+            2,
+            tau=jax.ShapeDtypeStruct((int(np.prod(volume_shape)),), jnp.float64),
+            kernel="triangular",
+            use_spherical_mask=True,
+            grid_correct=True,
+            gridding_correct="radial",
+            kernel_width=1,
+            tau2_fudge=1.0,
+            gridding_padding_factor=1,
+            minres_map=0,
+            current_size=4,
+            accumulator_volume_shape=accumulator_shape,
+            tau_is_1d=False,
+            preserve_output_precision=True,
+            relion_filter_scale=float(volume_shape[0] ** 4),
+            input_half_volume=True,
+            return_wiener_half_before_window=True,
+        )
+        memory = lowered.compile().memory_analysis()
+
+    numerator_bytes = half_size * np.dtype(np.complex64).itemsize
+    assert memory.output_size_in_bytes == numerator_bytes
+    assert memory.alias_size_in_bytes == numerator_bytes
+
+    if callable(clear_cache):
+        clear_cache()
+
+
+@pytest.mark.parametrize("current_size", [4, None])
+def test_large_wiener_split_stage_matches_monolith_bitwise(monkeypatch, current_size):
+    import recovar.core.fourier_transform_utils as ftu
+
+    monkeypatch.setenv("RECOVAR_RELION_POSTPROCESS_LARGE_GRID_SINGLE_PRECISION", "always")
+    compiled_functions = (
+        rf.post_process_from_filter_v2,
+        rf._regularize_large_relion_half_filter_donate_ctf,
+        rf._divide_large_relion_half_numerator_donate_numerator,
+    )
+    for compiled in compiled_functions:
+        clear_cache = getattr(compiled, "clear_cache", None)
+        if callable(clear_cache):
+            clear_cache()
+
+    volume_shape = (4, 4, 4)
+    accumulator_shape = (11, 11, 11)
+    half_shape = ftu.volume_shape_to_half_volume_shape(accumulator_shape)
+    rng = np.random.default_rng(20260901)
+    ft_ctf = rng.uniform(0.5, 1.5, half_shape).astype(np.float32)
+    f_ty = (rng.standard_normal(half_shape) + 1j * rng.standard_normal(half_shape)).astype(np.complex64)
+    tau = rng.uniform(0.5, 1.5, volume_shape[0] // 2 + 1).astype(np.float64)
+
+    expected = np.asarray(
+        rf.post_process_from_filter_v2(
+            ft_ctf,
+            f_ty,
+            volume_shape,
+            2,
+            tau=tau,
+            kernel="triangular",
+            use_spherical_mask=True,
+            grid_correct=True,
+            gridding_correct="radial",
+            kernel_width=1,
+            tau2_fudge=1.0,
+            gridding_padding_factor=1,
+            minres_map=0,
+            current_size=current_size,
+            accumulator_volume_shape=accumulator_shape,
+            tau_is_1d=True,
+            preserve_output_precision=True,
+            relion_filter_scale=float(volume_shape[0] ** 4),
+            input_half_volume=True,
+            return_wiener_half_before_window=True,
+        )
+    )
+    ctf_device = jnp.asarray(ft_ctf.copy())
+    regularized = rf._regularize_large_relion_half_filter_donate_ctf(
+        ctf_device,
+        jnp.asarray(tau),
+        volume_shape,
+        2,
+        1.0,
+        0,
+        current_size,
+        accumulator_shape,
+        True,
+        float(volume_shape[0] ** 4),
+    )
+    regularized.block_until_ready()
+    numerator_device = jnp.asarray(f_ty.copy())
+    actual = rf._divide_large_relion_half_numerator_donate_numerator(
+        numerator_device,
+        regularized,
+        2,
+        current_size,
+        accumulator_shape,
+    )
+
+    np.testing.assert_array_equal(np.asarray(actual), expected)
+    assert ctf_device.is_deleted()
+    assert numerator_device.is_deleted()
+
+    for compiled in compiled_functions:
+        clear_cache = getattr(compiled, "clear_cache", None)
+        if callable(clear_cache):
+            clear_cache()
+
+
+@pytest.mark.gpu
+def test_large_wiener_split_stage_aliases_inputs_without_divide_temporary(monkeypatch, gpu_device):
+    import recovar.core.fourier_transform_utils as ftu
+
+    monkeypatch.setenv("RECOVAR_RELION_POSTPROCESS_LARGE_GRID_SINGLE_PRECISION", "always")
+    volume_shape = (4, 4, 4)
+    accumulator_shape = (11, 11, 11)
+    half_shape = ftu.volume_shape_to_half_volume_shape(accumulator_shape)
+    half_size = int(np.prod(half_shape))
+    numerator_bytes = half_size * np.dtype(np.complex64).itemsize
+    filter_bytes = half_size * np.dtype(np.float32).itemsize
+
+    with jax.default_device(gpu_device):
+        regularize_memory = (
+            rf._regularize_large_relion_half_filter_donate_ctf.lower(
+                jax.ShapeDtypeStruct((half_size,), jnp.float32),
+                jax.ShapeDtypeStruct((volume_shape[0] // 2 + 1,), jnp.float64),
+                volume_shape,
+                2,
+                1.0,
+                0,
+                4,
+                accumulator_shape,
+                True,
+                float(volume_shape[0] ** 4),
+            )
+            .compile()
+            .memory_analysis()
+        )
+        divide_memory = (
+            rf._divide_large_relion_half_numerator_donate_numerator.lower(
+                jax.ShapeDtypeStruct((half_size,), jnp.complex64),
+                jax.ShapeDtypeStruct((half_size,), jnp.float32),
+                2,
+                4,
+                accumulator_shape,
+            )
+            .compile()
+            .memory_analysis()
+        )
+
+    assert regularize_memory.output_size_in_bytes == filter_bytes
+    assert regularize_memory.alias_size_in_bytes == filter_bytes
+    assert divide_memory.output_size_in_bytes == numerator_bytes
+    assert divide_memory.alias_size_in_bytes == numerator_bytes
+    assert divide_memory.temp_size_in_bytes == 0
+
+
+def test_join_halves_host_fallback_retains_bitwise_exact_half0_device_numerator(monkeypatch):
+    volume_shape = (8, 8, 8)
+    rng = np.random.default_rng(20260831)
+    ft_y_0 = (
+        rng.standard_normal(volume_shape) + 1j * rng.standard_normal(volume_shape)
+    ).astype(np.complex64)
+    ft_y_1 = (
+        rng.standard_normal(volume_shape) + 1j * rng.standard_normal(volume_shape)
+    ).astype(np.complex64)
+    ft_ctf_0 = rng.uniform(0.5, 1.5, volume_shape).astype(np.float32)
+    ft_ctf_1 = rng.uniform(0.5, 1.5, volume_shape).astype(np.float32)
+
+    monkeypatch.setenv("RECOVAR_LOWRES_JOIN_HOST_FALLBACK", "always")
+    joined = regularization.join_halves_at_low_resolution(
+        jnp.asarray(ft_y_0).reshape(-1),
+        jnp.asarray(ft_y_1).reshape(-1),
+        jnp.asarray(ft_ctf_0).reshape(-1),
+        jnp.asarray(ft_ctf_1).reshape(-1),
+        volume_shape=volume_shape,
+        voxel_size=10.0,
+        grid_size=4,
+        low_resol_join_halves_angstrom=40.0,
+        padding_factor=1,
+        preserve_inputs=False,
+        return_retained_first_numerator=True,
+    )
+
+    assert len(joined) == 5
+    assert all(isinstance(value, np.ndarray) for value in joined[:4])
+    retained_half0 = joined[4]
+    assert retained_half0 is not None
+    assert not isinstance(retained_half0, np.ndarray)
+    np.testing.assert_array_equal(np.asarray(retained_half0), joined[0])
+
+    padding_joined = regularization.join_halves_at_low_resolution(
+        jnp.asarray(ft_y_0).reshape(-1),
+        jnp.asarray(ft_y_1).reshape(-1),
+        jnp.asarray(ft_ctf_0).reshape(-1),
+        jnp.asarray(ft_ctf_1).reshape(-1),
+        volume_shape=volume_shape,
+        voxel_size=10.0,
+        grid_size=16,
+        low_resol_join_halves_angstrom=40.0,
+        padding_factor=1,
+        preserve_inputs=False,
+        return_retained_first_numerator=True,
+    )
+    assert all(isinstance(value, np.ndarray) for value in padding_joined[:4])
+    assert padding_joined[4] is None
+
+
+def test_join_halves_host_fallback_reserves_joined_numpy_half0_for_crop(monkeypatch, caplog):
+    """The box-scale host path must reserve its joined numerator before FSC/tau2."""
+
+    import recovar.core.fourier_transform_utils as ftu
+
+    volume_shape = (9, 9, 9)
+    half_shape = ftu.volume_shape_to_half_volume_shape(volume_shape)
+    rng = np.random.default_rng(20260901)
+    ft_y_0 = (
+        rng.standard_normal(half_shape) + 1j * rng.standard_normal(half_shape)
+    ).astype(np.complex64)
+    ft_y_1 = (
+        rng.standard_normal(half_shape) + 1j * rng.standard_normal(half_shape)
+    ).astype(np.complex64)
+    ft_ctf_0 = rng.uniform(0.5, 1.5, half_shape).astype(np.float32)
+    ft_ctf_1 = rng.uniform(0.5, 1.5, half_shape).astype(np.float32)
+
+    monkeypatch.setenv("RECOVAR_LOWRES_JOIN_HOST_FALLBACK", "always")
+    caplog.set_level("INFO", logger=regularization.__name__)
+    joined = regularization.join_halves_at_low_resolution(
+        ft_y_0,
+        ft_y_1,
+        ft_ctf_0,
+        ft_ctf_1,
+        volume_shape=volume_shape,
+        voxel_size=10.0,
+        grid_size=4,
+        low_resol_join_halves_angstrom=40.0,
+        padding_factor=2,
+        preserve_inputs=False,
+        return_retained_first_numerator=True,
+    )
+
+    assert joined[0] is ft_y_0
+    assert joined[1] is ft_y_1
+    assert joined[2] is ft_ctf_0
+    assert joined[3] is ft_ctf_1
+    assert joined[4] is not None
+    assert not isinstance(joined[4], np.ndarray)
+    np.testing.assert_array_equal(np.asarray(joined[4]), joined[0])
+    assert "Low-resolution half-join reserving joined first numerator on device" in caplog.text
+
+
+def test_joined_value_scatter_lowering_aliases_donated_first_device_buffer():
+    compiled = regularization._scatter_joined_values_into_first_device
+    lowered = compiled.lower(
+        regularization.jax.ShapeDtypeStruct((32,), jnp.complex64),
+        regularization.jax.ShapeDtypeStruct((5,), jnp.int32),
+        regularization.jax.ShapeDtypeStruct((5,), jnp.complex64),
+    )
+    hlo_text = lowered.compiler_ir(dialect="hlo").as_hlo_text()
+    hlo_header = hlo_text.splitlines()[0]
+
+    assert "input_output_alias" in hlo_header
+    assert "(0, {}, may-alias)" in hlo_header
+
+
+def test_join_halves_at_low_resolution_host_fallback_can_reuse_numpy_storage(monkeypatch):
+    volume_shape = (8, 8, 8)
+    idx_inside = (6, 4, 4)
+    idx_outside = (7, 7, 7)
+
+    ft_y_0 = np.zeros(volume_shape, dtype=np.complex64)
+    ft_y_1 = np.zeros(volume_shape, dtype=np.complex64)
+    ft_ctf_0 = np.ones(volume_shape, dtype=np.float32)
+    ft_ctf_1 = np.full(volume_shape, 3.0, dtype=np.float32)
+    ft_y_0[idx_inside] = 12.0 + 4.0j
+    ft_y_1[idx_inside] = 2.0 + 10.0j
+    ft_y_0[idx_outside] = 20.0
+    ft_y_1[idx_outside] = 4.0
+
+    monkeypatch.setenv("RECOVAR_LOWRES_JOIN_HOST_FALLBACK", "always")
+    joined = regularization.join_halves_at_low_resolution(
+        ft_y_0,
+        ft_y_1,
+        ft_ctf_0,
+        ft_ctf_1,
+        volume_shape=volume_shape,
+        voxel_size=10.0,
+        grid_size=4,
+        low_resol_join_halves_angstrom=40.0,
+        preserve_inputs=False,
+    )
+
+    assert joined[0] is ft_y_0
+    assert joined[1] is ft_y_1
+    assert joined[2] is ft_ctf_0
+    assert joined[3] is ft_ctf_1
+    np.testing.assert_array_equal(ft_y_0[idx_inside], np.complex64(7.0 + 7.0j))
+    np.testing.assert_array_equal(ft_y_1[idx_inside], np.complex64(7.0 + 7.0j))
+    np.testing.assert_array_equal(ft_ctf_0[idx_inside], np.float32(2.0))
+    np.testing.assert_array_equal(ft_ctf_1[idx_inside], np.float32(2.0))
+    np.testing.assert_array_equal(ft_y_0[idx_outside], np.complex64(20.0))
+    np.testing.assert_array_equal(ft_y_1[idx_outside], np.complex64(4.0))

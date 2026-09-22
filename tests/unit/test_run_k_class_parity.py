@@ -420,3 +420,104 @@ def test_positive_one_based_class_parser():
         _positive_one_based_class("0")
     with pytest.raises(argparse.ArgumentTypeError, match="positive integer"):
         _positive_one_based_class("class2")
+
+
+def test_k_class_replay_reconstructs_from_recorded_mstep_accumulator_shape():
+    import inspect
+    import scripts.run_k_class_parity as run_k_class_parity
+
+    source = inspect.getsource(run_k_class_parity.main)
+    reconstruct_start = source.index("    def reconstruct_variant(")
+    reconstruct_end = source.index("    variant_specs = [", reconstruct_start)
+    reconstruct_source = source[reconstruct_start:reconstruct_end]
+
+    assert "accumulator_volume_shape=result.mstep_accumulator_shape" in reconstruct_source
+
+
+def test_cropped_x_half_accumulator_reconstructs_when_shape_is_explicit():
+    from recovar.core import fourier_transform_utils
+    from recovar.em.refinement.mean_helpers import _reconstruct_volume_eager
+
+    volume_shape = (8, 8, 8)
+    accumulator_shape = (5, 5, 5)
+    accumulator_half_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(
+        accumulator_shape
+    )
+    weights = np.ones(accumulator_half_shape, dtype=np.float32)
+    numerator = np.zeros(accumulator_half_shape, dtype=np.complex64)
+    common = dict(
+        vol_shape=volume_shape,
+        padding_factor=2,
+        tau=np.ones(np.prod(volume_shape), dtype=np.float32),
+        tau2_fudge=1.0,
+        projection_padding_factor=1,
+        current_size=4,
+    )
+
+    with pytest.raises(ValueError, match="Could not infer half/full Fourier layout"):
+        _reconstruct_volume_eager(weights, numerator, **common)
+
+    reconstructed = _reconstruct_volume_eager(
+        weights,
+        numerator,
+        accumulator_volume_shape=accumulator_shape,
+        **common,
+    )
+
+    assert reconstructed.shape == volume_shape
+    assert reconstructed.dtype == np.dtype(np.complex64)
+    np.testing.assert_array_equal(
+        np.asarray(reconstructed),
+        np.zeros(volume_shape, dtype=np.complex64),
+    )
+
+
+def test_k_class_replay_resolves_saved_gradient_sentinel_to_active_k4_cap():
+    from scripts.run_k_class_parity import _resolve_replay_max_significants
+
+    resolved = _resolve_replay_max_significants(
+        override=None,
+        optimiser_metadata={
+            "gradient_refine": 1,
+            "has_converged": 0,
+            "number_iterations": 8,
+            "grad_em_iters": 0,
+            "grad_has_converged": 0,
+            "maximum_significants_arg": -1,
+        },
+        target_iteration=1,
+        do_firstiter_cc=False,
+        n_classes=4,
+    )
+
+    assert resolved == {
+        "maximum_significants_argument": -1,
+        "active_max_significants": 400,
+        "source": "relion_gradient_runtime_default",
+        "gradient_refine": True,
+        "do_grad": True,
+        "target_iteration": 1,
+    }
+
+
+def test_k_class_replay_max_significants_override_can_force_uncapped():
+    from scripts.run_k_class_parity import _resolve_replay_max_significants
+
+    resolved = _resolve_replay_max_significants(
+        override=-1,
+        optimiser_metadata={
+            "gradient_refine": 1,
+            "has_converged": 0,
+            "number_iterations": 8,
+            "grad_em_iters": 0,
+            "grad_has_converged": 0,
+            "maximum_significants_arg": -1,
+        },
+        target_iteration=1,
+        do_firstiter_cc=False,
+        n_classes=4,
+    )
+
+    assert resolved["active_max_significants"] == -1
+    assert resolved["source"] == "cli_override"
+    assert resolved["do_grad"] is True

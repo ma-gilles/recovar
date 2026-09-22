@@ -192,7 +192,7 @@ def _make_relion_wavg_rectangle(
     """
 
     image_shape = tuple(int(value) for value in image_shape)
-    current_size = int(current_size)
+    current_size = image_shape[0] if current_size is None else int(current_size)
     model_current_size = (
         current_size
         if reconstruction_current_size is None
@@ -227,10 +227,19 @@ def _make_relion_wavg_rectangle(
         include_dc=True,
         exact_radius=True,
     )
-    recon_indices = np.asarray(recon_window_indices, dtype=np.int32).reshape(-1)
+    full_box_unwindowed = bool(
+        recon_window_indices is None
+        and current_size == image_shape[0]
+        and model_current_size == image_shape[0]
+    )
+    recon_indices = (
+        np.arange(image_shape[0] * (image_shape[1] // 2 + 1), dtype=np.int32)
+        if full_box_unwindowed
+        else np.asarray(recon_window_indices, dtype=np.int32).reshape(-1)
+    )
     exact_support = np.array_equal(np.sort(recon_indices), exact_indices)
     rounded_support = np.array_equal(np.sort(recon_indices), rounded_indices)
-    if not (exact_support or rounded_support):
+    if not (full_box_unwindowed or exact_support or rounded_support):
         raise ValueError(
             "RELION Wavg rectangle requires a complete exact-radius or rounded-shell "
             "reconstruction window: "

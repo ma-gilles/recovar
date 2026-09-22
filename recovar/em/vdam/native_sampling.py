@@ -24,7 +24,6 @@ from recovar.em.helpers.expected_accuracy import (
     estimate_relion_expected_accuracy_from_prepared_inputs,
     estimate_relion_expected_accuracy_in_spawned_process_from_prepared_inputs,
 )
-from recovar.em.helpers.orientation_priors import make_relion_translation_log_prior
 from recovar.em.vdam.native_options import InitialModelDefaults, NativeInitialModelOptions
 from recovar.em.vdam.state import InitialModelState, NativeOpticsState, NativeParticleState
 from recovar.utils.helpers import R_to_relion, recovar_volume_to_relion
@@ -72,6 +71,7 @@ class NativeSamplingPlan:
     coarse_translations: np.ndarray | None = None
     coarse_prior_translations: np.ndarray | None = None
     metadata_translations: np.ndarray | None = None
+    translation_parent: np.ndarray | None = None
 
     @property
     def n_rotations(self) -> int:
@@ -598,6 +598,7 @@ def _build_sampling_plan(
         else coarse_translations
     )
 
+    translation_parent = None
     if oversampling == 0:
         rotations = sampling.get_relion_hidden_rotation_grid(healpix_order, matrices=True).astype(np.float32)
         translations = coarse_translations
@@ -621,7 +622,7 @@ def _build_sampling_plan(
                 oversampling_order=oversampling,
                 random_perturbation=random_perturbation,
             )
-        oversampled_trans, _translation_parent = sampling.get_oversampled_translation_grid(
+        oversampled_trans, translation_parent = sampling.get_oversampled_translation_grid(
             coarse_translations, pixel_offset=offset_step_px, oversampling_order=oversampling
         )
         metadata_translations, _metadata_translation_parent = sampling.get_oversampled_translation_grid(
@@ -629,7 +630,7 @@ def _build_sampling_plan(
             pixel_offset=offset_step_px,
             oversampling_order=oversampling,
         )
-        if not np.array_equal(_translation_parent, _metadata_translation_parent):
+        if not np.array_equal(translation_parent, _metadata_translation_parent):
             raise RuntimeError("GPU and metadata translation parent maps differ")
         translations = sampling.apply_relion_translation_perturbation(
             oversampled_trans.astype(np.float32, copy=False), random_perturbation, offset_step_pixels=offset_step_px
@@ -653,6 +654,7 @@ def _build_sampling_plan(
         coarse_translations=coarse_pass1_translations,
         coarse_prior_translations=coarse_translations,
         metadata_translations=np.asarray(metadata_translations, dtype=np.float64),
+        translation_parent=None if translation_parent is None else np.asarray(translation_parent, dtype=np.int64),
     )
 
 
@@ -689,22 +691,43 @@ def _translation_log_prior(
     *,
     voxel_size: float,
     sigma_angstrom: float | None,
-    centers: np.ndarray | None = None,
+    old_offsets: np.ndarray,
+    prior_offsets: np.ndarray | None = None,
 ) -> np.ndarray | None:
-    """Build InitialModel's RELION accelerated-path ``pdf_offset`` values."""
+    """Mirror InitialModel's accelerated coarse ``pdf_offset`` arithmetic.
+
+    RELION stores the sampling translations in Angstroms, but its accelerated
+    InitialModel path adds them directly to the rounded, pixel-valued previous
+    offset before applying one more ``pixel_size**2`` factor.  This mixed-unit
+    arithmetic is source behavior and is distinct from both the image
+    pre-shift and the offset-variance sufficient statistic. See
+    ``docs/math/relion_initial_model_em_parity_conventions.md#prior-preparation``.
+    """
 
     if sigma_angstrom is None:
         return None
-    translations = np.asarray(translations, dtype=np.float32)
-    shared = centers is None
-    centers_arr = np.zeros(2, dtype=np.float32) if shared else np.asarray(centers, dtype=np.float32)
-    log_prior = make_relion_translation_log_prior(
-        translations,
-        voxel_size=float(voxel_size),
-        sigma_offset_angstrom=float(sigma_angstrom),
-        prior_centers=centers_arr,
-    )
-    return np.asarray(log_prior, dtype=np.float32)
+    sigma_angstrom = float(sigma_angstrom)
+    if sigma_angstrom <= 0.0:
+        raise ValueError("translation_sigma_angstrom must be positive when provided")
+    translations_arr = np.asarray(translations, dtype=np.float64)
+    if translations_arr.ndim != 2 or translations_arr.shape[1] != 2:
+        raise ValueError(f"translations must have shape (N, 2), got {translations_arr.shape}")
+    old_offsets_arr = np.asarray(old_offsets, dtype=np.float64)
+    if old_offsets_arr.ndim != 2 or old_offsets_arr.shape[1] != 2:
+        raise ValueError(f"old_offsets must have shape (N, 2), got {old_offsets_arr.shape}")
+    if prior_offsets is None:
+        prior_offsets_arr = np.zeros_like(old_offsets_arr)
+    else:
+        prior_offsets_arr = np.asarray(prior_offsets, dtype=np.float64)
+        if prior_offsets_arr.shape != old_offsets_arr.shape:
+            raise ValueError(
+                f"prior_offsets must match old_offsets shape; got {prior_offsets_arr.shape} and {old_offsets_arr.shape}"
+            )
+
+    sampled_translations_angstrom = translations_arr[None, :, :] * float(voxel_size)
+    source_differences = old_offsets_arr[:, None, :] + sampled_translations_angstrom - prior_offsets_arr[:, None, :]
+    log_prior = -0.5 * np.sum(source_differences**2, axis=-1) * float(voxel_size) ** 2 / sigma_angstrom**2
+    return log_prior.astype(np.float32, copy=False)
 
 
 

@@ -71,20 +71,20 @@ def _layout(counts, *, seed, n_global=4):
     )
 
 
-def _fixture(float64: bool):
+def _fixture(float64: bool, n_classes=2):
     base = np.asarray(_hermitian_volume(VOLUME_SHAPE, seed=211))
     perturbation = np.asarray(_hermitian_volume(VOLUME_SHAPE, seed=307))
-    means = jnp.stack([jnp.asarray(base), jnp.asarray(base + 0.05 * perturbation)], axis=0)
+    means = jnp.stack([jnp.asarray(base + 0.05 * k * perturbation) for k in range(n_classes)], axis=0)
     if float64:
         means = means.astype(jnp.complex128)
     noise = jnp.full(IMAGE_SIZE, NOISE_VARIANCE, dtype=jnp.float64 if float64 else jnp.float32)
-    layouts = [_layout(ROWS_BY_CLASS[0], seed=17), _layout(ROWS_BY_CLASS[1], seed=29)]
+    layouts = [_layout(ROWS_BY_CLASS[k % 2], seed=17 + 12 * k) for k in range(n_classes)]
     return means, noise, layouts
 
 
 def _run(*, segmented, float64, accumulate_noise=True, reconstruct_significant_only=False,
-         use_float64_normalization=True):
-    means, noise, layouts = _fixture(float64)
+         use_float64_normalization=True, n_classes=2):
+    means, noise, layouts = _fixture(float64, n_classes)
     dataset = MockDataset(N_IMAGES, np.random.default_rng(11))
     kwargs = dict(
         image_batch_size=3,
@@ -111,7 +111,7 @@ def _run(*, segmented, float64, accumulate_noise=True, reconstruct_significant_o
         noise,
         layouts,
         "linear_interp",
-        class_log_priors=np.log(np.asarray([0.45, 0.55], dtype=np.float64)),
+        class_log_priors=np.log(np.tile(np.asarray([0.45, 0.55], dtype=np.float64), n_classes // 2) / (n_classes // 2)),
         segmented_class_rows=segmented,
         **kwargs,
     )
@@ -147,11 +147,11 @@ def _assert_published_dtypes_match(segmented, baseline, expected_real, expected_
         assert got == expected_real, (stats_name, got)
         assert got == np.asarray(getattr(baseline.stats, stats_name)).dtype, stats_name
         expected_field = expected_normalization_real if stats_name == "log_evidence_per_image" else expected_real
-        for class_index in range(2):
+        for class_index in range(len(segmented.per_class_stats)):
             per_class = np.asarray(getattr(segmented.per_class_stats[class_index], stats_name)).dtype
             assert per_class == np.asarray(getattr(baseline.per_class_stats[class_index], stats_name)).dtype
             assert per_class == expected_field, (stats_name, class_index, per_class)
-    for class_index in range(2):
+    for class_index in range(len(segmented.per_class_stats)):
         assert (
             np.asarray(segmented.per_class_stats[class_index].rotation_posterior_sums).dtype
             == np.asarray(baseline.per_class_stats[class_index].rotation_posterior_sums).dtype
@@ -179,10 +179,10 @@ def _assert_every_class_is_populated(result):
     """Guard the comparison itself: a collapsed class would make it vacuous."""
     responsibilities = np.asarray(result.class_responsibilities, dtype=np.float64)
     masses = np.asarray(result.class_posterior_sums, dtype=np.float64)
-    assert responsibilities.shape == (2, N_IMAGES)
+    assert responsibilities.shape == (len(result.per_class_stats), N_IMAGES)
     assert masses.min() > 0.5 * N_IMAGES / 10.0, masses
     assert responsibilities.min() > 1e-3, responsibilities
-    for class_index in range(2):
+    for class_index in range(len(result.per_class_stats)):
         for name in ("Ft_y", "Ft_ctf"):
             values = np.abs(np.asarray(getattr(result, name)[class_index]))
             assert values.max() > 0.0 and np.count_nonzero(values) > values.size // 10, (name, class_index)
@@ -190,13 +190,14 @@ def _assert_every_class_is_populated(result):
         assert angular.sum() > 0.1, (class_index, angular)
 
 
+@pytest.mark.parametrize("n_classes", [2, 4], ids=["K2", "K4"])
 @pytest.mark.parametrize("use_float64_normalization", [True, False], ids=["norm64", "norm32"])
 @pytest.mark.parametrize(
     "float64, rtol, atol_scale",
     [(False, 1e-6, 1e-6), (True, 1e-12, 1e-12)],
     ids=["float32", "float64"],
 )
-def test_segmented_pass_matches_per_class_calls(float64, rtol, atol_scale, use_float64_normalization):
+def test_segmented_pass_matches_per_class_calls(float64, rtol, atol_scale, use_float64_normalization, n_classes):
     recorded = []
     original = local_big_jit._class_segment_statistics
 
@@ -204,10 +205,10 @@ def test_segmented_pass_matches_per_class_calls(float64, rtol, atol_scale, use_f
         recorded.append(str(scores.dtype))
         return original(probs, scores, reconstruction_probs, **kwargs)
 
-    baseline = _run(segmented=False, float64=float64, use_float64_normalization=use_float64_normalization)
+    baseline = _run(segmented=False, float64=float64, use_float64_normalization=use_float64_normalization, n_classes=n_classes)
     local_big_jit._class_segment_statistics = record_dtypes
     try:
-        segmented = _run(segmented=True, float64=float64, use_float64_normalization=use_float64_normalization)
+        segmented = _run(segmented=True, float64=float64, use_float64_normalization=use_float64_normalization, n_classes=n_classes)
     finally:
         local_big_jit._class_segment_statistics = original
 
@@ -228,7 +229,7 @@ def test_segmented_pass_matches_per_class_calls(float64, rtol, atol_scale, use_f
         scale = float(np.abs(want).max()) if want.size else 1.0
         np.testing.assert_allclose(got, want, rtol=rtol, atol=atol_scale * max(scale, 1e-30), err_msg=label)
 
-    for class_index in range(2):
+    for class_index in range(n_classes):
         close(segmented.Ft_y[class_index], baseline.Ft_y[class_index], f"Ft_y class {class_index}")
         close(segmented.Ft_ctf[class_index], baseline.Ft_ctf[class_index], f"Ft_ctf class {class_index}")
         close(
@@ -258,7 +259,7 @@ def test_segmented_pass_matches_per_class_calls(float64, rtol, atol_scale, use_f
     )
     np.testing.assert_array_equal(np.asarray(segmented.class_assignments), np.asarray(baseline.class_assignments))
     np.testing.assert_array_equal(np.asarray(segmented.pose_assignments), np.asarray(baseline.pose_assignments))
-    for class_index in range(2):
+    for class_index in range(n_classes):
         np.testing.assert_array_equal(
             np.asarray(segmented.per_class_best_pose_rotation_ids[class_index]),
             np.asarray(baseline.per_class_best_pose_rotation_ids[class_index]),

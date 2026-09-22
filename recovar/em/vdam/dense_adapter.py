@@ -18,7 +18,6 @@ from recovar.em.classification.k_class import run_dense_k_class_em
 from recovar.em.helpers.orientation_priors import (
     relion_round_away_from_zero,
     relion_sigma_offset_prior_center,
-    relion_translation_prior_center,
 )
 from recovar.em.relion import relion_projector_setup
 from recovar.em.relion.relion_projector_setup import ProjectorSetupBackend
@@ -173,20 +172,31 @@ def _dense_estep_config(
         dtype=np.float32,
     )
     sigma_angstrom = float(sigma_offset_angstrom)
-    # InitialModel uses the same accelerated ``pdf_offset`` convention as the
-    # supplied-map EM path: the sampling grid is represented in projection
-    # pixels, while RELION applies its source-faithful pixel_size**4 scale.
-    translation_prior_centers = relion_translation_prior_center(
-        translation_offsets,
-        float(dataset.voxel_size),
-    )
+    # InitialModel's accelerated pdf_offset uses the rounded absolute old
+    # offset, independently of the same integer shift being pre-applied to the
+    # image. RELION computes this prior on the coarse translation grid and
+    # reuses each parent value for all oversampled children.
     _prior_kwargs = dict(
         voxel_size=float(dataset.voxel_size),
         sigma_angstrom=sigma_angstrom,
-        centers=translation_prior_centers,
+        old_offsets=image_pre_shifts,
     )
     coarse_translation_log_prior = native_sampling._translation_log_prior(coarse_prior_translations, **_prior_kwargs)
-    translation_log_prior = native_sampling._translation_log_prior(sampling_plan.translations, **_prior_kwargs)
+    if sampling_plan.translation_parent is None:
+        if int(np.asarray(sampling_plan.translations).shape[0]) != int(coarse_translation_log_prior.shape[1]):
+            raise ValueError(
+                "translation grid and coarse prior must have the same length without an oversampling parent map"
+            )
+        translation_log_prior = coarse_translation_log_prior
+    else:
+        translation_parent = np.asarray(sampling_plan.translation_parent, dtype=np.int64)
+        if translation_parent.shape != (int(np.asarray(sampling_plan.translations).shape[0]),):
+            raise ValueError("translation_parent must contain one coarse parent per fine translation")
+        if np.any(translation_parent < 0) or int(translation_parent.max(initial=-1)) >= int(
+            coarse_translation_log_prior.shape[1]
+        ):
+            raise ValueError("translation_parent contains indices outside the coarse translation prior")
+        translation_log_prior = coarse_translation_log_prior[:, translation_parent]
 
     sparse_pass2_enabled = os.environ.get("RECOVAR_DISABLE_SPARSE_PASS2", "") not in (
         "1",

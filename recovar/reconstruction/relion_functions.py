@@ -187,8 +187,20 @@ def _get_idft3_np(img, norm=fourier_transform_utils.DEFAULT_FFT_NORM, axes=(-3, 
     return img
 
 
-def _large_grid_postprocess_single_precision_enabled(padded_voxels):
-    """Return whether large RELION postprocess grids should avoid complex128.
+def _large_grid_postprocess_is_physically_large(grid_voxels):
+    """Return whether a RELION grid crosses the configured memory threshold."""
+
+    threshold = int(
+        os.environ.get(
+            "RECOVAR_RELION_POSTPROCESS_SINGLE_PRECISION_MIN_VOXELS",
+            _RELION_POSTPROCESS_SINGLE_PRECISION_MIN_VOXELS,
+        )
+    )
+    return int(grid_voxels) >= threshold
+
+
+def _large_grid_postprocess_single_precision_enabled(grid_voxels):
+    """Return whether a RELION postprocess grid should avoid complex128.
 
     RELION's GPU reconstruction path is single precision.  RECOVAR globally
     enables JAX x64, which can otherwise promote a large padded reconstruction
@@ -207,13 +219,7 @@ def _large_grid_postprocess_single_precision_enabled(padded_voxels):
             "Unrecognised RECOVAR_RELION_POSTPROCESS_LARGE_GRID_SINGLE_PRECISION=%r; using auto",
             mode,
         )
-    threshold = int(
-        os.environ.get(
-            "RECOVAR_RELION_POSTPROCESS_SINGLE_PRECISION_MIN_VOXELS",
-            _RELION_POSTPROCESS_SINGLE_PRECISION_MIN_VOXELS,
-        )
-    )
-    return int(padded_voxels) >= threshold
+    return _large_grid_postprocess_is_physically_large(grid_voxels)
 
 
 def _pad_volume_for_projection_host(
@@ -883,6 +889,7 @@ def adjust_regularization_relion_style(
     native_volume_shape=None,
     tau_is_1d=False,
     relion_filter_scale=None,
+    large_grid_single_precision=False,
 ):
     """Adjust the RELION-style regularization filter.
 
@@ -923,7 +930,12 @@ def adjust_regularization_relion_style(
         has_weight = native_weight > 1e-20
         safe_native_weight = jnp.where(has_weight, native_weight, 1.0)
         native_inverse = 1.0 / (0.001 * safe_native_weight)
-        return jnp.where(has_weight, native_inverse / scale, 0.0)
+        # Evaluate RELION's native-unit fallback in double precision, but do
+        # not let that scalar normalization promote a large float32 BPref
+        # denominator (and its subsequent complex division) box-wide.  The
+        # caller still promotes this result when its tau operand is float64.
+        fallback = jnp.where(has_weight, native_inverse / scale, 0.0)
+        return fallback.astype(current_filter.dtype) if large_grid_single_precision else fallback
 
     # Exact half-volume behavior: reuse full-volume implementation and repack.
     if half_volume:
@@ -1159,6 +1171,97 @@ def _relion_window_centered_half_fourier(vol_half, old_volume_shape, new_volume_
     return jnp.pad(vol_half, ((start, tail), (start, tail), (0, new_half_shape[-1] - n_cols)))
 
 
+def _relion_pad_centered_half_fourier_to_fftw(vol_half, old_volume_shape, new_volume_shape):
+    """Pad centered packed Fourier data directly into raw FFTW ordering.
+
+    This is the padding branch of :func:`_relion_window_centered_half_fourier`
+    with the two non-packed axes emitted in the layout consumed by
+    ``irfftn``.  Building that layout directly avoids a box-scale
+    ``ifftshift`` copy immediately before a large inverse FFT.
+    """
+
+    old_volume_shape = tuple(int(s) for s in old_volume_shape)
+    new_volume_shape = tuple(int(s) for s in new_volume_shape)
+    if len(set(old_volume_shape)) != 1 or len(set(new_volume_shape)) != 1:
+        raise ValueError(
+            "RELION Fourier padding currently requires cubic shapes, got "
+            f"old={old_volume_shape}, new={new_volume_shape}"
+        )
+    old_dim = old_volume_shape[0]
+    new_dim = new_volume_shape[0]
+    if new_dim <= old_dim:
+        raise ValueError(f"direct FFTW padding requires new_dim > old_dim, got {new_dim} <= {old_dim}")
+
+    old_half_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(old_volume_shape)
+    new_half_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(new_volume_shape)
+    vol_half = vol_half.reshape(old_half_shape)
+    freq = _relion_centered_axis_fftw_frequencies(old_dim).astype(np.int32)
+    raw_axis_idx = jnp.asarray(np.where(freq >= 0, freq, new_dim + freq), dtype=jnp.int32)
+    col_idx = jnp.arange(old_half_shape[-1], dtype=jnp.int32)
+    col_freq = np.arange(old_half_shape[-1], dtype=np.int32)
+    max_r2 = int(old_half_shape[-1] - 1) ** 2
+    support = (
+        freq[:, None, None] * freq[:, None, None]
+        + freq[None, :, None] * freq[None, :, None]
+        + col_freq[None, None, :] * col_freq[None, None, :]
+    ) <= max_r2
+    vol_half = jnp.where(jnp.asarray(support), vol_half, jnp.zeros((), dtype=vol_half.dtype))
+    out = jnp.zeros(new_half_shape, dtype=vol_half.dtype)
+    return out.at[
+        raw_axis_idx[:, None, None],
+        raw_axis_idx[None, :, None],
+        col_idx[None, None, :],
+    ].set(vol_half)
+
+
+def _relion_crop_centered_half_fourier_to_fftw(vol_half, old_volume_shape, new_volume_shape):
+    """Crop centered packed Fourier data directly into raw FFTW ordering.
+
+    This is the cropping branch of :func:`_relion_window_centered_half_fourier`
+    with the two non-packed axes emitted in the layout consumed by
+    ``irfftn``.  Selecting the final order directly avoids retaining a
+    box-scale centered crop while ``ifftshift`` materializes an equally large
+    raw-FFTW copy.
+    """
+
+    old_volume_shape = tuple(int(s) for s in old_volume_shape)
+    new_volume_shape = tuple(int(s) for s in new_volume_shape)
+    if len(set(old_volume_shape)) != 1 or len(set(new_volume_shape)) != 1:
+        raise ValueError(
+            "RELION Fourier cropping currently requires cubic shapes, got "
+            f"old={old_volume_shape}, new={new_volume_shape}"
+        )
+    old_dim = old_volume_shape[0]
+    new_dim = new_volume_shape[0]
+    if new_dim >= old_dim:
+        raise ValueError(f"direct FFTW cropping requires new_dim < old_dim, got {new_dim} >= {old_dim}")
+
+    old_half_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(old_volume_shape)
+    new_half_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(new_volume_shape)
+    vol_half = vol_half.reshape(old_half_shape)
+    centered_axis_idx = _relion_centered_axis_take_indices(old_dim, new_dim)
+    raw_axis_idx = jnp.asarray(np.fft.ifftshift(centered_axis_idx), dtype=jnp.int32)
+    col_idx = jnp.arange(new_half_shape[-1], dtype=jnp.int32)
+    return vol_half[
+        raw_axis_idx[:, None, None],
+        raw_axis_idx[None, :, None],
+        col_idx[None, None, :],
+    ]
+
+
+def _relion_idft3_real_from_fftw_half(vol_half, volume_shape):
+    """Inverse-transform a packed half-volume already in raw FFTW order."""
+
+    axes = (-3, -2, -1)
+    vol = jnp.fft.irfftn(
+        vol_half,
+        s=tuple(int(s) for s in volume_shape),
+        axes=axes,
+        norm=fourier_transform_utils.DEFAULT_FFT_NORM,
+    )
+    return jnp.fft.ifftshift(vol, axes=axes)
+
+
 def _relion_current_size_decenter_mask(volume_shape, radius, *, half_volume):
     """RELION ``Projector::decenter`` support: include ``r2 <= max_r2``.
 
@@ -1221,7 +1324,114 @@ def post_process_from_filter(
     )
 
 
-@functools.partial(jax.jit, static_argnums=[2, 3, 5, 6, 7, 8, 9, 11, 12, 13, 17, 18, 19, 20, 21, 22])
+_POSTPROCESS_STATIC_ARGNUMS = (2, 3, 5, 6, 7, 8, 9, 11, 12, 13, 17, 18, 19, 20, 21, 22, 23, 24, 25)
+
+
+def _regularize_large_relion_half_filter_impl(
+    Ft_ctf,
+    tau,
+    og_volume_shape,
+    volume_upsampling_factor,
+    tau2_fudge,
+    minres_map,
+    current_size,
+    accumulator_volume_shape,
+    tau_is_1d,
+    relion_filter_scale,
+):
+    """Build the large packed-half Wiener denominator without its numerator.
+
+    Keeping this operation separate from the complex division is a memory
+    boundary, not a different reconstruction formula.  In particular, the
+    casts and arguments below mirror the large-grid branch in
+    :func:`post_process_from_filter_v2` exactly.  Its donating executable can
+    reuse the float32 CTF input while its regularization temporaries are live;
+    the twice-as-large complex numerator may therefore remain on the host.
+    """
+
+    og_volume_shape = tuple(int(s) for s in og_volume_shape)
+    volume_upsampling_factor = int(volume_upsampling_factor)
+    upsampled_volume_shape = (
+        tuple(3 * [og_volume_shape[0] * volume_upsampling_factor])
+        if accumulator_volume_shape is None
+        else tuple(int(s) for s in accumulator_volume_shape)
+    )
+    packed_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(upsampled_volume_shape)
+    Ft_ctf_flat, _ = _as_flat_single_volume(Ft_ctf, packed_shape)
+    Ft_ctf_flat = Ft_ctf_flat.real.astype(jnp.float32)
+    tau_for_filter = None if tau is None else jnp.asarray(tau, dtype=jnp.float32)
+    current_size_limited = current_size is not None and current_size > 0
+    native_r_max = int(current_size) // 2 if current_size_limited else None
+    regularized_filter = adjust_regularization_relion_style(
+        Ft_ctf_flat,
+        upsampled_volume_shape,
+        tau=tau_for_filter,
+        padding_factor=volume_upsampling_factor,
+        half_volume=True,
+        tau2_fudge=tau2_fudge,
+        minres_map=minres_map,
+        max_res_shell=native_r_max,
+        relion_native_shell_floor=current_size_limited,
+        native_volume_shape=og_volume_shape,
+        tau_is_1d=tau_is_1d,
+        relion_filter_scale=relion_filter_scale,
+        large_grid_single_precision=True,
+    )
+    return regularized_filter.reshape(Ft_ctf.shape)
+
+
+_regularize_large_relion_half_filter_donate_ctf = jax.jit(
+    _regularize_large_relion_half_filter_impl,
+    static_argnums=(2, 3, 5, 6, 7, 8, 9),
+    donate_argnums=(0,),
+)
+
+
+def _divide_large_relion_half_numerator_impl(
+    F_ty,
+    regularized_filter,
+    volume_upsampling_factor,
+    current_size,
+    accumulator_volume_shape,
+):
+    """Apply the exact packed-half support mask and Wiener division.
+
+    XLA fuses this elementwise stage into the donated complex64 numerator, so
+    it needs no box-scale temporary in addition to the numerator and the
+    already-regularized float32 denominator.
+    """
+
+    upsampled_volume_shape = tuple(int(s) for s in accumulator_volume_shape)
+    packed_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(upsampled_volume_shape)
+    F_ty_flat, _ = _as_flat_single_volume(F_ty, packed_shape)
+    F_ty_flat = F_ty_flat.astype(jnp.complex64)
+    current_size_limited = current_size is not None and current_size > 0
+    if current_size_limited:
+        wiener_radius = int(volume_upsampling_factor) * (int(current_size) // 2)
+        valid_mask = _relion_current_size_decenter_mask(
+            upsampled_volume_shape,
+            wiener_radius,
+            half_volume=True,
+        )
+    else:
+        wiener_radius = upsampled_volume_shape[0] // 2 - 1
+        valid_mask = fourier_transform_utils.full_volume_to_half_volume(
+            mask.get_radial_mask(upsampled_volume_shape, radius=wiener_radius),
+            upsampled_volume_shape,
+        )
+    valid_indices = valid_mask.reshape(-1).astype(F_ty_flat.real.dtype)
+    divided = (F_ty_flat * valid_indices) / jnp.asarray(regularized_filter).reshape(-1)
+    return divided.astype(jnp.complex64).reshape(F_ty.shape)
+
+
+_divide_large_relion_half_numerator_donate_numerator = jax.jit(
+    _divide_large_relion_half_numerator_impl,
+    static_argnums=(2, 3, 4),
+    donate_argnums=(0,),
+)
+
+
+@functools.partial(jax.jit, static_argnums=_POSTPROCESS_STATIC_ARGNUMS)
 def post_process_from_filter_v2(
     Ft_ctf,
     F_ty,
@@ -1246,10 +1456,17 @@ def post_process_from_filter_v2(
     tau_is_1d=False,
     preserve_output_precision=False,
     relion_filter_scale=None,
+    return_fftw_half_before_ifft=False,
+    return_wiener_half_before_window=False,
+    fft_compute_dtype=None,
 ):
     """Post-process RELION-style reconstruction from filter weights.
 
     Steps: regularize -> iDFT -> crop -> spherical mask -> grid correct -> DFT.
+
+    ``fft_compute_dtype`` explicitly selects complex64 or complex128 transform
+    arithmetic, independently of denominator and gridding precision. None
+    preserves the historical size-dependent behavior for existing callers.
 
     Supports both full Fourier inputs ``(N0*N1*N2,)`` and packed half-volume
     inputs ``(N0*N1*(N2//2+1),)``.
@@ -1264,17 +1481,64 @@ def post_process_from_filter_v2(
     added only on the strict sphere ``r2 < max_r2``.  The radial denominator
     floor is computed from the same strict sphere and clamped to its final
     native shell outside that support.
+
+    ``return_fftw_half_before_ifft`` is an internal large-grid memory
+    boundary.  It returns the single-precision packed half-volume in raw FFTW
+    order immediately before the padded inverse FFT.  The eager EM
+    reconstruction path host-stages this array and completes post-processing
+    with :func:`_finish_large_relion_postprocess_from_fftw_half`. This both
+    prevents large accumulators and the padded inverse-FFT workspace from
+    overlapping and keeps giant inverse-FFT normalization in the separate
+    executable even when the current-size accumulator itself is compact.
+
+    ``return_wiener_half_before_window`` is the earlier boundary used by the
+    donating large-grid executable. It returns the centered, Wiener-divided
+    accumulator before the crop to the reconstruction grid. The output has
+    the same shape and dtype as the complex numerator so XLA can reuse that
+    input buffer; the eager caller performs the byte-only crop on the host.
     """
     upsampled_volume_shape = (
         tuple(3 * [og_volume_shape[0] * volume_upsampling_factor])
         if accumulator_volume_shape is None
         else tuple(int(s) for s in accumulator_volume_shape)
     )
-    use_large_grid_single_precision = _large_grid_postprocess_single_precision_enabled(
+    reconstruction_volume_shape = _relion_reconstruction_padded_shape(
+        og_volume_shape,
+        volume_upsampling_factor,
+    )
+    use_large_accumulator_single_precision = _large_grid_postprocess_single_precision_enabled(
         int(np.prod(upsampled_volume_shape))
+    )
+    use_large_reconstruction_single_precision = _large_grid_postprocess_single_precision_enabled(
+        int(np.prod(reconstruction_volume_shape))
+    )
+    use_large_postprocess_single_precision = (
+        use_large_accumulator_single_precision or use_large_reconstruction_single_precision
     )
     if input_half_volume is None:
         input_half_volume = _infer_half_volume_layout(Ft_ctf, upsampled_volume_shape)
+    if return_fftw_half_before_ifft and not (
+        input_half_volume
+        and reconstruction_volume_shape != upsampled_volume_shape
+        and use_large_reconstruction_single_precision
+    ):
+        raise ValueError(
+            "The pre-IFFT host boundary requires a distinct large single-precision "
+            "reconstruction grid in packed half-volume layout"
+        )
+    if return_wiener_half_before_window and not (
+        input_half_volume
+        and reconstruction_volume_shape != upsampled_volume_shape
+        and use_large_accumulator_single_precision
+        and use_large_reconstruction_single_precision
+    ):
+        raise ValueError(
+            "The pre-window Wiener host boundary requires distinct large "
+            "single-precision accumulator/reconstruction grids in packed "
+            "half-volume layout"
+        )
+    if return_fftw_half_before_ifft and return_wiener_half_before_window:
+        raise ValueError("Only one large-grid host boundary may be requested")
 
     # Wiener spatial mask: match RELION's max_r2 skip when current_size given.
     current_size_limited = current_size is not None and current_size > 0
@@ -1289,7 +1553,7 @@ def post_process_from_filter_v2(
         packed_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(upsampled_volume_shape)
         Ft_ctf_flat, _ = _as_flat_single_volume(Ft_ctf, packed_shape)
         F_ty_flat, _ = _as_flat_single_volume(F_ty, packed_shape)
-        if use_large_grid_single_precision:
+        if use_large_accumulator_single_precision:
             Ft_ctf_flat = Ft_ctf_flat.real.astype(jnp.float32)
             F_ty_flat = F_ty_flat.astype(jnp.complex64)
         if current_size_limited:
@@ -1307,7 +1571,7 @@ def post_process_from_filter_v2(
     else:
         Ft_ctf_flat, _ = _as_flat_single_volume(Ft_ctf, upsampled_volume_shape)
         F_ty_flat, _ = _as_flat_single_volume(F_ty, upsampled_volume_shape)
-        if use_large_grid_single_precision:
+        if use_large_accumulator_single_precision:
             Ft_ctf_flat = Ft_ctf_flat.real.astype(jnp.float32)
             F_ty_flat = F_ty_flat.astype(jnp.complex64)
         if current_size_limited:
@@ -1321,7 +1585,7 @@ def post_process_from_filter_v2(
         valid_indices = valid_mask.reshape(-1).astype(Ft_ctf_flat.real.dtype)
 
     tau_for_filter = tau
-    if use_large_grid_single_precision and tau is not None:
+    if use_large_accumulator_single_precision and tau is not None:
         tau_for_filter = jnp.asarray(tau, dtype=jnp.float32)
 
     Ft_ctf2 = adjust_regularization_relion_style(
@@ -1337,6 +1601,7 @@ def post_process_from_filter_v2(
         native_volume_shape=og_volume_shape,
         tau_is_1d=tau_is_1d,
         relion_filter_scale=relion_filter_scale,
+        large_grid_single_precision=use_large_accumulator_single_precision,
     )
     vol = (F_ty_flat * valid_indices) / Ft_ctf2
 
@@ -1345,7 +1610,6 @@ def post_process_from_filter_v2(
     # first windows that Fourier grid to the even padoridim grid before
     # inverse FFT.  Preserve that convention here; directly inverse-FFTing
     # the odd accumulator introduces a common map-origin shift.
-    reconstruction_volume_shape = _relion_reconstruction_padded_shape(og_volume_shape, volume_upsampling_factor)
     _maybe_dump_relion_wiener_boundary(
         Ft_ctf_input=Ft_ctf_flat,
         F_ty_input=F_ty_flat,
@@ -1362,21 +1626,57 @@ def post_process_from_filter_v2(
         minres_map=minres_map,
         tau_is_1d=tau_is_1d,
     )
+    if use_large_postprocess_single_precision:
+        # Preserve the compact accumulator's Wiener arithmetic, then cast at
+        # the boundary where it is scattered onto the much larger inverse-FFT
+        # grid.  A float64 tau must not promote a box-scale padded FFT to a
+        # complex128 allocation merely because the current-size accumulator
+        # itself is small.
+        vol = vol.astype(jnp.complex64)
+    if return_wiener_half_before_window:
+        return vol.reshape(F_ty.shape)
+
+    if fft_compute_dtype is not None:
+        fft_compute_dtype = jnp.dtype(fft_compute_dtype)
+        if fft_compute_dtype not in (jnp.dtype(jnp.complex64), jnp.dtype(jnp.complex128)):
+            raise ValueError("fft_compute_dtype must be complex64 or complex128")
+        vol = vol.astype(fft_compute_dtype)
 
     # iDFT → crop to original size
     if input_half_volume:
         vol_half = vol.reshape(packed_shape)
         if reconstruction_volume_shape != upsampled_volume_shape:
-            vol_half = _relion_window_centered_half_fourier(
+            if use_large_reconstruction_single_precision:
+                if reconstruction_volume_shape[0] > upsampled_volume_shape[0]:
+                    vol_half = _relion_pad_centered_half_fourier_to_fftw(
+                        vol_half,
+                        upsampled_volume_shape,
+                        reconstruction_volume_shape,
+                    )
+                else:
+                    vol_half = _relion_crop_centered_half_fourier_to_fftw(
+                        vol_half,
+                        upsampled_volume_shape,
+                        reconstruction_volume_shape,
+                    )
+                if return_fftw_half_before_ifft:
+                    return vol_half
+                vol = _relion_idft3_real_from_fftw_half(vol_half, reconstruction_volume_shape)
+            else:
+                vol_half = _relion_window_centered_half_fourier(
+                    vol_half,
+                    upsampled_volume_shape,
+                    reconstruction_volume_shape,
+                )
+                vol = fourier_transform_utils.get_idft3_real(
+                    vol_half,
+                    volume_shape=reconstruction_volume_shape,
+                )
+        else:
+            vol = fourier_transform_utils.get_idft3_real(
                 vol_half,
-                upsampled_volume_shape,
-                reconstruction_volume_shape,
+                volume_shape=reconstruction_volume_shape,
             )
-        packed_shape_for_ifft = fourier_transform_utils.volume_shape_to_half_volume_shape(reconstruction_volume_shape)
-        vol = fourier_transform_utils.get_idft3_real(
-            vol_half.reshape(packed_shape_for_ifft),
-            volume_shape=reconstruction_volume_shape,
-        )
     else:
         if reconstruction_volume_shape != upsampled_volume_shape:
             vol_half = fourier_transform_utils.full_volume_to_half_volume(
@@ -1388,11 +1688,8 @@ def post_process_from_filter_v2(
                 upsampled_volume_shape,
                 reconstruction_volume_shape,
             )
-            packed_shape_for_ifft = fourier_transform_utils.volume_shape_to_half_volume_shape(
-                reconstruction_volume_shape
-            )
             vol = fourier_transform_utils.get_idft3_real(
-                vol_half.reshape(packed_shape_for_ifft),
+                vol_half,
                 volume_shape=reconstruction_volume_shape,
             )
         else:
@@ -1405,7 +1702,7 @@ def post_process_from_filter_v2(
     if volume_mask is not None:
         vol = vol * volume_mask
 
-    if use_large_grid_single_precision:
+    if use_large_postprocess_single_precision:
         vol = vol.astype(jnp.complex64 if np.issubdtype(vol.dtype, np.complexfloating) else jnp.float32)
 
     if grid_correct:
@@ -1413,11 +1710,15 @@ def post_process_from_filter_v2(
         grid_fn = griddingCorrect_square if gridding_correct == "square" else griddingCorrect
         gc_pf = gridding_padding_factor if gridding_padding_factor is not None else volume_upsampling_factor
         vol, _ = grid_fn(vol.reshape(og_volume_shape), og_volume_shape[0], gc_pf / kernel_width, order=order)
-        if use_large_grid_single_precision:
+        if use_large_postprocess_single_precision:
             vol = vol.astype(jnp.complex64 if np.issubdtype(vol.dtype, np.complexfloating) else jnp.float32)
 
+    if fft_compute_dtype is not None:
+        fft_real_dtype = jnp.float32 if fft_compute_dtype == jnp.dtype(jnp.complex64) else jnp.float64
+        vol = vol.astype(fft_compute_dtype if np.issubdtype(vol.dtype, np.complexfloating) else fft_real_dtype)
+
     if return_real_space:
-        return vol.real.astype(Ft_ctf2.real.dtype)
+        return vol.real.astype(Ft_ctf2.real.dtype if fft_compute_dtype is None else fft_real_dtype)
 
     if input_half_volume:
         vol = fourier_transform_utils.get_dft3_real(vol.reshape(og_volume_shape))
@@ -1431,6 +1732,138 @@ def post_process_from_filter_v2(
     if input_half_volume:
         vol = fourier_transform_utils.half_volume_to_full_volume(vol, og_volume_shape)
     return vol if preserve_output_precision else vol.astype(F_ty_flat.dtype)
+
+
+_post_process_from_filter_v2_donate_numerator = jax.jit(
+    post_process_from_filter_v2.__wrapped__,
+    static_argnums=_POSTPROCESS_STATIC_ARGNUMS,
+    donate_argnums=(1,),
+)
+
+
+def _finish_large_relion_postprocess_from_unpadded_real_impl(
+    vol,
+    og_volume_shape,
+    volume_upsampling_factor,
+    kernel="triangular",
+    use_spherical_mask=True,
+    grid_correct=True,
+    gridding_correct="square",
+    kernel_width=1,
+    volume_mask=None,
+    return_real_space=False,
+    return_half_volume=False,
+    gridding_padding_factor=None,
+    gridding_order=None,
+):
+    """Finish large-grid post-processing from an unpadded real volume."""
+
+    vol = jnp.asarray(vol).reshape(og_volume_shape)
+    if use_spherical_mask:
+        vol, _ = mask.soft_mask_outside_map(vol, cosine_width=3)
+
+    if volume_mask is not None:
+        vol = vol * volume_mask
+
+    vol = vol.astype(jnp.complex64 if np.issubdtype(vol.dtype, np.complexfloating) else jnp.float32)
+
+    if grid_correct:
+        order = gridding_order if gridding_order is not None else (1 if kernel == "triangular" else 0)
+        grid_fn = griddingCorrect_square if gridding_correct == "square" else griddingCorrect
+        gc_pf = gridding_padding_factor if gridding_padding_factor is not None else volume_upsampling_factor
+        vol, _ = grid_fn(vol, og_volume_shape[0], gc_pf / kernel_width, order=order)
+        vol = vol.astype(jnp.complex64 if np.issubdtype(vol.dtype, np.complexfloating) else jnp.float32)
+
+    if return_real_space:
+        return vol.real.astype(jnp.float32)
+
+    vol = fourier_transform_utils.get_dft3_real(vol)
+    if return_half_volume:
+        return vol.reshape(-1).astype(jnp.complex64)
+    vol = fourier_transform_utils.half_volume_to_full_volume(vol, og_volume_shape)
+    return vol.astype(jnp.complex64)
+
+
+@functools.partial(jax.jit, static_argnums=[1, 2, 3, 4, 5, 6, 7, 9, 10])
+def _finish_large_relion_postprocess_from_unpadded_real(
+    vol,
+    og_volume_shape,
+    volume_upsampling_factor,
+    kernel="triangular",
+    use_spherical_mask=True,
+    grid_correct=True,
+    gridding_correct="square",
+    kernel_width=1,
+    volume_mask=None,
+    return_real_space=False,
+    return_half_volume=False,
+    gridding_padding_factor=None,
+    gridding_order=None,
+):
+    """Finish a host-iFFT reconstruction after its real-space center crop."""
+
+    return _finish_large_relion_postprocess_from_unpadded_real_impl(
+        vol,
+        og_volume_shape,
+        volume_upsampling_factor,
+        kernel=kernel,
+        use_spherical_mask=use_spherical_mask,
+        grid_correct=grid_correct,
+        gridding_correct=gridding_correct,
+        kernel_width=kernel_width,
+        volume_mask=volume_mask,
+        return_real_space=return_real_space,
+        return_half_volume=return_half_volume,
+        gridding_padding_factor=gridding_padding_factor,
+        gridding_order=gridding_order,
+    )
+
+
+@functools.partial(jax.jit, static_argnums=[1, 2, 3, 4, 5, 6, 7, 9, 10])
+def _finish_large_relion_postprocess_from_fftw_half(
+    vol_half,
+    og_volume_shape,
+    volume_upsampling_factor,
+    kernel="triangular",
+    use_spherical_mask=True,
+    grid_correct=True,
+    gridding_correct="square",
+    kernel_width=1,
+    volume_mask=None,
+    return_real_space=False,
+    return_half_volume=False,
+    gridding_padding_factor=None,
+    gridding_order=None,
+):
+    """Finish a large c64/f32 reconstruction from a raw-FFTW half-volume.
+
+    This is exactly the portion of :func:`post_process_from_filter_v2` after
+    its padded inverse-FFT boundary.  Keeping it in a separate executable lets
+    the eager caller release the accumulator executable and its device inputs
+    before allocating the inverse-FFT workspace.
+    """
+
+    reconstruction_volume_shape = _relion_reconstruction_padded_shape(
+        og_volume_shape,
+        volume_upsampling_factor,
+    )
+    vol = _relion_idft3_real_from_fftw_half(vol_half, reconstruction_volume_shape)
+    vol = padding.unpad_volume_spatial_domain(vol, reconstruction_volume_shape[0] - og_volume_shape[0])
+    return _finish_large_relion_postprocess_from_unpadded_real_impl(
+        vol,
+        og_volume_shape,
+        volume_upsampling_factor,
+        kernel=kernel,
+        use_spherical_mask=use_spherical_mask,
+        grid_correct=grid_correct,
+        gridding_correct=gridding_correct,
+        kernel_width=kernel_width,
+        volume_mask=volume_mask,
+        return_real_space=return_real_space,
+        return_half_volume=return_half_volume,
+        gridding_padding_factor=gridding_padding_factor,
+        gridding_order=gridding_order,
+    )
 
 
 def relion_reconstruct(

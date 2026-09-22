@@ -5,9 +5,12 @@ from __future__ import annotations
 import logging
 import os
 from functools import partial
+from types import SimpleNamespace
 
 import jax
 import jax.numpy as jnp
+import math
+
 import numpy as np
 
 from recovar import core
@@ -311,6 +314,29 @@ def _relion_projector_texture_enabled(
     return enabled_now
 
 
+def _host_relion_projector_texture_enabled(
+    projector_half, *, r_max, padding_factor, allow_float32_cast=False, enabled=None,
+):
+    """Check upload geometry using the fine consumer's effective dtype.
+
+    Planning inspects metadata only. The fine dispatcher performs the existing
+    c128-to-c64 production cast on host; coarse callers retain their source.
+    """
+    if not (
+        isinstance(projector_half, np.ndarray)
+        and projector_half.ndim == 3 and projector_half.flags.c_contiguous
+        and r_max is not None
+    ):
+        return False
+    dtype = projector_half.dtype
+    if allow_float32_cast and dtype == np.dtype(np.complex128):
+        dtype = np.dtype(np.complex64)
+    return bool(dtype == np.dtype(np.complex64) and _relion_projector_texture_enabled(
+        SimpleNamespace(shape=projector_half.shape, dtype=dtype),
+        r_max=int(r_max), padding_factor=int(padding_factor), enabled=enabled,
+    ))
+
+
 def prepare_relion_projector_capacity(volume_relion_half, *, r_max, physical_size, padding_factor):
     """Center-pad the original logical texture slab, including its ghost texels."""
     from recovar.core import slicing
@@ -347,7 +373,7 @@ def _texture_centered_crop_to_full(
     *,
     image_shape,
     projector_output_size: int,
-    mask_current_image_disk: bool = True,
+    mask_current_image_disk: bool = False,
     current_image_mask_size=None,
 ):
     """Scatter a centered even-size CUDA projection into the full image box."""
@@ -409,7 +435,7 @@ def _texture_centered_crop_at_indices(
     *,
     image_shape,
     projector_output_size: int,
-    mask_current_image_disk: bool = True,
+    mask_current_image_disk: bool = False,
     current_image_mask_size=None,
 ):
     """Gather centered full-image pixels directly from a CUDA projection crop."""
@@ -456,20 +482,43 @@ def _project_relion_projector_texture(
     *,
     r_max: int,
     projector_output_size: int,
-    mask_current_image_disk: bool = True,
+    mask_current_image_disk: bool = False,
     current_image_mask_size=None,
     pixel_indices=None,
     runtime_r_max=None,
     padding_factor=1,
     image_r_max=None,
+    persistent_texture=None,
 ):
     """Project one RELION ``PPref`` block with RELION's CUDA texture arithmetic.
 
     Eligible F32 inputs use direct half storage; see
     ``docs/development/em_half_texture_staging.md`` for eligibility and gates.
+    Radius ownership is specified in ``docs/math/sparse_projection_radius.md``.
     """
 
-    if image_r_max is not None:
+    # Native texture kernels own the rotated, integer-truncated radius test.
+    # Capacity buffers may exceed the active image; pass its radius into the
+    # kernel rather than applying an exact source-pixel disk after projection.
+    if (
+        not mask_current_image_disk and persistent_texture is None
+        and image_r_max is None and current_image_mask_size is not None
+    ):
+        image_r_max = jnp.asarray(current_image_mask_size, dtype=jnp.int32) // jnp.int32(2)
+    if persistent_texture is not None:
+        if current_image_mask_size is not None:
+            raise ValueError("persistent texture requires a fixed current-image radius")
+        if runtime_r_max is not None or image_r_max is not None:
+            raise ValueError("persistent texture requires a fixed model and image radius")
+        from recovar.cuda_backproject import (
+            relion_projector_persistent_half_texture_f32,
+        )
+        projection_crop = relion_projector_persistent_half_texture_f32(
+            persistent_texture, jnp.asarray(rotations_block, dtype=jnp.float32),
+            current_size=int(projector_output_size), padding_factor=int(padding_factor),
+            projector_max_r=int(r_max),
+        )
+    elif image_r_max is not None:
         if mask_current_image_disk:
             raise ValueError("rotated image radius cannot be combined with an exact image-disk mask")
         from recovar.cuda_backproject import project_relion_half_capacity
@@ -505,6 +554,24 @@ def _project_relion_projector_texture(
             volume_relion_half, rotations_block, jnp.asarray(r_max, jnp.int32),
             image_shape=(int(projector_output_size), int(projector_output_size)),
             padding_factor=int(padding_factor),
+            **({"image_r_max": jnp.asarray(projector_output_size // 2, jnp.int32)}
+               if not mask_current_image_disk else {}),
+        )
+    elif (
+        runtime_r_max is None and int(r_max) > 0 and int(padding_factor) > 0
+        and volume_relion_half.dtype == jnp.complex64
+        and rotations_block.dtype == jnp.float32
+        and volume_relion_half.shape == (
+            2 * int(r_max) * int(padding_factor) + 3,
+            2 * int(r_max) * int(padding_factor) + 3,
+            int(r_max) * int(padding_factor) + 2,
+        )
+    ):
+        from recovar.cuda_backproject import relion_projector_half_texture_f32
+        projection_crop = relion_projector_half_texture_f32(
+            volume_relion_half, rotations_block,
+            current_size=int(projector_output_size), padding_factor=int(padding_factor),
+            projector_max_r=int(r_max),
         )
     elif runtime_r_max is None:
         projector_full = relion_projector_half_to_texture_full(volume_relion_half)
@@ -525,6 +592,8 @@ def _project_relion_projector_texture(
             volume_relion_half, rotations_block, runtime_r_max,
             image_shape=(int(projector_output_size), int(projector_output_size)),
             padding_factor=int(padding_factor),
+            **({"image_r_max": jnp.asarray(projector_output_size // 2, jnp.int32)}
+               if not mask_current_image_disk else {}),
         )
     if pixel_indices is not None:
         return _texture_centered_crop_at_indices(
@@ -558,11 +627,12 @@ def compute_relion_projector_projections_block(
     pixel_indices=None,
     relion_texture_interp: bool | None = None,
     relion_acc_double_floorf_quirk: bool = False,
-    mask_current_image_disk: bool = True,
+    mask_current_image_disk: bool = False,
     current_image_mask_size=None,
     projector_capacity: bool = False,
     runtime_r_max=None,
     image_r_max=None,
+    persistent_texture=None,
 ):
     """Project precomputed RELION ``PPref`` data for one rotation block.
 
@@ -580,7 +650,13 @@ def compute_relion_projector_projections_block(
     resolved_output_size = int(r_max) * 2 if projector_output_size is None else int(projector_output_size)
     if resolved_output_size <= 0 or resolved_output_size > image_size:
         resolved_output_size = image_size
-    if projector_capacity:
+    if persistent_texture is not None:
+        if projector_capacity or runtime_r_max is not None or image_r_max is not None:
+            raise ValueError("persistent texture cannot use the runtime capacity/radius route")
+        if relion_texture_interp is False:
+            raise ValueError("persistent texture cannot use manual projection")
+        use_texture = True
+    elif projector_capacity:
         if (
             int(r_max) != 0 or runtime_r_max is None or not centered_rows
             or pixel_indices is None or projector_output_size is None
@@ -615,6 +691,8 @@ def compute_relion_projector_projections_block(
             "r_max": int(r_max),
             "projector_output_size": resolved_output_size,
         }
+        if persistent_texture is not None:
+            texture_kwargs["persistent_texture"] = persistent_texture
         if int(padding_factor) != 1:
             texture_kwargs["padding_factor"] = int(padding_factor)
         if image_r_max is not None:
@@ -622,8 +700,8 @@ def compute_relion_projector_projections_block(
             texture_kwargs["padding_factor"] = int(padding_factor)
         if centered_rows and pixel_indices is not None:
             texture_kwargs["pixel_indices"] = pixel_indices
-        if not mask_current_image_disk:
-            texture_kwargs["mask_current_image_disk"] = False
+        if mask_current_image_disk:
+            texture_kwargs["mask_current_image_disk"] = True
         if current_image_mask_size is not None:
             texture_kwargs["current_image_mask_size"] = current_image_mask_size
         if projector_capacity:
@@ -956,3 +1034,98 @@ def relion_scale_correction_pixel_mask(data_vs_prior, shell_indices, *, n_shells
         return jnp.zeros_like(indices, dtype=bool)
     safe_indices = jnp.clip(indices, 0, dvp.size - 1)
     return valid_shell & (indices < dvp.size) & (dvp[safe_indices] > 3.0)
+
+
+def compact_relion_projector_half_for_centered_indices(
+    projector_half,
+    pixel_indices,
+    image_shape,
+    *,
+    r_max: int,
+    padding_factor: int,
+):
+    """Materialize the smallest host PPref slab covering score pixels.
+
+    RELION's first-iteration normalized-CC pass scores a small square Fourier
+    window even when ``Projector::data`` was built for the full image box.
+    Copy only the centered y/z region and nonnegative-x prefix that can be
+    sampled by those pixels, retaining the standard one-voxel interpolation
+    halo.  The returned radius is strictly larger than every consumed image
+    radius, so the compact texture's model-sphere cutoff remains inactive for
+    the complete score window.
+
+    This helper intentionally accepts a NumPy host array.  Compacting after an
+    eager JAX transfer would leave the full projector resident on the device,
+    defeating the memory bound this operation provides.
+    """
+
+    if not isinstance(projector_half, np.ndarray):
+        raise TypeError("RELION projector compaction requires a NumPy host array")
+    if projector_half.ndim != 3:
+        raise ValueError(
+            "RELION projector compaction expects one (z, y, x-half) slab, "
+            f"got {projector_half.shape}",
+        )
+    r_max = int(r_max)
+    padding_factor = int(padding_factor)
+    if r_max <= 0 or padding_factor <= 0:
+        raise ValueError(
+            f"r_max and padding_factor must be positive, got {r_max} and {padding_factor}",
+        )
+    padded_r_max = r_max * padding_factor
+    expected_size = 2 * (padded_r_max + 1) + 1
+    expected_shape = (expected_size, expected_size, padded_r_max + 2)
+    if projector_half.shape != expected_shape:
+        raise ValueError(
+            "RELION projector shape does not match r_max/padding_factor: "
+            f"got {projector_half.shape}, expected {expected_shape}",
+        )
+
+    image_height, image_width = (int(value) for value in image_shape)
+    if (
+        image_height <= 0
+        or image_width <= 0
+        or image_height != image_width
+        or image_height % 2
+        or image_width % 2
+    ):
+        raise ValueError(f"expected a positive even square image shape, got {image_shape}")
+    indices = np.asarray(pixel_indices, dtype=np.int64).reshape(-1)
+    if indices.size == 0:
+        raise ValueError("RELION projector compaction requires at least one pixel index")
+    image_half_width = image_width // 2 + 1
+    if np.any(indices < 0) or np.any(indices >= image_height * image_half_width):
+        raise ValueError("RELION projector compaction pixel indices exceed the half image")
+    rows = indices // image_half_width
+    columns = indices - rows * image_half_width
+    centered_rows = rows - image_height // 2
+    max_radius_squared = int(np.max(centered_rows * centered_rows + columns * columns))
+    # ``isqrt(max_r2) + 1`` is a strict radius bound, including when the
+    # farthest score pixel lies exactly on an integer-radius shell.
+    compact_r_max = min(r_max, max(1, math.isqrt(max_radius_squared) + 1))
+    if compact_r_max == r_max:
+        return projector_half, r_max
+
+    compact_padded_r_max = compact_r_max * padding_factor
+    source_center = padded_r_max + 1
+    compact_center = compact_padded_r_max + 1
+    start = source_center - compact_center
+    stop = source_center + compact_center + 1
+    compact = np.ascontiguousarray(
+        projector_half[
+            start:stop,
+            start:stop,
+            : compact_padded_r_max + 2,
+        ],
+    )
+    expected_compact_shape = (
+        2 * compact_center + 1,
+        2 * compact_center + 1,
+        compact_padded_r_max + 2,
+    )
+    if compact.shape != expected_compact_shape:
+        raise RuntimeError(
+            "internal RELION projector compaction shape mismatch: "
+            f"got {compact.shape}, expected {expected_compact_shape}",
+        )
+    return compact, compact_r_max

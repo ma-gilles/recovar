@@ -12,6 +12,7 @@ import os
 from typing import NamedTuple
 
 import numpy as np
+from recovar.em.scoring.sparse_bucket_arrays import bucket_chunk_bounds
 
 from recovar.em.helpers.env_flags import parse_env_int_set
 from recovar.em.scoring.compact_candidates import SparseCandidateMask, _candidate_mask_is_full
@@ -325,11 +326,14 @@ def _hybrid_k_class_compact_pair_execution_buckets(
             image_indices = image_indices[keep_mask]
         if image_indices.size == 0:
             continue
-        rectangular_bucket = dict(bucket)
-        rectangular_bucket["image_indices"] = np.asarray(image_indices, dtype=np.int64)
-        rectangular_execution_buckets.append(
-            _tag_k_class_execution_bucket(rectangular_bucket, mode="rectangular"),
-        )
+        # Removing compact-routed images leaves an arbitrary count; re-chunk it
+        # so the ladder (when enabled) still yields repeatable bucket shapes.
+        for start, stop in bucket_chunk_bounds(int(image_indices.size), int(image_indices.size)):
+            rectangular_bucket = dict(bucket)
+            rectangular_bucket["image_indices"] = np.asarray(image_indices[start:stop], dtype=np.int64)
+            rectangular_execution_buckets.append(
+                _tag_k_class_execution_bucket(rectangular_bucket, mode="rectangular"),
+            )
 
     return rectangular_execution_buckets + compact_execution_buckets
 

@@ -1,5 +1,6 @@
 """Select the supported sparse pass-2 engine without changing admission policy."""
 
+import numpy as np
 import logging
 
 from recovar.em.reference.sparse_pass2 import _compute_pass2_stats_sparse_perimage_reference
@@ -29,7 +30,7 @@ def compute_pass2_stats_sparse(
     accumulate_noise=False,
     half_spectrum_scoring=False,
     projection_padding_factor=1,
-    projection_mask_current_image_disk=True,
+    projection_mask_current_image_disk=False,
     reconstruction_padding_factor=1,
     image_corrections=None,
     scale_corrections=None,
@@ -78,6 +79,7 @@ def compute_pass2_stats_sparse(
     include_unweighted_norm_high_shell: bool = True,
     preserve_bpref_particle_order: bool = False,
     source_faithful_spectrum_norm: bool = False,
+    symmetry_label: str = "C1",
 ):
     """Exact sparse pass 2 over per-image significant coarse samples.
 
@@ -102,6 +104,9 @@ def compute_pass2_stats_sparse(
     RELION's fine-search diff2/minimum ordering. Float64 diagnostics retain
     the historical algebraic scorer so they do not silently downcast.
     """
+    from recovar.em.symmetry import canonicalize_rotational_symmetry
+
+    symmetry_label = canonicalize_rotational_symmetry(symmetry_label)
     has_external_score_normalization = (
         normalization_log_z is not None or normalization_other_score_log_z is not None
     )
@@ -141,7 +146,8 @@ def compute_pass2_stats_sparse(
             "fine_mstep_rotations_override is only implemented for the bucketed sparse pass-2 path",
         )
     full_grid_reference = (
-        all(samples is None for samples in significant_sample_indices)
+        symmetry_label == "C1"
+        and all(samples is None for samples in significant_sample_indices)
         and not return_score_log_z
         and not return_score_log_z_only
         and normalization_log_z is None
@@ -189,6 +195,7 @@ def compute_pass2_stats_sparse(
             out_of_scope = resident_pass2_out_of_scope_reason(
                 relion_firstiter_score_mode=relion_firstiter_score_mode,
                 relion_firstiter_winner_take_all=relion_firstiter_winner_take_all,
+                symmetry_label=symmetry_label,
             )
             if out_of_scope is None:
                 sparse_pass2_impl = compute_pass2_stats_resident
@@ -198,7 +205,15 @@ def compute_pass2_stats_sparse(
                     "this pass runs on the compact engine",
                     out_of_scope,
                 )
-        return sparse_pass2_impl(
+        texture = None
+        if sparse_pass2_impl is compute_pass2_stats_sparse_bucketed and not use_float64_scoring:
+            texture = _open_persistent_relion_projector_texture(
+                relion_projector_half,
+                relion_projector_r_max=relion_projector_r_max,
+                projection_padding_factor=projection_padding_factor,
+            )
+        return _call_with_persistent_texture_cleanup(
+            texture, sparse_pass2_impl,
             experiment_dataset,
             volume,
             noise_variance,
@@ -257,7 +272,8 @@ def compute_pass2_stats_sparse(
             relion_fine_diff2_fused_ffi=relion_fine_diff2_fused_ffi,
             relion_f32_fine_posterior=relion_f32_fine_posterior,
             relion_exact_fine_normalized_cc=relion_exact_fine_normalized_cc,
-            relion_projector_half=relion_projector_half,
+            relion_projector_half=relion_projector_half if texture is None else None,
+            **({"relion_projector_texture": texture} if texture is not None else {}),
             relion_projector_r_max=relion_projector_r_max,
             adaptive_fraction=adaptive_fraction,
             bpref_device_signature_active=bpref_device_signature_active,
@@ -265,6 +281,7 @@ def compute_pass2_stats_sparse(
             include_unweighted_norm_high_shell=include_unweighted_norm_high_shell,
             preserve_bpref_particle_order=preserve_bpref_particle_order,
             source_faithful_spectrum_norm=source_faithful_spectrum_norm,
+            **({"symmetry_label": symmetry_label} if symmetry_label != "C1" else {}),
         )
 
     if any(value is not None for value in (
@@ -313,5 +330,60 @@ def compute_pass2_stats_sparse(
         relion_half_volume_mstep=relion_half_volume_mstep,
         relion_firstiter_score_mode=relion_firstiter_score_mode,
         relion_firstiter_winner_take_all=relion_firstiter_winner_take_all,
+        **({"symmetry_label": symmetry_label} if symmetry_label != "C1" else {}),
     )
+
+
+
+def _open_persistent_relion_projector_texture(
+    relion_projector_half,
+    *,
+    relion_projector_r_max,
+    projection_padding_factor,
+    relion_texture_interp=None,
+    log_label="Sparse pass-2",
+):
+    """Upload an eligible host ``PPref`` slab without staging it through JAX.
+
+    This is deliberately a narrow fast path for fine sparse pass-2.  Other
+    inputs retain the established transient texture/JAX behavior.
+    """
+
+    from recovar.em.helpers.projection import _host_relion_projector_texture_enabled
+
+    if not _host_relion_projector_texture_enabled(
+        relion_projector_half, r_max=relion_projector_r_max,
+        padding_factor=projection_padding_factor, allow_float32_cast=True,
+        enabled=relion_texture_interp,
+    ):
+        return None
+
+    from recovar.cuda_backproject import RelionPersistentHalfTextureF32
+
+    # Match the bucketed float32 consumer cast, before any device upload.
+    relion_projector_half = np.asarray(relion_projector_half, dtype=np.complex64)
+
+    logger.info(
+        "%s persistent RELION projector texture: shape=%s host=%.2f GiB",
+        str(log_label),
+        tuple(relion_projector_half.shape),
+        relion_projector_half.nbytes / float(1024**3),
+    )
+    return RelionPersistentHalfTextureF32(
+        relion_projector_half,
+        padding_factor=int(projection_padding_factor),
+        projector_max_r=int(relion_projector_r_max),
+        projector_scale=1.0,
+    )
+
+
+
+def _call_with_persistent_texture_cleanup(texture, callback, *args, **kwargs):
+    """Run ``callback`` and close an optional texture on every exit path."""
+
+    try:
+        return callback(*args, **kwargs)
+    finally:
+        if texture is not None:
+            texture.close()
 

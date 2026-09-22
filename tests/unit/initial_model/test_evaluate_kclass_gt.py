@@ -21,6 +21,8 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+from argparse import Namespace
+from recovar.em.diagnostics.gt_metrics import VolumeAlignment
 from pathlib import Path
 
 import mrcfile
@@ -373,3 +375,119 @@ def test_assignment_summary_reports_weighted_means_only_when_asked():
     assert weighted["best_mean_fsc_auc"] == pytest.approx(plain["best_mean_fsc_auc"])
     assert weighted["class_weights"] == pytest.approx([0.9, 0.1])
     assert weighted["best_weighted_mean_fsc_auc"] > weighted["best_mean_fsc_auc"]
+
+
+def test_pair_workers_preserve_row_major_results_and_drop_aligned_volumes(monkeypatch):
+    rec_vols = [np.full((4, 4, 4), value, dtype=np.float64) for value in (1.0, 2.0)]
+    gt_vols = [np.full((4, 4, 4), value, dtype=np.float64) for value in (3.0, 4.0)]
+    rotations = np.eye(3, dtype=np.float64)[None, ...]
+
+    def fake_align(rec, gt, _rotations, **_kwargs):
+        pair_value = float(rec[0, 0, 0] * 10.0 + gt[0, 0, 0])
+        return VolumeAlignment(
+            aligned_volume=np.full_like(rec, pair_value),
+            corr=pair_value / 100.0,
+            score=pair_value,
+            rotation_index=0,
+            rotation_matrix=np.eye(3, dtype=np.float64) * pair_value,
+            mirror_x=False,
+            sign=1,
+        )
+
+    def fake_fsc(aligned, _gt):
+        return np.asarray([1.0, aligned[0, 0, 0] / 100.0], dtype=np.float64)
+
+    monkeypatch.setattr(evaluator, "align_volume_to_reference", fake_align)
+    monkeypatch.setattr(evaluator, "_fsc", fake_fsc)
+    args = Namespace(
+        gt_align_refine_orders=[],
+        gt_align_healpix_order=0,
+        gt_align_max_shell=1,
+        gt_align_no_mirror=True,
+        gt_align_allow_sign=False,
+        gt_align_refine_sigma_deg=30.0,
+        pair_workers=4,
+    )
+
+    result = evaluator._evaluate_one_set(
+        label="parallel",
+        rec_paths=["rec1", "rec2"],
+        rec_vols=rec_vols,
+        gt_paths=["gt1", "gt2"],
+        gt_vols=gt_vols,
+        voxel_size=1.0,
+        rotations=rotations,
+        args=args,
+    )
+
+    assert result["pair_workers"] == 4
+    np.testing.assert_allclose(result["pairwise_corr"], [[0.13, 0.14], [0.23, 0.24]])
+    assert all("aligned_volume" not in entry for entry in result["per_class"])
+
+
+
+def test_pair_workers_must_be_positive():
+    args = Namespace(
+        gt_align_refine_orders=[],
+        gt_align_healpix_order=0,
+        gt_align_max_shell=1,
+        gt_align_no_mirror=True,
+        gt_align_allow_sign=False,
+        gt_align_refine_sigma_deg=30.0,
+        pair_workers=0,
+    )
+
+    with pytest.raises(ValueError, match="pair_workers must be positive"):
+        evaluator._evaluate_one_set(
+            label="invalid",
+            rec_paths=["rec"],
+            rec_vols=[np.ones((4, 4, 4), dtype=np.float64)],
+            gt_paths=["gt"],
+            gt_vols=[np.ones((4, 4, 4), dtype=np.float64)],
+            voxel_size=1.0,
+            rotations=np.eye(3, dtype=np.float64)[None, ...],
+            args=args,
+        )
+
+
+
+def test_pair_workers_match_serial_alignment_exactly():
+    rng = np.random.default_rng(20260902)
+    rec_vols = [rng.standard_normal((8, 8, 8)) for _ in range(2)]
+    gt_vols = [rng.standard_normal((8, 8, 8)) for _ in range(2)]
+    rotations = np.eye(3, dtype=np.float64)[None, ...]
+    args = Namespace(
+        gt_align_refine_orders=[],
+        gt_align_healpix_order=0,
+        gt_align_max_shell=2,
+        gt_align_no_mirror=True,
+        gt_align_allow_sign=False,
+        gt_align_refine_sigma_deg=30.0,
+        pair_workers=1,
+    )
+
+    serial = evaluator._evaluate_one_set(
+        label="exactness",
+        rec_paths=["rec1", "rec2"],
+        rec_vols=rec_vols,
+        gt_paths=["gt1", "gt2"],
+        gt_vols=gt_vols,
+        voxel_size=1.0,
+        rotations=rotations,
+        args=args,
+    )
+    args.pair_workers = 4
+    parallel = evaluator._evaluate_one_set(
+        label="exactness",
+        rec_paths=["rec1", "rec2"],
+        rec_vols=rec_vols,
+        gt_paths=["gt1", "gt2"],
+        gt_vols=gt_vols,
+        voxel_size=1.0,
+        rotations=rotations,
+        args=args,
+    )
+
+    assert serial.pop("pair_workers") == 1
+    assert parallel.pop("pair_workers") == 4
+    assert parallel == serial

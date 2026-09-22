@@ -562,3 +562,32 @@ def test_relion_cc_inverse_power_uses_selected_per_image_fourier_array():
 
     assert observed.dtype == np.float64
     np.testing.assert_array_equal(observed, np.asarray([[1.0 / expected_power]]))
+
+
+@pytest.mark.parametrize("model_radius", [4, 6])
+@pytest.mark.parametrize("padding_factor", [1, 2])
+def test_native_cc_rescore_limits_support_to_current_image(model_radius, padding_factor):
+    """A larger stored PPref must not add pixels outside this image's radius."""
+    import jax
+    import jax.numpy as jnp
+    from recovar import cuda_backproject
+
+    if jax.default_backend() != "gpu" or not cuda_backproject.custom_cuda_requested():
+        pytest.skip("requires the custom CUDA GPU path")
+    size = 8
+    pixels = size * (size // 2 + 1)
+    side = 2 * model_radius * padding_factor + 3
+    result = np.asarray(cuda_backproject.relion_coarse_normalized_cc_native_texture_pairs_f32(
+        jnp.ones((side, side, side), dtype=jnp.complex64),
+        jnp.eye(3, dtype=jnp.float32)[None],
+        jnp.ones((1, pixels), dtype=jnp.complex64),
+        jnp.ones((1, pixels), dtype=jnp.float32),
+        jnp.ones(pixels, dtype=jnp.float32),
+        jnp.arange(pixels, dtype=jnp.int32),
+        size, padding_factor, model_radius, return_components=True,
+    ))
+    x = np.arange(pixels) % (size // 2 + 1)
+    y = np.arange(pixels) // (size // 2 + 1)
+    y = np.where(y > size // 2, y - size, y)
+    count = np.count_nonzero(x*x + y*y <= (size // 2)**2)
+    np.testing.assert_array_equal(result[0, 1:], [count, count])

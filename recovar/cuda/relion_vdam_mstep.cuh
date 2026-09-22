@@ -149,6 +149,25 @@ __global__ void relion_vdam_scale_texture_f32_kernel(
     imag[index] *= scale;
 }
 
+// Preserve the two scalar textures and their interpolation semantics while
+// avoiding the intermediate real/imag linear buffers for logical half input.
+__global__ void relion_vdam_half_to_surfaces_f32_kernel(
+    const float2* __restrict__ half,
+    cudaSurfaceObject_t real_surface,
+    cudaSurfaceObject_t imag_surface,
+    int64_t count, int tex_x, int tex_y, float scale)
+{
+    const int64_t index = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    if (index >= count) return;
+    const int x = static_cast<int>(index % tex_x);
+    const int64_t yz = index / tex_x;
+    const int y = static_cast<int>(yz % tex_y);
+    const int z = static_cast<int>(yz / tex_y);
+    const float2 value = half[index];
+    surf3Dwrite(__fmul_rn(value.x, scale), real_surface, x * sizeof(float), y, z);
+    surf3Dwrite(__fmul_rn(value.y, scale), imag_surface, x * sizeof(float), y, z);
+}
+
 __global__ void relion_vdam_split_translations_f32_kernel(
     const float* translation_angles,
     float* translation_x,
@@ -979,7 +998,8 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
     std::int32_t* quiesced_prelaunch_worker_lane,
     std::int32_t* quiesced_prelaunch_reconstruction_group,
     const int32_t* runtime_projector_radius = nullptr,
-    bool particle_tail_mask = false)
+    bool particle_tail_mask = false,
+    bool direct_half_projector = false)
 {
     const bool serial_rotation_replay = serial_rotation_replay_mode != 0;
     const bool persistent_serial_rotation_replay =
@@ -1008,6 +1028,8 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
     cudaArray_t array_imag = nullptr;
     cudaTextureObject_t texture_real = 0;
     cudaTextureObject_t texture_imag = 0;
+    cudaSurfaceObject_t surface_real = 0;
+    cudaSurfaceObject_t surface_imag = 0;
     // --pool controls how many particles are read into the outer pool and does
     // not set the shared GUI-default worker-stream count above.
     cudaStream_t particle_streams[kRelionVdamWorkerStreams] = {};
@@ -1273,56 +1295,59 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
         tex_y_init = tex_z_init = -(padded_max_r + 1);
         texture_voxels = static_cast<int64_t>(tex_x) * tex_y * tex_z;
     }
-    err = recovar::scratch_alloc(
-        reinterpret_cast<void**>(&real),
-        static_cast<size_t>(texture_voxels) * sizeof(float), stream);
-    if (err != cudaSuccess) goto cleanup;
-    err = recovar::scratch_alloc(
-        reinterpret_cast<void**>(&imag),
-        static_cast<size_t>(texture_voxels) * sizeof(float), stream);
-    if (err != cudaSuccess) goto cleanup;
+    if (!direct_half_projector)
+    {
+        err = recovar::scratch_alloc(
+            reinterpret_cast<void**>(&real),
+            static_cast<size_t>(texture_voxels) * sizeof(float), stream);
+        if (err != cudaSuccess) goto cleanup;
+        err = recovar::scratch_alloc(
+            reinterpret_cast<void**>(&imag),
+            static_cast<size_t>(texture_voxels) * sizeof(float), stream);
+        if (err != cudaSuccess) goto cleanup;
 
-    if (capacity_projector)
-    {
-        fill_relion_texture_capacity_kernel<<<
-            static_cast<unsigned int>((texture_voxels + BLOCK_SIZE - 1) / BLOCK_SIZE),
-            BLOCK_SIZE, 0, stream>>>(
-                projector_full, real, imag, runtime_projector_radius,
-                projection_padding_factor, tex_x, tex_y, tex_z,
-                static_cast<int>(projector_size / 2 + 1),
-                static_cast<int>(projector_size), static_cast<int>(projector_size));
-    }
-    else
-    {
-        fill_relion_texture_compact_kernel<float><<<
-            static_cast<unsigned int>((texture_voxels + BLOCK_SIZE - 1) / BLOCK_SIZE),
-            BLOCK_SIZE,
-            0,
-            stream>>>(
-                reinterpret_cast<const float*>(projector_full),
-                real,
-                imag,
-                tex_x,
-                tex_y,
-                tex_z,
-                tex_y_init,
-                tex_z_init,
-                static_cast<int>(projector_size),
-                static_cast<int>(projector_size),
-                static_cast<int>(projector_size));
-    }
-    err = cudaGetLastError();
-    if (err != cudaSuccess) goto cleanup;
-    {
-        const float projector_scale = -static_cast<float>(
-            physical_image_size * physical_image_size);
-        relion_vdam_scale_texture_f32_kernel<<<
-            static_cast<unsigned int>((texture_voxels + BLOCK_SIZE - 1) / BLOCK_SIZE),
-            BLOCK_SIZE,
-            0,
-            stream>>>(real, imag, texture_voxels, projector_scale);
+        if (capacity_projector)
+        {
+            fill_relion_texture_capacity_kernel<<<
+                static_cast<unsigned int>((texture_voxels + BLOCK_SIZE - 1) / BLOCK_SIZE),
+                BLOCK_SIZE, 0, stream>>>(
+                    projector_full, real, imag, runtime_projector_radius,
+                    projection_padding_factor, tex_x, tex_y, tex_z,
+                    static_cast<int>(projector_size / 2 + 1),
+                    static_cast<int>(projector_size), static_cast<int>(projector_size));
+        }
+        else
+        {
+            fill_relion_texture_compact_kernel<float><<<
+                static_cast<unsigned int>((texture_voxels + BLOCK_SIZE - 1) / BLOCK_SIZE),
+                BLOCK_SIZE,
+                0,
+                stream>>>(
+                    reinterpret_cast<const float*>(projector_full),
+                    real,
+                    imag,
+                    tex_x,
+                    tex_y,
+                    tex_z,
+                    tex_y_init,
+                    tex_z_init,
+                    static_cast<int>(projector_size),
+                    static_cast<int>(projector_size),
+                    static_cast<int>(projector_size));
+        }
         err = cudaGetLastError();
         if (err != cudaSuccess) goto cleanup;
+        {
+            const float projector_scale = -static_cast<float>(
+                physical_image_size * physical_image_size);
+            relion_vdam_scale_texture_f32_kernel<<<
+                static_cast<unsigned int>((texture_voxels + BLOCK_SIZE - 1) / BLOCK_SIZE),
+                BLOCK_SIZE,
+                0,
+                stream>>>(real, imag, texture_voxels, projector_scale);
+            err = cudaGetLastError();
+            if (err != cudaSuccess) goto cleanup;
+        }
     }
 
     {
@@ -1332,30 +1357,35 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
             static_cast<size_t>(tex_x),
             static_cast<size_t>(tex_y),
             static_cast<size_t>(tex_z));
-        err = cudaMalloc3DArray(&array_real, &desc, extent);
+        err = cudaMalloc3DArray(&array_real, &desc, extent,
+            direct_half_projector ? cudaArraySurfaceLoadStore : 0);
         if (err != cudaSuccess) goto cleanup;
-        err = cudaMalloc3DArray(&array_imag, &desc, extent);
+        err = cudaMalloc3DArray(&array_imag, &desc, extent,
+            direct_half_projector ? cudaArraySurfaceLoadStore : 0);
         if (err != cudaSuccess) goto cleanup;
 
-        cudaMemcpy3DParms copy_params = {0};
-        copy_params.extent = extent;
-        copy_params.kind = cudaMemcpyDeviceToDevice;
-        copy_params.srcPtr = make_cudaPitchedPtr(
-            real,
-            static_cast<size_t>(tex_x) * sizeof(float),
-            static_cast<size_t>(tex_x),
-            static_cast<size_t>(tex_y));
-        copy_params.dstArray = array_real;
-        err = cudaMemcpy3DAsync(&copy_params, stream);
-        if (err != cudaSuccess) goto cleanup;
-        copy_params.srcPtr = make_cudaPitchedPtr(
-            imag,
-            static_cast<size_t>(tex_x) * sizeof(float),
-            static_cast<size_t>(tex_x),
-            static_cast<size_t>(tex_y));
-        copy_params.dstArray = array_imag;
-        err = cudaMemcpy3DAsync(&copy_params, stream);
-        if (err != cudaSuccess) goto cleanup;
+        if (!direct_half_projector)
+        {
+            cudaMemcpy3DParms copy_params = {0};
+            copy_params.extent = extent;
+            copy_params.kind = cudaMemcpyDeviceToDevice;
+            copy_params.srcPtr = make_cudaPitchedPtr(
+                real,
+                static_cast<size_t>(tex_x) * sizeof(float),
+                static_cast<size_t>(tex_x),
+                static_cast<size_t>(tex_y));
+            copy_params.dstArray = array_real;
+            err = cudaMemcpy3DAsync(&copy_params, stream);
+            if (err != cudaSuccess) goto cleanup;
+            copy_params.srcPtr = make_cudaPitchedPtr(
+                imag,
+                static_cast<size_t>(tex_x) * sizeof(float),
+                static_cast<size_t>(tex_x),
+                static_cast<size_t>(tex_y));
+            copy_params.dstArray = array_imag;
+            err = cudaMemcpy3DAsync(&copy_params, stream);
+            if (err != cudaSuccess) goto cleanup;
+        }
 
         cudaResourceDesc resource_real = {};
         cudaResourceDesc resource_imag = {};
@@ -1364,6 +1394,21 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
         resource_real.res.array.array = array_real;
         resource_imag.resType = cudaResourceTypeArray;
         resource_imag.res.array.array = array_imag;
+        if (direct_half_projector)
+        {
+            err = cudaCreateSurfaceObject(&surface_real, &resource_real);
+            if (err != cudaSuccess) goto cleanup;
+            err = cudaCreateSurfaceObject(&surface_imag, &resource_imag);
+            if (err != cudaSuccess) goto cleanup;
+            const float projector_scale = -static_cast<float>(
+                physical_image_size * physical_image_size);
+            relion_vdam_half_to_surfaces_f32_kernel<<<
+                static_cast<unsigned int>((texture_voxels + BLOCK_SIZE - 1) / BLOCK_SIZE),
+                BLOCK_SIZE, 0, stream>>>(projector_full, surface_real, surface_imag,
+                    texture_voxels, tex_x, tex_y, projector_scale);
+            err = cudaGetLastError();
+            if (err != cudaSuccess) goto cleanup;
+        }
         texture_desc.filterMode = cudaFilterModeLinear;
         texture_desc.readMode = cudaReadModeElementType;
         texture_desc.normalizedCoords = false;
@@ -2825,6 +2870,8 @@ cleanup:
     if (weight_volume_f64) recovar::scratch_free(weight_volume_f64, stream);
     if (texture_real) cudaDestroyTextureObject(texture_real);
     if (texture_imag) cudaDestroyTextureObject(texture_imag);
+    if (surface_real) cudaDestroySurfaceObject(surface_real);
+    if (surface_imag) cudaDestroySurfaceObject(surface_imag);
     if (array_real) cudaFreeArray(array_real);
     if (array_imag) cudaFreeArray(array_imag);
     if (image_real) recovar::scratch_free(image_real, stream);
@@ -3159,4 +3206,3 @@ cleanup_host_replay:
             cudaGetErrorString(error));
     return static_cast<int>(error);
 }
-

@@ -19,6 +19,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from recovar.em.helpers.adjoint import adjoint_slice_volume_maybe_windowed as _adjoint_slice_volume_maybe_windowed
+from recovar.em.helpers.adjoint import adjoint_slice_volume_windowed_donating as _adjoint_slice_volume_windowed_donating
 from recovar.em.helpers.deterministic_reduce import add_segment_sum
 from recovar.em.helpers.dtype_policy import DensePrecisionPolicy
 from recovar.em.helpers.fourier_window import centered_half_indices_to_fftw_half_indices
@@ -223,17 +224,41 @@ def _adjoint_slice_volume_maybe_windowed_row_chunks(
     relion_x_half: bool,
     target_rows: int,
 ):
-    """Apply an exact-local sparse adjoint in row chunks when requested."""
+    """Apply an exact-local sparse adjoint in row chunks when requested.
 
-    n_rows = int(half_rows.shape[0])
-    target_rows = int(target_rows)
-    if target_rows <= 0 or n_rows <= target_rows:
-        return (
-            _adjoint_slice_volume_maybe_windowed(
-                half_rows,
+    RELION x-half updates consume ``volume``: every caller replaces its
+    accumulator with the returned array.  Exposing that ownership to the
+    indexed-backprojection JIT avoids preserving a second full accumulator.
+    """
+
+    if relion_x_half:
+        if window_indices is None:
+            n_half = int(image_shape[0]) * (int(image_shape[1]) // 2 + 1)
+            window_indices = jnp.arange(n_half, dtype=jnp.int32)
+
+        def update_volume(rows, rotations_block, accumulator):
+            return _adjoint_slice_volume_windowed_donating(
+                rows,
                 window_indices,
-                rotations,
-                volume,
+                rotations_block,
+                accumulator,
+                image_shape,
+                volume_shape,
+                disc_type,
+                True,
+                True,
+                max_r,
+                True,
+            )
+
+    else:
+
+        def update_volume(rows, rotations_block, accumulator):
+            return _adjoint_slice_volume_maybe_windowed(
+                rows,
+                window_indices,
+                rotations_block,
+                accumulator,
                 image_shape,
                 volume_shape,
                 disc_type,
@@ -241,29 +266,19 @@ def _adjoint_slice_volume_maybe_windowed_row_chunks(
                 True,
                 use_window=use_window,
                 max_r=max_r,
-                relion_x_half=relion_x_half,
-            ),
-            1,
-        )
+                relion_x_half=False,
+            )
+
+    n_rows = int(half_rows.shape[0])
+    target_rows = int(target_rows)
+    if target_rows <= 0 or n_rows <= target_rows:
+        return update_volume(half_rows, rotations, volume), 1
 
     updated = volume
     n_chunks = 0
     for start in range(0, n_rows, target_rows):
         stop = min(n_rows, start + target_rows)
-        updated = _adjoint_slice_volume_maybe_windowed(
-            half_rows[start:stop],
-            window_indices,
-            rotations[start:stop],
-            updated,
-            image_shape,
-            volume_shape,
-            disc_type,
-            True,
-            True,
-            use_window=use_window,
-            max_r=max_r,
-            relion_x_half=relion_x_half,
-        )
+        updated = update_volume(half_rows[start:stop], rotations[start:stop], updated)
         n_chunks += 1
     return updated, n_chunks
 
@@ -331,17 +346,18 @@ def _relion_local_projector_flat(
 
     if relion_projector_r_max is None:
         raise ValueError("relion_projector_r_max is required when relion_projector_half is provided")
-    relion_projector_half = prepare_local_projector_slab(relion_projector_half)
+    if relion_projector_half is not None:
+        relion_projector_half = prepare_local_projector_slab(relion_projector_half)
     relion_texture_interp = projection_kwargs.get("relion_texture_interp")
     relion_acc_double_floorf_quirk = bool(projection_kwargs.get("relion_acc_double_floorf_quirk", False))
-    mask_current_image_disk = bool(projection_kwargs.get("mask_current_image_disk", True))
+    mask_current_image_disk = bool(projection_kwargs.get("mask_current_image_disk", False))
     projector_kwargs = {}
     if window_spec.use_window and window_spec.max_r is not None:
         projector_kwargs["projector_output_size"] = int(window_spec.relion_projector_output_size())
     if projection_indices is not None:
         projector_kwargs["pixel_indices"] = projection_indices
-    if not mask_current_image_disk:
-        projector_kwargs["mask_current_image_disk"] = False
+    if mask_current_image_disk:
+        projector_kwargs["mask_current_image_disk"] = True
     proj_relion_flat, _ = _compute_relion_projector_projections_block(
         relion_projector_half,
         flat_rotations,
@@ -896,7 +912,16 @@ def _postprocess_local_bucket(
         if local_rotation_posterior_ids is None
         else np.asarray(local_rotation_posterior_ids, dtype=np.int32)
     )
-    np.add.at(buffers.rotation_posterior_sums, posterior_ids_np[local_mask_np], probs_sum_t_np[local_mask_np])
+    if posterior_ids_np.shape != local_rotation_ids_np.shape:
+        raise RuntimeError("exact local posterior ids must match the padded local rotation-id shape")
+    active_posterior_ids = posterior_ids_np[local_mask_np]
+    if (np.any(active_posterior_ids < 0)
+            or int(active_posterior_ids.max(initial=-1)) >= buffers.rotation_posterior_sums.size):
+        raise RuntimeError(
+            "exact local posterior id is outside rotation_posterior_sums; "
+            "parent-expanded non-C1 layouts must provide symmetry-reduced parent ids"
+        )
+    np.add.at(buffers.rotation_posterior_sums, active_posterior_ids, probs_sum_t_np[local_mask_np])
 
     significant_sample_count = 0
     if collect_profile_stats:

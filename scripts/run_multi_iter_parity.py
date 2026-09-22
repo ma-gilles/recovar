@@ -230,27 +230,6 @@ def map_relion_scale_groups_to_half_order(
     return group_ids, group_count
 
 
-def retain_group_scale_update_state(
-    *,
-    max_iter: int,
-    skip_final_iteration: bool,
-    diagnostic_retain_terminal_state: bool = False,
-) -> bool:
-    """Whether a later score can consume group scales updated by this replay.
-
-    The legacy dense ``adaptive_oversampling=0`` engine does not accumulate
-    RELION XA/AA group-scale sufficient statistics. A single explicitly
-    terminal numbered pass may still use the loaded per-particle scale factors
-    for scoring because its newly estimated scale state has no downstream
-    consumer. All nonterminal replays retain group IDs and therefore keep the
-    engine's fail-closed protection against silently skipping an update.
-    """
-
-    return bool(diagnostic_retain_terminal_state) or not (
-        int(max_iter) == 1 and bool(skip_final_iteration)
-    )
-
-
 def particle_half_indices(
     random_subsets,
     *,
@@ -1176,14 +1155,6 @@ def main():
     )
     parser.add_argument("--max_healpix_order", type=int, default=8)
     parser.add_argument("--skip_final_iteration", action="store_true", help="Skip the final combined-data Nyquist iter")
-    parser.add_argument(
-        "--diagnostic-retain-terminal-group-scale-state",
-        action="store_true",
-        help=(
-            "Diagnostic only: retain scale-group IDs and XA/AA sufficient "
-            "statistics for a one-iteration --skip_final_iteration replay."
-        ),
-    )
     parser.add_argument(
         "--force_max_iter_after_convergence",
         action="store_true",
@@ -2332,16 +2303,9 @@ def main():
     # ---- Run ----
     print(f"\nRunning {args.max_iter} iterations...")
     t0 = time.time()
-    keep_group_scale_update_state = retain_group_scale_update_state(
-        max_iter=args.max_iter,
-        skip_final_iteration=args.skip_final_iteration,
-        diagnostic_retain_terminal_state=args.diagnostic_retain_terminal_group_scale_state,
-    )
-    if not keep_group_scale_update_state:
-        print(
-            "  Explicitly terminal one-iteration replay: loaded group scales are "
-            "used for scoring; no downstream XA/AA group-scale update is requested"
-        )
+    # Group IDs select the same coarse/fine scoring route as the ongoing
+    # refinement. A terminal replay must preserve them even when its newly
+    # estimated scale statistics have no downstream consumer.
     result = refine_single_volume(
         experiment_datasets=[ds_half1, ds_half2],
         init_volume=[jnp.asarray(vol_ft_h1), jnp.asarray(vol_ft_h2)],
@@ -2399,12 +2363,8 @@ def main():
                 init_reference_real=initial_reference_real_for_projector,
                 init_image_corrections=[corr_h1, corr_h2],
                 init_scale_corrections=[scale_corr_h1, scale_corr_h2],
-                init_group_ids=(
-                    [group_ids_h1, group_ids_h2]
-                    if keep_group_scale_update_state
-                    else None
-                ),
-                init_group_count=(group_count if keep_group_scale_update_state else None),
+                init_group_ids=[group_ids_h1, group_ids_h2],
+                init_group_count=group_count,
                 init_previous_best_translations=[trans_h1, trans_h2],
                 init_previous_best_rotation_eulers=[euler_h1, euler_h2],
                 init_direction_prior=direction_prior,

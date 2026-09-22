@@ -39,7 +39,7 @@ from recovar.em.helpers.half_spectrum import (
     mask_relion_noise_shell_indices_to_current_window,
 )
 from recovar.em.helpers.half_volume_mstep import (
-    enforce_half_volume_x0,
+    finalize_half_volume_bpref,
     half_volume_accumulator_shape,
     half_volume_accumulators_to_full,
 )
@@ -626,6 +626,7 @@ def run_em(
     score_only: bool = False,
     relion_half_volume_mstep: bool = False,
     return_half_volume_accumulators: bool = False,
+    symmetry_label: str = "C1",
 ) -> DenseEMResult:
     """Score and accumulate one grid using blockwise posterior normalization.
 
@@ -1053,7 +1054,7 @@ def run_em(
             ) = _pad_dense_big_jit_image_axis(batch_data, ctf_params, image_batch_size)
         else:
             valid_image_mask_np = np.ones(actual_batch_size, dtype=bool)
-        batch_size = int(np.asarray(batch_data).shape[0])
+        batch_size = int(batch_data.shape[0])
         valid_image_mask = jnp.asarray(valid_image_mask_np, dtype=bool)
         batch_data = jnp.asarray(batch_data)
         if scale_corrections is not None:
@@ -2029,12 +2030,14 @@ def run_em(
     if score_only:
         new_mean = None
     elif relion_half_volume_mstep:
-        Ft_y, Ft_ctf = enforce_half_volume_x0(
+        Ft_y, Ft_ctf = finalize_half_volume_bpref(
             Ft_y,
             Ft_ctf,
             recon_volume_shape,
             logger=logger,
             label="Dense",
+            symmetry_label=symmetry_label,
+            relion_x_half=False,
         )
         if return_half_volume_accumulators:
             logger.info("Dense M-step: keeping native half-volume accumulators for downstream reconstruction")
