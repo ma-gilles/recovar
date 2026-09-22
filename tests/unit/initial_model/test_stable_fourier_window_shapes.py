@@ -298,16 +298,50 @@ def test_stable_coarse_projector_keeps_logical_disk_boundary(monkeypatch):
         (2, layout.physical_square_count),
         dtype=np.complex64,
     )
+    # The exact source-pixel disk is the explicit diagnostic arm of the
+    # embedding helper; it must use the logical, not the physical, radius.
     masked = _texture_centered_crop_at_indices(
         projection_crop,
         layout.score_indices_np,
         image_shape=_IMAGE_SHAPE,
         projector_output_size=layout.physical_current_size,
+        mask_current_image_disk=True,
         current_image_mask_size=np.int32(logical_size),
     )
     masked = np.asarray(masked)
     assert np.all(masked[:, just_outside] == 0)
     assert np.all(masked[:, layout.logical_projector_mask_np] == 1)
+
+    # By default the native texture kernel owns image clipping
+    # (docs/math/sparse_projection_radius.md): the physical-size-96 projection
+    # must hand the kernel the logical size-86 radius, and the embedding helper
+    # must then preserve the kernel's values.
+    from recovar import cuda_backproject
+    from recovar.em.helpers import projection
+
+    kernel_calls = []
+    physical = int(layout.physical_current_size)
+    kernel_crop = np.ones((2, physical * (physical // 2 + 1)), dtype=np.complex64)
+
+    def capture_capacity_kernel(projector_half, rotations, logical_r_max, *, image_shape, padding_factor, image_r_max):
+        del projector_half, rotations, logical_r_max, padding_factor
+        kernel_calls.append((tuple(image_shape), int(image_r_max)))
+        return kernel_crop
+
+    monkeypatch.setattr(cuda_backproject, "project_relion_half_capacity", capture_capacity_kernel)
+    default_route = np.asarray(
+        projection._project_relion_projector_texture(
+            np.zeros((5, 5, 3), dtype=np.complex64),
+            np.zeros((2, 3, 3), dtype=np.float32),
+            _IMAGE_SHAPE,
+            r_max=1,
+            projector_output_size=physical,
+            current_image_mask_size=np.int32(logical_size),
+            pixel_indices=layout.score_indices_np,
+        )
+    )
+    assert kernel_calls == [((physical, physical), logical_size // 2)]
+    assert np.all(default_route == 1)
 
 
 def test_stable_coarse_square_has_one_shape_across_q32_class(monkeypatch):

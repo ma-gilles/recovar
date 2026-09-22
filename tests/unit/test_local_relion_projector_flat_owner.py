@@ -38,5 +38,14 @@ def test_owner_builds_the_projector_keywords_from_the_window(monkeypatch):
         projection_kwargs={"mask_current_image_disk": False, "relion_texture_interp": True}, window_spec=Window(), projection_indices="IDX",
     )
     assert out == "FLAT" and seen["half"] == ("SLAB", "HALF") and seen["r_max"] == 4 and seen["padding_factor"] == 2
-    assert seen["projector_output_size"] == 12 and seen["pixel_indices"] == "IDX" and seen["mask_current_image_disk"] is False
+    # A disabled exact disk is the projector default (the native kernel owns
+    # image clipping), so the owner forwards the mask only when it is requested.
+    assert seen["projector_output_size"] == 12 and seen["pixel_indices"] == "IDX" and "mask_current_image_disk" not in seen
     assert seen["relion_texture_interp"] is True and seen["relion_acc_double_floorf_quirk"] is False and seen["centered_rows"] and seen["dense_scale"]
+
+    seen.clear()
+    local_bucket_stages._relion_local_projector_flat(
+        "HALF", "ROT", image_shape=(8, 8), relion_projector_r_max=4, projection_padding_factor=2,
+        projection_kwargs={"mask_current_image_disk": True, "relion_texture_interp": True}, window_spec=Window(), projection_indices="IDX",
+    )
+    assert seen["mask_current_image_disk"] is True
