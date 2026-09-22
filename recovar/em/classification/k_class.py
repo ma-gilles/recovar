@@ -1222,7 +1222,7 @@ def _run_dense_k_class_joint_firstiter_score_probe(
         do_gridding_correction=bool(engine_kwargs.get("do_gridding_correction", False)),
         square_window=bool(engine_kwargs.get("square_window", False)),
         use_float64_scoring=bool(engine_kwargs.get("use_float64_scoring", False)),
-        use_float64_projections=bool(engine_kwargs.get("use_float64_projections", False)),
+        use_float64_projections=_projection_float64_from_kwargs(engine_kwargs),
         relion_projector_half=score_projector_half,
         relion_projector_r_max=score_projector_r_max,
         relion_projector_texture_interp=engine_kwargs.get(
@@ -1306,10 +1306,16 @@ def _subset_image_axis_engine_kwargs(kwargs: dict, image_indices: np.ndarray, n_
     return out
 
 
+def _projection_float64_from_kwargs(kwargs: dict) -> bool:
+    """Whether projections run in double; production projects in float32."""
+
+    return bool(kwargs.get("use_float64_projections", False))
+
+
 def _pose_dtype_from_kwargs(kwargs: dict):
     """Host pose dtype: float64 when scoring or projections run in double, else float32."""
 
-    return np.float64 if kwargs.get("use_float64_scoring", False) or kwargs.get("use_float64_projections", False) else np.float32
+    return np.float64 if kwargs.get("use_float64_scoring", False) or _projection_float64_from_kwargs(kwargs) else np.float32
 
 
 def _score_dtype_from_kwargs(kwargs: dict):
@@ -2842,7 +2848,7 @@ def run_dense_k_class_em_adaptive(
             do_gridding_correction=engine_kwargs.get("do_gridding_correction", False),
             square_window=engine_kwargs.get("square_window", False),
             use_float64_scoring=engine_kwargs.get("use_float64_scoring", False),
-            use_float64_projections=bool(engine_kwargs.get("use_float64_projections", False)),
+            use_float64_projections=_projection_float64_from_kwargs(engine_kwargs),
             score_mode=engine_kwargs.get("relion_firstiter_score_mode", "gaussian"),
             relion_projector_half=relion_projector_half,
             relion_projector_r_max=relion_projector_r_max,
