@@ -15,6 +15,7 @@ import starfile
 
 from recovar import cuda_backproject
 from recovar.em.cuda import kernels as em_cuda_kernels
+from recovar.em.cuda import kernels as em_cuda_kernels
 from recovar.em.diagnostics.bpref_contribution_replay import native_current_fft_rows  # noqa: E402
 from recovar.em.helpers.fourier_window import make_fourier_window_indices_np
 from recovar.em.helpers.half_spectrum import make_relion_noise_shell_indices_half, make_scoring_half_image_weights
@@ -1126,7 +1127,7 @@ def analyze(
             ("native_lane", True, False),
             ("native_atomic", False, True),
         ):
-            normalized_real, masked_real = cuda_backproject.relion_preprocess_real_f32(
+            normalized_real, masked_real = em_cuda_kernels.relion_preprocess_real_f32(
                 jnp.asarray(raw_image[None], dtype=jnp.float32),
                 jnp.asarray([normalization_factor], dtype=jnp.float32),
                 jnp.asarray([integer_pre_shift], dtype=jnp.int32),

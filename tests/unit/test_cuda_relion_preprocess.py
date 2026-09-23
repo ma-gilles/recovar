@@ -13,6 +13,7 @@ pytestmark = [pytest.mark.unit, pytest.mark.gpu]
 @pytest.fixture(autouse=True)
 def _use_custom_cuda_lib(monkeypatch, custom_cuda_lib):
     import recovar.cuda_backproject as cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
     monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
@@ -39,7 +40,7 @@ def _zero_fill_shift(images, factors, shifts):
 
 
 def test_relion_cuda_normalize_shift_is_bit_exact(gpu_device):
-    from recovar.cuda_backproject import relion_preprocess_real_f32
+    from recovar.em.cuda.kernels import relion_preprocess_real_f32
 
     rng = np.random.default_rng(20260714)
     images = rng.standard_normal((3, 32, 32)).astype(np.float32)
@@ -62,7 +63,7 @@ def test_relion_cuda_normalize_shift_is_bit_exact(gpu_device):
 
 
 def test_relion_cuda_softmask_has_constant_exterior_and_finite_output(gpu_device):
-    from recovar.cuda_backproject import relion_preprocess_real_f32
+    from recovar.em.cuda.kernels import relion_preprocess_real_f32
 
     rng = np.random.default_rng(17)
     images = rng.standard_normal((2, 64, 64)).astype(np.float32)
@@ -91,7 +92,7 @@ def test_relion_cuda_softmask_has_constant_exterior_and_finite_output(gpu_device
 
 @pytest.mark.parametrize("native_lane_reduction", [False, True])
 def test_relion_cuda_softmask_repeats_bit_exactly(gpu_device, native_lane_reduction):
-    from recovar.cuda_backproject import relion_preprocess_real_f32
+    from recovar.em.cuda.kernels import relion_preprocess_real_f32
 
     rng = np.random.default_rng(20260731)
     images = rng.standard_normal((3, 128, 128)).astype(np.float32)
@@ -118,7 +119,7 @@ def test_relion_cuda_softmask_repeats_bit_exactly(gpu_device, native_lane_reduct
 
 @pytest.mark.parametrize("radius,cosine_width", [(1.0e-6, 1.0), (15.999, 1.0e-4)])
 def test_relion_cuda_softmask_boundary_radii_remain_finite(radius, cosine_width, gpu_device):
-    from recovar.cuda_backproject import relion_preprocess_real_f32
+    from recovar.em.cuda.kernels import relion_preprocess_real_f32
 
     rng = np.random.default_rng(23)
     images = rng.standard_normal((2, 32, 32)).astype(np.float32)
@@ -136,7 +137,7 @@ def test_relion_cuda_softmask_boundary_radii_remain_finite(radius, cosine_width,
 
 
 def test_relion_cuda_softmask_fails_closed_with_zero_background_area(gpu_device):
-    from recovar.cuda_backproject import relion_preprocess_real_f32
+    from recovar.em.cuda.kernels import relion_preprocess_real_f32
 
     with jax.default_device(gpu_device), pytest.raises(jax.errors.JaxRuntimeError, match="CUDA: invalid argument"):
         _normalized_shifted, masked = relion_preprocess_real_f32(
@@ -159,7 +160,7 @@ def test_relion_cuda_softmask_fails_closed_with_zero_background_area(gpu_device)
     ],
 )
 def test_relion_cuda_preprocess_rejects_wrong_dtypes(images, factors, shifts, error, gpu_device):
-    from recovar.cuda_backproject import relion_preprocess_real_f32
+    from recovar.em.cuda.kernels import relion_preprocess_real_f32
 
     with jax.default_device(gpu_device), pytest.raises(TypeError, match=error):
         relion_preprocess_real_f32(
@@ -173,10 +174,11 @@ def test_relion_cuda_preprocess_rejects_wrong_dtypes(images, factors, shifts, er
 
 def test_relion_cuda_preprocess_fails_closed_without_gpu(monkeypatch):
     import recovar.cuda_backproject as cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     monkeypatch.setattr(cuda_backproject.jax, "default_backend", lambda: "cpu")
     with pytest.raises(RuntimeError, match="requires a JAX GPU backend"):
-        cuda_backproject.relion_preprocess_real_f32.__wrapped__(
+        em_cuda_kernels.relion_preprocess_real_f32.__wrapped__(
             jnp.zeros((1, 8, 8), dtype=jnp.float32),
             jnp.ones((1,), dtype=jnp.float32),
             jnp.zeros((1, 2), dtype=jnp.int32),
@@ -187,11 +189,12 @@ def test_relion_cuda_preprocess_fails_closed_without_gpu(monkeypatch):
 
 def test_relion_cuda_preprocess_fails_closed_when_custom_cuda_disabled(monkeypatch):
     import recovar.cuda_backproject as cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     monkeypatch.setattr(cuda_backproject.jax, "default_backend", lambda: "gpu")
     monkeypatch.setenv("RECOVAR_DISABLE_CUDA", "1")
     with pytest.raises(RuntimeError, match="custom CUDA is disabled"):
-        cuda_backproject.relion_preprocess_real_f32.__wrapped__(
+        em_cuda_kernels.relion_preprocess_real_f32.__wrapped__(
             jnp.zeros((1, 8, 8), dtype=jnp.float32),
             jnp.ones((1,), dtype=jnp.float32),
             jnp.zeros((1, 2), dtype=jnp.int32),
@@ -209,7 +212,7 @@ def test_relion_cuda_softmask_batch_matches_single_image_bitwise(gpu_device, nat
     depend on which other images share its batch.
     """
 
-    from recovar.cuda_backproject import relion_preprocess_real_f32
+    from recovar.em.cuda.kernels import relion_preprocess_real_f32
 
     rng = np.random.default_rng(20260913)
     images = rng.standard_normal((5, 64, 64)).astype(np.float32)
@@ -244,7 +247,7 @@ def test_relion_cuda_softmask_batch_matches_single_image_bitwise(gpu_device, nat
 def test_relion_cuda_softmask_non_finite_image_fails_closed(gpu_device):
     """A non-finite image still aborts the batched call, as the per-image launcher did."""
 
-    from recovar.cuda_backproject import relion_preprocess_real_f32
+    from recovar.em.cuda.kernels import relion_preprocess_real_f32
 
     rng = np.random.default_rng(3)
     images = rng.standard_normal((3, 32, 32)).astype(np.float32)
@@ -269,9 +272,10 @@ def test_relion_cuda_softmask_deferred_check_queues_and_fails_closed_on_drain(gp
     """
 
     from recovar import cuda_backproject
-    from recovar.cuda_backproject import relion_preprocess_real_f32
+    from recovar.em.cuda import kernels as em_cuda_kernels
+    from recovar.em.cuda.kernels import relion_preprocess_real_f32
 
-    cuda_backproject.drain_relion_preprocess_checks()
+    em_cuda_kernels.drain_relion_preprocess_checks()
     rng = np.random.default_rng(3)
     images = rng.standard_normal((3, 32, 32)).astype(np.float32)
     images[1, 5, 7] = np.nan
@@ -289,7 +293,7 @@ def test_relion_cuda_softmask_deferred_check_queues_and_fails_closed_on_drain(gp
             deferred_finite_check=True,
         )
         masked = np.asarray(masked)
-        assert cuda_backproject.pending_relion_preprocess_checks() == 1
+        assert em_cuda_kernels.pending_relion_preprocess_checks() == 1
         for row in (0, 2):
             _single_shifted, single = relion_preprocess_real_f32(
                 jnp.asarray(images[row : row + 1]),
@@ -306,15 +310,16 @@ def test_relion_cuda_softmask_deferred_check_queues_and_fails_closed_on_drain(gp
     exterior = np.sqrt(xx * xx + yy * yy) > 13.0
     assert np.all(np.isnan(masked[1][exterior]))
     with pytest.raises(RuntimeError, match="deferred check.*1 image"):
-        cuda_backproject.drain_relion_preprocess_checks()
-    assert cuda_backproject.pending_relion_preprocess_checks() == 0
+        em_cuda_kernels.drain_relion_preprocess_checks()
+    assert em_cuda_kernels.pending_relion_preprocess_checks() == 0
 
 
 def test_relion_cuda_softmask_deferred_check_drains_clean_batches(gpu_device):
     from recovar import cuda_backproject
-    from recovar.cuda_backproject import relion_preprocess_real_f32
+    from recovar.em.cuda import kernels as em_cuda_kernels
+    from recovar.em.cuda.kernels import relion_preprocess_real_f32
 
-    cuda_backproject.drain_relion_preprocess_checks()
+    em_cuda_kernels.drain_relion_preprocess_checks()
     rng = np.random.default_rng(11)
     with jax.default_device(gpu_device):
         for _ in range(3):
@@ -337,18 +342,19 @@ def test_relion_cuda_softmask_deferred_check_drains_clean_batches(gpu_device):
             apply_mask=False,
             deferred_finite_check=True,
         )
-    assert cuda_backproject.pending_relion_preprocess_checks() == 3
-    assert cuda_backproject.drain_relion_preprocess_checks() == 3
-    assert cuda_backproject.drain_relion_preprocess_checks() == 0
+    assert em_cuda_kernels.pending_relion_preprocess_checks() == 3
+    assert em_cuda_kernels.drain_relion_preprocess_checks() == 3
+    assert em_cuda_kernels.drain_relion_preprocess_checks() == 0
 
 
 def test_relion_preprocess_deferred_check_flag_is_strict(monkeypatch):
     from recovar import cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
-    monkeypatch.setenv(cuda_backproject.RELION_PREPROCESS_DEFERRED_CHECK_ENV, "1")
-    assert cuda_backproject.relion_preprocess_deferred_check_requested() is True
-    monkeypatch.delenv(cuda_backproject.RELION_PREPROCESS_DEFERRED_CHECK_ENV)
-    assert cuda_backproject.relion_preprocess_deferred_check_requested() is False
-    monkeypatch.setenv(cuda_backproject.RELION_PREPROCESS_DEFERRED_CHECK_ENV, "yes")
+    monkeypatch.setenv(em_cuda_kernels.RELION_PREPROCESS_DEFERRED_CHECK_ENV, "1")
+    assert em_cuda_kernels.relion_preprocess_deferred_check_requested() is True
+    monkeypatch.delenv(em_cuda_kernels.RELION_PREPROCESS_DEFERRED_CHECK_ENV)
+    assert em_cuda_kernels.relion_preprocess_deferred_check_requested() is False
+    monkeypatch.setenv(em_cuda_kernels.RELION_PREPROCESS_DEFERRED_CHECK_ENV, "yes")
     with pytest.raises(ValueError, match="must be 0 or 1"):
-        cuda_backproject.relion_preprocess_deferred_check_requested()
+        em_cuda_kernels.relion_preprocess_deferred_check_requested()

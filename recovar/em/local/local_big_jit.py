@@ -2328,10 +2328,9 @@ def run_local_bucket_big_jit(
     if relion_score_translation_angles is not None:
         relion_score_translation_angles = relion_score_translation_angles.astype(precision_policy.score_real_dtype)
     if use_relion_cuda_preprocess:
-        from recovar import cuda_backproject
         from recovar.em.cuda import kernels as em_cuda_kernels
 
-        normalized_images, masked_images = cuda_backproject.relion_preprocess_real_f32(
+        normalized_images, masked_images = em_cuda_kernels.relion_preprocess_real_f32(
             jnp.asarray(batch, dtype=jnp.float32),
             jnp.asarray(image_only_corrections, dtype=jnp.float32),
             jnp.asarray(integer_pre_shifts, dtype=jnp.int32),
@@ -2773,7 +2772,6 @@ def run_local_bucket_big_jit(
 
     direct_scores = None
     if relion_exact_fine_diff2:
-        from recovar import cuda_backproject
         from recovar.em.cuda import kernels as em_cuda_kernels
 
         pixel_correction = _relion_cuda_pixel_correction_from_rfloat_ctf(
@@ -3163,7 +3161,6 @@ def run_local_bucket_big_jit(
             shifted_noise_for_return = jnp.zeros((1, 1, 1), dtype=shifted_recon_split.dtype)
             processed_score_half_for_return = jnp.zeros((1, 1), dtype=processed_score_half.dtype)
         if return_deferred_source_vdam_operands:
-            from recovar import cuda_backproject
             from recovar.em.cuda import kernels as em_cuda_kernels
 
             if not use_packed_local_projection:
@@ -3349,7 +3346,6 @@ def run_local_bucket_big_jit(
     if return_source_vdam_operands and not source_ordered_vdam_mstep:
         raise ValueError("source VDAM operands require the guarded RELION VDAM M-step route")
     if source_ordered_vdam_mstep:
-        from recovar import cuda_backproject
         from recovar.em.cuda import kernels as em_cuda_kernels
         if source_ordered_vdam_scattered:
             Ft_y, Ft_ctf, ctf_probs = em_cuda_kernels.relion_vdam_mstep_fused_x_half(

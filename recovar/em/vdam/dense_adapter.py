@@ -98,6 +98,10 @@ def _configure_relion_image_mask(dataset, opts: NativeInitialModelOptions) -> No
         particle_diameter_ang=float(opts.particle_diameter),
         width_mask_edge_px=float(opts.width_mask_edge_px),
     )
+    from recovar.em.cuda import (
+        kernels as _em_cuda_kernels,  # noqa: F401  (registers the relion_cuda preprocessor, relax split seam S2)
+    )
+
     backend.set_relion_fourier_backend(opts.image_fourier_backend)
 
 

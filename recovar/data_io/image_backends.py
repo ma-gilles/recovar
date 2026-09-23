@@ -36,6 +36,29 @@ NVTX_DOMAIN_DATA_IO = "data_io"
 RelionFourierBackend = Literal["host_numpy", "jax_gpu", "relion_cuda"]
 _RELION_FOURIER_BACKENDS = frozenset(("host_numpy", "jax_gpu", "relion_cuda"))
 
+# The ``relion_cuda`` backend runs RELION's CUDA image preprocessing, which belongs to the EM code
+# (relax). recovar does not import it; the EM package registers it here (relax split seam S2).
+_RELION_CUDA_PREPROCESSOR = None
+
+
+def register_relion_cuda_preprocessor(preprocess) -> None:
+    """Install the ``relion_cuda`` real-space preprocessor (called by the EM CUDA kernels module)."""
+
+    global _RELION_CUDA_PREPROCESSOR
+    _RELION_CUDA_PREPROCESSOR = preprocess
+
+
+def relion_cuda_preprocessor():
+    """Return the registered ``relion_cuda`` preprocessor; fail clearly when none is installed."""
+
+    if _RELION_CUDA_PREPROCESSOR is None:
+        raise RuntimeError(
+            "The 'relion_cuda' image Fourier backend needs RELION's CUDA preprocessing, which is "
+            "provided by the EM package (import recovar.em.cuda.kernels, or relax once the EM code "
+            "has moved). Use 'host_numpy' or 'jax_gpu' otherwise."
+        )
+    return _RELION_CUDA_PREPROCESSOR
+
 
 def _normalize_image_dtype(dtype):
     """Return the supported complex scalar type for image Fourier data."""
@@ -402,7 +425,7 @@ class ParticleImageDataset:
                         "relion_cuda preprocessing requires data_multiplier=1; "
                         "folding an additional multiplier into RELION's stored float32 stage is unsupported"
                     )
-                from recovar.cuda_backproject import relion_preprocess_real_f32
+                relion_preprocess_real_f32 = relion_cuda_preprocessor()
 
                 native_atomic_value = os.environ.get(
                     "RECOVAR_RELION_NATIVE_ATOMIC_SOFTMASK_REDUCTION",

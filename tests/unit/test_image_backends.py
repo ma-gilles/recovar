@@ -234,8 +234,6 @@ def test_relion_per_image_fft_is_batch_size_invariant(gpu_device):
 
 
 def test_particle_image_dataset_relion_cuda_routes_explicit_operands(monkeypatch):
-    import recovar.cuda_backproject as cuda_backproject
-
     monkeypatch.setattr(image_backends.ImageLoader, "from_file", lambda *args, **kwargs: _DummySource(n=4, D=8))
     ds = image_backends.ParticleImageDataset("dummy.mrcs", lazy=True, invert_data=False)
     ds.set_relion_image_mask(pixel_size=1.0, particle_diameter_ang=6.0, width_mask_edge_px=2.0)
@@ -268,7 +266,7 @@ def test_particle_image_dataset_relion_cuda_routes_explicit_operands(monkeypatch
         )
         return got_images, got_images + jnp.float32(3.0)
 
-    monkeypatch.setattr(cuda_backproject, "relion_preprocess_real_f32", fake_preprocess)
+    monkeypatch.setattr(image_backends, "_RELION_CUDA_PREPROCESSOR", fake_preprocess)
     monkeypatch.setattr(image_backends, "_centered_rfft2_jax", lambda x: x.astype(jnp.complex64))
 
     result = ds.process_images_half(
@@ -290,8 +288,6 @@ def test_particle_image_dataset_relion_cuda_routes_explicit_operands(monkeypatch
 
 
 def test_particle_image_dataset_relion_cuda_routes_per_image_fft(monkeypatch):
-    import recovar.cuda_backproject as cuda_backproject
-
     monkeypatch.setattr(
         image_backends.ImageLoader,
         "from_file",
@@ -312,7 +308,7 @@ def test_particle_image_dataset_relion_cuda_routes_per_image_fft(monkeypatch):
         return jnp.asarray(images), jnp.asarray(images)
 
     monkeypatch.setattr(
-        cuda_backproject, "relion_preprocess_real_f32", fake_preprocess
+        image_backends, "_RELION_CUDA_PREPROCESSOR", fake_preprocess
     )
     monkeypatch.setattr(
         image_backends,
@@ -337,8 +333,6 @@ def test_particle_image_dataset_relion_cuda_routes_per_image_fft(monkeypatch):
 
 
 def test_particle_image_dataset_routes_native_lane_softmask_diagnostic(monkeypatch):
-    import recovar.cuda_backproject as cuda_backproject
-
     monkeypatch.setattr(image_backends.ImageLoader, "from_file", lambda *args, **kwargs: _DummySource(n=4, D=8))
     ds = image_backends.ParticleImageDataset("dummy.mrcs", lazy=True, invert_data=False)
     ds.set_relion_image_mask(pixel_size=1.0, particle_diameter_ang=6.0, width_mask_edge_px=2.0)
@@ -351,7 +345,7 @@ def test_particle_image_dataset_routes_native_lane_softmask_diagnostic(monkeypat
         captured.update(kwargs)
         return jnp.asarray(images), jnp.asarray(images)
 
-    monkeypatch.setattr(cuda_backproject, "relion_preprocess_real_f32", fake_preprocess)
+    monkeypatch.setattr(image_backends, "_RELION_CUDA_PREPROCESSOR", fake_preprocess)
     # This CPU unit test checks CUDA option routing. The FFT has a separate
     # GPU contract; verify its input here and supply a correctly shaped result.
     def fake_fft(values):
@@ -378,6 +372,24 @@ def test_particle_image_dataset_relion_cuda_fails_closed_without_operands(monkey
 
     with pytest.raises(RuntimeError, match="requires per-image float32 normalization"):
         ds.process_images_half(images, apply_image_mask=True)
+
+
+def test_particle_image_dataset_relion_cuda_requires_registered_preprocessor(monkeypatch):
+    # Seam S2 (relax split): recovar never imports the EM CUDA preprocessing itself.
+    monkeypatch.setattr(image_backends.ImageLoader, "from_file", lambda *args, **kwargs: _DummySource(n=4, D=8))
+    monkeypatch.setattr(image_backends, "_RELION_CUDA_PREPROCESSOR", None)
+    ds = image_backends.ParticleImageDataset("dummy.mrcs", lazy=True, invert_data=False)
+    ds.set_relion_image_mask(pixel_size=1.0, particle_diameter_ang=6.0, width_mask_edge_px=2.0)
+    ds.set_relion_fourier_backend("relion_cuda")
+    images, _p_idx, _t_idx = ds[2]
+
+    with pytest.raises(RuntimeError, match="provided by the EM package"):
+        ds.process_images_half(
+            images,
+            apply_image_mask=True,
+            relion_normalization_factors=np.ones(1, dtype=np.float32),
+            relion_integer_shifts=np.zeros((1, 2), dtype=np.int32),
+        )
 
 
 def test_particle_image_dataset_data_multiplier_and_mult_share_state(monkeypatch):

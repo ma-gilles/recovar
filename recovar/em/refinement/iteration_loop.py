@@ -709,6 +709,10 @@ def refine_single_volume(
         if backend is None:
             continue
         if hasattr(backend, "set_relion_fourier_backend"):
+            from recovar.em.cuda import (
+                kernels as _em_cuda_kernels,  # noqa: F401  (registers the relion_cuda preprocessor, relax split seam S2)
+            )
+
             backend.set_relion_fourier_backend(parity.image_fourier_backend)
         if source_faithful_spectrum_norm and getattr(backend, "relion_fourier_backend", None) not in (None, "relion_cuda"):
             # The fresh K=1 defaults score from RELION's CUDA image preprocessing;
@@ -2764,7 +2768,7 @@ def refine_single_volume(
 
         # E-step + per-half M-step accumulators are now both populated.
         _parity_dump.mark_stage(iteration, "e_step")
-        from recovar.cuda_backproject import drain_relion_preprocess_checks
+        from recovar.em.cuda.kernels import drain_relion_preprocess_checks
         drain_relion_preprocess_checks()
         if iter_sig_count_parts:
             iter_sig_counts = np.concatenate(iter_sig_count_parts, axis=0)

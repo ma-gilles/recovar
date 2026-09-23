@@ -310,7 +310,7 @@ def run_gpu_analysis(
     import jax
     import jax.numpy as jnp
 
-    from recovar.cuda_backproject import relion_preprocess_real_f32
+    from recovar.em.cuda.kernels import relion_preprocess_real_f32
     from recovar.data_io.image_backends import _centered_rfft2_jax
     from recovar.data_io.image_loader import ImageLoader
 

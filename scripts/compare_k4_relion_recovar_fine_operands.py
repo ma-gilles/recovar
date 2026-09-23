@@ -14,7 +14,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from recovar.core.ctf import _compute_spa_ctf
-from recovar.cuda_backproject import relion_preprocess_real_f32
+from recovar.em.cuda.kernels import relion_preprocess_real_f32
 from recovar.data_io.image_backends import (
     _apply_relion_soft_image_mask_numpy,
     _centered_rfft2_jax,

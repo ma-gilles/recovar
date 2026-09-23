@@ -7,6 +7,9 @@ import jax.numpy as jnp
 import numpy as np
 
 import recovar.core.fourier_transform_utils as fourier_transform_utils
+from recovar.em.cuda import (
+    kernels as _em_cuda_kernels,  # noqa: F401  (registers the relion_cuda preprocessor, relax split seam S2)
+)
 from recovar.em.helpers.env_flags import parse_env_strict_flag
 from recovar.em.helpers.half_spectrum import make_half_image_weights
 

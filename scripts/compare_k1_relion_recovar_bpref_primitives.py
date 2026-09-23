@@ -299,6 +299,7 @@ def _compare_particle(
     if preprocess_backend == "relion_cuda":
         from recovar import cuda_backproject
         from recovar.em.cuda import kernels as em_cuda_kernels
+        from recovar.em.cuda import kernels as em_cuda_kernels
 
         def optics_value(name: str) -> float:
             return float(optics_row[name] if name in optics_row else optics_row[f"_{name}"])
@@ -316,7 +317,7 @@ def _compare_particle(
             contribution["integer_pre_shifts"][contribution_row : contribution_row + 1],
             dtype=np.int32,
         )
-        _, production_preprocessed_device = cuda_backproject.relion_preprocess_real_f32(
+        _, production_preprocessed_device = em_cuda_kernels.relion_preprocess_real_f32(
             jnp.asarray(raw_real_image[None, ...], dtype=jnp.float32),
             jnp.asarray(normalization_factors, dtype=jnp.float32),
             jnp.asarray(integer_shifts, dtype=jnp.int32),
@@ -371,6 +372,7 @@ def _compare_particle(
         native_ctf_replay**2 * native_inverse_noise_replay / n4
     ).astype(np.float32)
     from recovar import cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
     from recovar.em.cuda import kernels as em_cuda_kernels
 
     translation_angles = jnp.asarray(

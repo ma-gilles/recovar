@@ -6394,7 +6394,7 @@ def compute_k_class_pass2_stats_sparse_fused(
             if group_key != last_bucket_size_logged:
                 if last_bucket_size_logged is not None and group_t0 is not None:
                     prev_chunks, prev_images = bucket_group_stats[last_bucket_size_logged]
-                    from recovar.cuda_backproject import drain_relion_preprocess_checks
+                    from recovar.em.cuda.kernels import drain_relion_preprocess_checks
                     drain_relion_preprocess_checks()
                     prev_wall = time.time() - group_t0
                     logger.info(
@@ -8690,7 +8690,7 @@ def compute_k_class_pass2_stats_sparse_fused(
             _add_sparse_group_timing(group_timing, "chunk_total", time.time() - chunk_t0)
             chunk_profile.end_bucket((Ft_y_total, Ft_ctf_total))
 
-    from recovar.cuda_backproject import drain_relion_preprocess_checks
+    from recovar.em.cuda.kernels import drain_relion_preprocess_checks
     drain_relion_preprocess_checks()
     host_updates.flush()
     if device_noise_totals is not None:

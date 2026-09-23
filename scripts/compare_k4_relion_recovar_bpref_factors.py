@@ -13,7 +13,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from recovar.core.ctf import _compute_spa_ctf
-from recovar.cuda_backproject import relion_preprocess_real_f32
+from recovar.em.cuda.kernels import relion_preprocess_real_f32
 from recovar.data_io.image_backends import _centered_rfft2_jax, _centered_rfft2_numpy
 from recovar.em.helpers.image_shifts import apply_relion_integer_pre_shifts
 from recovar.em.sparse_pass2.sparse_pass2_bucket_io import _half_translation_phase_table_for_indices
