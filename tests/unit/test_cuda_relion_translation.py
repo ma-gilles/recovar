@@ -767,7 +767,11 @@ def test_relion_vdam_mstep_fused_x_half_validates_reference_shape():
 def test_relion_vdam_mstep_fused_projector_x_half_validates_projector_shape():
     import recovar.cuda_backproject as cuda_backproject
 
-    with pytest.raises(TypeError, match="projector_full must be a nonempty complex64 cube"):
+    # 41128dcd0 also admits a radius-matched logical half slab; a 2-D array is
+    # neither that nor a cube.
+    with pytest.raises(
+        TypeError, match="projector_full must be a complex64 cube or radius-matched logical half slab"
+    ):
         cuda_backproject.relion_vdam_mstep_fused_projector_x_half.__wrapped__(
             jnp.zeros((196,), dtype=jnp.complex64),
             jnp.zeros((196,), dtype=jnp.float32),
