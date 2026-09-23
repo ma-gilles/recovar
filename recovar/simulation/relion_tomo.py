@@ -19,18 +19,23 @@ Cs, amplitude contrast and noise level. Per-tilt poses and depth-corrected
 defocus are not computed here: the RELION STAR files are written first and
 then read back with :func:`recovar.commands.parse_relion5_tomo.convert`, so the
 simulator and recovar's RELION 5 reader share one geometry implementation.
-Images use the ``CRYO_ET`` CTF (``rlnCtfScalefactor`` as contrast,
-``rlnMicrographPreExposure`` as dose). The RELION conventions are listed in
-the cryo-ET port plan (``pr179_coordination/cryoet_plan_20260923/PLAN.md``).
+Images use the CTF relion_refine applies to a tomo image (:func:`relion_tomo_ctf`):
+the SPA CTF scaled by ``rlnCtfScalefactor`` times RELION's dose weight for the
+tilt's ``rlnMicrographPreExposure``. This is deliberately not recovar's
+``CRYO_ET`` dose filter, which has a cutoff and a 200 kV factor RELION lacks.
+The RELION conventions are listed in the cryo-ET port plan
+(``pr179_coordination/cryoet_plan_20260923/PLAN.md``).
 """
 
 import logging
 import os
 
+import jax.numpy as jnp
 import numpy as np
 import pandas as pd
 from scipy.spatial.transform import Rotation
 
+import recovar.core.fourier_transform_utils as fourier_transform_utils
 import recovar.utils as utils
 from recovar import core
 from recovar.commands import parse_relion5_tomo
@@ -43,6 +48,29 @@ DEFAULT_OPTICS_GROUPS = (
     {"voltage": 300.0, "cs": 2.7, "amp_contrast": 0.1, "noise_scale": 1.0},
     {"voltage": 200.0, "cs": 1.4, "amp_contrast": 0.07, "noise_scale": 1.5},
 )
+
+
+def relion_dose_weight(freq_sq, dose):
+    """RELION's dose weight ``exp(-0.5 N / Ne(k))``, ``Ne = 0.245 k^-1.665 + 2.81`` (``src/ctf.h:219-233``).
+
+    ``freq_sq`` is ``k^2`` in 1/A^2 per pixel and ``dose`` the cumulative dose ``N``
+    in e/A^2 per image. At ``k = 0`` ``Ne`` is infinite and the weight is 1.
+    """
+    critical_exposure = 0.245 * jnp.power(freq_sq, -0.8325) + 2.81
+    return jnp.exp(-0.5 * jnp.asarray(dose)[:, None] / critical_exposure[None, :])
+
+
+def relion_tomo_ctf(ctf_params, image_shape, voxel_size, *, half_image=False):
+    """CTF of a RELION tomo image: SPA CTF (with ``CONTRAST`` = ``rlnCtfScalefactor``) times the dose weight."""
+    grid_fn = (
+        fourier_transform_utils.get_k_coordinate_of_each_pixel_half
+        if half_image
+        else fourier_transform_utils.get_k_coordinate_of_each_pixel
+    )
+    ctf_params = jnp.asarray(ctf_params)
+    freqs = grid_fn(image_shape, voxel_size, scaled=True, dtype=jnp.result_type(ctf_params, jnp.float32))
+    ctf = core.evaluate_ctf(freqs, ctf_params[:, : int(core.CTFParamIndex.DOSE)])
+    return ctf * relion_dose_weight(jnp.sum(freqs**2, axis=-1), ctf_params[:, core.CTFParamIndex.DOSE])
 
 
 def dose_symmetric_tilt_scheme(max_tilt=60.0, tilt_step=3.0, group_size=2):
@@ -271,7 +299,7 @@ def generate_relion5_tomo_dataset(
             None,
             voxel_size,
             cryoem_dataset.ImageMetadata(rots[rows], np.zeros((rows.size, 2)), ctf_params[rows]),
-            ctf_evaluator=core.CTFEvaluator(mode=core.CTFMode.CRYO_ET),
+            ctf_evaluator=relion_tomo_ctf,
             grid_size=grid_size,
         )
 

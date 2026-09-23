@@ -148,3 +148,34 @@ def test_optics_group_noise_scale(dataset):
     ratio = np.mean(power[2]) / np.mean(power[1])
     assert 1.7 < ratio < 2.8, ratio
     assert os.path.isfile(out / "simulation_info.pkl")
+
+
+def test_relion_dose_weight_matches_ctf_h():
+    """exp(-0.5 dose / (0.245 u2^-0.8325 + 2.81)) with weight 1 at u2 = 0, as in RELION's CTF::getCTF."""
+    u2 = np.array([0.0, 1e-4, 0.01, 0.0625])
+    dose = np.array([0.0, 3.0, 60.0])
+    got = np.asarray(relion_tomo.relion_dose_weight(u2, dose))
+    with np.errstate(divide="ignore"):
+        expected = np.exp(-0.5 * dose[:, None] / (0.245 * u2[None, :] ** -0.8325 + 2.81))
+    np.testing.assert_allclose(got, expected, rtol=1e-6)
+    assert np.all(got[:, 0] == 1.0) and np.all(got[0] == 1.0)
+
+
+def test_relion_tomo_ctf_is_spa_ctf_times_dose_weight():
+    from recovar import core
+    from recovar.core import fourier_transform_utils as ftu
+
+    params = np.zeros((2, 11))
+    params[:, :6] = [[15000, 14500, 30, 300, 2.7, 0.1], [22000, 22000, 0, 200, 1.4, 0.07]]
+    params[:, core.CTFParamIndex.CONTRAST] = [1.0, 0.5]
+    params[:, core.CTFParamIndex.DOSE] = [0.0, 45.0]
+    ctf = np.asarray(relion_tomo.relion_tomo_ctf(params, (16, 16), 3.0))
+    freqs = np.asarray(ftu.get_k_coordinate_of_each_pixel((16, 16), 3.0, scaled=True))
+    spa = np.asarray(core.evaluate_ctf(freqs, params[:, :9]))
+    np.testing.assert_allclose(ctf[0], spa[0], rtol=1e-4, atol=1e-5)  # float32 grid vs float64 reference
+    weight = np.asarray(relion_tomo.relion_dose_weight((freqs**2).sum(-1), params[1:, 9]))[0]
+    np.testing.assert_allclose(ctf[1], spa[1] * weight, rtol=1e-4, atol=1e-5)  # float32 grid vs float64 reference
+    half = np.asarray(relion_tomo.relion_tomo_ctf(params, (16, 16), 3.0, half_image=True))
+    np.testing.assert_allclose(
+        half, np.asarray(ftu.full_image_to_half_image(ctf, (16, 16))), rtol=1e-4, atol=1e-5
+    )  # float32 grid vs float64 reference
