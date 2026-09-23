@@ -546,7 +546,7 @@ def _reconstruct_volume_eager(
             *postprocess_args,
             **postprocess_kwargs,
         )
-        reconstruction_shape = relion_functions.relion_reconstruction_padded_shape(
+        reconstruction_shape = relion_functions._relion_reconstruction_padded_shape(
             vol_shape,
             padding_factor,
         )
@@ -579,7 +579,7 @@ def _reconstruct_volume_eager(
         if accumulator_volume_shape is None
         else tuple(int(s) for s in accumulator_volume_shape)
     )
-    reconstruction_shape = relion_functions.relion_reconstruction_padded_shape(
+    reconstruction_shape = relion_functions._relion_reconstruction_padded_shape(
         vol_shape,
         padding_factor,
     )
@@ -1313,7 +1313,7 @@ def _should_host_stage_large_relion_ifft(
         if accumulator_volume_shape is None
         else tuple(int(s) for s in accumulator_volume_shape)
     )
-    reconstruction_shape = relion_functions.relion_reconstruction_padded_shape(
+    reconstruction_shape = relion_functions._relion_reconstruction_padded_shape(
         vol_shape,
         padding_factor,
     )
@@ -1332,7 +1332,7 @@ def _should_host_stage_large_relion_ifft(
     # accumulators can safely form and host-stage that one padded boundary.
     # Large accumulators still require the existing earlier host offload so
     # their storage cannot overlap the padded inverse-FFT workspace.
-    accumulator_is_large = relion_functions.large_grid_postprocess_is_physically_large(
+    accumulator_is_large = relion_functions._large_grid_postprocess_is_physically_large(
         int(np.prod(accumulator_shape)),
     )
     inputs_are_host = isinstance(Ft_ctf, np.ndarray) and isinstance(Ft_y, np.ndarray)
@@ -1340,7 +1340,7 @@ def _should_host_stage_large_relion_ifft(
         return False
     if accumulator_is_large and not inputs_are_host:
         return False
-    return relion_functions.large_grid_postprocess_single_precision_enabled(
+    return relion_functions._large_grid_postprocess_single_precision_enabled(
         int(np.prod(reconstruction_shape)),
     )
 
@@ -1368,7 +1368,7 @@ def _pack_compact_full_accumulators_for_large_relion_ifft(
         if accumulator_volume_shape is None
         else tuple(int(s) for s in accumulator_volume_shape)
     )
-    reconstruction_shape = relion_functions.relion_reconstruction_padded_shape(
+    reconstruction_shape = relion_functions._relion_reconstruction_padded_shape(
         vol_shape,
         padding_factor,
     )
@@ -1381,9 +1381,9 @@ def _pack_compact_full_accumulators_for_large_relion_ifft(
     # compact grid must not misclassify it as too large to repack.  The
     # reconstruction still needs the single-precision large-grid path because
     # this boundary stages a complex64 packed half-volume.
-    if relion_functions.large_grid_postprocess_is_physically_large(
+    if relion_functions._large_grid_postprocess_is_physically_large(
         accumulator_voxels,
-    ) or not relion_functions.large_grid_postprocess_single_precision_enabled(
+    ) or not relion_functions._large_grid_postprocess_single_precision_enabled(
         reconstruction_voxels,
     ):
         return Ft_ctf, Ft_y
@@ -1428,7 +1428,7 @@ def _crop_relion_wiener_half_to_fftw_host(
         accumulator_shape,
     )
     wiener_half = np.asarray(wiener_half).reshape(accumulator_half_shape)
-    centered_axis_idx = relion_functions.relion_centered_axis_take_indices(
+    centered_axis_idx = relion_functions._relion_centered_axis_take_indices(
         accumulator_shape[0],
         reconstruction_shape[0],
     )

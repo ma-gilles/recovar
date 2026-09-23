@@ -160,7 +160,7 @@ def test_cuda_preserves_all_seven_outputs_and_input_bytes(batch, case):
 @pytest.mark.parametrize("case", ["dtype", "rank", "shape", "output_dtype", "output_shape"])
 def test_raw_ffi_rejects_bad_buffers(case):
     assert jax.default_backend() == "gpu"
-    cuda._ensure_optional_ffi(em_cuda_kernels._TARGET_DEFERRED_VDAM_HOST_PACK)
+    em_cuda_kernels._ensure_optional_ffi(em_cuda_kernels._TARGET_DEFERRED_VDAM_HOST_PACK)
     arrays = operands()
     outputs = list(em_cuda_kernels._deferred_vdam_host_pack_shapes(*arrays))
     args = [jnp.asarray(x) for x in arrays]

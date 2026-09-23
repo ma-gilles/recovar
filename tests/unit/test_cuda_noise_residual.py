@@ -102,7 +102,7 @@ def test_masked_nonfinite_terms(dtype):
 def test_native_rejects_malformed_buffers(case):
     args = list(jax.tree.map(jnp.asarray,operands(shape=(2,3,5))))
     outputs = list(nr._output_shapes(*args))
-    cb._ensure_optional_ffi(em_cuda_kernels._TARGET_NOISE_RESIDUAL_STATISTICS)
+    em_cuda_kernels._ensure_optional_ffi(em_cuda_kernels._TARGET_NOISE_RESIDUAL_STATISTICS)
     scale = 0
     if case == "mask_dtype": args[-1] = args[-1].astype(jnp.int32)
     if case == "scratch": outputs[-1] = jax.ShapeDtypeStruct((2,1,3),jnp.float64)

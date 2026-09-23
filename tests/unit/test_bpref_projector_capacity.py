@@ -232,7 +232,7 @@ def test_optional_registration_preserves_qualified_legacy_library(monkeypatch):
     assert symbol not in legacy
     library = SimpleNamespace(**legacy)
     registrations = []
-    monkeypatch.setattr(cb, "_ensure_ffi", lambda: None)
+    monkeypatch.setattr(cb, "ensure_ffi", lambda: None)
     monkeypatch.setattr(em_library, "ffi_registered", False)
     monkeypatch.setattr(em_library, "optional_registered", set())
     monkeypatch.setattr(em_library, "loaded_path", None)

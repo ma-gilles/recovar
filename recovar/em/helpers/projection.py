@@ -354,7 +354,7 @@ def prepare_relion_projector_capacity(volume_relion_half, *, r_max, physical_siz
         raise ValueError("projector capacity requires the original C64 logical half shape including ghost planes")
     if not _relion_projector_texture_enabled(
         logical, r_max=radius, padding_factor=pf
-    ) or not slicing.use_cuda(1):
+    ) or not slicing._use_cuda(1):
         raise ValueError("projector capacity requires the existing custom CUDA texture projection route")
     capacity = pf * physical_size + 3
     if capacity > 1025:
@@ -791,7 +791,7 @@ def project_half_spectrum(
             raise ValueError("force_jax projection is only supported for nearest/linear interpolation")
         from recovar.core import relion_interp
 
-        resolved_max_r = core.default_max_r(image_shape) if max_r is DEFAULT_PROJECTION_MAX_R else max_r
+        resolved_max_r = core._default_max_r(image_shape) if max_r is DEFAULT_PROJECTION_MAX_R else max_r
         return relion_interp.project(
             volume,
             rotations_block,

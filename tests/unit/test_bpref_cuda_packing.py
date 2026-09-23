@@ -173,7 +173,7 @@ def test_cuda_pack_preserves_every_bit_and_bucket_worker_ids(counts, capacity):
 )
 def test_raw_cuda_pack_rejects_malformed_buffers(case):
     assert jax.default_backend() == "gpu"
-    cuda_backproject._ensure_optional_ffi(em_cuda_kernels._TARGET_BPREF_PARTICLE_PACK)
+    em_cuda_kernels._ensure_optional_ffi(em_cuda_kernels._TARGET_BPREF_PARTICLE_PACK)
     columns = columns_for((2, 3))
     outputs = list(em_cuda_kernels._bpref_particle_pack_shapes(columns, 8))
     args = [jnp.asarray(x) for column in columns for x in column]

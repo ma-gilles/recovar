@@ -181,7 +181,7 @@ def test_gpu_all_prefix_tail_and_input_bytes(batch, target, wide):
 @pytest.mark.gpu
 @pytest.mark.parametrize("case", ["rank", "dtype", "shape", "output_dtype", "output_shape", "target"])
 def test_raw_ffi_rejects_before_copy(case):
-    cuda._ensure_optional_ffi(em_cuda_kernels._TARGET_NOISE_PIXEL_PACK)
+    em_cuda_kernels._ensure_optional_ffi(em_cuda_kernels._TARGET_NOISE_PIXEL_PACK)
     args = [jnp.asarray(a) for a in operands()]
     outputs = list(em_cuda_kernels._noise_pixel_pack_shapes(*args, target_batch=42))
     target = 42

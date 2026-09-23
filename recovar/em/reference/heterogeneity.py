@@ -540,7 +540,7 @@ def compute_projected_covariance_rhs_lhs(
 
     rotation_batch = max(1, rotations.shape[0] // 10)
 
-    packed_lhs_dim = covariance_estimation.symmetric_matrix_packed_size(basis_size)
+    packed_lhs_dim = covariance_estimation._symmetric_matrix_packed_size(basis_size)
     memory_left_over_after_kron_allocate = utils.get_gpu_memory_total() - (
         2 * packed_lhs_dim**2 * 8 / 1e9 + utils.get_size_in_gb(mean_projections[:rotation_batch]) * (1 + basis_size**2)
     )
