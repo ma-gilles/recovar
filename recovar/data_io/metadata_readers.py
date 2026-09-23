@@ -66,6 +66,8 @@ def _star_image_sizes(sf, target_size):
 def parse_poses_from_star(
     star_path: str,
     D: int,
+    *,
+    absent_angles_zero: bool = False,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Extract rotation matrices and translations from a RELION .star file.
 
@@ -86,6 +88,12 @@ def parse_poses_from_star(
     tilt_col = sf.get_optics_values("_rlnAngleTilt", dtype=np.float64)
     psi_col = sf.get_optics_values("_rlnAnglePsi", dtype=np.float64)
 
+    if absent_angles_zero:
+        # relion_refine sets each absent angle label to 0 (Experiment::read,
+        # exp_model.cpp:1104-1136).
+        rot_col, tilt_col, psi_col = (
+            np.zeros(n, dtype=np.float64) if col is None else col for col in (rot_col, tilt_col, psi_col)
+        )
     if rot_col is None or tilt_col is None or psi_col is None:
         raise ValueError(
             "STAR file must contain _rlnAngleRot, _rlnAngleTilt, _rlnAnglePsi "
@@ -354,11 +362,16 @@ def can_extract_poses(filepath: str) -> bool:
 def auto_parse_poses(
     filepath: str,
     D: int,
+    *,
+    absent_angles_zero: bool = False,
 ) -> Tuple[np.ndarray, np.ndarray]:
-    """Auto-extract poses from STAR or CS file based on extension."""
+    """Auto-extract poses from STAR or CS file based on extension.
+
+    ``absent_angles_zero`` applies to STAR files only (see ``parse_poses_from_star``).
+    """
     lower = filepath.lower()
     if lower.endswith(".star"):
-        return parse_poses_from_star(filepath, D)
+        return parse_poses_from_star(filepath, D, absent_angles_zero=absent_angles_zero)
     elif lower.endswith(".cs"):
         return parse_poses_from_cs(filepath, D)
     else:

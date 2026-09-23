@@ -1052,7 +1052,9 @@ def _load_ctf_params(particles_file, ctf_file, D, ind, n_images):
     return ctf_params, dataset_indices
 
 
-def _load_poses(particles_file, poses_file, D, n_images, dataset_indices, *, real_dtype=np.float32):
+def _load_poses(
+    particles_file, poses_file, D, n_images, dataset_indices, *, real_dtype=np.float32, absent_angles_zero=False
+):
     """Load rotation matrices and translations.
 
     Returns ``(rots, translations)`` in *real_dtype*.
@@ -1065,7 +1067,9 @@ def _load_poses(particles_file, poses_file, D, n_images, dataset_indices, *, rea
         from recovar.data_io import metadata_readers
 
         source_file = poses_file if poses_file is not None else particles_file
-        rots_raw, trans_frac = metadata_readers.auto_parse_poses(source_file, D)
+        rots_raw, trans_frac = metadata_readers.auto_parse_poses(
+            source_file, D, absent_angles_zero=absent_angles_zero
+        )
         if dataset_indices is not None:
             rots_raw = rots_raw[dataset_indices]
             trans_frac = trans_frac[dataset_indices]
@@ -1212,6 +1216,7 @@ def load_dataset(
     sort_with_Bfac=False,
     downsample_D=None,
     dtype=np.complex64,
+    absent_angles_zero=False,
 ):
     """Load a cryo-EM / cryo-ET dataset.
 
@@ -1223,6 +1228,8 @@ def load_dataset(
     CTF/pose/image arrays; ``complex128`` uses float64. Physical ``voxel_size``
     is a Python float resolved from source geometry at the loaded image grid,
     before those casts. Subsets and EM consumers retain that single host scalar.
+    ``absent_angles_zero`` reads a STAR without angle columns as zero angles, as
+    relion_refine does; by default such a STAR is rejected.
     """
     dtype = np.dtype(dtype)
     if dtype not in (np.dtype(np.complex64), np.dtype(np.complex128)):
@@ -1303,6 +1310,7 @@ def load_dataset(
         image_source.n_images,
         dataset_indices,
         real_dtype=real_dtype,
+        absent_angles_zero=absent_angles_zero,
     )
 
     # ---- Validate voxel sizes ----
