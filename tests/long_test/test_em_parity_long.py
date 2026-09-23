@@ -708,11 +708,15 @@ def test_em_parity_long_kclass_full(tmp_path):
 
     Runs ``run_full_refinement.py --n_classes 4 --max_iter 15`` from the fixture's
     initial class references with the RELION reference's Class3D command. Like
-    ``test_em_parity_fast_kclass_coldstart``, RELION's per-iteration sampling
-    perturbation and particle corrections are replayed from the reference while the
-    initial noise, tau2 and sigma are derived locally. The reference is a single
-    non-MPI ``relion_refine`` process, so it has no MPI followers or dispatch
-    schedule and the replay runs with ``--relion-scale-followers 0``.
+    ``test_em_parity_fast_kclass_coldstart`` this is a controlled replay, not an
+    autonomous trajectory: iteration 1 derives its noise, tau2 and sigma locally,
+    and every later iteration takes the state RELION's previous iteration wrote
+    (``--perturb_replay_relion_dir``: sampling perturbation, noise spectrum, per-class
+    tau2, sigma_offset, direction prior, per-particle norm/scale corrections and
+    previous best poses). The class maps and class assignments are RECOVAR's own and
+    are carried through all 15 iterations. The reference is a single non-MPI
+    ``relion_refine`` process, so it has no MPI followers or dispatch schedule and the
+    replay runs with ``--relion-scale-followers 0``.
 
     The four final class maps are Hungarian-matched to RELION's
     ``run_it015_class00N.mrc`` on mean FSC over shells 1-16, and each matched pair
