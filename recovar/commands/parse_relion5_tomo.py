@@ -258,13 +258,6 @@ def convert(tomograms_path, particles_path, output_path):
         tilt_series_cache[tomo_name] = (ts_df, hand, pixel_size)
         return ts_df, hand, pixel_size
 
-    # ---- Get optics info ----
-    voltage = float(optics_df["_rlnVoltage"].values[0])
-    cs = float(optics_df["_rlnSphericalAberration"].values[0])
-    amp_contrast = float(optics_df["_rlnAmplitudeContrast"].values[0])
-    angpix = float(optics_df["_rlnImagePixelSize"].values[0])
-    image_size = int(optics_df["_rlnImageSize"].values[0])
-
     # ---- Group particles by (tomo_name, visible_frames) for batching ----
     n_particles = len(particles_df)
     has_subtomo_rot = "_rlnTomoSubtomogramRot" in particles_df.columns
@@ -343,6 +336,7 @@ def convert(tomograms_path, particles_path, output_path):
             R_base,
             random_subsets,
         )
+        df_2d["_rlnOpticsGroup"] = np.repeat(particles_df["_rlnOpticsGroup"].values[idxs], tomogram.n_tilts)
 
         all_rows.append(df_2d)
 
@@ -362,21 +356,23 @@ def convert(tomograms_path, particles_path, output_path):
         "Total 2D rows: %d (%d particles x ~%d tilts)", len(final_df), n_particles, len(final_df) // max(n_particles, 1)
     )
 
-    # ---- Build output optics table ----
+    # ---- Build output optics table: every particle keeps its RELION optics group ----
     out_optics = pd.DataFrame(
         {
-            "_rlnOpticsGroup": ["1"],
-            "_rlnOpticsGroupName": ["opticsGroup1"],
-            "_rlnImagePixelSize": [str(angpix)],
-            "_rlnImageSize": [str(image_size)],
-            "_rlnVoltage": [str(voltage)],
-            "_rlnSphericalAberration": [str(cs)],
-            "_rlnAmplitudeContrast": [str(amp_contrast)],
-            "_rlnImageDimensionality": ["2"],
+            "_rlnOpticsGroup": optics_df["_rlnOpticsGroup"].values,
+            "_rlnOpticsGroupName": (
+                optics_df["_rlnOpticsGroupName"].values
+                if "_rlnOpticsGroupName" in optics_df.columns
+                else [f"opticsGroup{g}" for g in optics_df["_rlnOpticsGroup"].values]
+            ),
+            "_rlnImagePixelSize": optics_df["_rlnImagePixelSize"].values,
+            "_rlnImageSize": optics_df["_rlnImageSize"].values,
+            "_rlnVoltage": optics_df["_rlnVoltage"].values,
+            "_rlnSphericalAberration": optics_df["_rlnSphericalAberration"].values,
+            "_rlnAmplitudeContrast": optics_df["_rlnAmplitudeContrast"].values,
+            "_rlnImageDimensionality": "2",
         }
     )
-
-    final_df["_rlnOpticsGroup"] = "1"
 
     # ---- Write output ----
     starfile.write_star(output_path, final_df, data_optics=out_optics)

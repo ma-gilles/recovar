@@ -145,19 +145,24 @@ def write_star(
         array_rows: Avoid per-row Series construction for scalar numeric/string
             tables. Other types retain the existing Series conversion.
     """
+    if data_optics is not None:
+        # RELION 3.1 format (with optics)
+        blocks = {"data_optics": data_optics, "data_particles": data}
+    else:
+        # RELION 3.0 format (no optics)
+        blocks = {"data_": data}
+    write_star_blocks(filepath, blocks, array_rows=array_rows)
+
+
+def write_star_blocks(filepath: str, blocks: dict, *, array_rows: bool = False) -> None:
+    """Write named data blocks, e.g. ``{"data_global": df}``, to a .star file, in order."""
     with open(filepath, "w") as f:
         # Header comment
         f.write(f"# Created {datetime.now()}\n\n")
-
-        # RELION 3.1 format (with optics)
-        if data_optics is not None:
-            _write_block(f, data_optics, "data_optics", array_rows=array_rows)
-            f.write("\n\n")
-            _write_block(f, data, "data_particles", array_rows=array_rows)
-
-        # RELION 3.0 format (no optics)
-        else:
-            _write_block(f, data, "data_", array_rows=array_rows)
+        for i, (block_name, df) in enumerate(blocks.items()):
+            if i:
+                f.write("\n\n")
+            _write_block(f, df, block_name, array_rows=array_rows)
 
 
 def _write_block(f: TextIO, df: pd.DataFrame, block_name: str, *, array_rows: bool = False) -> None:
