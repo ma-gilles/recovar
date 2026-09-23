@@ -404,7 +404,8 @@ def test_package_import_is_fast(tmp_path):
     regression to this package instead of those shared imports.
     """
     import subprocess
-    import sys
+
+    from conftest import repo_python_command, repo_subprocess_env
 
     code = """\
 import time
@@ -419,7 +420,8 @@ assert not any(name.startswith("recovar.em.vdam.") for name in sys.modules)
 print(parent_elapsed, initial_model_elapsed)
 """
     result = subprocess.run(
-        [sys.executable, "-c", code],
+        repo_python_command("-c", code),
+        env=repo_subprocess_env(),
         check=True,
         capture_output=True,
         text=True,

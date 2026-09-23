@@ -92,14 +92,18 @@ def test_gpu_memory_arg_in_command(cmd_name):
     these need a project dir or other args to run end-to-end.
     """
     import subprocess
-    import sys
+
+    from conftest import repo_python_command, repo_subprocess_env
 
     result = subprocess.run(
-        [sys.executable, "-m", f"recovar.commands.{cmd_name}", "--help"],
+        repo_python_command("-m", f"recovar.commands.{cmd_name}", "--help"),
+        env=repo_subprocess_env(),
         capture_output=True,
         text=True,
         timeout=30,
     )
+    # A failed child (including its import-root check) must not pass on text alone.
+    assert result.returncode == 0, result.stderr[-2000:]
     # Some commands print help to stdout, some to stderr depending on argparse
     # version + sys.exit code. Check both.
     combined = result.stdout + result.stderr

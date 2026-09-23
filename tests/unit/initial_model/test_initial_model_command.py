@@ -3,11 +3,11 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-import sys
 from dataclasses import fields
 from types import SimpleNamespace
 
 import pytest
+from conftest import repo_python_command, repo_subprocess_env
 
 import recovar
 from recovar.commands import initial_model
@@ -255,18 +255,11 @@ def test_module_entrypoint_keeps_default_allocator_without_override():
     environ.pop("RECOVAR_INITIAL_MODEL_CUDA_ALLOCATOR", None)
 
     completed = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "recovar.commands.initial_model",
-            "--i",
-            "particles.star",
-            "--dry-run",
-        ],
+        repo_python_command("-m", "recovar.commands.initial_model", "--i", "particles.star", "--dry-run"),
         check=True,
         capture_output=True,
         text=True,
-        env=environ,
+        env=repo_subprocess_env(environ),
     )
 
     assert json.loads(completed.stdout)["resolved_cuda_allocator"] == "default"

@@ -2,7 +2,8 @@
 
 import os
 import subprocess
-import sys
+
+from conftest import repo_python_command, repo_subprocess_env
 
 
 def _threshold_with_env(extra_env):
@@ -10,7 +11,9 @@ def _threshold_with_env(extra_env):
     env.update({"JAX_PLATFORMS": "cpu", "CUDA_VISIBLE_DEVICES": ""})
     env.update(extra_env)
     code = "import recovar.jax_config, os; print(os.environ.get('JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS', 'unset'))"
-    out = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True, check=True)
+    out = subprocess.run(
+        repo_python_command("-c", code), env=repo_subprocess_env(env), capture_output=True, text=True, check=True
+    )
     return out.stdout.strip().splitlines()[-1]
 
 

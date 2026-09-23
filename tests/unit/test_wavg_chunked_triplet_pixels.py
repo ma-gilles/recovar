@@ -12,7 +12,6 @@ job 14282511, failed allocating one: [136, 116, 9303] complex64).
 import json
 import os
 import subprocess
-import sys
 import textwrap
 
 import jax.numpy as jnp
@@ -311,13 +310,16 @@ _PEAK_PROBE = textwrap.dedent(
 
 
 def _probe_peak(mode, images_per_chunk=0):
+    # Imported here: the probe child imports this module, and has no conftest.
+    from conftest import repo_python_command, repo_subprocess_env
+
     env = dict(os.environ)
     env["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
     env.pop("XLA_PYTHON_CLIENT_ALLOCATOR", None)
     script = _PEAK_PROBE.format(tests_unit=os.path.dirname(os.path.abspath(__file__)))
     result = subprocess.run(
-        [sys.executable, "-c", script, mode, str(images_per_chunk)],
-        env=env,
+        repo_python_command("-c", script, mode, str(images_per_chunk)),
+        env=repo_subprocess_env(env),
         capture_output=True,
         text=True,
         timeout=900,

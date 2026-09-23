@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import json
 import subprocess
-import sys
 from argparse import Namespace
 from recovar.em.diagnostics.gt_metrics import VolumeAlignment
 from pathlib import Path
@@ -28,6 +27,7 @@ from pathlib import Path
 import mrcfile
 import numpy as np
 import pytest
+from conftest import repo_python_command, repo_subprocess_env
 
 from scripts import evaluate_kclass_gt as evaluator
 
@@ -106,8 +106,8 @@ def _save_mrc(path: Path, vol: np.ndarray, voxel_size: float = 4.25) -> None:
 
 
 def _run(args: list[str]) -> subprocess.CompletedProcess[str]:
-    cmd = [sys.executable, str(SCRIPT), *args]
-    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+    cmd = repo_python_command(str(SCRIPT), *args)
+    proc = subprocess.run(cmd, env=repo_subprocess_env(), capture_output=True, text=True, timeout=180)
     if proc.returncode != 0:
         pytest.fail(f"evaluate_kclass_gt.py exited {proc.returncode}\nstdout:\n{proc.stdout}\nstderr:\n{proc.stderr}")
     return proc
@@ -232,8 +232,7 @@ def test_kclass_eval_count_mismatch_errors(tmp_path):
     _save_mrc(gt1_path, vol)
     _save_mrc(gt2_path, vol)
 
-    cmd = [
-        sys.executable,
+    cmd = repo_python_command(
         str(SCRIPT),
         "--volume",
         str(rec_path),
@@ -246,9 +245,10 @@ def test_kclass_eval_count_mismatch_errors(tmp_path):
         "--gt_frame",
         "recovar",
         "--gt_align_refine_orders",
-    ]
-    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-    assert proc.returncode != 0
+    )
+    proc = subprocess.run(cmd, env=repo_subprocess_env(), capture_output=True, text=True, timeout=60)
+    # The script's own rejection (SystemExit with a message), not the import-root check.
+    assert proc.returncode == 1, proc.stderr[-2000:]
     assert "must equal" in proc.stderr or "must equal" in proc.stdout
 
 
