@@ -77,6 +77,48 @@ def test_compute_fsc_prior_gpu_v2_and_prior_iteration_are_finite():
     assert np.all(np.isfinite(fsc_raw))
     assert np.all(np.isfinite(prior_avg))
 
+    h0 = np.abs(rng.normal(size=n)).astype(np.float32) + 1.0
+    h1 = np.abs(rng.normal(size=n)).astype(np.float32) + 1.0
+    b0 = (rng.normal(size=n) + 1j * rng.normal(size=n)).astype(np.complex64)
+    b1 = (rng.normal(size=n) + 1j * rng.normal(size=n)).astype(np.complex64)
+
+    p, f = regularization.prior_iteration(
+        H0=h0,
+        H1=h1,
+        B0=b0,
+        B1=b1,
+        frequency_shift=np.array([0, 0, 0], dtype=np.int32),
+        init_regularization=prior0,
+        substract_shell_mean=False,
+        volume_shape=shape,
+        prior_iterations=3,
+    )
+    p = np.asarray(p)
+    f = np.asarray(f)
+    assert p.shape == (n,)
+    assert f.ndim == 1
+    assert np.all(np.isfinite(p))
+    assert np.all(np.isfinite(f))
+
+
+def test_prior_iteration_batch_maps_prior_iteration_over_leading_axis():
+    shape = (4, 4, 4)
+    n = int(np.prod(shape))
+    rng = np.random.default_rng(3)
+    h = np.abs(rng.normal(size=(2, 2, n))).astype(np.float32) + 1.0
+    b = (rng.normal(size=(2, 2, n)) + 1j * rng.normal(size=(2, 2, n))).astype(np.complex64)
+    shifts = np.zeros((2, 3), dtype=np.int32)
+    priors = np.ones((2, n), dtype=np.float32)
+
+    p, f = regularization.prior_iteration_batch(h[0], h[1], b[0], b[1], shifts, priors, False, shape, 3)
+
+    for k in range(2):
+        p_k, f_k = regularization.prior_iteration(
+            h[0, k], h[1, k], b[0, k], b[1, k], shifts[k], priors[k], False, shape, 3
+        )
+        np.testing.assert_allclose(np.asarray(p)[k], np.asarray(p_k), rtol=1e-6)
+        np.testing.assert_allclose(np.asarray(f)[k], np.asarray(f_k), rtol=1e-6)
+
 
 def test_prior_iteration_relion_style_and_downsample_from_fsc():
     shape = (4, 4, 4)

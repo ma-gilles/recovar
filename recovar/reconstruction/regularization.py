@@ -654,6 +654,36 @@ def covariance_update_col_with_mask(H, B, prior, volume_mask, valid_idx, volume_
     return cov
 
 
+@functools.partial(jax.jit, static_argnums=[6, 7, 8])
+def prior_iteration(
+    H0, H1, B0, B1, frequency_shift, init_regularization, substract_shell_mean, volume_shape, prior_iterations
+):
+
+    H_comb = (H0 + H1) / 2
+    prior = init_regularization
+
+    # Unrolled iterations (see prior_iteration_relion_style for fori_loop variant)
+
+    cov_col0 = covariance_update_col(H0, B0, prior)
+    cov_col1 = covariance_update_col(H1, B1, prior)
+    prior, fsc, _ = compute_fsc_prior_gpu_v2(
+        volume_shape, cov_col0, cov_col1, H_comb, prior, frequency_shift=frequency_shift
+    )
+
+    cov_col0 = covariance_update_col(H0, B0, prior)
+    cov_col1 = covariance_update_col(H1, B1, prior)
+    prior, fsc, _ = compute_fsc_prior_gpu_v2(
+        volume_shape, cov_col0, cov_col1, H_comb, prior, frequency_shift=frequency_shift
+    )
+    cov_col0 = covariance_update_col(H0, B0, prior)
+    cov_col1 = covariance_update_col(H1, B1, prior)
+    prior, fsc, _ = compute_fsc_prior_gpu_v2(
+        volume_shape, cov_col0, cov_col1, H_comb, prior, frequency_shift=frequency_shift
+    )
+
+    return prior, fsc
+
+
 from recovar.reconstruction import relion_functions
 
 
@@ -2023,6 +2053,7 @@ def compute_current_size_relion(resolution_shell, ori_size, ave_Pmax=0.0, has_hi
     return min(2 * maxres, ori_size)
 
 
+prior_iteration_batch = jax.vmap(prior_iteration, in_axes=(0, 0, 0, 0, 0, 0, None, None, None))
 prior_iteration_relion_style_batch = jax.vmap(
     prior_iteration_relion_style,
     # 14 positional args from
