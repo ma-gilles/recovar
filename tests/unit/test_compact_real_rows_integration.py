@@ -258,4 +258,9 @@ def test_fused_translate_capacity_skips_only_absent_pair_gather(monkeypatch):
     fused = _split_compact_pair_buckets_by_projection_gather_budget([bucket], (), skip_diff2_gather_budget=True, **kwargs)
     assert gathered[0]["image_capacity_budget"] == 1  # 2 * 1024 * 16 * sizeof(complex64)
     assert fused[0]["image_capacity_budget"] == 16  # still limited by preparation
-    np.testing.assert_array_equal(gathered[0]["image_indices"], fused[0]["image_indices"])
+    # The byte budget also bounds the chunk size (as in the S donor splitter), so
+    # the one-image diff2 budget splits the gathered bucket per image, while the
+    # fused route, which skips only that absent gather, keeps both images.
+    assert [bucket["image_indices"].tolist() for bucket in gathered] == [[0], [1]]
+    assert all(bucket["image_capacity_budget"] == 1 for bucket in gathered)
+    assert [bucket["image_indices"].tolist() for bucket in fused] == [[0, 1]]
