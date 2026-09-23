@@ -214,6 +214,7 @@ def test_completion_k1_relion_replay_mode_is_explicit(tmp_path):
         {
             "EM_COMPLETION_SCRATCH_DIR": str(scratch),
             "EM_COMPLETION_RUNTIME_ROOT": str(runtime),
+            "RELION_REFINE_MPI": "/bin/true",  # never resolve RELION from the node's modules
             "K1_TRAJECTORY_MODE": "relion-replay",
         }
     )
@@ -236,6 +237,7 @@ def test_completion_k1_intermediates_can_be_disabled(tmp_path):
         {
             "EM_COMPLETION_SCRATCH_DIR": str(scratch),
             "EM_COMPLETION_RUNTIME_ROOT": str(runtime),
+            "RELION_REFINE_MPI": "/bin/true",  # never resolve RELION from the node's modules
             "K1_SAVE_INTERMEDIATES": "0",
         }
     )
@@ -259,6 +261,7 @@ def test_completion_k4_resource_overrides_are_written(tmp_path):
         {
             "EM_COMPLETION_SCRATCH_DIR": str(scratch),
             "EM_COMPLETION_RUNTIME_ROOT": str(runtime),
+            "RELION_REFINE_MPI": "/bin/true",  # never resolve RELION from the node's modules
             "SBATCH_ACCOUNT": "gilles",
             "SBATCH_PARTITION": "cryoem",
             "SBATCH_CONSTRAINT": "",
@@ -318,6 +321,7 @@ def test_completion_setup_defaults_to_cpu_partition(tmp_path):
         {
             "EM_COMPLETION_SCRATCH_DIR": str(scratch),
             "EM_COMPLETION_RUNTIME_ROOT": str(runtime),
+            "RELION_REFINE_MPI": "/bin/true",  # never resolve RELION from the node's modules
             "SBATCH_ACCOUNT": "gilles",
             "SBATCH_PARTITION": "cryoem",
             "SBATCH_CONSTRAINT": "",
