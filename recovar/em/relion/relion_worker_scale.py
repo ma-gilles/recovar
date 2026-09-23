@@ -1,20 +1,27 @@
 """Strict RELION MPI-follower group-scale emulation.
 
 How far RELION 5.0.1 reduces the group-scale XA/AA statistics across
-followers depends on how the oracle combined its weighted sums
-(``MlOptimiserMpi::combineAllWeightedSums*``, ml_optimiser_mpi.cpp):
+followers depends on how the oracle combined its weighted sums. Line numbers
+refer to RELION f2c1a38 (read-only tree /scratch/gpfs/GILLES/mg6942/relion;
+its ml_model.cpp is byte-identical to the dispatch-capture oracle source):
 
-* Without ``--dont_combine_weights_via_disc`` every follower writes one
-  ``MlWsumModel::pack(Mpack)`` message, which carries all ``nr_groups``
-  physical-group XA/AA entries, so every group is reduced.
-* With ``--dont_combine_weights_via_disc`` a CUDA build (``USE_MPI_COLLECTIVE``
-  is defined only for SYCL/ALTCPU builds) combines through the segmented
-  ``pack(Mpack, piece, nr_pieces)``. Its local ``nr_groups`` is
-  ``sigma2_noise.size()``, the optics-group count (ml_model.cpp), so in an
-  all-data Class3D run with more scale groups than optics groups only the
-  leading optics-group-sized prefix is MPI-reduced; the remaining scale
-  statistics and resulting scale vectors stay follower-local (per-rank dump
-  evidence in docs/math/em_parity_program.md).
+* ``combine_weights_thru_disc = !--dont_combine_weights_via_disc``
+  (ml_optimiser.cpp:708) selects ``combineAllWeightedSumsViaFile`` or
+  ``combineAllWeightedSums`` (ml_optimiser_mpi.cpp:3951-3954).
+* Without the flag, ``combineAllWeightedSumsViaFile`` (ml_optimiser_mpi.cpp:1924)
+  writes one ``MlWsumModel::pack(Mpack)`` per follower (:1941). That message
+  loops over the member ``nr_groups`` (ml_model.cpp:1920 pack, :2003 unpack),
+  so every physical group is reduced.
+* With the flag, ``combineAllWeightedSums`` (ml_optimiser_mpi.cpp:2028) uses a
+  single collective pack only under ``USE_MPI_COLLECTIVE`` (:2048), which
+  CMakeLists.txt:248,254 defines for SYCL/ALTCPU builds only; CUDA builds use
+  the segmented ``pack(Mpack, piece, nr_pieces)`` (:2078). Its local
+  ``nr_groups = sigma2_noise.size()`` (ml_model.cpp:2056 pack, :2241 unpack)
+  is the optics-group count (``sigma2_noise.resize(nr_optics_groups)``,
+  ml_model.cpp:57). In an all-data Class3D run with more scale groups than
+  optics groups only the leading optics-group-sized prefix is MPI-reduced; the
+  remaining scale statistics and resulting scale vectors stay follower-local
+  (per-rank dump evidence in docs/math/em_parity_program.md).
 
 The mode is read from the oracle's recorded command line. These helpers
 reproduce both behaviors without leaking them into ordinary RECOVAR
