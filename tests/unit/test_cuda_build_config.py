@@ -77,8 +77,8 @@ def _run_make(wrapper: Path, *targets: str, env: dict[str, str]):
 def test_local_cuda_includes_are_build_and_package_inputs():
     import recovar.cuda_backproject as cb
 
-    # Includes resolve relative to the including file (EM headers live in recovar/em/cuda and are
-    # included as ../em/cuda/<name>); names are kept relative to recovar/cuda, as the build lists them.
+    # Includes resolve relative to the including file; names are kept relative to recovar/cuda, as the
+    # build lists them.
     pending = ["cuda_backproject.cu"]
     sources = set()
     while pending:

@@ -108,7 +108,6 @@ nav:
       - Codebase Map: development/codebase.md
       - Della Setup: development/della.md
       - Benchmark Contract: development/benchmarks.md
-      - Current EM Status: development/em_status.md
     - Developer API:
       - recovar.core: reference/api/core.md
       - recovar.data_io: reference/api/data_io.md
@@ -116,6 +115,5 @@ nav:
       - recovar.reconstruction: reference/api/reconstruction.md
       - recovar.simulation: reference/api/simulation.md
       - recovar.output: reference/api/output.md
-      - recovar.em: reference/api/em.md
       - recovar.utils: reference/api/utils.md
   - Troubleshooting: troubleshooting.md

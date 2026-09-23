@@ -54,8 +54,7 @@ def relion_cuda_preprocessor():
     if _RELION_CUDA_PREPROCESSOR is None:
         raise RuntimeError(
             "The 'relion_cuda' image Fourier backend needs RELION's CUDA preprocessing, which is "
-            "provided by the EM package (import recovar.em.cuda.kernels, or relax once the EM code "
-            "has moved). Use 'host_numpy' or 'jax_gpu' otherwise."
+            "provided by relax (import relax.cuda.kernels). Use 'host_numpy' or 'jax_gpu' otherwise."
         )
     return _RELION_CUDA_PREPROCESSOR
 

@@ -130,7 +130,7 @@ class TinyFTImageStack:
     def process_images_half(self, image, apply_image_mask=False):
         """Half-spectrum variant required by dense-EM preprocessing.
 
-        ``recovar/em/helpers/preprocessing.py:63`` and the
+        relax ``relax/helpers/preprocessing.py:63`` and the
         ``ParticleImageBackend.process_images_half`` plumbing now route
         through this method. Images here are already centered FT in flat
         ``(n_images, D*D)`` layout; remap to packed half-spectrum

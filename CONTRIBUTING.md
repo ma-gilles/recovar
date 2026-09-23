@@ -80,34 +80,24 @@ empty or were warmed by a specified command.
 | Scope | Starting check | Further qualification |
 | --- | --- | --- |
 | Pure helpers and reporting | `pixi run python -m pytest -v tests/unit/<affected_test>.py` on CPU | Real missing/invalid/duplicate input cases; affected callers |
-| Dense/local EM | `pixi run test-em-fast-guard` | [EM ladder](recovar/em/AGENTS.md), including GPU and K1/K4 gates |
+| Dense/local EM | In [relax](https://github.com/ma-gilles/relax): `pixi run test-em-fast-guard` | relax's EM ladder (`relax/AGENTS.md`), including GPU and K1/K4 gates |
 | Shared pipeline | Affected unit/integration tests | SPA, cryo-ET, outlier and downstream quality/performance under Slurm |
 | GUI or docs | Applicable scoped checks | Build and relevant user workflow checks |
-
-The dense/local fast guard first checks undefined names with the installed Ruff
-before importing JAX or compiling tests. This check covers
-`recovar/em`; it is not repository-wide lint or scientific
-qualification.
 
 Use focused tests between edits. Group related changes into a frozen checkpoint
 for broader CPU and applicable GPU checks; full long suites are publication or
 milestone checks, not the default response to a small change. Reuse saved outputs
 for report-only audits. Repeat a scientific run when the source, workload or an
-unresolved failure requires it, and record that reason. The
-[EM/VDAM scope](docs/development/em_status.md) records its current boundaries
-and qualification gaps.
+unresolved failure requires it, and record that reason. The EM/VDAM
+scope, its boundaries and qualification gaps are recorded in relax.
 
 `pixi run test-fast` selects the repository's unit tier; do not assume every
 unit test is tiny or independent of external fixtures. Long and GPU tests run
 under Slurm. Record selected versus executed counts, skips and process exit
 status. Preserve full logs; a truncated console tail is not a result archive.
 
-CPU placement does not remove native dependencies: some unit tests require the
-RELION extension even without a GPU. For those tests, preflight the required
-exports from `recovar.relion_bind._relion_bind_core` and record the loaded path
-and binary hash; an isolated existing build can be selected with
-`RECOVAR_RELION_BIND_BUILD_DIR`. Missing required exports are setup failures,
-not passing or skipped checks. Report CPU-only, native-oracle, GPU and scientific
+Missing required native exports are setup failures, not passing or skipped
+checks. Report CPU-only, native-oracle, GPU and scientific
 parity results separately; the EM fast guard does not qualify the other scopes.
 
 Some legacy EM tests write ledgers beside baselines, and performance helpers
@@ -147,7 +137,7 @@ For shared/non-EM changes, including this codebase cleanup:
    **REGRESSED**. Missing or incompatible hardware measurements are not “OK.”
 4. Include exact source identities, test commands, Slurm IDs and linked logs.
 
-EM-only changes follow [the EM contract](recovar/em/AGENTS.md), including its
+EM-only changes belong to [relax](https://github.com/ma-gilles/relax) and follow its EM contract, including its
 scoped suites and completion evidence, instead of unrelated SPA/ET suites.
 A change spanning both scopes requires both sets of applicable checks when
 covered by the task; do not infer repeated permission requirements from scope.
@@ -174,14 +164,12 @@ and their scoped checks in sync with the pinned development toolchain.
 
 ## Instruction maintenance
 
-Keep root AGENTS/CLAUDE and EM AGENTS/CLAUDE mirrors identical. Scoped loader
-files, such as PPCA's AGENTS.md, intentionally link to their substantive guide.
+Keep the root AGENTS/CLAUDE mirrors identical.
 Keep durable invariants in guides, a short active state/next check in the program
 board, and dated experiments in linked archives. Preserve superseded evidence
 with its original source and an explicit historical label.
 
 ```bash
 cmp AGENTS.md CLAUDE.md
-cmp recovar/em/AGENTS.md recovar/em/CLAUDE.md
 pixi run python scripts/check_agent_guides.py
 ```

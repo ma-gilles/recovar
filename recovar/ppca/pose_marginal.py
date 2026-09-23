@@ -22,7 +22,7 @@ def compute_ppca_pose_scores_and_moments_no_contrast(
     r"""Closed-form pose-marginal PPCA score and posterior moments.
 
     Takes the six sufficient-statistic tensors produced by
-    :func:`recovar.em.ppca_refinement.engine._per_pose_stats_block` and
+    :func:`relax.ppca_refinement.engine._per_pose_stats_block` and
     integrates the latent ``z ~ N(0, I_q)`` analytically.
 
     Quadratic completion. For a single image at pose (R, t):

@@ -7,8 +7,9 @@ the two facts that make it "scoped to the EM entry points" are tested directly:
 
 * a plain ``import recovar`` does not add the flag, because nothing sets the
   marker;
-* the EM entry script sets the marker, and sets it before the first import that
-  reaches jax, because ``XLA_FLAGS`` is read at jax import time.
+* the EM entry scripts (in relax) set the marker, and set it before the first
+  import that reaches jax, because ``XLA_FLAGS`` is read at jax import time;
+  relax's tests/unit/test_em_xla_defaults_entries.py checks them.
 
 A user who has already chosen `xla_gpu_autotune_level` always wins, in either
 direction, which is the same contract the neighbouring triton-GEMM default has.
@@ -16,7 +17,6 @@ direction, which is the same contract the neighbouring triton-GEMM default has.
 
 from __future__ import annotations
 
-import re
 import subprocess
 import sys
 from pathlib import Path
@@ -28,12 +28,6 @@ from recovar.jax_config import em_xla_flag_additions
 pytestmark = pytest.mark.unit
 
 REPO = Path(__file__).resolve().parents[2]
-# Every EM entry point must opt in, so the entry assertions below run over all
-# of them rather than over one named script.
-ENTRIES = (
-    REPO / "scripts" / "run_full_refinement.py",
-    REPO / "recovar" / "commands" / "initial_model.py",
-)
 MARKER = "RECOVAR_EM_XLA_DEFAULTS"
 FLAG = "--xla_gpu_autotune_level=0"
 
@@ -76,34 +70,7 @@ def test_unrelated_flags_are_left_alone():
     assert em_xla_flag_additions(existing, "1") == FLAG
 
 
-# --------------------------------------------------------- the entry point ---
-
-
-@pytest.mark.parametrize("ENTRY", ENTRIES, ids=lambda p: p.name)
-def test_the_em_entry_sets_the_marker_before_importing_jax(ENTRY):
-    """`XLA_FLAGS` is read when jax is imported, so the order is load-bearing."""
-
-    lines = ENTRY.read_text().splitlines()
-    marker_at = [i for i, l in enumerate(lines)
-                 if MARKER in l and "setdefault" in l]
-    assert marker_at, f"{ENTRY.name} does not opt in to the EM XLA defaults"
-    first_import = next(
-        i for i, l in enumerate(lines)
-        if re.match(r"^(import jax|from jax|import recovar|from recovar)", l)
-    )
-    assert marker_at[0] < first_import, (
-        f"the marker is set at line {marker_at[0] + 1}, after the first jax or "
-        f"recovar import at line {first_import + 1}; XLA_FLAGS would already have been read"
-    )
-
-
-@pytest.mark.parametrize("ENTRY", ENTRIES, ids=lambda p: p.name)
-def test_the_entry_uses_setdefault_so_an_explicit_zero_wins(ENTRY):
-    text = ENTRY.read_text()
-    assert f'os.environ.setdefault("{MARKER}", "1")' in text, (
-        "the entry must use setdefault, or RECOVAR_EM_XLA_DEFAULTS=0 in the "
-        "environment could not turn the default off"
-    )
+# --------------------------------------------------------- end to end ---
 
 
 def test_end_to_end_the_flag_reaches_xla_flags_only_for_an_em_entry():

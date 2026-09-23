@@ -15,7 +15,7 @@ Engineering priorities are correctness, GPU performance, then clarity.
 - Incorporate corrections and answer side questions while retaining the active
   objective, completed work and running jobs. Use a concise handoff when moving
   to a fresh thread; link evidence instead of repeating experiment histories.
-- Delegate only when authorized; for EM, follow `recovar/em/SUBAGENTS.md`.
+- Delegate only when authorized; for EM, follow relax's `relax/SUBAGENTS.md`.
   Preserve the user's Terra/Astra workload choices and exclusive source ownership.
 - Report outcomes and limitations in plain, concise prose. Use tables for
   comparisons and keep required evidence in linked artifacts.
@@ -45,7 +45,7 @@ model/delegation evidence and compact task handoffs.
 Metrics are tracked in standing artifacts, not only in run reports: the EMPIAR
 real-data scorecard, the synthetic fixed-suite scorecards, the pinned completion
 baselines and the per-run parity ledgers. Read the value your change touches
-before running, and write the new value back after. `recovar/em/CLAUDE.md`
+before running, and write the new value back after. relax's `relax/CLAUDE.md`
 lists each artifact with the command that regenerates or checks it, and records
 two setup traps that make the parity tier look red for reasons that are not
 numerical. End-to-end runs are what fill the real-data rows; short tests do not
@@ -55,8 +55,7 @@ substitute for them.
 | --- | --- |
 | Python source and numerical conventions | [recovar/CLAUDE.md](recovar/CLAUDE.md) |
 | Tests, tolerances and baselines | [tests/CLAUDE.md](tests/CLAUDE.md) |
-| EM and RELION parity | [recovar/em/AGENTS.md](recovar/em/AGENTS.md) |
-| PPCA refinement | [recovar/em/ppca_refinement/AGENTS.md](recovar/em/ppca_refinement/AGENTS.md) |
+| EM, RELION parity and PPCA refinement | the [relax](https://github.com/ma-gilles/relax) repository (`relax/AGENTS.md`), which holds the EM code |
 | CUDA and FFI | [recovar/cuda/CLAUDE.md](recovar/cuda/CLAUDE.md) |
 | GUI | [recovar/gui_v2/CLAUDE.md](recovar/gui_v2/CLAUDE.md) |
 | Documentation | [docs/CLAUDE.md](docs/CLAUDE.md) |

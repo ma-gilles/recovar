@@ -110,7 +110,7 @@ def repo_subprocess_env(env=None):
     puts ``scripts/`` there), so an unpinned child can silently test the other
     checkout. Launch the child with ``repo_python_command`` so the import root
     is asserted inside it. ``RECOVAR_EXPECTED_REPO_ROOT`` is deliberately left
-    alone: ``recovar.commands.initial_model`` prints its own provenance check on
+    alone: ``relax.commands.initial_model`` prints its own provenance check on
     stdout when that is set.
     """
     env = dict(os.environ if env is None else env)
@@ -404,7 +404,7 @@ def _strict_em_operand_precision(monkeypatch):
     Production EM precision is float32; a single float64 factor upstream can
     silently promote reconstruction and M-step rows with no visible effect on
     results. Production only warns (see
-    ``recovar.em.helpers.dtype_policy``); tests are strict
+    ``relax.helpers.dtype_policy``); tests are strict
     unless a test opts out by setting the variable itself.
     """
 

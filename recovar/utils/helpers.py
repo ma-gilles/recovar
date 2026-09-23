@@ -295,7 +295,7 @@ def relion_volume_to_recovar(vol_relion):
 
     Notes
     -----
-    See ``recovar/em/CLAUDE.md`` and ``~/CLAUDE.md`` for the full
+    See relax's ``relax/CLAUDE.md`` and ``~/CLAUDE.md`` for the full
     convention discussion. This helper was previously removed from
     helpers.py in commit 4703c634, leaving the docs stale and forcing
     every subsequent maintainer to rediscover the convention by hand.

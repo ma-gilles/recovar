@@ -206,17 +206,6 @@ async function main() {
     else
         log(1, 'FAIL', 'Pipeline form missing required fields');
 
-    // InitialModel extension: native defaults must load and render the core form.
-    const jobTypeSelect = page.locator('select').first();
-    await jobTypeSelect.selectOption('initial_model');
-    await page.waitForTimeout(1500);
-    await page.screenshot({ path: DIR + '/ac1_initial_model.png' });
-    const initialModelBody = await page.textContent('body') || '';
-    if (initialModelBody.includes('Input STAR') && initialModelBody.includes('Classes (K)') && initialModelBody.includes('Submit InitialModel Job'))
-        log(1, 'PASS', 'InitialModel form loads native defaults and core controls');
-    else
-        log(1, 'FAIL', 'InitialModel form or native defaults are unavailable');
-
     // AC-3: Volume viewer
     await page.goto(BASE + '/jobs/' + JOB_PIPELINE);
     await page.waitForTimeout(1500);

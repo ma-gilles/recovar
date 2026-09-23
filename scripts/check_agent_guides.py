@@ -9,7 +9,6 @@ from urllib.parse import unquote, urlsplit
 
 MIRRORS = (
     ("AGENTS.md", "CLAUDE.md"),
-    ("recovar/em/AGENTS.md", "recovar/em/CLAUDE.md"),
 )
 
 

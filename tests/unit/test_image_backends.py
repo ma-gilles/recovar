@@ -383,7 +383,7 @@ def test_particle_image_dataset_relion_cuda_requires_registered_preprocessor(mon
     ds.set_relion_fourier_backend("relion_cuda")
     images, _p_idx, _t_idx = ds[2]
 
-    with pytest.raises(RuntimeError, match="provided by the EM package"):
+    with pytest.raises(RuntimeError, match="provided by relax"):
         ds.process_images_half(
             images,
             apply_image_mask=True,

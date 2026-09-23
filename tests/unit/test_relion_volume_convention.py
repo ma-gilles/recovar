@@ -3,11 +3,11 @@
 Background: in commit 7df73fa (2026-04-01) the helpers
 ``relion_volume_to_recovar`` and ``recovar_volume_to_relion`` were added
 to ``recovar/utils/helpers.py`` along with documentation in
-``recovar/em/CLAUDE.md``.
+relax's ``relax/CLAUDE.md``.
 
 In commit 4703c634 (one hour later) the helpers were silently removed
 "to revert helpers.py to clean origin/dev state", but the documentation
-in ``recovar/em/CLAUDE.md`` was left behind.
+in relax's ``relax/CLAUDE.md`` was left behind.
 
 The result was a year of intermittent confusion: every maintainer who
 tried to follow the EM CLAUDE.md got an ``ImportError`` and had to
@@ -44,7 +44,7 @@ def test_helpers_exist():
 def test_relion_to_recovar_is_negate_and_transpose():
     """The conversion is exactly ``-np.transpose(vol, (2, 1, 0))``.
 
-    See ``recovar/em/CLAUDE.md`` and issue #86. The convention difference
+    See relax's ``relax/CLAUDE.md`` and issue #86. The convention difference
     was empirically verified to give CC=0.998 vs the recovar
     reconstruction on EMPIAR challenge1.
     """
@@ -183,7 +183,7 @@ def test_write_relion_mrc_disk_bytes_match_recovar_to_relion(tmp_path):
 
 
 def test_em_claude_md_helper_reference_is_valid():
-    """The helper that ``recovar/em/CLAUDE.md`` references must exist.
+    """The helper that relax's ``relax/CLAUDE.md`` references must exist.
 
     This is a meta-test: the EM developer guide tells maintainers to
     use ``relion_volume_to_recovar``. If that helper ever gets removed
@@ -194,9 +194,9 @@ def test_em_claude_md_helper_reference_is_valid():
     import importlib
     helpers = importlib.import_module("recovar.utils.helpers")
     assert hasattr(helpers, "relion_volume_to_recovar"), (
-        "recovar/em/CLAUDE.md references relion_volume_to_recovar but the "
+        "relax/CLAUDE.md references relion_volume_to_recovar but the "
         "function is missing from recovar/utils/helpers.py. This was the "
         "exact bug that wasted a week of RELION-parity work in 2026-04. "
-        "DO NOT remove the helper without first updating recovar/em/CLAUDE.md "
+        "DO NOT remove the helper without first updating relax/CLAUDE.md "
         "and recovar/CLAUDE.md to point to the replacement."
     )
