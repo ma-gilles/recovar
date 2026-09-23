@@ -141,14 +141,20 @@ def test_runner_registers_the_overlap_flag():
     This is the failure that wasted a four-arm measurement: the option existed
     and the harness invoked a checkout whose parser did not know the flag, so
     every overlapped arm died at argparse.
+
+    The child must import this checkout: ``python scripts/...`` does not put
+    the repo root on ``sys.path``, so without the pin a shared environment's
+    editable finder resolves ``recovar`` to whichever checkout it was built for.
     """
     import subprocess
-    import sys
+
+    from conftest import repo_python_command, repo_subprocess_env
 
     runner = _runner_path()
     assert runner.is_file(), runner
     proc = subprocess.run(
-        [sys.executable, str(runner), "--help"],
+        repo_python_command(str(runner), "--help"),
+        env=repo_subprocess_env(),
         capture_output=True,
         text=True,
         timeout=600,

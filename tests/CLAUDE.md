@@ -114,6 +114,19 @@ subprocess.run(cmd, check=True, env=gpu_subprocess_env())
 
 This sets `XLA_PYTHON_CLIENT_PREALLOCATE=false`, pins `XLA_PYTHON_CLIENT_MEM_FRACTION=.90` for reproducible baselines, can auto-select a least-loaded GPU, and isolates Python paths. Set the allowed device visibility explicitly first; automatic selection alone does not enforce the reserved-local-GPU rule below.
 
+Any other child interpreter that imports `recovar` (`-c`, `-m` or `python scripts/...`) must pin
+this checkout too: the shared environment's editable finder can resolve `recovar` to another
+checkout, and `python scripts/x.py` never puts the repo root on `sys.path`.
+
+```python
+from conftest import repo_python_command, repo_subprocess_env
+subprocess.run(repo_python_command("-m", "recovar.command_line", "pipeline", "--help"), env=repo_subprocess_env())
+```
+
+`repo_subprocess_env(env)` prepends the repo root to `PYTHONPATH` and leaves device settings
+alone; `repo_python_command` runs the invocation unchanged, then exits the child with
+`REPO_IMPORT_ROOT_FAILURE_STATUS` (86) unless `recovar` came from under the repo root.
+
 ## Backend and run isolation
 
 Before pytest collection, unset `PYTHONPATH`, `PYTHONHOME`, `CONDA_PREFIX` and

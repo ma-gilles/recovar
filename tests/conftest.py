@@ -67,8 +67,7 @@ def gpu_subprocess_env():
       are not perturbed by a developer shell override such as ``.50``.
     """
     env = dict(os.environ)
-    existing = env.get("PYTHONPATH", "")
-    env["PYTHONPATH"] = str(ROOT) + (os.pathsep + existing if existing else "")
+    _prepend_repo_root_to_pythonpath(env)
     env["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
     env["XLA_PYTHON_CLIENT_MEM_FRACTION"] = ".90"
     env["TF_GPU_ALLOCATOR"] = "cuda_malloc_async"
@@ -93,6 +92,79 @@ def gpu_subprocess_env():
             env["RECOVAR_ENABLE_CUSTOM_CUDA"] = "1"
             env.pop("RECOVAR_DISABLE_CUDA", None)
     return env
+
+
+def _prepend_repo_root_to_pythonpath(env):
+    existing = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = str(ROOT) + (os.pathsep + existing if existing else "")
+
+
+def repo_subprocess_env(env=None):
+    """Environment for a child interpreter that must import this checkout's ``recovar``.
+
+    The device-neutral sibling of ``gpu_subprocess_env``: it pins the import
+    root and leaves device, backend and allocator settings as the caller made
+    them. A shared environment's editable finder can map ``recovar`` to another
+    checkout, and a child sees this repo root on ``sys.path`` only through its
+    working directory (``-c``/``-m``) or not at all (``python scripts/x.py``
+    puts ``scripts/`` there), so an unpinned child can silently test the other
+    checkout. Launch the child with ``repo_python_command`` so the import root
+    is asserted inside it. ``RECOVAR_EXPECTED_REPO_ROOT`` is deliberately left
+    alone: ``recovar.commands.initial_model`` prints its own provenance check on
+    stdout when that is set.
+    """
+    env = dict(os.environ if env is None else env)
+    _prepend_repo_root_to_pythonpath(env)
+    env["PYTHONNOUSERSITE"] = "1"
+    return env
+
+
+# Exit status of a child whose ``recovar`` import resolved outside the repo root.
+# It differs from the statuses the launched entry points use, so a test that
+# expects its child to fail cannot pass on a child that failed in another checkout.
+REPO_IMPORT_ROOT_FAILURE_STATUS = 86
+
+# Runs one ``python`` invocation (``-c CODE``, ``-m MODULE`` or ``SCRIPT``, then
+# its arguments) as ``python`` would, then, however it ended, exits with
+# REPO_IMPORT_ROOT_FAILURE_STATUS unless ``recovar`` was imported from under the
+# root given as the first argument.
+_REPO_IMPORT_ROOT_LAUNCHER = f"""\
+import os, pathlib, runpy, sys
+root = pathlib.Path(sys.argv[1]).resolve()
+if sys.argv[2] in ("-c", "-m"):
+    mode, target, sys.argv = sys.argv[2], sys.argv[3], [sys.argv[2], *sys.argv[4:]]
+else:
+    mode, target, sys.argv = "script", sys.argv[2], sys.argv[2:]
+try:
+    if mode == "-c":
+        exec(compile(target, "<string>", "exec"), {{"__name__": "__main__"}})
+    elif mode == "-m":
+        runpy.run_module(target, run_name="__main__", alter_sys=True)
+    else:
+        sys.path[0] = os.path.dirname(os.path.realpath(target))
+        runpy.run_path(target, run_name="__main__")
+finally:
+    module = sys.modules.get("recovar")
+    origin = pathlib.Path(module.__file__).resolve() if module is not None else None
+    if origin is None or not origin.is_relative_to(root):
+        sys.stdout.flush()
+        sys.stderr.write(f"child imported recovar from {{origin}}, not from under {{root}}\\n")
+        sys.stderr.flush()
+        os._exit({REPO_IMPORT_ROOT_FAILURE_STATUS})
+"""
+
+
+def repo_python_command(*args):
+    """``python *args`` for a child that must fail unless it imported this checkout's ``recovar``.
+
+    ``args`` are what would follow ``python``: ``"-c", code, ...``,
+    ``"-m", module, ...`` or ``script, ...``. The child runs them unchanged and
+    then exits with ``REPO_IMPORT_ROOT_FAILURE_STATUS`` if ``recovar`` was not
+    imported from under the repo root, whatever the invocation itself returned.
+    Pair it with ``repo_subprocess_env``, which is what makes that import
+    resolve here.
+    """
+    return [sys.executable, "-c", _REPO_IMPORT_ROOT_LAUNCHER, str(ROOT), *args]
 
 
 def pytest_addoption(parser):
