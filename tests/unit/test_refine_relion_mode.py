@@ -8941,7 +8941,10 @@ class TestRelionModeSmokeTest:
         self, half_datasets, init_volume, rotations, translations, monkeypatch, voxel_size,
     ):
         """Zero initial offsets still have native accelerated pdf_offset, not a flat prior."""
-        monkeypatch.setenv("RECOVAR_DISABLE_CUDA", "1")
+        # RELION-parity refinement on a GPU backend builds its scorer rotations with the
+        # strict CUDA primitive and refuses to run with custom CUDA disabled; on CPU the
+        # NumPy scorer path runs. Do not inherit a caller's RECOVAR_DISABLE_CUDA.
+        monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
         monkeypatch.setattr(
             sampling_module, "_relion_rotation_grid_float32",
             lambda order, dtype: (np.asarray(rotations, dtype=dtype), np.zeros((N_ROTATIONS, 3), dtype=dtype)),
@@ -9740,7 +9743,10 @@ class TestRelionModeSmokeTest:
         collapse_calls = []
         make_prior_calls = []
 
-        monkeypatch.setenv("RECOVAR_DISABLE_CUDA", "1")
+        # RELION-parity refinement on a GPU backend builds its scorer rotations with the
+        # strict CUDA primitive and refuses to run with custom CUDA disabled; on CPU the
+        # NumPy scorer path runs. Do not inherit a caller's RECOVAR_DISABLE_CUDA.
+        monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
 
         def force_convergence_after_first_iter(*args, **kwargs):
             updated = original_update(*args, **kwargs)
