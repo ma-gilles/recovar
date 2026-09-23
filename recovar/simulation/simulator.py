@@ -636,11 +636,11 @@ def generate_synthetic_dataset(
     create_nested_structure=False,
     nested_prefix="Extract/job193",
     percent_tilt_series_outliers=0.0,
+    noise_rng_batch_size=None,
     relion_normalize=False,
     relion_bg_radius_px=None,
     streaming_mmap=False,
     streaming_chunk_size=1000,
-    noise_rng_batch_size=None,
 ):
     """Generate a synthetic cryo-EM particle dataset.
 

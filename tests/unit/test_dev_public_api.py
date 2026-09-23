@@ -20,8 +20,7 @@ FIXTURE = ROOT / "tests" / "fixtures" / "dev_public_api.json"
 
 # Deliberate removal (user decision 2026-09-23): undocumented, no callers, 801 lines of benchmark CUDA.
 ALLOWED_MISSING = {"recovar/cuda_backproject.py::CudaBenchmarker"}
-# Pre-existing dev2 break, fixed in a separate recovar package (PLAN.md section 1.3, P5).
-ALLOWED_SIGNATURE_BREAKS = {"recovar/simulation/simulator.py::generate_synthetic_dataset"}
+ALLOWED_SIGNATURE_BREAKS: set[str] = set()
 
 
 def _load_freezer():
