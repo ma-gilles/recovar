@@ -74,7 +74,7 @@ def test_runtime_radius_is_operand_not_attribute_and_reuses_trace(monkeypatch):
         np.testing.assert_array_equal(result, np.full(result.shape, radius, np.complex64))
     assert len(records) == 1
     target, _, rotshape, radius_aval, attrs = records[0]
-    assert target == cb._TARGET_PROJECT_RELION_HALF_RUNTIME
+    assert target == em_cuda_kernels._TARGET_PROJECT_RELION_HALF_RUNTIME
     assert rotshape == (1, 6)
     assert radius_aval.shape == () and radius_aval.dtype == np.dtype(np.int32)
     assert set(attrs) == {"image_h", "image_w", "padding_factor"}

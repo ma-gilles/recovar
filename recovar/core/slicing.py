@@ -52,6 +52,10 @@ def _default_max_r(image_shape):
     return image_shape[0] // 2 - 1
 
 
+# Public name for the EM package (relax split P2); the private name stays for existing callers.
+default_max_r = _default_max_r
+
+
 def _resolve_max_r(max_r, image_shape):
     """Resolve max_r: _AUTO → default, None → None (no clip), number → number."""
     if max_r is _AUTO:
@@ -92,6 +96,10 @@ def _use_cuda(order):
     if not cuda_available():
         raise cuda_unavailable_error()
     return True
+
+
+# Public name for the EM package (relax split P2); the private name stays for existing callers.
+use_cuda = _use_cuda
 
 
 def _use_cuda_backproject(order):

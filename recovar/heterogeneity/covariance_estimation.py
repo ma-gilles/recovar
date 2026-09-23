@@ -1007,6 +1007,10 @@ def _symmetric_matrix_packed_size(n):
     return n * (n + 1) // 2
 
 
+# Public name for the EM package (relax split P2); the private name stays for existing callers.
+symmetric_matrix_packed_size = _symmetric_matrix_packed_size
+
+
 def _packed_symmetric_matrix_size_to_full(packed_size):
     n = int((np.sqrt(8 * packed_size + 1) - 1) // 2)
     if _symmetric_matrix_packed_size(n) != packed_size:

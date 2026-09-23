@@ -226,25 +226,28 @@ def test_gpu_capacity_matches_legacy_all_three_outputs_and_one_executable(pf, gr
 
 def test_optional_registration_preserves_qualified_legacy_library(monkeypatch):
     symbol = "RelionVdamMstepFusedProjectorCapacityXHalf"
-    legacy = {name: object() for _, name in cb._FFI_REGISTRATIONS}
+    target = em_cuda_kernels._TARGET_RELION_VDAM_MSTEP_FUSED_PROJECTOR_CAPACITY_X_HALF
+    em_library = em_cuda_kernels._LIBRARY
+    legacy = {name: object() for _, name in em_library.registrations}
     assert symbol not in legacy
     library = SimpleNamespace(**legacy)
     registrations = []
-    monkeypatch.setattr(cb, "_ffi_registered", False)
-    monkeypatch.setattr(cb, "_optional_ffi_registered", set())
-    monkeypatch.setattr(cb, "_loaded_lib_path", None)
-    monkeypatch.setattr(cb, "_get_lib", lambda: library)
+    monkeypatch.setattr(cb, "_ensure_ffi", lambda: None)
+    monkeypatch.setattr(em_library, "ffi_registered", False)
+    monkeypatch.setattr(em_library, "optional_registered", set())
+    monkeypatch.setattr(em_library, "loaded_path", None)
+    monkeypatch.setattr(em_library, "get_lib", lambda: library)
     monkeypatch.setattr(jax.ffi, "pycapsule", lambda value: value)
     monkeypatch.setattr(jax.ffi, "register_ffi_target", lambda target, *args, **kwargs: registrations.append(target))
-    cb._ensure_ffi()
-    assert registrations == [target for target, _ in cb._FFI_REGISTRATIONS]
+    em_cuda_kernels._ensure_ffi()
+    assert registrations == [target for target, _ in em_library.registrations]
     with pytest.raises(RuntimeError, match=symbol):
-        cb._ensure_optional_ffi(cb._TARGET_RELION_VDAM_MSTEP_FUSED_PROJECTOR_CAPACITY_X_HALF)
-    assert cb._ffi_registered and cb._TARGET_RELION_VDAM_MSTEP_FUSED_PROJECTOR_CAPACITY_X_HALF not in cb._optional_ffi_registered
+        em_cuda_kernels._ensure_optional_ffi(target)
+    assert em_library.ffi_registered and target not in em_library.optional_registered
     setattr(library, symbol, object())
-    cb._ensure_optional_ffi(cb._TARGET_RELION_VDAM_MSTEP_FUSED_PROJECTOR_CAPACITY_X_HALF)
-    cb._ensure_optional_ffi(cb._TARGET_RELION_VDAM_MSTEP_FUSED_PROJECTOR_CAPACITY_X_HALF)
-    assert registrations.count(cb._TARGET_RELION_VDAM_MSTEP_FUSED_PROJECTOR_CAPACITY_X_HALF) == 1
+    em_cuda_kernels._ensure_optional_ffi(target)
+    em_cuda_kernels._ensure_optional_ffi(target)
+    assert registrations.count(target) == 1
 
 
 def test_capacity_radius_operand_preserves_aliases_geometry_and_one_trace(monkeypatch):
@@ -277,7 +280,7 @@ def test_capacity_radius_operand_preserves_aliases_geometry_and_one_trace(monkey
             np.testing.assert_array_equal(np.asarray(result[2]), np.full((1, 1, 1), radius, np.float32))
         assert function._cache_size() == 1 and len(records) == 1
         target, radius, attrs, ffi_options, output_shapes = records[0]
-        assert target == cb._TARGET_RELION_VDAM_MSTEP_FUSED_PROJECTOR_CAPACITY_X_HALF
+        assert target == em_cuda_kernels._TARGET_RELION_VDAM_MSTEP_FUSED_PROJECTOR_CAPACITY_X_HALF
         assert radius.shape == () and radius.dtype == np.dtype(np.int32) and not radius.weak_type
         assert attrs["projector_max_r"] == 0 and attrs["projection_padding_factor"] == 1
         assert ffi_options["input_output_aliases"] == {14: 0, 15: 1, 16: 2}

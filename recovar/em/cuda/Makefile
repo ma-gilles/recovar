@@ -1,3 +1,4 @@
+# EM CUDA library librelax_cuda.so (relax split seam S4); toolchain rules follow recovar/cuda/Makefile.
 PYTHON     ?= python
 NVCC_FROM_PATH := $(shell command -v nvcc 2>/dev/null)
 NVCC_FROM_LOCAL_CUDA_PATH := $(shell [ -n "$(LOCAL_CUDA_PATH)" ] && [ -x "$(LOCAL_CUDA_PATH)/bin/nvcc" ] && printf '%s' "$(LOCAL_CUDA_PATH)/bin/nvcc")
@@ -81,10 +82,14 @@ CUDA_TOOLKIT_ROOT := $(abspath $(dir $(NVCC))/..)
 CUDA_DRIVER_STUB_DIR := $(CUDA_TOOLKIT_ROOT)/targets/x86_64-linux/lib/stubs
 CUDA_DRIVER_LINK_DIR := -L$(CUDA_DRIVER_STUB_DIR)
 
-NVCC_FLAGS := -O3 -std=c++17 -Xcompiler -fPIC -Xcompiler -pthread --shared $(CUDA_ARCH) -I$(XLA_INC) $(CUDA_DRIVER_LINK_DIR)
+# recovar's public CUDA headers (recovar_cuda_common.cuh, device_scratch.cuh): one implementation of the
+# device helpers shared with recovar's pipeline library.
+RECOVAR_CUDA_INCLUDE ?= $(shell $(PYTHON) -c "import recovar.cuda_build as b; print(b.include_dir())")
+
+NVCC_FLAGS := -O3 -std=c++17 -Xcompiler -fPIC -Xcompiler -pthread --shared $(CUDA_ARCH) -I$(XLA_INC) -I$(RECOVAR_CUDA_INCLUDE) $(CUDA_DRIVER_LINK_DIR)
 CUDA_LIBS := -lcuda
 
-LIB ?= libcuda_backproject.so
+LIB ?= librelax_cuda.so
 
 all: $(LIB)
 
@@ -96,7 +101,7 @@ check-nvcc:
 		exit 1; \
 	fi
 
-$(LIB): cuda_backproject.cu include/device_scratch.cuh include/recovar_cuda_common.cuh | check-nvcc
+$(LIB): relax_kernels.cu relion_coarse_diff2_projector_body.inc noise_residual.cuh relion_vdam_mstep.cuh relion_scoring.cuh relion_posterior.cuh vdam_trace.cuh relion_preprocess.cuh sparse_pass2_posterior.cuh relion_translate_sum.cuh $(RECOVAR_CUDA_INCLUDE)/device_scratch.cuh $(RECOVAR_CUDA_INCLUDE)/recovar_cuda_common.cuh | check-nvcc
 	@mkdir -p $(dir $@)
 	$(NVCC) $(NVCC_FLAGS) -o $@ $< $(CUDA_LIBS)
 

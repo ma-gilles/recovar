@@ -137,6 +137,10 @@ def _large_grid_postprocess_is_physically_large(grid_voxels):
     return int(grid_voxels) >= threshold
 
 
+# Public name for the EM package (relax split P2); the private name stays for existing callers.
+large_grid_postprocess_is_physically_large = _large_grid_postprocess_is_physically_large
+
+
 def _large_grid_postprocess_single_precision_enabled(grid_voxels):
     """Return whether a RELION postprocess grid should avoid complex128.
 
@@ -158,6 +162,10 @@ def _large_grid_postprocess_single_precision_enabled(grid_voxels):
             mode,
         )
     return _large_grid_postprocess_is_physically_large(grid_voxels)
+
+
+# Public name for the EM package (relax split P2); the private name stays for existing callers.
+large_grid_postprocess_single_precision_enabled = _large_grid_postprocess_single_precision_enabled
 
 
 def zero_pad_fourier_volume(vol_flat, native_shape, padding_factor):
@@ -891,6 +899,10 @@ def _relion_reconstruction_padded_shape(volume_shape, padding_factor):
     return (padoridim, padoridim, padoridim)
 
 
+# Public name for the EM package (relax split P2); the private name stays for existing callers.
+relion_reconstruction_padded_shape = _relion_reconstruction_padded_shape
+
+
 def _relion_centered_axis_take_indices(old_dim, new_dim):
     """Indices for RELION FFTW crop, expressed in recovar centered layout."""
 
@@ -902,6 +914,10 @@ def _relion_centered_axis_take_indices(old_dim, new_dim):
     freq = _relion_centered_axis_fftw_frequencies(new_dim)
     raw_old = np.where(freq >= 0, freq, old_dim + freq)
     return ((raw_old - old_shift) % old_dim).astype(np.int32)
+
+
+# Public name for the EM package (relax split P2); the private name stays for existing callers.
+relion_centered_axis_take_indices = _relion_centered_axis_take_indices
 
 
 def _relion_centered_axis_fftw_frequencies(dim):
@@ -978,6 +994,10 @@ def _relion_window_centered_half_fourier(vol_half, old_volume_shape, new_volume_
         vol_half = jnp.take(jnp.take(vol_half, gather, axis=0), gather, axis=1)
     tail = new_dim - start - old_dim
     return jnp.pad(vol_half, ((start, tail), (start, tail), (0, new_half_shape[-1] - n_cols)))
+
+
+# Public name for the EM package (relax split P2); the private name stays for existing callers.
+relion_window_centered_half_fourier = _relion_window_centered_half_fourier
 
 
 def _relion_pad_centered_half_fourier_to_fftw(vol_half, old_volume_shape, new_volume_shape):

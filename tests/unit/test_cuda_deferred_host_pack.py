@@ -125,14 +125,14 @@ def test_requires_host_plan_before_dataset_access(monkeypatch):
 
 
 def test_older_library_supported_until_new_transaction_requested(monkeypatch):
-    assert all(symbol != "DeferredVdamHostPack" for _, symbol in cuda._FFI_REGISTRATIONS)
-    monkeypatch.setattr(cuda, "_ensure_ffi", lambda: None)
+    em_library = em_cuda_kernels._LIBRARY
+    assert all(symbol != "DeferredVdamHostPack" for _, symbol in em_library.registrations)
     monkeypatch.setattr(em_cuda_kernels, "_ensure_ffi", lambda: None)
-    monkeypatch.setattr(cuda, "_get_lib", lambda: SimpleNamespace())
-    monkeypatch.setattr(em_cuda_kernels, "_get_lib", lambda: SimpleNamespace())
-    monkeypatch.setattr(cuda, "_optional_ffi_registered", set())
+    monkeypatch.setattr(em_library, "ensure_ffi", lambda: None)
+    monkeypatch.setattr(em_library, "get_lib", lambda: SimpleNamespace())
+    monkeypatch.setattr(em_library, "optional_registered", set())
     with pytest.raises(RuntimeError, match="explicit build with DeferredVdamHostPack"):
-        cuda._ensure_optional_ffi(cuda._TARGET_DEFERRED_VDAM_HOST_PACK)
+        em_cuda_kernels._ensure_optional_ffi(em_cuda_kernels._TARGET_DEFERRED_VDAM_HOST_PACK)
 
 
 @pytest.mark.gpu
@@ -160,7 +160,7 @@ def test_cuda_preserves_all_seven_outputs_and_input_bytes(batch, case):
 @pytest.mark.parametrize("case", ["dtype", "rank", "shape", "output_dtype", "output_shape"])
 def test_raw_ffi_rejects_bad_buffers(case):
     assert jax.default_backend() == "gpu"
-    cuda._ensure_optional_ffi(cuda._TARGET_DEFERRED_VDAM_HOST_PACK)
+    cuda._ensure_optional_ffi(em_cuda_kernels._TARGET_DEFERRED_VDAM_HOST_PACK)
     arrays = operands()
     outputs = list(em_cuda_kernels._deferred_vdam_host_pack_shapes(*arrays))
     args = [jnp.asarray(x) for x in arrays]
@@ -175,5 +175,5 @@ def test_raw_ffi_rejects_bad_buffers(case):
     elif case == "output_shape":
         outputs[2] = jax.ShapeDtypeStruct((1, 7), jnp.complex64)
     with pytest.raises((ValueError, RuntimeError), match="DeferredVdamHostPack:"):
-        result = jax.ffi.ffi_call(cuda._TARGET_DEFERRED_VDAM_HOST_PACK, tuple(outputs), vmap_method="sequential")(*args)
+        result = jax.ffi.ffi_call(em_cuda_kernels._TARGET_DEFERRED_VDAM_HOST_PACK, tuple(outputs), vmap_method="sequential")(*args)
         jax.block_until_ready(result)

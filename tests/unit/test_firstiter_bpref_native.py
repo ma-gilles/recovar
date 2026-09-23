@@ -10,10 +10,7 @@ pytestmark = pytest.mark.unit
 
 def test_relion_firstiter_bpref_cuda_source_preserves_native_interface_and_pass_loop():
     cuda_source = (
-        Path(__file__).resolve().parents[2]
-        / "recovar"
-        / "cuda"
-        / "cuda_backproject.cu"
+        Path(__file__).resolve().parents[2] / "recovar" / "em" / "cuda" / "relax_kernels.cu"
     )
     text = cuda_source.read_text()
     kernel_start = text.index("relion_firstiter_bpref_fused_x_half_kernel(")
@@ -93,7 +90,7 @@ def test_relion_firstiter_bpref_wrapper_uses_split_native_operands_and_static_sc
         )
     )
 
-    assert observed["target"] == cuda_backproject._TARGET_RELION_FIRSTITER_BPREF_FUSED_X_HALF
+    assert observed["target"] == em_cuda_kernels._TARGET_RELION_FIRSTITER_BPREF_FUSED_X_HALF
     assert observed["options"]["input_output_aliases"] == {8: 0, 9: 1, 10: 2}
     assert observed["options"]["vmap_method"] == "sequential"
     assert [item.dtype for item in observed["result_types"]] == [
@@ -178,7 +175,7 @@ def test_relion_firstiter_bpref_split_wrapper_preserves_three_ffi_aliases(
         )
     )
 
-    assert observed["target"] == cuda_backproject._TARGET_RELION_FIRSTITER_BPREF_FUSED_X_HALF
+    assert observed["target"] == em_cuda_kernels._TARGET_RELION_FIRSTITER_BPREF_FUSED_X_HALF
     assert observed["options"]["input_output_aliases"] == {8: 0, 9: 1, 10: 2}
     assert observed["options"]["vmap_method"] == "sequential"
     assert [item.dtype for item in observed["result_types"]] == [
@@ -315,7 +312,7 @@ def test_relion_split_symmetry_range_has_bounded_outputs_and_no_aliases(monkeypa
 
     assert (
         observed["target"]
-        == cuda_backproject._TARGET_RELION_POINT_GROUP_SYMMETRISE_BPREF_SPLIT_RANGE
+        == em_cuda_kernels._TARGET_RELION_POINT_GROUP_SYMMETRISE_BPREF_SPLIT_RANGE
     )
     assert "input_output_aliases" not in observed["options"]
     assert [result.shape for result in observed["result_types"]] == [

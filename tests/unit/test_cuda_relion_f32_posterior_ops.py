@@ -14,14 +14,11 @@ pytestmark = pytest.mark.unit
 
 def test_relion_f32_posterior_cuda_source_pins_deployed_arithmetic():
     source = (
-        Path(__file__).resolve().parents[2]
-        / "recovar"
-        / "cuda"
-        / "cuda_backproject.cu"
+        Path(__file__).resolve().parents[2] / "recovar" / "em" / "cuda" / "relax_kernels.cu"
     ).read_text()
 
     source = source.replace(
-        '#include "../em/cuda/relion_posterior.cuh"',
+        '#include "relion_posterior.cuh"',
         (Path(__file__).resolve().parents[2] / "recovar/em/cuda/relion_posterior.cuh").read_text(),
     )
 

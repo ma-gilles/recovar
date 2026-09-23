@@ -51,11 +51,12 @@ def _gpu_available():
     if jax.default_backend() != "gpu":
         return False
     from recovar import cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     return bool(
         cuda_backproject.custom_cuda_requested()
-        and cuda_backproject.sparse_pass2_segmented_supported()
-        and cuda_backproject.relion_wavg_rotation_atomic_runtime_flat_rows_triplet_add_f32_supported()
+        and em_cuda_kernels.sparse_pass2_segmented_supported()
+        and em_cuda_kernels.relion_wavg_rotation_atomic_runtime_flat_rows_triplet_add_f32_supported()
     )
 
 

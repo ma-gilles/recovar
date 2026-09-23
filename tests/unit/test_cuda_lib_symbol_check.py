@@ -26,23 +26,36 @@ pytestmark = pytest.mark.unit
 
 
 def test_ffi_registrations_cover_all_target_constants():
-    """Every target is eager or explicitly optional; optional ABIs stay lazy."""
+    """Every target is eager or explicitly optional in its own library; optional ABIs stay lazy."""
+    # recovar's pipeline library
     targets_in_table = {target for target, _symbol in cb._FFI_REGISTRATIONS}
-    target_constants = {
+    target_constants = {v for k, v in vars(cb).items() if k.startswith("_TARGET_") and isinstance(v, str)}
+    optional_targets = set(cb._OPTIONAL_FFI_REGISTRATIONS)
+    assert targets_in_table.isdisjoint(optional_targets)
+    assert target_constants == targets_in_table | optional_targets
+    # the EM library (relax split S3/S4); _TARGET_PROJECT_INDEXED is imported from recovar
+    em_targets_in_table = {target for target, _symbol in em_cuda_kernels._FFI_REGISTRATIONS}
+    em_target_constants = {
         v
-        for module in (cb, em_cuda_kernels)
-        for k, v in vars(module).items()
-        if k.startswith("_TARGET_") and isinstance(v, str)
+        for k, v in vars(em_cuda_kernels).items()
+        if k.startswith("_TARGET_") and isinstance(v, str) and v not in target_constants
     }
-    optional_targets = {
-        *cb._OPTIONAL_FFI_REGISTRATIONS,
+    em_optional_targets = {
+        *em_cuda_kernels._OPTIONAL_FFI_REGISTRATIONS,
         em_cuda_kernels._TARGET_RELION_WAVG_NATIVE_PREFIX_F32,
         em_cuda_kernels._TARGET_RELION_WAVG_NATIVE_PREFIX_DEBUG_F32,
         em_cuda_kernels._TARGET_RELION_COARSE_POSTERIOR_TRANSACTION_F32,
         em_cuda_kernels._TARGET_RELION_COARSE_SHARED_PRETRANSLATED_RUNTIME_F32,
     }
-    assert targets_in_table.isdisjoint(optional_targets)
-    assert target_constants == targets_in_table | optional_targets
+    assert em_targets_in_table.isdisjoint(em_optional_targets)
+    assert em_target_constants == em_targets_in_table | em_optional_targets
+    assert em_target_constants.isdisjoint(target_constants)
+
+
+def test_recovar_library_registers_no_em_handler():
+    """recovar's library exposes only pipeline handlers (relax split invariant I2)."""
+    symbols = [s for _t, s in cb._FFI_REGISTRATIONS] + [s for s, _msg in cb._OPTIONAL_FFI_REGISTRATIONS.values()]
+    assert not [s for s in symbols if s.startswith(("Relion", "Sparse", "DualWeighted")) or "Vdam" in s]
 
 
 def test_ffi_registrations_have_unique_targets_and_symbols():

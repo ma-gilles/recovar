@@ -109,6 +109,7 @@ def test_pair_sparse_native_sums_match_dense_native_bitwise(
     monkeypatch, custom_cuda_lib, gpu_device, value_dtype, empty
 ):
     import recovar.cuda_backproject as cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
     monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
@@ -145,7 +146,7 @@ def test_pair_sparse_native_sums_match_dense_native_bitwise(
             n_rotation_rows=n_rows,
             n_trans=n_trans,
         )
-        summed, summed_image = cuda_backproject.dual_weighted_sums_f32(dense_probs, args[4], args[5])
+        summed, summed_image = em_cuda_kernels.dual_weighted_sums_f32(dense_probs, args[4], args[5])
         probs_sum_t = jnp.sum(dense_probs, axis=-1)
         dense = (
             summed,

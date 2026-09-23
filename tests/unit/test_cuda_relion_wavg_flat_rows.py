@@ -51,14 +51,15 @@ def _rectangular_operands(rng, *, batch_size, rotation_count, translation_count,
 
 def _cuda_backproject(monkeypatch, custom_cuda_lib):
     import recovar.cuda_backproject as cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
     monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
     monkeypatch.setattr(cuda_backproject, "_cuda_ok", None)
-    if not cuda_backproject.relion_wavg_sequential_runtime_flat_rows_triplet_f32_supported():
+    if not em_cuda_kernels.relion_wavg_sequential_runtime_flat_rows_triplet_f32_supported():
         pytest.skip("loaded CUDA library predates the flat-row Wavg targets")
     if not (
-        cuda_backproject.relion_wavg_rotation_atomic_runtime_flat_rows_triplet_add_f32_supported()
+        em_cuda_kernels.relion_wavg_rotation_atomic_runtime_flat_rows_triplet_add_f32_supported()
     ):
         pytest.skip("loaded CUDA library predates the flat-row Wavg atomics")
     from recovar.em.cuda import kernels as em_cuda_kernels

@@ -1,7 +1,10 @@
 include recovar/trajectory/_fast_marching_native.cpp
 include recovar/cuda/Makefile
 include recovar/cuda/cuda_backproject.cu
-include recovar/cuda/device_scratch.cuh
+include recovar/cuda/include/device_scratch.cuh
+include recovar/cuda/include/recovar_cuda_common.cuh
+include recovar/em/cuda/Makefile
+include recovar/em/cuda/relax_kernels.cu
 include recovar/em/cuda/relion_coarse_diff2_projector_body.inc
 include setup_helpers.py
 include recovar/em/cuda/noise_residual.cuh

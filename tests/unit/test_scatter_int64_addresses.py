@@ -17,11 +17,13 @@ def test_cuda_backproject_box800_complex_addresses_use_64_bit_offsets():
     cuda_source = Path(__file__).resolve().parents[2] / "recovar" / "cuda" / "cuda_backproject.cu"
     text = cuda_source.read_text()
     helper = text[
-        text.index("int64_t volume_spatial_offset(") : text.index("#define BLOCK_SIZE")
+        text.index("int64_t volume_spatial_offset(") : text.index("/* scatter_nearest:")
     ]
     scatter = text[
         text.index("static __device__ __forceinline__ void scatter_nearest(") :
-        text.index("/* Strict RELION x-half diagnostic:")
+        # after the relax split (S4) the RELION fused x-half scatter that followed lives in
+        # include/recovar_cuda_common.cuh, so the pipeline scatters end at the backproject kernels
+        text.index("/*                  Backproject kernel")
     ]
 
     assert "static_cast<int64_t>(i0) * stride0" in helper
@@ -31,7 +33,7 @@ def test_cuda_backproject_box800_complex_addresses_use_64_bit_offsets():
     assert "const int off =" not in scatter
     indexed_batch = text[
         text.index("batch_backproject_indexed_kernel(") :
-        text.index("/* One invocation corresponds to one RELION particle.")
+        text.index("/*                    Project kernel", text.index("batch_backproject_indexed_kernel("))
     ]
     start = text.index("batch_backproject_kernel(")
     opening = text.index("{", start)

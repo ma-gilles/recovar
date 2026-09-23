@@ -922,6 +922,10 @@ class _PrefetchIterator:
             thread.join(timeout=5.0)
 
 
+# Public name for the EM package (relax split P2); the private name stays for existing callers.
+PrefetchIterator = _PrefetchIterator
+
+
 # ---------------------------------------------------------------------------
 # Grain Batch Loader
 # ---------------------------------------------------------------------------

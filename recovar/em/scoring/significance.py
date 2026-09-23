@@ -1653,6 +1653,7 @@ def _compute_k_class_significance_batched(
                 f"translations, got {n_trans}"
             )
         from recovar import cuda_backproject
+        from recovar.em.cuda import kernels as em_cuda_kernels
         from recovar.em.helpers.projection import relion_projector_half_to_texture_full
         from recovar.em.relion.relion_ctf import _relion_exact_ctf_half_from_source_star
         from recovar.em.sparse_pass2.sparse_pass2_bucket_io import _relion_translation_angles_f32
@@ -1989,6 +1990,7 @@ def _compute_k_class_significance_batched(
                 "half-spectrum scoring",
             )
         from recovar import cuda_backproject
+        from recovar.em.cuda import kernels as em_cuda_kernels
         from recovar.em.helpers.projection import relion_projector_half_to_texture_full
         from recovar.em.relion.relion_ctf import _relion_exact_ctf_half_from_source_star
         from recovar.em.sparse_pass2.sparse_pass2_bucket_io import _relion_translation_angles_f32
@@ -2300,6 +2302,7 @@ def _compute_k_class_significance_batched(
 
         from recovar import cuda_backproject
         from recovar.em.cuda import kernels as em_cuda_kernels
+        from recovar.em.cuda import kernels as em_cuda_kernels
 
         if not coarse_fused_projector_enabled:
             raise RuntimeError("fused coarse scorer was not enabled")
@@ -2333,9 +2336,9 @@ def _compute_k_class_significance_batched(
             )
         selected_wrapper = getattr(coarse_projector, "__name__", None)
         selected_target = (
-            cuda_backproject._TARGET_RELION_COARSE_DIFF2_PROJECTOR_MULTISTREAM_F32
+            em_cuda_kernels._TARGET_RELION_COARSE_DIFF2_PROJECTOR_MULTISTREAM_F32
             if coarse_multistream_enabled
-            else cuda_backproject._TARGET_RELION_COARSE_DIFF2_PROJECTOR_F32
+            else em_cuda_kernels._TARGET_RELION_COARSE_DIFF2_PROJECTOR_F32
         )
         previous_wrapper = coarse_selector_execution["wrapper"]
         previous_target = coarse_selector_execution["target"]

@@ -309,11 +309,12 @@ def test_unmasked_scoring_is_refused():
 
 def _gpu_case(monkeypatch, custom_cuda_lib):
     import recovar.cuda_backproject as cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
     monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
     monkeypatch.setattr(cuda_backproject, "_cuda_ok", None)
-    if not cuda_backproject.relion_translate_sum_flat_rows_f32_supported():
+    if not em_cuda_kernels.relion_translate_sum_flat_rows_f32_supported():
         pytest.skip("loaded CUDA library predates the translate-and-sum target")
     from recovar.em.cuda import kernels as em_cuda_kernels
 

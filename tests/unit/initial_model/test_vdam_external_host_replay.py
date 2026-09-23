@@ -2,7 +2,7 @@ import ctypes
 import os
 from pathlib import Path
 
-from helpers.cuda_source import read_cuda_source
+from helpers.cuda_source import read_em_cuda_source
 
 import pytest
 
@@ -31,7 +31,7 @@ def test_compiled_host_replay_rejects_missing_operands():
 
 
 def test_exact_native_host_replay_has_one_shared_abi():
-    cuda_source = read_cuda_source()
+    cuda_source = read_em_cuda_source()
     helper_source = HELPER.read_text()
 
     symbol = "recovar_relion_vdam_exact_native_host_replay"
@@ -86,7 +86,7 @@ def test_external_host_replay_can_preserve_input_bundles_fail_closed():
 
 
 def test_external_host_replay_can_capture_quiesced_prelaunch_state():
-    cuda_source = read_cuda_source()
+    cuda_source = read_em_cuda_source()
     helper = HELPER.read_text()
 
     assert "quiesced_prelaunch_target_particle_id" in cuda_source
@@ -146,7 +146,7 @@ def test_quiesced_prelaunch_capture_rejects_negative_particle_id(
 
 
 def test_exact_wavg_predecessor_uses_relion_ptx_and_same_particle_stream():
-    cuda_source = read_cuda_source()
+    cuda_source = read_em_cuda_source()
 
     assert "RECOVAR_VDAM_EXACT_WAVG_PREDECESSOR" in cuda_source
     assert "_Z16cuda_kernel_wavgILb1ELb1ELb0ELi256E" in cuda_source
@@ -157,7 +157,7 @@ def test_exact_wavg_predecessor_uses_relion_ptx_and_same_particle_stream():
 
 
 def test_runtime_bpref_launch_discriminator_is_fail_closed():
-    cuda_source = read_cuda_source()
+    cuda_source = read_em_cuda_source()
 
     assert "RECOVAR_VDAM_RUNTIME_BPREF_WITH_EXACT_WAVG" in cuda_source
     assert "runtime_bpref_with_exact_wavg_requested &&" in cuda_source
@@ -167,7 +167,7 @@ def test_runtime_bpref_launch_discriminator_is_fail_closed():
 
 
 def test_wavg_bpref_host_gap_is_fail_closed_and_measures_from_wavg_return():
-    cuda_source = read_cuda_source()
+    cuda_source = read_em_cuda_source()
 
     assert "RECOVAR_VDAM_WAVG_BPREF_HOST_GAP_NS" in cuda_source
     assert "wavg_bpref_host_gap_requested && !exact_wavg_predecessor_requested" in cuda_source
@@ -177,7 +177,7 @@ def test_wavg_bpref_host_gap_is_fail_closed_and_measures_from_wavg_return():
 
 
 def test_wavg_bpref_host_gap_trace_is_targeted_and_fail_closed():
-    cuda_source = read_cuda_source()
+    cuda_source = read_em_cuda_source()
     local_engine = LOCAL_ENGINE.read_text()
     replay_helper = REPLAY_HELPER.read_text()
 

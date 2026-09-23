@@ -1,6 +1,5 @@
 """Masked rectangular fine diff2: RELION-style pair pruning inside the kernel."""
 
-from pathlib import Path
 
 import numpy as np
 import pytest
@@ -9,7 +8,7 @@ pytest.importorskip("jax")
 import jax
 import jax.numpy as jnp
 
-from helpers.cuda_source import read_cuda_source
+from helpers.cuda_source import read_cuda_source, read_em_cuda_source
 
 
 def _operands(rng, batch_size, rotation_count, translation_count, compact, full):
@@ -39,17 +38,18 @@ def test_masked_fine_diff2_source_pins_rectangular_body_and_zero_fill():
     assert body.count("relion_fine_diff2_update_f32(") == 1
     assert "__fadd_rn(lane_sums[0], initial_diff2[batch])" in body
     assert "kRelionFineDiff2BlockSize / 2; width > 0; width /= 2" in body
-    handler = read_cuda_source("cuda_backproject.cu")
+    handler = read_em_cuda_source()
     assert "RelionFineDiff2RectangularMaskedF32Impl" in handler
     assert "candidate_mask.element_type() != ffi::DataType::PRED" in handler
 
 
 def test_masked_fine_diff2_is_optional_ffi_target():
     from recovar import cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
-    target = cuda_backproject._TARGET_RELION_FINE_DIFF2_RECTANGULAR_MASKED_F32
+    target = em_cuda_kernels._TARGET_RELION_FINE_DIFF2_RECTANGULAR_MASKED_F32
     assert target == "cuda_relion_fine_diff2_rectangular_masked_f32"
-    assert target in cuda_backproject._OPTIONAL_FFI_REGISTRATIONS
+    assert target in em_cuda_kernels._OPTIONAL_FFI_REGISTRATIONS
     assert target not in dict(cuda_backproject._FFI_REGISTRATIONS)
 
 
@@ -105,6 +105,9 @@ def test_masked_support_probe_reports_false_without_a_library(monkeypatch):
 
     monkeypatch.setattr(
         cuda_backproject, "_ensure_ffi", lambda: (_ for _ in ()).throw(RuntimeError("no lib"))
+    )
+    monkeypatch.setattr(
+        em_cuda_kernels, "_ensure_ffi", lambda: (_ for _ in ()).throw(RuntimeError("no lib"))
     )
     monkeypatch.setattr(
         em_cuda_kernels, "_ensure_ffi", lambda: (_ for _ in ()).throw(RuntimeError("no lib"))

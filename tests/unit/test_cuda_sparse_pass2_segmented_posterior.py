@@ -196,12 +196,12 @@ def test_segmented_targets_are_optional_abi():
     """Both handlers register lazily, like the other optional CUDA targets."""
 
     for target in (
-        cb._TARGET_SPARSE_PASS2_SEGMENTED_LOG_Z_F64,
-        cb._TARGET_SPARSE_PASS2_SEGMENTED_POSTERIOR_F32,
+        em_cuda_kernels._TARGET_SPARSE_PASS2_SEGMENTED_LOG_Z_F64,
+        em_cuda_kernels._TARGET_SPARSE_PASS2_SEGMENTED_POSTERIOR_F32,
     ):
-        assert target in cb._OPTIONAL_FFI_REGISTRATIONS
+        assert target in em_cuda_kernels._OPTIONAL_FFI_REGISTRATIONS
         assert target not in {name for name, _symbol in cb._FFI_REGISTRATIONS}
-    assert isinstance(cb.sparse_pass2_segmented_supported(), bool)
+    assert isinstance(em_cuda_kernels.sparse_pass2_segmented_supported(), bool)
 
 
 @pytest.mark.parametrize(

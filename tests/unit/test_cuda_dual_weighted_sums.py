@@ -14,10 +14,7 @@ pytestmark = pytest.mark.unit
 
 def test_dual_weighted_sums_cuda_source_has_one_ordered_translation_loop():
     source = (
-        Path(__file__).resolve().parents[2]
-        / "recovar"
-        / "cuda"
-        / "cuda_backproject.cu"
+        Path(__file__).resolve().parents[2] / "recovar" / "em" / "cuda" / "relax_kernels.cu"
     ).read_text()
 
     start = source.index("dual_weighted_fma")
@@ -40,6 +37,7 @@ def test_dual_weighted_sums_matches_sparse_jax_matmul(
     value_dtype,
 ):
     import recovar.cuda_backproject as cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
     monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
@@ -72,7 +70,7 @@ def test_dual_weighted_sums_matches_sparse_jax_matmul(
             jnp.matmul(probabilities_jax, first_jax, precision=jax.lax.Precision.HIGHEST),
             jnp.matmul(probabilities_jax, second_jax, precision=jax.lax.Precision.HIGHEST),
         )
-        actual = cuda_backproject.dual_weighted_sums_f32(
+        actual = em_cuda_kernels.dual_weighted_sums_f32(
             probabilities_jax,
             first_jax,
             second_jax,
@@ -91,6 +89,7 @@ def test_compact_weighted_sums_and_noise_wrapper_matches_composed_boundaries(
     gpu_device,
 ):
     import recovar.cuda_backproject as cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
     from recovar.em.sparse_pass2 import sparse_pass2_bucketed, sparse_pass2_noise_blocks
 
     monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))

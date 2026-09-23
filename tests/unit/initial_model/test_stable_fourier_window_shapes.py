@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from helpers.cuda_source import read_cuda_source
+from helpers.cuda_source import read_em_cuda_source
 from types import SimpleNamespace
 
 import numpy as np
@@ -772,7 +772,7 @@ def test_crop_relion_x_half_accumulator_rejects_unsupported_topology(
 
 
 def test_runtime_cuda_kernels_are_separate_from_default_primitives():
-    source = read_cuda_source()
+    source = read_em_cuda_source()
 
     powerclass_start = source.index("void relion_powerclass_spectrum_highres_f32_kernel(")
     powerclass = source[
@@ -816,7 +816,7 @@ def test_runtime_cuda_kernels_are_separate_from_default_primitives():
 
 
 def test_stable_bpref_uses_capacity_stride_but_logical_native_issue_count():
-    source = read_cuda_source()
+    source = read_em_cuda_source()
     launcher_start = source.index(
         "cudaError_t launch_relion_vdam_mstep_fused_projector_x_half("
     )
@@ -929,7 +929,7 @@ def test_stable_bpref_wrapper_packs_logical_rows_and_poison_tail(monkeypatch):
     )
 
     assert observed["target"] == (
-        cuda_backproject._TARGET_RELION_VDAM_MSTEP_FUSED_PROJECTOR_RUNTIME_X_HALF
+        em_cuda_kernels._TARGET_RELION_VDAM_MSTEP_FUSED_PROJECTOR_RUNTIME_X_HALF
     )
     assert observed["attrs"]["image_h"] == plan.physical_current_size
     assert observed["attrs"]["image_w"] == plan.physical_current_size // 2 + 1
@@ -951,8 +951,8 @@ def test_stable_bpref_wrapper_packs_logical_rows_and_poison_tail(monkeypatch):
 
 def test_runtime_bpref_ffi_abi_keeps_default_static_target_separate():
     root = Path(__file__).resolve().parents[3]
-    python_source = (root / "recovar" / "cuda_backproject.py").read_text()
-    cuda_source = read_cuda_source()
+    python_source = (root / "recovar" / "em" / "cuda" / "kernels.py").read_text()
+    cuda_source = read_em_cuda_source()
 
     assert "cuda_relion_vdam_mstep_fused_projector_x_half" in python_source
     assert "cuda_relion_vdam_mstep_fused_projector_runtime_x_half" in python_source
@@ -1001,8 +1001,8 @@ def test_runtime_bpref_ffi_abi_keeps_default_static_target_separate():
 
 def test_runtime_coarse_ffi_abi_keeps_static_targets_separate():
     root = Path(__file__).resolve().parents[3]
-    python_source = (root / "recovar" / "cuda_backproject.py").read_text()
-    cuda_source = read_cuda_source()
+    python_source = (root / "recovar" / "em" / "cuda" / "kernels.py").read_text()
+    cuda_source = read_em_cuda_source()
 
     for stem in ("Rectangular", "RotationBlocks"):
         assert f"cuda_relion_coarse_diff2_{'rectangular' if stem == 'Rectangular' else 'rotation_blocks'}_runtime_f32" in python_source
@@ -1101,7 +1101,7 @@ def test_runtime_bpref_lowering_and_jit_cache_ignore_logical_size(monkeypatch):
     assert {
         target for target, _options, _attrs, _operand_count in observed
     } == {
-        cuda_backproject._TARGET_RELION_VDAM_MSTEP_FUSED_PROJECTOR_RUNTIME_X_HALF
+        em_cuda_kernels._TARGET_RELION_VDAM_MSTEP_FUSED_PROJECTOR_RUNTIME_X_HALF
     }
     assert {operand_count for _target, _options, _attrs, operand_count in observed} == {18}
     for _target, _options, attrs, _operand_count in observed:

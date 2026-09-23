@@ -128,14 +128,14 @@ def test_requires_pixel_capacity_before_dataset_access(monkeypatch):
 
 
 def test_optional_symbol(monkeypatch):
-    assert all(symbol != "NoisePixelPack" for _, symbol in cuda._FFI_REGISTRATIONS)
-    monkeypatch.setattr(cuda, "_ensure_ffi", lambda: None)
+    em_library = em_cuda_kernels._LIBRARY
+    assert all(symbol != "NoisePixelPack" for _, symbol in em_library.registrations)
     monkeypatch.setattr(em_cuda_kernels, "_ensure_ffi", lambda: None)
-    monkeypatch.setattr(cuda, "_get_lib", lambda: SimpleNamespace())
-    monkeypatch.setattr(em_cuda_kernels, "_get_lib", lambda: SimpleNamespace())
-    monkeypatch.setattr(cuda, "_optional_ffi_registered", set())
+    monkeypatch.setattr(em_library, "ensure_ffi", lambda: None)
+    monkeypatch.setattr(em_library, "get_lib", lambda: SimpleNamespace())
+    monkeypatch.setattr(em_library, "optional_registered", set())
     with pytest.raises(RuntimeError, match="explicit build with NoisePixelPack"):
-        cuda._ensure_optional_ffi(cuda._TARGET_NOISE_PIXEL_PACK)
+        em_cuda_kernels._ensure_optional_ffi(em_cuda_kernels._TARGET_NOISE_PIXEL_PACK)
 
 
 def test_public_helper_forwards_original_buffers_and_dynamic_spare(monkeypatch):
@@ -181,7 +181,7 @@ def test_gpu_all_prefix_tail_and_input_bytes(batch, target, wide):
 @pytest.mark.gpu
 @pytest.mark.parametrize("case", ["rank", "dtype", "shape", "output_dtype", "output_shape", "target"])
 def test_raw_ffi_rejects_before_copy(case):
-    cuda._ensure_optional_ffi(cuda._TARGET_NOISE_PIXEL_PACK)
+    cuda._ensure_optional_ffi(em_cuda_kernels._TARGET_NOISE_PIXEL_PACK)
     args = [jnp.asarray(a) for a in operands()]
     outputs = list(em_cuda_kernels._noise_pixel_pack_shapes(*args, target_batch=42))
     target = 42
@@ -198,7 +198,7 @@ def test_raw_ffi_rejects_before_copy(case):
     elif case == "target":
         target = 10
     with pytest.raises((ValueError, RuntimeError), match="NoisePixelPack:"):
-        result = jax.ffi.ffi_call(cuda._TARGET_NOISE_PIXEL_PACK, tuple(outputs), vmap_method="sequential")(
+        result = jax.ffi.ffi_call(em_cuda_kernels._TARGET_NOISE_PIXEL_PACK, tuple(outputs), vmap_method="sequential")(
             *args, target_batch=target
         )
         jax.block_until_ready(result)

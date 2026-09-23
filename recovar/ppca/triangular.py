@@ -11,6 +11,10 @@ def _tri_size(size: int) -> int:
     return int(size) * (int(size) + 1) // 2
 
 
+# Public name for the EM package (relax split P2); the private name stays for existing callers.
+tri_size = _tri_size
+
+
 def pack_upper_tri(matrix):
     """Pack ``(..., p, p)`` into row-major upper-triangular storage."""
     p = int(matrix.shape[-1])

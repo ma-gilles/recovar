@@ -43,33 +43,34 @@ supports the requested targets. Record overrides with benchmark results.
 
 ## Source ownership
 
-`cuda_backproject.cu` is the translation unit for shared projection/backprojection
-kernels and FFI handlers. `relion_vdam_mstep.cuh` owns the RELION-layout VDAM
-M-step and native replay implementation. Its kernels share the translation unit's
-private namespace; the host replay C ABI and argument record have external
-linkage so nvcc emits the callable export. `noise_residual.cuh` owns shared noise
-reductions. `vdam_trace.cuh` owns optional block-trace records, file writing and
-device timestamp helpers; inclusion preserves their original translation-unit order.
-`relion_preprocess.cuh` owns RELION image normalization, translation and soft-mask
-kernels and their launcher; its include retains the original anonymous-namespace
-position. FFI handlers remain in the translation unit.
-`relion_scoring.cuh` owns shared EM/VDAM coarse and fine scoring,
-translation and power-spectrum kernels; its common coarse projector body is
-`relion_coarse_diff2_projector_body.inc`. `relion_posterior.cuh` owns the shared float32 exponentiation, division, CUB
-sort/scan and coarse-posterior transaction with their FFI handlers. Its include
-stays at global scope after the shared Ampere scan policy; no second translation
-unit is introduced.
-`sparse_pass2_posterior.cuh` owns the
-opt-in fused sparse pass-2 posterior handlers (`RECOVAR_SPARSE_PASS2_CUDA_POSTERIOR=1`);
-it is included last because it reuses the pinned Ampere scan helper. Keep build,
-packaging and loader-staleness inputs aligned when changing these boundaries.
-Since the relax split (P1) the EM headers above and the `.inc` live in
-`recovar/em/cuda/` and are included as `../em/cuda/<name>` (still one translation
-unit and one library); their Python FFI wrappers live in `recovar/em/cuda/kernels.py`.
+Two libraries are built from two translation units (relax split, seam S4):
+
+- `cuda_backproject.cu` -> `libcuda_backproject.so` (recovar): the pipeline
+  projection/backprojection handlers (`Backproject*`, `Project*`,
+  `BatchBackproject*`, `PerImageBackproject`), including their RELION modes.
+- `../em/cuda/relax_kernels.cu` -> `librelax_cuda.so` (EM, moves to relax): every
+  `Relion*`, `SparsePass2*`, VDAM, packing and noise-residual handler, the
+  persistent-texture C ABI and the native host replay; built by
+  `../em/cuda/Makefile`.
+
+Device helpers and the RELION-mode texture projection used by both live once in
+the public headers `include/recovar_cuda_common.cuh` and `include/device_scratch.cuh`
+(`recovar.cuda_build.include_dir()`); the EM Makefile adds that directory to the
+include path. Both units keep their items verbatim and in the original order, so
+per-kernel SASS equals the former single library (check with the relax-split
+`native_snapshot.py compare`). The EM headers in `recovar/em/cuda/`
+(`relion_vdam_mstep.cuh`, `relion_scoring.cuh` with `relion_coarse_diff2_projector_body.inc`,
+`relion_preprocess.cuh`, `relion_posterior.cuh`, `sparse_pass2_posterior.cuh`,
+`relion_translate_sum.cuh`, `noise_residual.cuh`, `vdam_trace.cuh`) are included by
+the EM unit only. Keep each library's Makefile prerequisites, loader staleness list
+(`_CUDA_BUILD_SOURCE_NAMES`, `_RELAX_CUDA_BUILD_SOURCE_NAMES`) and `MANIFEST.in`
+aligned when changing these boundaries.
 
 ## Runtime and interface
 
-`recovar/cuda_backproject.py` registers kernels through JAX XLA FFI.
+`recovar/cuda_backproject.py` loads `libcuda_backproject.so` and registers its kernels through JAX XLA FFI;
+`recovar/em/cuda/kernels.py` loads `librelax_cuda.so` through `recovar.cuda_build.NativeLibrary`
+(explicit path: `RECOVAR_RELAX_CUDA_LIB`) and registers the EM targets.
 `core/slicing.py` dispatches projection/backprojection operations to custom
 CUDA by default on GPU. The loader can build a missing or stale library;
 staleness includes source/Makefile modification times and missing FFI symbols.
