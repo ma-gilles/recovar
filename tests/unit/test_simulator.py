@@ -214,7 +214,8 @@ def _make_fake_param_generator(n_cols=9):
     return _generator
 
 
-def test_generate_simulated_dataset_tilt_branch_wires_ctf_and_metadata(monkeypatch):
+@pytest.mark.parametrize("n_ctf_cols", [9, 11])
+def test_generate_simulated_dataset_tilt_branch_wires_ctf_and_metadata(monkeypatch, n_ctf_cols):
     volumes = np.ones((2, 4**3), dtype=np.complex64)
     voxel_size = 1.5
     n_images = 6
@@ -261,7 +262,7 @@ def test_generate_simulated_dataset_tilt_branch_wires_ctf_and_metadata(monkeypat
         noise_scale_std=0.0,
         contrast_std=0.0,
         put_extra_particles=False,
-        dataset_param_generator=_make_fake_param_generator(),
+        dataset_param_generator=_make_fake_param_generator(n_ctf_cols),
         n_tilts=n_tilts,
         dose_per_tilt=2.0,
         angle_per_tilt=5.0,
@@ -272,6 +273,9 @@ def test_generate_simulated_dataset_tilt_branch_wires_ctf_and_metadata(monkeypat
     assert main_image_stack.shape == (n_images, 4, 4)
     np.testing.assert_array_equal(tilt_groups, np.array([0, 0, 0, 1, 1, 1]))
     assert ctf_params.shape[1] == 11  # base 9 + dose + angle
+    # The real generators already return 11 columns; dose must land in DOSE, not be appended.
+    np.testing.assert_array_equal(ctf_params[:, core.CTFParamIndex.DOSE], ((np.arange(n_images) % n_tilts) + 0.5) * 2.0)
+    np.testing.assert_array_equal(ctf_params[:, core.CTFParamIndex.TILT_ANGLE], 0)
     np.testing.assert_array_equal(
         ctf_params[:, core.CTFParamIndex.BFACTOR],
         -4 * ((np.arange(n_images) % n_tilts) + 0.5) * 2.0,

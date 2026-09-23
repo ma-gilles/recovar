@@ -1129,7 +1129,11 @@ def generate_simulated_dataset(
         # Angle ind is just set to 0 in this version
         dose = (tilt_numbers + 0.5) * dose_per_tilt
 
-        ctf_params = np.concatenate([ctf_params, dose[:, None], np.zeros_like(tilt_numbers[:, None])], axis=-1)
+        # Generators return either 9 columns or already the 11 of CTFParamIndex.
+        n_ctf_cols = int(core.CTFParamIndex.TILT_ANGLE) + 1
+        ctf_params = np.pad(ctf_params, ((0, 0), (0, max(0, n_ctf_cols - ctf_params.shape[1]))))
+        ctf_params[:, core.CTFParamIndex.DOSE] = dose
+        ctf_params[:, core.CTFParamIndex.TILT_ANGLE] = 0
 
         ##
         if noise_increase_per_tilt is not None:
