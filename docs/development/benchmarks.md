@@ -61,15 +61,15 @@ the input state and candidates before comparing precisions, and do not infer
 numerical noise merely because a discrepancy shrinks in double. Preserve
 intentional higher-precision host/metadata operations; this is not a blanket
 array-narrowing policy. See the mandatory
-[EM precision rule](../../recovar/em/AGENTS.md).
+[EM precision rule](https://github.com/ma-gilles/relax/blob/main/AGENTS.md).
 
 Retain the existing metric directions, tolerances and quantitative EM gates.
 Map quality uses FSC curves, FSC-AUC and established FSC summaries against GT
 and RELION. Map correlation is diagnostic and cannot override those gates.
 For K4, use Hungarian matching and show all class results; never accept a poor
 class because the mean passes. Keep initial/per-iteration/final products and
-convergence/finalization identities explicit. See [EM numeric rules](../../recovar/em/AGENTS.md)
-and [the program gates](../math/em_parity_program.md).
+convergence/finalization identities explicit. See [EM numeric rules](https://github.com/ma-gilles/relax/blob/main/AGENTS.md)
+and [the program gates](https://github.com/ma-gilles/relax/blob/main/docs/math/em_parity_program.md).
 
 Preserve casts, FFT frames, half-spectrum support, normalization, reduction
 order and candidate domains when comparing implementations. Match full state,

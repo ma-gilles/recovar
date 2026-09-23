@@ -26,7 +26,7 @@ numerical proposals separate. An untested WIP publication never implies acceptan
 
 ## Current memory and ownership
 
-The [EM status page](em_status.md) links the shared coordination board. The board
+The [EM status page](https://github.com/ma-gilles/relax/blob/main/docs/development/em_status.md) links the shared coordination board. The board
 contains only current ownership, source, active jobs and actionable handoffs.
 Each agent writes only its own status and handoffs; the integrator owns shared
 status/docs and publication. Replace historical payloads with archive links.

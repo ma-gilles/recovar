@@ -51,7 +51,7 @@ The shared RELION dump build is
 `/scratch/gpfs/GILLES/mg6942/relion/build_patched/`. Do not clone another oracle
 or edit/rebuild that shared resource without coordinating with its users.
 Record the actual source, patch and binary identity; a directory name does not
-identify the oracle. See [EM rules](../../recovar/em/AGENTS.md).
+identify the oracle. See [EM rules](https://github.com/ma-gilles/relax/blob/main/AGENTS.md).
 
 ## RECOVAR Paper Dataset Runbook
 
