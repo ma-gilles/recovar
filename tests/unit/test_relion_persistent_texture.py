@@ -428,20 +428,21 @@ def test_bound_cuda_library_keeps_persistent_texture_handles_live(
                 )
             )
 
+    # The persistent textures live in the EM library (librelax_cuda.so), which binds like the pipeline one.
     with jax.default_device(gpu_device):
-        cb._ensure_ffi()
-        bound = cb._loaded_lib_path
+        em_cuda_kernels._ensure_ffi()
+        bound = em_cuda_kernels._LIBRARY.loaded_path
         reference = project()
-        copy = tmp_path / "second_copy" / "libcuda_backproject.so"
+        copy = tmp_path / "second_copy" / "librelax_cuda.so"
         copy.parent.mkdir()
         shutil.copy(bound, copy)
-        monkeypatch.setenv("RECOVAR_CUDA_LIB", str(copy))
+        monkeypatch.setenv("RECOVAR_RELAX_CUDA_LIB", str(copy))
         with pytest.raises(RuntimeError, match="bound to"):
             project()
         # Without an explicit request, native calls keep using the bound library.
-        monkeypatch.delenv("RECOVAR_CUDA_LIB")
+        monkeypatch.delenv("RECOVAR_RELAX_CUDA_LIB")
         np.testing.assert_array_equal(project().view(np.uint32), reference.view(np.uint32))
-    assert cb._loaded_lib_path == bound
+    assert em_cuda_kernels._LIBRARY.loaded_path == bound
 
 
 def test_sparse_pass2_opens_eligible_texture_from_original_host_slab(monkeypatch):
