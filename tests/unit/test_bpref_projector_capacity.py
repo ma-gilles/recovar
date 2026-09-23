@@ -112,8 +112,13 @@ def test_capacity_static_and_runtime_image_contract(monkeypatch, failure):
 def test_runtime_radius_appended_without_changing_legacy_static_positions():
     source = Path(cb.__file__).read_text()
     node = next(n for n in ast.parse(source).body if isinstance(n, ast.FunctionDef) and n.name == FUNCTION)
+
+    def jit_static_argnums(value):
+        # The decorator may spell the positions inline or name a module constant.
+        return getattr(cb, value.id) if isinstance(value, ast.Name) else ast.literal_eval(value)
+
     static = [
-        ast.literal_eval(k.value)
+        jit_static_argnums(k.value)
         for decorator in node.decorator_list
         if isinstance(decorator, ast.Call)
         for k in decorator.keywords
