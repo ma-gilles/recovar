@@ -26,6 +26,7 @@ from recovar.em.sparse_pass2.sparse_pass2_wavg import (
     _relion_cuda_translate_wavg_norm_images,
     _relion_wavg_add_triplet_pixels_chunked,
     _relion_wavg_atomic_triplet_terms,
+    _relion_wavg_chunk_budget_bytes,
     _relion_wavg_chunk_bytes_per_image,
     _relion_wavg_image_chunk_ranges,
     _relion_wavg_rectangle_triplet_terms,
@@ -73,6 +74,12 @@ def test_failing_completion_bucket_wavg_chunks_fit_the_noise_block_budget(bucket
     # ... chunked it stays inside the 1 GiB noise-block budget of that run.
     for start, stop in _relion_wavg_image_chunk_ranges(bucket_images, per_image, GIB):
         assert (stop - start) * per_image <= GIB
+
+
+def test_wavg_chunk_budget_is_a_quarter_of_allocator_free_memory_at_least_the_noise_block_budget():
+    assert _relion_wavg_chunk_budget_bytes(GIB, None) == GIB
+    assert _relion_wavg_chunk_budget_bytes(GIB, 2 * GIB) == GIB
+    assert _relion_wavg_chunk_budget_bytes(GIB, 40 * GIB) == 10 * GIB
 
 
 def test_bucket_loop_snapshots_only_the_image_for_the_wavg_stage():

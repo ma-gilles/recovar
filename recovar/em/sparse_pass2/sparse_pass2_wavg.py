@@ -486,6 +486,21 @@ def _relion_wavg_chunk_bytes_per_image(
     return translated + powers + rectangle_terms
 
 
+def _relion_wavg_chunk_budget_bytes(max_block_bytes: int, allocator_free_bytes: int | None) -> int:
+    """Chunk budget of the Wavg stage: a quarter of the allocator's free bytes, at least ``max_block_bytes``.
+
+    Chunking only bounds memory; every chunk layout gives the same bits, and
+    each extra chunk costs the bucket tail host round trips (a whole-bucket
+    stage at current_size 100 ran 13% slower split about three ways, job 14288806).
+    So a bucket is split only when its Wavg stage would take more than a
+    quarter of the memory the allocator has left.
+    """
+
+    if allocator_free_bytes is None:
+        return int(max_block_bytes)
+    return max(int(max_block_bytes), int(allocator_free_bytes) // 4)
+
+
 def _relion_wavg_image_chunk_ranges(batch: int, bytes_per_image: int, max_block_bytes: int):
     """Contiguous ``(start, stop)`` image ranges whose chunk working set fits the budget.
 

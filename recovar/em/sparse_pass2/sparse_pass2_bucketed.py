@@ -310,6 +310,7 @@ from recovar.em.sparse_pass2.sparse_pass2_wavg import (
     _make_relion_wavg_rectangle,
     _relion_cuda_translate_wavg_norm_images,
     _relion_wavg_add_triplet_pixels_chunked,
+    _relion_wavg_chunk_budget_bytes,
     _relion_wavg_direct_norm_per_image,
     _replace_low_shell_noise_with_relion_wavg_direct_residual,
     _replace_untranslated_low_shell_norm_power,
@@ -1748,7 +1749,10 @@ def compute_pass2_stats_sparse_bucketed(
                             scale=bucket_scale_for_stats,
                             raw_ctf=direct_ctf_rfloat_recon,
                             posterior=noise_probs,
-                            max_block_bytes=max_noise_block_bytes,
+                            max_block_bytes=_relion_wavg_chunk_budget_bytes(
+                                max_noise_block_bytes,
+                                _jax_allocator_free_memory_bytes(),
+                            ),
                         )
                     ),
                     dtype=np.float32,
@@ -3240,7 +3244,10 @@ def compute_pass2_stats_sparse_bucketed(
                                 scale=bucket_scale_for_stats,
                                 raw_ctf=direct_ctf_rfloat_recon,
                                 posterior=noise_probs,
-                                max_block_bytes=max_noise_block_bytes,
+                                max_block_bytes=_relion_wavg_chunk_budget_bytes(
+                                    max_noise_block_bytes,
+                                    _jax_allocator_free_memory_bytes(),
+                                ),
                             )
                         if chunked_scale_aa_target_rows.size:
                             selected = jnp.asarray(
