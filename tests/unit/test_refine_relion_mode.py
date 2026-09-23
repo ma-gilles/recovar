@@ -8303,34 +8303,57 @@ def test_skip_deferred_zero_norm_preserves_real_local_outputs(
         return original_stats(**kwargs)
 
     monkeypatch.setattr(engine, "make_noise_stats", observe_stats)
-    results = []
-    for enabled in ("0", "1"):
-        monkeypatch.setenv(engine.EXACT_LOCAL_SKIP_DEFERRED_ZERO_NORM_ENV, enabled)
-        results.append(engine.run_local_em_exact(
-            *case, "linear_interp", image_batch_size=2, rotation_block_size=8,
-            current_size=6, accumulate_noise=True, reconstruct_significant_only=True,
-            return_profile=True, score_with_masked_images=False,
-            half_spectrum_scoring=False, max_significants=-1,
-            source_faithful_spectrum_norm=spectrum_norm,
-            use_float64_normalization=normalization_float64,
-        ))
-    assert len(captured) == 4  # Two real buckets in each treatment.
-    assert all(int(result.profile["big_jit_bucket_count"]) == 2 for result in results)
-    assert np.any(np.asarray(results[0].noise_stats.wsum_norm_correction) != 0)
-    # Publication preserves the carry dtype, including the float64 spectrum sum.
-    assert len(raw_norms) == 2 and raw_norms[0].tobytes() == raw_norms[1].tobytes()
-    assert results[0].noise_stats.wsum_norm_correction.dtype == np.dtype(np.float64 if spectrum_norm else np.float32)
-    first, first_tree = jax.tree_util.tree_flatten(
-        tuple(getattr(results[0], field.name) for field in fields(results[0]) if field.name != "profile")
+
+    def run_both_treatments():
+        captured.clear()
+        raw_norms.clear()
+        results = []
+        for enabled in ("0", "1"):
+            monkeypatch.setenv(engine.EXACT_LOCAL_SKIP_DEFERRED_ZERO_NORM_ENV, enabled)
+            results.append(engine.run_local_em_exact(
+                *case, "linear_interp", image_batch_size=2, rotation_block_size=8,
+                current_size=6, accumulate_noise=True, reconstruct_significant_only=True,
+                return_profile=True, score_with_masked_images=False,
+                half_spectrum_scoring=False, max_significants=-1,
+                source_faithful_spectrum_norm=spectrum_norm,
+                use_float64_normalization=normalization_float64,
+            ))
+        assert len(captured) == 4  # Two real buckets in each treatment.
+        assert all(int(result.profile["big_jit_bucket_count"]) == 2 for result in results)
+        assert np.any(np.asarray(results[0].noise_stats.wsum_norm_correction) != 0)
+        # Publication preserves the carry dtype, including the float64 spectrum sum.
+        assert len(raw_norms) == 2
+        assert results[0].noise_stats.wsum_norm_correction.dtype == np.dtype(np.float64 if spectrum_norm else np.float32)
+        return results
+
+    def assert_bitwise_equal(first, second):
+        first, first_tree = jax.tree_util.tree_flatten(first)
+        second, second_tree = jax.tree_util.tree_flatten(second)
+        assert first_tree == second_tree
+        for left, right in zip(first, second, strict=True):
+            left, right = np.asarray(left), np.asarray(right)
+            assert left.dtype == right.dtype and left.shape == right.shape
+            assert left.tobytes() == right.tobytes()
+
+    results = run_both_treatments()
+    if jax.default_backend() != "cpu":
+        # On the GPU, Ft_y, Ft_ctf and the noise sums (wsum_norm_correction
+        # among them) accumulate through atomics whose order varies from run to
+        # run: repeating one treatment alone moves them by up to 1.5e-7 relative
+        # on an A100, while the CPU repeats bitwise. Here only the per-image
+        # scoring outputs, which no atomic accumulates, are compared bitwise;
+        # the whole-result identity is checked on the deterministic CPU backend.
+        assert_bitwise_equal(
+            (results[0].hard_assignments, results[0].stats),
+            (results[1].hard_assignments, results[1].stats),
+        )
+        monkeypatch.setenv("RECOVAR_DISABLE_CUDA", "1")
+        with jax.default_device(jax.devices("cpu")[0]):
+            results = run_both_treatments()
+    assert raw_norms[0].tobytes() == raw_norms[1].tobytes()
+    assert_bitwise_equal(
+        *(tuple(getattr(result, field.name) for field in fields(result) if field.name != "profile") for result in results)
     )
-    second, second_tree = jax.tree_util.tree_flatten(
-        tuple(getattr(results[1], field.name) for field in fields(results[1]) if field.name != "profile")
-    )
-    assert first_tree == second_tree
-    for left, right in zip(first, second, strict=True):
-        left, right = np.asarray(left), np.asarray(right)
-        assert left.dtype == right.dtype and left.shape == right.shape
-        assert left.tobytes() == right.tobytes()
 
 
 @pytest.mark.parametrize("token, expected", [(None, False), ("0", False), ("1", True), (" 1 ", True)])
