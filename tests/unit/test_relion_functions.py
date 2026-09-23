@@ -1777,6 +1777,15 @@ def test_post_process_large_grid_guard_uses_reconstruction_grid_for_compact_accu
         clear_cache()
 
 
+@pytest.fixture
+def _jax_cpu_default_device():
+    """Pin JAX to CPU for host-vs-JAX bitwise checks; cuFFT differs from the host FFT at ~1e-16."""
+    with jax.default_device(jax.devices("cpu")[0]):
+        yield
+
+
+
+@pytest.mark.usefixtures("_jax_cpu_default_device")
 def test_post_process_small_grid_auto_guard_matches_disabled_bitwise(monkeypatch):
     clear_cache = getattr(rf.post_process_from_filter_v2, "clear_cache", None)
     volume_shape = (6, 6, 6)
@@ -2006,6 +2015,7 @@ def test_large_odd_accumulator_crop_routes_directly_to_fftw(monkeypatch):
         clear_cache()
 
 
+@pytest.mark.usefixtures("_jax_cpu_default_device")
 def test_large_host_staged_pre_ifft_split_matches_monolith_bitwise(monkeypatch):
     from recovar.core import fourier_transform_utils as ftu
     from recovar.em.refinement import mean_helpers
@@ -2107,6 +2117,7 @@ def test_large_host_staged_pre_ifft_split_matches_monolith_bitwise(monkeypatch):
     ("reconstruction_size", "output_size"),
     [(8, 4), (10, 6), (9, 5), (11, 6)],
 )
+@pytest.mark.usefixtures("_jax_cpu_default_device")
 def test_host_irfft_center_crop_matches_jax_without_full_shift(
     monkeypatch,
     reconstruction_size,
@@ -2147,6 +2158,7 @@ def test_host_irfft_center_crop_matches_jax_without_full_shift(
     np.testing.assert_array_equal(actual, expected)
 
 
+@pytest.mark.usefixtures("_jax_cpu_default_device")
 def test_host_unpadded_tail_matches_existing_fftw_half_finish_bitwise():
     from recovar.core import fourier_transform_utils as ftu
     from recovar.em.refinement import mean_helpers
