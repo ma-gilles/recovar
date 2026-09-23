@@ -71,6 +71,7 @@ def _module_env(**overrides):
             "_packed_reconstruction_rows",
             "_build_reconstruction_pack_indices",
             "_build_nonzero_reconstruction_pack_indices",
+            "_unpadded_rows",
         )
         if hasattr(engine, name)
     }
@@ -133,6 +134,15 @@ def test_disabled_packing_statement_order_matches_frozen_parent():
             # this fixture. Compare its disabled path to the original parent.
             if ast.unparse(node.test) == "host_publication_enabled":
                 return self.visit(node.orelse)
+            return self.generic_visit(node)
+
+        def visit_Call(self, node):
+            # 243bcbc76 replaced the per-bucket ``array[:n]`` trims with
+            # ``_unpadded_rows(array, n)``, which skips the slice when it is an
+            # identity. Compare the parent's inline slice.
+            if isinstance(node.func, ast.Name) and node.func.id == "_unpadded_rows" and len(node.args) == 2:
+                array, n_rows = (self.visit(arg) for arg in node.args)
+                return ast.Subscript(value=array, slice=ast.Slice(upper=n_rows), ctx=ast.Load())
             return self.generic_visit(node)
 
         def visit_If(self, node):
