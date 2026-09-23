@@ -25,3 +25,6 @@ class AugmentedPPCAStats:
     log_likelihood: float = 0.0
     n_images: int = 0
     diagnostics: dict[str, Any] = field(default_factory=dict)
+    residual_gradient: jax.Array | None = None
+    embeddings: jax.Array | None = None
+    original_image_ids: jax.Array | None = None
