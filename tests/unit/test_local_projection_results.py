@@ -100,7 +100,8 @@ def test_local_projection_views(monkeypatch, backend, current_size, reconstruct,
     )
     assert len(calls) == 1
     assert calls[0][0] == expected_backend
-    if expected_backend == "ordinary":
+    if expected_backend in ("ordinary", "relion"):
+        # 41128dcd0: a disabled exact disk is the RELION projector default (the
+        # native kernel owns image clipping), so the owner forwards it only
+        # when it is requested; the ordinary projector never takes it.
         assert "mask_current_image_disk" not in calls[0][-1]
-    elif expected_backend == "relion":
-        assert calls[0][-1]["mask_current_image_disk"] is False
