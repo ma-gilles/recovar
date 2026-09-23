@@ -8486,6 +8486,75 @@ def batch_project(
     )(volumes)
 
 
+# ──────────────────────────────────────────────────────────────────────
+# ctypes helpers  (for standalone benchmarks without JAX JIT overhead)
+# ──────────────────────────────────────────────────────────────────────
+
+_cudart = None
+
+
+def _get_cudart():
+    global _cudart
+    if _cudart is not None:
+        return _cudart
+    import glob as _glob
+
+    for name in ("libcudart.so", "libcudart.so.12", "libcudart.so.11.0"):
+        try:
+            _cudart = ctypes.CDLL(name)
+            return _cudart
+        except OSError:
+            continue
+    for p in sorted(_glob.glob("/usr/local/cuda*/lib64/libcudart.so"), reverse=True):
+        try:
+            _cudart = ctypes.CDLL(p)
+            return _cudart
+        except OSError:
+            continue
+    raise RuntimeError("Cannot find libcudart.so")
+
+
+class GpuArray:
+    """Minimal GPU allocation managed via cudart."""
+
+    def __init__(self, data: np.ndarray):
+        self.shape, self.dtype, self.nbytes = data.shape, data.dtype, data.nbytes
+        data = np.ascontiguousarray(data)
+        rt = _get_cudart()
+        self._ptr = ctypes.c_void_p()
+        assert rt.cudaMalloc(ctypes.byref(self._ptr), ctypes.c_size_t(self.nbytes)) == 0
+        assert (
+            rt.cudaMemcpy(
+                self._ptr, data.ctypes.data_as(ctypes.c_void_p), ctypes.c_size_t(self.nbytes), ctypes.c_int(1)
+            )
+            == 0
+        )
+
+    def as_float_ptr(self):
+        return ctypes.cast(self._ptr, ctypes.POINTER(ctypes.c_float))
+
+    def to_numpy(self):
+        out = np.empty(self.shape, dtype=self.dtype)
+        _get_cudart().cudaMemcpy(
+            out.ctypes.data_as(ctypes.c_void_p), self._ptr, ctypes.c_size_t(self.nbytes), ctypes.c_int(2)
+        )
+        return out
+
+    def free(self):
+        if self._ptr:
+            try:
+                _get_cudart().cudaFree(self._ptr)
+            except Exception:
+                logger.debug("cudaFree failed", exc_info=True)
+            self._ptr = ctypes.c_void_p()
+
+    def __del__(self):
+        try:
+            self.free()
+        except Exception:
+            pass  # destructors must not raise
+
+
 def relion_firstiter_bpref_fused_x_half(
     data_volume: jax.Array,
     weight_volume: jax.Array,
