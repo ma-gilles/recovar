@@ -10,12 +10,12 @@ See ``docs/math/relion_refinement_algorithm.md`` for the algorithm map.
 """
 
 import gc
-from functools import partial
 import logging
 import os
 import time
-from typing import NamedTuple
+from functools import partial
 from types import SimpleNamespace
+from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
@@ -24,10 +24,8 @@ import numpy as np
 from recovar import utils
 from recovar.core import fourier_transform_utils
 from recovar.data_io import cryoem_dataset
-from recovar.em.refinement.firstiter_cc import single_class_bucketed_pass2_selected
-from recovar.em.classification.k_class_inputs import _select_projector_half_for_class
 from recovar.em import sampling
-from recovar.em.sparse_pass2 import sparse_pass2_budget, firstiter_bpref
+from recovar.em.classification.k_class_inputs import _select_projector_half_for_class
 from recovar.em.dense.score_outputs import (
     HalfScoreResult,
     PerHalfOutputs,
@@ -84,7 +82,6 @@ from recovar.em.diagnostics.state_swap_runtime import (
     _copy_optional_float_pair,
     _snapshot_state_swap_inputs,
 )
-from recovar.em.helpers.projection import _host_relion_projector_texture_enabled
 from recovar.em.helpers.batch_planning import (
     _RELION_EM_COMPACT_K1_FIXED_BASE_GB,
     _estimate_relion_em_batch_sizes,
@@ -140,6 +137,7 @@ from recovar.em.helpers.orientation_priors import (
     relion_translation_search_base,
     remap_half_direction_prior_to_healpix_order,
 )
+from recovar.em.helpers.projection import _host_relion_projector_texture_enabled
 from recovar.em.helpers.resolution import (
     _bootstrap_current_size_relion,
     _firstiter_cc_ini_high_tau2_taper,
@@ -160,6 +158,7 @@ from recovar.em.helpers.resolution import (
 from recovar.em.helpers.types import make_noise_stats, make_relion_stats
 from recovar.em.local.local_layout import _selected_rotation_matrices
 from recovar.em.refinement import finalization_policy
+from recovar.em.refinement.firstiter_cc import single_class_bucketed_pass2_selected
 from recovar.em.refinement.half_inputs import (
     HalfInputState,
     _as_sigma_offset_half_pair,
@@ -176,9 +175,9 @@ from recovar.em.refinement.mean_helpers import (
     _mean_variance_for_scoring_half,
     _merged_mean_from_halves,
     _normalize_initial_means,
-    _snapshot_and_release_previous_k1_means,
     _reconstruct_and_postprocess_means,
     _reconstruct_volume_eager,
+    _snapshot_and_release_previous_k1_means,
     _stack_class_tau2_update_details,
     _updated_mean_variance_per_half,
     compute_unregularized_halfmaps_and_align_signs,
@@ -218,6 +217,7 @@ from recovar.em.sampling import (
     relion_sampling_perturbation_for_iteration,
     rotation_grid_size,
 )
+from recovar.em.sparse_pass2 import firstiter_bpref, sparse_pass2_budget
 from recovar.reconstruction.regularization import (
     compute_current_size_relion,
     fsc_to_relion_ssnr,

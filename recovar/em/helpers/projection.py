@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 import logging
+import math
 import os
 from functools import partial
 from types import SimpleNamespace
 
 import jax
 import jax.numpy as jnp
-import math
-
 import numpy as np
 
 from recovar import core

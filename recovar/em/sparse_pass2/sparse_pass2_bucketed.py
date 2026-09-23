@@ -28,26 +28,25 @@ from __future__ import annotations
 
 import gc
 import logging
-from dataclasses import replace
 import os
 import time
+from dataclasses import replace
 from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
 import numpy as np
 
-from recovar.em.helpers.fourier_window import make_stable_fourier_window_shape_plan
-
 from recovar.em.classification.k_class_results import (
     DeferredHostUpdates,
+    SparseKClassDeviceNoiseTotals,
     SparseKClassHostStatistics,
     SparseKClassNoiseStatistics,
-    SparseKClassDeviceNoiseTotals,
 )
 from recovar.em.diagnostics import bpref_diagnostics, finite_check
 from recovar.em.diagnostics import norm_scale as norm_scale_diagnostics
 from recovar.em.diagnostics import pass2 as pass2_diagnostics
+from recovar.em.diagnostics.chunk_profile import SparseChunkProfile
 from recovar.em.diagnostics.compact_candidate_capture import (
     compact_capture_requested_for_original_indices,
     compact_capture_requested_particle_count,
@@ -67,8 +66,13 @@ from recovar.em.diagnostics.sparse_pass2_dump import (
     _prioritize_stopped_pass2_dump_buckets,
 )
 from recovar.em.helpers.batch_fetch import fetch_indexed_batch, original_image_indices, prefetched_batches
-from recovar.em.diagnostics.chunk_profile import SparseChunkProfile
-from recovar.em.helpers.env_flags import parse_env_binary_flag, parse_env_flag, parse_env_int_set, parse_env_nonnegative_int
+from recovar.em.helpers.env_flags import (
+    parse_env_binary_flag,
+    parse_env_flag,
+    parse_env_int_set,
+    parse_env_nonnegative_int,
+)
+from recovar.em.helpers.fourier_window import make_stable_fourier_window_shape_plan
 from recovar.em.helpers.half_spectrum import (
     make_relion_noise_shell_indices_half,
     mask_relion_noise_shell_indices_to_current_window,
@@ -108,22 +112,22 @@ from recovar.em.relion.relion_projector_setup import cast_relion_projector_for_e
 from recovar.em.scoring.compact_candidates import _candidate_mask_count
 from recovar.em.scoring.sparse_bucket_arrays import (
     _attach_group_static_active_row_targets,
-    _group_static_pad_to,
-    bucket_rotations_device_enabled,
     _bucket_pass2_inputs,
     _bucket_sparse_k_class_pass2_inputs,
     _build_bucket_arrays,
-    image_capacity_enabled,
-    quantized_image_capacity,
-    pad_bucket_arrays_to_image_capacity,
-    pad_compact_pair_arrays_to_image_capacity,
     _build_compact_pair_bucket_arrays,
     _build_compact_pair_bucket_arrays_from_per_image_inputs,
     _build_k_class_bucket_arrays,
     _compact_pair_image_mask_for_threshold,
+    _group_static_pad_to,
     _prepare_per_image_compact_candidate_pairs,
     _prepare_per_image_pass2_inputs,
+    bucket_rotations_device_enabled,
     coarse_winner_local_pose_ids,
+    image_capacity_enabled,
+    pad_bucket_arrays_to_image_capacity,
+    pad_compact_pair_arrays_to_image_capacity,
+    quantized_image_capacity,
 )
 from recovar.em.sparse_pass2 import firstiter_bpref, sparse_pass2_projection_blocks
 from recovar.em.sparse_pass2.sparse_pass2_adjoint import (
@@ -134,10 +138,10 @@ from recovar.em.sparse_pass2.sparse_pass2_adjoint import (
     _split_compact_pair_buckets_by_projection_gather_budget,
 )
 from recovar.em.sparse_pass2.sparse_pass2_bucket_io import (
-    _best_pair_indices_device,
-    _log_score_offset_from_min_diff2_device,
-    _log_score_offset_from_batch_norm_device,
     _absolute_log_z_to_score_frame_device,
+    _best_pair_indices_device,
+    _log_score_offset_from_batch_norm_device,
+    _log_score_offset_from_min_diff2_device,
     _prepare_bucket_io,
     _relion_cuda_score_translation_angles_if_available,
     _reorder_to_indices,
@@ -158,7 +162,6 @@ from recovar.em.sparse_pass2.sparse_pass2_bucket_plan import (
     _validate_k_class_execution_bucket_partition,
 )
 from recovar.em.sparse_pass2.sparse_pass2_budget import (
-    _split_sparse_pass2_buckets_by_mstep_output_budget,
     _EXACT_RAW_DIFF2_CACHE_MAX_BYTES,
     _compact_pair_dense_mstep_max_bytes_for_pass,
     _device_free_memory_bytes,
@@ -180,6 +183,7 @@ from recovar.em.sparse_pass2.sparse_pass2_budget import (
     _projection_cache_fits_budget,
     _projection_cache_max_bytes_for_pass,
     _projection_cache_transient_bytes,
+    _split_sparse_pass2_buckets_by_mstep_output_budget,
 )
 from recovar.em.sparse_pass2.sparse_pass2_compact_pair_sums import (
     _active_flat_gather_chunk_rows,
@@ -190,8 +194,8 @@ from recovar.em.sparse_pass2.sparse_pass2_compact_pair_sums import (
     _compact_pair_weighted_rotation_and_image_sums_native,
     _compact_pair_weighted_rotation_sums,
     _compact_pair_weighted_sums_and_noise_native,
-    _real_flat_row_indices_from_actual_counts,
     _compute_active_noise_rows_chunked,
+    _real_flat_row_indices_from_actual_counts,
     _rectangular_active_prematmul_is_efficient,
     _rectangular_active_weighted_image_sums_or_none,
     _rectangular_active_weighted_sums_or_none,
@@ -203,10 +207,6 @@ from recovar.em.sparse_pass2.sparse_pass2_noise_blocks import (
     _compute_noise_block_chunked,
 )
 from recovar.em.sparse_pass2.sparse_pass2_policy import (
-    vectorized_stats_replay_enabled,
-    fused_chunk_enabled,
-    stable_windows_enabled,
-    group_static_active_rows_enabled,
     _BPREF_EXECUTION_GROUP_BY_BUCKET_SIZE_ENV,
     _BPREF_EXECUTION_ORDER_LOCAL_FILE_ENV,
     _BPREF_REVERSE_PHYSICAL_ORDER_ENV,
@@ -243,6 +243,10 @@ from recovar.em.sparse_pass2.sparse_pass2_policy import (
     _tail_bucket_coalesce_params_for_pass,
     _translation_tile_half_pixels_for_budget,
     _windowed_translation_tile_cap_enabled_for_pass,
+    fused_chunk_enabled,
+    group_static_active_rows_enabled,
+    stable_windows_enabled,
+    vectorized_stats_replay_enabled,
 )
 from recovar.em.sparse_pass2.sparse_pass2_posterior import (
     _SPARSE_KCLASS_RELION_FINE_MSTEP_PRUNE_ENV,
@@ -277,9 +281,9 @@ from recovar.em.sparse_pass2.sparse_pass2_projection_blocks import (
     _projection_kwargs_for_relion_score_window,
 )
 from recovar.em.sparse_pass2.sparse_pass2_scoring import (
-    _fused_chunk_scores_and_log_z,
     _compact_fused_translate_scoring_enabled,
     _fine_diff2_masked_enabled,
+    _fused_chunk_scores_and_log_z,
     _gather_pair_rotation_log_prior,
     _gather_pair_translation_log_prior,
     _gather_projection_cache_rows,

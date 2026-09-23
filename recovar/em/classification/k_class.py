@@ -1132,11 +1132,11 @@ def _run_dense_k_class_joint_firstiter_score_probe(
     """Score RELION firstiter-CC K-class coarse poses in one shared pass."""
 
     from recovar.em.diagnostics.coarse_gaussian_diagnostics import _significance_debug_dump_matches
+    from recovar.em.helpers.projection import compact_relion_projector_half_for_centered_indices
     from recovar.em.scoring.significance import (
         _compute_k_class_significance_batched,
         _global_pass1_relion_projector_texture_enabled,
     )
-    from recovar.em.helpers.projection import compact_relion_projector_half_for_centered_indices
 
     means_array = _as_class_means(means_array)
     n_classes = int(means_array.shape[0])
@@ -2624,7 +2624,6 @@ def run_dense_k_class_em_adaptive(
     # Lazy import to avoid the formatter stripping a top-level name that is
     # only referenced inside this function.
     from recovar.em.scoring.significance import _compute_k_class_significance_batched
-
     from recovar.em.symmetry import canonicalize_rotational_symmetry
 
     symmetry_label = canonicalize_rotational_symmetry(

@@ -14,7 +14,6 @@ from dataclasses import dataclass
 
 import numpy as np
 
-
 from recovar.em.classification.k_class import run_local_k_class_em
 from recovar.em.helpers.batch_planning import _estimate_relion_em_batch_sizes
 from recovar.em.helpers.types import LocalEMResult, NoiseStats, RelionStats

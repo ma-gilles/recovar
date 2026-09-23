@@ -107,11 +107,11 @@ from recovar.em.local.local_backprojection import (
     flatten_bucket_rows,
 )
 from recovar.em.local.local_batch_planning import (
-    _exact_local_runtime_free_memory_bytes,
-    _exact_local_score_only_preprocess_image_batch_size,
     _exact_local_big_jit_max_bucket_rotations,
     _exact_local_effective_max_hypotheses_per_microbatch,
     _exact_local_microbatch_env_overridden,
+    _exact_local_runtime_free_memory_bytes,
+    _exact_local_score_only_preprocess_image_batch_size,
     _exact_local_xhalf_auto_microbatch_boost,
     _exact_local_xhalf_projection_microbatch_cap,
     _exact_local_xhalf_projection_target_row_pixels,

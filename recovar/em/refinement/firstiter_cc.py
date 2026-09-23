@@ -23,8 +23,8 @@ from recovar.em.sampling import (
 
 def single_class_bucketed_pass2_selected(*, firstiter: bool) -> bool:
     """Whether K1 uses the bucketed projector/BPref lifetime."""
-    from recovar.em.classification.k_class import _use_fused_sparse_k_class_pass2
     from recovar.em.classification.k1_local_pass2 import k1_local_pass2_engine_selected
+    from recovar.em.classification.k_class import _use_fused_sparse_k_class_pass2
     from recovar.em.sparse_pass2.resident_pass2 import resident_pass2_requested
     return bool(
         _sparse_pass2_selected("RECOVAR_K_CLASS_DENSE_PASS2" if firstiter else "RECOVAR_K1_DENSE_PASS2")

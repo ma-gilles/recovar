@@ -10,17 +10,16 @@ from __future__ import annotations
 import functools
 import logging
 import time
-from recovar.em.diagnostics.sparse_pass2_dump import _add_sparse_group_timing
 from functools import partial
 from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
 import numpy as np
-from recovar.em.helpers.dtype_policy import audit_operand_precision
 
 from recovar.em.diagnostics import finite_check
-from recovar.em.helpers.dtype_policy import DensePrecisionPolicy
+from recovar.em.diagnostics.sparse_pass2_dump import _add_sparse_group_timing
+from recovar.em.helpers.dtype_policy import DensePrecisionPolicy, audit_operand_precision
 from recovar.em.helpers.env_flags import parse_env_binary_flag
 from recovar.em.helpers.half_spectrum import make_half_image_weights, make_shell_indices_half
 from recovar.em.helpers.image_shifts import apply_relion_integer_pre_shifts, half_image_phase_factors

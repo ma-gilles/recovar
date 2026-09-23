@@ -1,6 +1,7 @@
 """Input-STAR pose initialization in matched half-local particle order."""
 
 import argparse
+
 import numpy as np
 
 from recovar.em.relion import relion_metadata

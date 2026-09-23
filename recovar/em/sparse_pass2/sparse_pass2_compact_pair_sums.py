@@ -15,8 +15,8 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from recovar.em.helpers.env_flags import parse_env_flag
 from recovar.em.helpers.deterministic_reduce import add_segment_sum
+from recovar.em.helpers.env_flags import parse_env_flag
 from recovar.em.local.local_backprojection import (
     compute_local_ctf_sums_from_probs_sum_t,
     compute_local_mstep_sums,

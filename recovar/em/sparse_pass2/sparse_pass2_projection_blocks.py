@@ -10,6 +10,7 @@ Radius propagation: ``docs/math/sparse_projection_radius.md``.
 from __future__ import annotations
 
 import logging
+
 logger = logging.getLogger(__name__)
 
 from functools import partial

@@ -10,8 +10,9 @@ from __future__ import annotations
 
 import logging
 import time
-import jax.numpy as jnp
 from pathlib import Path
+
+import jax.numpy as jnp
 
 from recovar.em.diagnostics import pass2 as pass2_diagnostics
 from recovar.em.helpers.env_flags import parse_env_flag

@@ -6,10 +6,10 @@ matching the final donor implementation. Profiling is diagnostic, not timing
 qualification; its synchronization changes execution overlap.
 """
 
-from contextlib import AbstractContextManager
 import itertools
 import logging
 import os
+from contextlib import AbstractContextManager
 
 import jax
 

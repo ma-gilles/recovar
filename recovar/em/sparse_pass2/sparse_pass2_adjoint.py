@@ -8,8 +8,6 @@ projection-gather budget split of compact-pair buckets.
 
 from __future__ import annotations
 
-from recovar.em.helpers.adjoint import adjoint_slice_volume_windowed_donating as _adjoint_slice_volume_windowed_donating
-
 import functools
 import logging
 
@@ -20,9 +18,13 @@ import numpy as np
 from recovar.em.diagnostics import bpref_diagnostics
 from recovar.em.helpers.adjoint import adjoint_slice_volume_half as _adjoint_slice_volume_half
 from recovar.em.helpers.adjoint import adjoint_slice_volume_windowed as _adjoint_slice_volume_windowed
+from recovar.em.helpers.adjoint import adjoint_slice_volume_windowed_donating as _adjoint_slice_volume_windowed_donating
 from recovar.em.helpers.env_flags import parse_env_flag
 from recovar.em.local.local_layout import _exact_bucket_rotation_size
-from recovar.em.scoring.sparse_bucket_arrays import _compact_bucket_size_for_class, bucket_chunk_bounds, ladder_chunks_enabled
+from recovar.em.scoring.sparse_bucket_arrays import (
+    _compact_bucket_size_for_class,
+    bucket_chunk_bounds,
+)
 from recovar.em.sparse_pass2.sparse_pass2_budget import (
     _complex_counterpart_real_dtype,
     _dtype_itemsize,

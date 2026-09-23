@@ -15,14 +15,13 @@ import subprocess
 import jax
 import numpy as np
 
-from recovar.em.helpers.env_flags import parse_env_nonnegative_int
 from recovar.em.helpers.deterministic_reduce import deterministic_reductions_enabled
+from recovar.em.helpers.env_flags import parse_env_nonnegative_int
 from recovar.em.local.local_layout import (
     LocalHypothesisLayout,
     _exact_bucket_rotation_size,
     _exact_local_large_bucket_quantum,
 )
-
 from recovar.em.sparse_pass2 import sparse_pass2_budget as _sparse_pass2_budget
 
 logger = logging.getLogger(__name__)

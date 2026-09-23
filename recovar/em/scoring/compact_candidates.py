@@ -716,7 +716,6 @@ def _compact_pair_index_arrays_impl(tables, parents, ftp, counts, real_rows, *, 
     C order: its row is the last row whose exclusive start is ``<= p``, its
     translation the ``(p - start)``-th valid translation of that row's coarse row.
     """
-    import jax
     import jax.numpy as jnp
 
     n_alloc, rows = parents.shape

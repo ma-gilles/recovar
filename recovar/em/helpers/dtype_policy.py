@@ -10,7 +10,6 @@ from dataclasses import dataclass
 import jax.numpy as jnp
 import numpy as np
 
-
 logger = logging.getLogger(__name__)
 
 OPERAND_PRECISION_CHECK_ENV = "RECOVAR_EM_OPERAND_PRECISION_CHECK"

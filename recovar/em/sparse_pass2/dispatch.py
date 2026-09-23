@@ -1,7 +1,8 @@
 """Select the supported sparse pass-2 engine without changing admission policy."""
 
-import numpy as np
 import logging
+
+import numpy as np
 
 from recovar.em.reference.sparse_pass2 import _compute_pass2_stats_sparse_perimage_reference
 

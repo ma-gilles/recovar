@@ -4,17 +4,20 @@ Native accumulation stays in RELION units until the half has finished; callers
 own the final conversion to RECOVAR FFT normalization and CTF sign.
 """
 from __future__ import annotations
+
+import logging
+import os
 from functools import partial
 from typing import NamedTuple
-import os
-import logging
+
 logger = logging.getLogger(__name__)
 import jax
 import jax.numpy as jnp
 import numpy as np
+
 from recovar.em.diagnostics import bpref_diagnostics, finite_check
-from recovar.em.sparse_pass2 import sparse_pass2_budget, sparse_pass2_policy
 from recovar.em.helpers.env_flags import parse_env_flag as _env_flag_enabled
+from recovar.em.sparse_pass2 import sparse_pass2_budget, sparse_pass2_policy
 from recovar.em.sparse_pass2.sparse_pass2_budget import _optional_positive_int_env
 
 _RELION_FIRSTITER_FUSED_BPREF_ENV = "RECOVAR_K1_RELION_FIRSTITER_FUSED_BPREF"

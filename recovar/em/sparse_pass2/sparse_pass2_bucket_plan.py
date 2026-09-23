@@ -12,13 +12,13 @@ import os
 from typing import NamedTuple
 
 import numpy as np
-from recovar.em.scoring.sparse_bucket_arrays import bucket_chunk_bounds
 
 from recovar.em.helpers.env_flags import parse_env_int_set
 from recovar.em.scoring.compact_candidates import SparseCandidateMask, _candidate_mask_is_full
 from recovar.em.scoring.sparse_bucket_arrays import (
     _DEFAULT_MAX_HYPOTHESES_PER_MICROBATCH,
     _bucket_sparse_k_class_compact_pair_counts,
+    bucket_chunk_bounds,
 )
 from recovar.em.sparse_pass2.sparse_pass2_policy import _compact_pair_max_images_per_microbatch_for_pass
 
