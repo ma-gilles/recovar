@@ -100,7 +100,9 @@ def test_gpu_memory_arg_in_command(cmd_name):
         env=repo_subprocess_env(),
         capture_output=True,
         text=True,
-        timeout=30,
+        # Wall-clock guard only: a cold `--help` import takes 15-20 s alone and
+        # exceeded 30 s in a 32-way parallel CPU sweep.
+        timeout=120,
     )
     # A failed child (including its import-root check) must not pass on text alone.
     assert result.returncode == 0, result.stderr[-2000:]
