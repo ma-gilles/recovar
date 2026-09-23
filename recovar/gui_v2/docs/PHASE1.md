@@ -56,7 +56,7 @@ These are explicitly deferred. Do not implement, even partially:
 
 ### Job Types (Phase 1)
 
-The original Phase 1 contract required these four job types:
+Only these four job types have GUI forms:
 
 | Job Type | Required Fields | Advanced Fields (collapsed) |
 |----------|----------------|----------------------------|
@@ -65,12 +65,7 @@ The original Phase 1 contract required these four job types:
 | **Compute State** | result_dir, zdim, latent coordinate (auto-filled from scatter plot click; see access paths below) | output name |
 | **Compute Trajectory** | result_dir, zdim, z_start, z_end (auto-filled from two scatter plot clicks; see access paths below) | n-vols-along-path, output name |
 
-The implemented GUI has subsequently added density, stable states,
-postprocess, downsample, and InitialModel. InitialModel uses the native
-`GuiInitialModelDefaults` response rather than duplicating RELION defaults in
-TypeScript. Its required field is a particle STAR file; iterations, K,
-tau2-fudge, symmetry, particle diameter, sampling, batching, CUDA, masking,
-and artifact controls remain configurable.
+All other recovar commands (density, stable_states, postprocess, downsample, extract_subset, etc.) are not in the GUI for Phase 1. Users run them from the CLI.
 
 **Compute State / Compute Trajectory: dual access paths.**
 

@@ -17,6 +17,7 @@ import logging
 import os
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -179,7 +180,6 @@ def _detect_job_type_from_dir(type_dir_name: str, job_dir: str) -> str | None:
         if jt.dir_name == type_dir_name:
             return jt.name
     known_dirs = {
-        "InitialModel": "InitialModel",
         "Pipeline": "Pipeline",
         "Analyze": "Analyze",
         "ReconstructState": "ReconstructState",
