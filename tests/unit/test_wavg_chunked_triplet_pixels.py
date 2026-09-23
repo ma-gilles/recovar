@@ -281,7 +281,7 @@ _PEAK_PROBE = textwrap.dedent(
     import numpy as np
     sys.path.insert(0, {tests_unit!r})
     from test_wavg_chunked_triplet_pixels import _chunked, _per_image_bytes, _wavg_case, _whole_bucket_rectangle_terms
-    from recovar import cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     mode, images_per_chunk = sys.argv[1], int(sys.argv[2])
     case = _wavg_case(batch=48, translations=116, rotations=8, image_size=256, current_size=154, seed=0)
@@ -292,7 +292,7 @@ _PEAK_PROBE = textwrap.dedent(
     if mode == "chunked":
         out = _chunked(case, accumulator, sequential=True, max_block_bytes=images_per_chunk * _per_image_bytes(case))
     else:
-        out = cuda_backproject.relion_wavg_rotation_atomic_triplet_add_f32(
+        out = em_cuda_kernels.relion_wavg_rotation_atomic_triplet_add_f32(
             _whole_bucket_rectangle_terms(case, sequential=True), accumulator
         )
     jax.block_until_ready(out)
