@@ -115,6 +115,10 @@ a genuinely new scientific objective requires a separate decision.
 
 Work on a feature branch (`codex/<task>` for Codex), never directly on `dev`.
 Target `dev`, not the old public `main`. Preserve an explicitly pinned control.
+Branches are fine for isolation, but they are temporary: once a branch is merged, delete it
+(local and remote); if it is abandoned, record why in the task handoff and delete it. Do not
+leave finished or dead branches behind. Keep only `main`/`dev`/`dev2`, active work and
+branches the user explicitly asked to keep.
 Rebasing an implementation creates a new candidate that needs fresh validation.
 Never force-push unless explicitly asked. Before pushing or opening a PR, follow
 all applicable checks and table requirements in CONTRIBUTING.md and scoped guides.
