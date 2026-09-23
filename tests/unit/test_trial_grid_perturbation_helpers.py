@@ -109,3 +109,44 @@ def test_perturbed_trial_grid_records_call_order(monkeypatch):
     assert calls == [("rot", 0.0, 0.5, 30.0, np.float32), ("rot", 1.0, 0.5, 30.0, np.float32), ("trans", 0.5, 1.5)]
     assert grid.mstep_rotations.shape == (4, 3, 3) and float(grid.mstep_rotations[0, 0, 0]) == 1.0
     assert grid.translations.shape == (2, 2) and float(grid.translations[0, 0]) == 0.5
+
+
+def _reduced_source_eulers(order, symmetry):
+    """Deterministic stand-in for a point-group grid: a quarter of the C1 rows, off the float32 lattice."""
+    return _canonical_eulers(order)[: rotation_grid_size(order) // 4] + 0.1234567
+
+
+def test_point_group_mstep_source_uses_the_reduced_grid_rfloat_angles(monkeypatch):
+    """Final Q a087087cc: a non-C1 grid seeds its M-step matrices from RELION's RFLOAT reduced-grid angles.
+
+    The scoring grid carries float32 Euler rows. Promoting those back to float64
+    is not RELION's source precision; the reduced grid's own binary64 angles are.
+    """
+
+    calls = []
+
+    def fake(order, *, symmetry="C1"):
+        calls.append((order, symmetry))
+        return _reduced_source_eulers(order, symmetry) if symmetry != "C1" else _canonical_eulers(order)
+
+    monkeypatch.setattr(sampling_module, "_get_relion_rotation_grid_eulers_float64", fake)
+    expected = _reduced_source_eulers(ORDER, "C4")
+    scoring_eulers = expected.astype(np.float32)
+    source = sampling_module._relion_mstep_source_eulers(scoring_eulers, ORDER, symmetry="C4")
+    assert calls == [(ORDER, "C4")]
+    assert source.dtype == np.float64 and source.tobytes() == expected.tobytes()
+    assert source.tobytes() != scoring_eulers.astype(np.float64).tobytes()
+
+
+def test_point_group_label_is_canonicalized_and_c1_keeps_the_one_argument_lookup(monkeypatch):
+    calls = []
+
+    def fake(order, **kwargs):
+        calls.append((order, kwargs))
+        return _canonical_eulers(order)
+
+    monkeypatch.setattr(sampling_module, "_get_relion_rotation_grid_eulers_float64", fake)
+    eulers = np.zeros((N_ROT, 3), dtype=np.float32)
+    sampling_module._relion_mstep_source_eulers(eulers, ORDER, symmetry="c1")
+    sampling_module._relion_mstep_source_eulers(eulers, ORDER)
+    assert calls == [(ORDER, {}), (ORDER, {})]

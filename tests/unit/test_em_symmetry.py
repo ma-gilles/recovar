@@ -876,3 +876,141 @@ def test_iteration_debug_metadata_default_preserves_explicit_c1(
     )
 
     assert default == explicit
+
+
+def _k1_symmetric_dense_half_kwargs(**overrides):
+    from recovar.em.dense.score_outputs import PerHalfOutputs
+
+    kwargs = dict(
+        outputs=PerHalfOutputs(),
+        k=0,
+        experiment_dataset=SimpleNamespace(image_shape=(8, 8)),
+        means_k=np.zeros(8, dtype=np.complex64),
+        mean_variance=np.ones(8, dtype=np.float32),
+        noise_variance_k=np.ones(8, dtype=np.float32),
+        effective_rotations=np.repeat(np.eye(3, dtype=np.float32)[None, :, :], 24, axis=0),
+        current_translations=np.zeros((1, 2), dtype=np.float32),
+        base_translations=np.zeros((1, 2), dtype=np.float32),
+        current_healpix_order=1,
+        state=SimpleNamespace(adaptive_oversampling=1, translation_step=1.0),
+        random_perturbation=0.0,
+        disc_type="linear_interp",
+        image_batch_size=1,
+        rotation_log_prior_k=None,
+        class_rotation_log_prior_k=None,
+        translation_log_prior=None,
+        translation_search_base=None,
+        trans_prior_center_for_engine=None,
+        image_corrections_k=None,
+        scale_corrections_k=None,
+        firstiter_score_mode_this_iter="gaussian",
+        firstiter_winner_take_all_this_iter=False,
+        cs_for_engine=4,
+        class_log_priors=None,
+        k_class_enabled=False,
+        relion_firstiter_cc_this_iter=False,
+        disable_adjoint_y=False,
+        disable_adjoint_ctf=False,
+        safe_batch_sizes=lambda *_args, **_kwargs: (1, 1),
+        max_significants=-1,
+        symmetry="O",
+    )
+    kwargs.update(overrides)
+    return kwargs
+
+
+@pytest.mark.parametrize("firstiter_cc", [False, True])
+def test_non_c1_k1_adaptive_refinement_without_x_half_fails_before_scoring(monkeypatch, firstiter_cc):
+    """Final Q a087087cc: without x-half BPref accumulation a point group would never be applied.
+
+    CPU-only execution, disabled custom CUDA or RECOVAR_K1_RELION_X_HALF_MSTEP=0
+    select the full-volume M-step, which has no point-group finalizer, so the
+    K=1 adaptive route must refuse instead of returning an unsymmetrized map.
+    """
+
+    from recovar.em.refinement import half_scoring
+
+    monkeypatch.setattr(half_scoring, "_k1_relion_x_half_mstep_enabled", lambda: False)
+    for name in ("_adaptive_pass2_grids", "_score_kclass_firstiter_cc_pass2", "run_em", "run_dense_k_class_em_adaptive"):
+        monkeypatch.setattr(
+            half_scoring,
+            name,
+            lambda *_args, _name=name, **_kwargs: pytest.fail(f"unsupported non-C1 route reached {_name}"),
+        )
+    kwargs = _k1_symmetric_dense_half_kwargs(relion_firstiter_cc_this_iter=firstiter_cc)
+    with pytest.raises(RuntimeError, match="O reconstruction requires RELION x-half BPref accumulation"):
+        half_scoring._score_half_dense(**kwargs)
+
+
+@pytest.mark.parametrize("k_class_enabled", [False, True])
+def test_non_c1_exact_local_refinement_without_x_half_fails_before_scoring(monkeypatch, k_class_enabled):
+    """Final Q a087087cc: exact-local reconstruction of a point group requires x-half accumulation."""
+
+    from recovar.em.dense.score_outputs import PerHalfOutputs
+    from recovar.em.refinement import half_scoring
+
+    monkeypatch.setattr(half_scoring, "_k1_relion_x_half_mstep_enabled", lambda: False)
+    monkeypatch.setattr(half_scoring, "_k_class_relion_x_half_mstep_enabled", lambda: False)
+    monkeypatch.setattr(
+        half_scoring,
+        "_run_local_search_iteration",
+        lambda *_args, **_kwargs: pytest.fail("unsupported non-C1 exact-local route was scored"),
+    )
+    n_classes = 2 if k_class_enabled else 1
+    kwargs = dict(
+        k=0,
+        experiment_dataset=SimpleNamespace(image_shape=(8, 8)),
+        means_k=np.zeros((n_classes, 8), dtype=np.complex64) if k_class_enabled else np.zeros(8, dtype=np.complex64),
+        noise_variance_k=np.ones(8, dtype=np.float32),
+        previous_best_rotation_eulers_k=np.zeros((1, 3), dtype=np.float32),
+        local_search_rotations=None,
+        local_search_order=2,
+        sigma_rot=0.1,
+        sigma_psi=0.1,
+        current_translations=np.zeros((1, 2), dtype=np.float32),
+        base_translations=np.zeros((1, 2), dtype=np.float32),
+        trans_prior_center=None,
+        trans_prior_center_for_engine=None,
+        current_sigma_offset_angstrom=1.0,
+        disc_type="linear_interp",
+        cs_for_engine=4,
+        local_pass1_current_size=4,
+        image_corrections_k=None,
+        scale_corrections_k=None,
+        translation_search_base=None,
+        disable_adjoint_y=False,
+        disable_adjoint_ctf=False,
+        max_significants=-1,
+        iteration=0,
+        save_intermediates_dir=None,
+        local_search_random_perturbation=0.0,
+        local_search_angular_sampling_deg=None,
+        local_parent_oversampling_order=0,
+        local_search_translation_prior_mode="current",
+        replay_prior_translations=None,
+        class_log_priors=np.full(n_classes, -np.log(n_classes)) if k_class_enabled else None,
+        k_class_enabled=k_class_enabled,
+        collect_local_search_profile=False,
+        diagnostic_score_only=False,
+        safe_batch_sizes=lambda *_args, **_kwargs: (1, 1),
+        outputs=PerHalfOutputs(),
+        local_profile_history=[],
+        symmetry="C4",
+    )
+    with pytest.raises(RuntimeError, match="C4 exact-local reconstruction requires RELION x-half BPref"):
+        half_scoring._score_half_local(**kwargs)
+
+
+@pytest.mark.parametrize("label", ["C4", "O", "I1"])
+def test_point_group_mstep_source_angles_are_the_relion_binary64_rows(label):
+    """The scoring grid is float32; the M-step source angles stay RELION's RFLOAT rows (final Q a087087cc)."""
+
+    from recovar.em import sampling
+
+    order = 2
+    _, scoring_eulers = sampling._relion_rotation_grid_float32(order, symmetry=label)
+    exact = sampling._get_relion_rotation_grid_eulers_float64(order, symmetry=label)
+    source = sampling._relion_mstep_source_eulers(scoring_eulers, order, symmetry=label)
+    assert source.dtype == np.float64 and source.shape == exact.shape
+    assert source.tobytes() == exact.tobytes()
+    assert source.tobytes() != scoring_eulers.astype(np.float64).tobytes()

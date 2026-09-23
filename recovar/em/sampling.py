@@ -1300,19 +1300,22 @@ class _PerturbedTrialGrid(NamedTuple):
     translations: jnp.ndarray
 
 
-def _relion_mstep_source_eulers(rotation_eulers, healpix_order, *, use_grid_eulers: bool = False):
+def _relion_mstep_source_eulers(rotation_eulers, healpix_order, *, use_grid_eulers: bool = False, symmetry: str = "C1"):
     """Euler angles that seed the exact RELION M-step rotations of a scoring grid.
 
     RELION derives its M-step matrices from the sampling grid's native RFLOAT
     angles. A sealed captured grid supplies its own angles; otherwise RELION's
-    canonical grid at ``healpix_order`` is used, unless its row count differs
-    from the scoring grid (capped orders, subsets), in which case the scoring
-    grid's own angles are used.
+    canonical grid at ``healpix_order`` for the point group ``symmetry`` is
+    used, unless its row count differs from the scoring grid (capped orders,
+    subsets), in which case the scoring grid's own angles are used.
     """
 
     if use_grid_eulers:
         return np.asarray(rotation_eulers, dtype=np.float64)
-    source = _get_relion_rotation_grid_eulers_float64(healpix_order)
+    symmetry = canonicalize_rotational_symmetry(symmetry)
+    source = _get_relion_rotation_grid_eulers_float64(
+        healpix_order, **({"symmetry": symmetry} if symmetry != "C1" else {})
+    )
     if int(source.shape[0]) != int(rotation_eulers.shape[0]):
         return np.asarray(rotation_eulers, dtype=np.float64)
     return source
@@ -1377,17 +1380,20 @@ def _relion_base_translation_grid(translation_range, translation_step, *, n_clas
     ).astype(np.float64, copy=False)
 
 
-def _exact_local_fine_grid(*, healpix_order, angular_sampling_deg, random_perturbation, dtype=np.float32):
+def _exact_local_fine_grid(*, healpix_order, angular_sampling_deg, random_perturbation, dtype=np.float32, symmetry="C1"):
     """Materialize RELION's fine local-search grid once, with its SamplingPerturbation.
 
     RELION rotates every fine orientation by the iteration's perturbation
     (``healpix_sampling.cpp:1909-1934``) and rebuilds the exact M-step matrices
     from the canonical RFLOAT angles with the same perturbation.  ``None`` keeps
-    the unperturbed grid matrices for a pass that drew no perturbation.
+    the unperturbed grid matrices for a pass that drew no perturbation.  A
+    point group ``symmetry`` materializes its reduced grid and source angles.
     Returns ``(rotations, rotation_eulers, mstep_rotations)``.
     """
 
-    rotations, rotation_eulers = _relion_rotation_grid_float32(healpix_order, dtype=dtype)
+    symmetry = canonicalize_rotational_symmetry(symmetry)
+    symmetry_kwargs = {"symmetry": symmetry} if symmetry != "C1" else {}
+    rotations, rotation_eulers = _relion_rotation_grid_float32(healpix_order, dtype=dtype, **symmetry_kwargs)
     if random_perturbation is not None:
         rotations, rotation_eulers = apply_relion_rotation_perturbation_to_eulers(
             rotation_eulers,
@@ -1395,14 +1401,14 @@ def _exact_local_fine_grid(*, healpix_order, angular_sampling_deg, random_pertur
             angular_sampling_deg,
         )
     mstep_rotations, _ = apply_relion_rotation_perturbation_to_eulers(
-        _get_relion_rotation_grid_eulers_float64(healpix_order),
+        _get_relion_rotation_grid_eulers_float64(healpix_order, **symmetry_kwargs),
         0.0 if random_perturbation is None else float(random_perturbation),
         angular_sampling_deg,
     )
     return rotations, rotation_eulers, mstep_rotations
 
 
-def _local_search_mstep_rotations(effective_mstep_rotations, rotation_eulers, healpix_order):
+def _local_search_mstep_rotations(effective_mstep_rotations, rotation_eulers, healpix_order, *, symmetry="C1"):
     """Exact M-step rotations of a local search that reuses the scoring grid.
 
     The perturbed trial grid already carries its M-step matrices; a grid
@@ -1413,7 +1419,7 @@ def _local_search_mstep_rotations(effective_mstep_rotations, rotation_eulers, he
     if effective_mstep_rotations is not None:
         return effective_mstep_rotations
     mstep_rotations, _ = apply_relion_rotation_perturbation_to_eulers(
-        _relion_mstep_source_eulers(rotation_eulers, healpix_order),
+        _relion_mstep_source_eulers(rotation_eulers, healpix_order, symmetry=symmetry),
         0.0,
         relion_angular_sampling_deg(healpix_order, adaptive_oversampling=0),
     )

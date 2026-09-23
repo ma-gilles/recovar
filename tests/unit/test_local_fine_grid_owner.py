@@ -9,7 +9,10 @@ pass with ``relion_local_pass1_current_size`` only under adaptive oversampling.
 
 from __future__ import annotations
 
+import ast
+import collections
 import inspect
+import textwrap
 
 import numpy as np
 import pytest
@@ -103,3 +106,84 @@ def test_controller_builds_local_search_grids_through_the_owners():
     # The remaining coarse-size arithmetic belongs to the adaptive (non-local) pass-1 sizing of each pass.
     assert source.count("compute_coarse_image_size(") == 2
     assert source.count("clamp_relion_coarse_image_size(") == 2
+
+
+def _fake_reduced_eulers(order, *, symmetry="C1"):
+    """Point-group stand-in: a quarter of the C1 rows, off the float32 lattice."""
+    if symmetry == "C1":
+        return _canonical_eulers(order)
+    return _canonical_eulers(order)[: rotation_grid_size(order) // 4] + 0.0765432
+
+
+def _fake_reduced_grid(order, dtype=np.float32, *, symmetry="C1"):
+    source = _fake_reduced_eulers(order, symmetry=symmetry)
+    return _relion_mstep_rotations_from_eulers(source, dtype=dtype), source.astype(dtype)
+
+
+@pytest.mark.parametrize("random_perturbation", [0.3, None])
+def test_point_group_fine_grid_uses_the_reduced_grid_and_its_source_angles(monkeypatch, random_perturbation):
+    """Final Q a087087cc: a non-C1 lazy local fine grid is the point-group grid, not the C1 grid."""
+
+    monkeypatch.setattr(sampling_module, "_get_relion_rotation_grid_eulers_float64", _fake_reduced_eulers)
+    monkeypatch.setattr(sampling_module, "_relion_rotation_grid_float32", _fake_reduced_grid)
+    rotations, eulers, mstep = sampling_module._exact_local_fine_grid(
+        healpix_order=ORDER,
+        angular_sampling_deg=ANGULAR_SAMPLING,
+        random_perturbation=random_perturbation,
+        symmetry="C4",
+    )
+    grid_rot, grid_eulers = _fake_reduced_grid(ORDER, symmetry="C4")
+    if random_perturbation is None:
+        exp_rot, exp_eulers = grid_rot, grid_eulers
+    else:
+        exp_rot, exp_eulers = apply_relion_rotation_perturbation_to_eulers(
+            grid_eulers, random_perturbation, ANGULAR_SAMPLING
+        )
+    exp_mstep, _ = apply_relion_rotation_perturbation_to_eulers(
+        _fake_reduced_eulers(ORDER, symmetry="C4"),
+        0.0 if random_perturbation is None else random_perturbation,
+        ANGULAR_SAMPLING,
+    )
+    assert rotations.shape == (N_ROT // 4, 3, 3)
+    assert _same(rotations, exp_rot) and _same(eulers, exp_eulers) and _same(mstep, exp_mstep)
+
+
+def test_point_group_reused_grid_rebuilds_mstep_rotations_from_reduced_source_angles(monkeypatch):
+    monkeypatch.setattr(sampling_module, "_get_relion_rotation_grid_eulers_float64", _fake_reduced_eulers)
+    source = _fake_reduced_eulers(ORDER, symmetry="C4")
+    got = sampling_module._local_search_mstep_rotations(None, source.astype(np.float32), ORDER, symmetry="C4")
+    expected, _ = apply_relion_rotation_perturbation_to_eulers(source, 0.0, ANGULAR_SAMPLING)
+    assert _same(got, expected) and got.shape == (N_ROT // 4, 3, 3)
+
+
+_POINT_GROUP_GRID_OWNERS = (
+    "_relion_mstep_source_eulers",
+    "_exact_local_fine_grid",
+    "_local_search_mstep_rotations",
+    "_precompute_exact_local_fine_grid_enabled",
+)
+
+
+def _passes_point_group(call: ast.Call) -> bool:
+    for keyword in call.keywords:
+        if keyword.arg == "symmetry":
+            return True
+        if keyword.arg is None and "symmetry" in ast.unparse(keyword.value):
+            return True
+    return False
+
+
+def test_controller_passes_the_point_group_to_every_grid_owner():
+    """Every regular and final-pass grid owner call carries the refinement point group (final Q a087087cc)."""
+
+    tree = ast.parse(textwrap.dedent(inspect.getsource(iteration_loop.refine_single_volume)))
+    found = collections.Counter()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", None)
+        if name in _POINT_GROUP_GRID_OWNERS:
+            found[name] += 1
+            assert _passes_point_group(node), f"{name} call at source line {node.lineno} drops the point group"
+    assert found == {name: 2 for name in _POINT_GROUP_GRID_OWNERS}

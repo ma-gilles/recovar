@@ -1744,6 +1744,7 @@ def refine_single_volume(
                         effective_rotation_eulers,
                         _angsamp_order,
                         use_grid_eulers=sealed_sampling_state is not None,
+                        **({"symmetry": symmetry} if symmetry != "C1" else {}),
                     ),
                     base_translations=base_translations,
                     translation_step=float(state.translation_step),
@@ -1875,12 +1876,15 @@ def refine_single_volume(
                     local_search_order,
                     adaptive_oversampling=0,
                 )
-                if (not use_parent_expanded_local) and _precompute_exact_local_fine_grid_enabled(local_search_order):
+                if (not use_parent_expanded_local) and _precompute_exact_local_fine_grid_enabled(
+                    local_search_order, **({"symmetry": symmetry} if symmetry != "C1" else {})
+                ):
                     local_search_rotations, local_search_rotation_eulers, local_search_mstep_rotations = (
                         sampling._exact_local_fine_grid(
                             healpix_order=local_search_order,
                             angular_sampling_deg=local_search_angular_sampling_deg,
                             random_perturbation=float(random_perturbation),
+                            **({"symmetry": symmetry} if symmetry != "C1" else {}),
                         )
                     )
                     local_search_random_perturbation = 0.0
@@ -1922,7 +1926,7 @@ def refine_single_volume(
                 local_search_rotations = effective_rotations
                 local_search_rotation_eulers = None
                 local_search_mstep_rotations = sampling._local_search_mstep_rotations(
-                    effective_mstep_rotations, effective_rotation_eulers, local_search_order
+                    effective_mstep_rotations, effective_rotation_eulers, local_search_order, **({"symmetry": symmetry} if symmetry != "C1" else {})
                 )
             logger.info(
                 "Local search (batched exact): fine_order=%d, sigma_rot=%.4f rad (%.2f deg), sigma_psi=%.4f rad",
@@ -4515,6 +4519,7 @@ def refine_single_volume(
             mstep_source_eulers=sampling._relion_mstep_source_eulers(
                 final_effective_rotation_eulers,
                 final_perturbation_healpix_order,
+                **({"symmetry": symmetry} if symmetry != "C1" else {}),
             ),
             base_translations=final_base_translations,
             translation_step=final_translation_step,
@@ -4566,7 +4571,7 @@ def refine_single_volume(
                 adaptive_oversampling=0,
             )
             if (not use_parent_expanded_final_local) and _precompute_exact_local_fine_grid_enabled(
-                final_local_search_order
+                final_local_search_order, **({"symmetry": symmetry} if symmetry != "C1" else {})
             ):
                 _final_local_search_use_float64_scoring, _final_local_search_use_float64_projections = (
                     _local_search_precision_flags(final_sampling_relion_iteration, pass_index=2)
@@ -4581,6 +4586,7 @@ def refine_single_volume(
                             if (_final_local_search_use_float64_scoring or _final_local_search_use_float64_projections)
                             else np.float32
                         ),
+                        **({"symmetry": symmetry} if symmetry != "C1" else {}),
                     )
                 )
             else:
@@ -4601,7 +4607,7 @@ def refine_single_volume(
         else:
             final_local_search_rotations = final_effective_rotations
             final_local_search_mstep_rotations = sampling._local_search_mstep_rotations(
-                final_effective_mstep_rotations, final_effective_rotation_eulers, final_local_search_order
+                final_effective_mstep_rotations, final_effective_rotation_eulers, final_local_search_order, **({"symmetry": symmetry} if symmetry != "C1" else {})
             )
         logger.info(
             "RELION final all-data iteration using local search: parent_order=%d fine_order=%d, "

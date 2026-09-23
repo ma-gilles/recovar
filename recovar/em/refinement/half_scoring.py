@@ -32,6 +32,8 @@ from recovar.em.dense.score_outputs import (
 )
 from recovar.em.dense.scoring_policy import (
     _DENSE_EM_STATIC_KWARGS,
+    _K1_RELION_X_HALF_MSTEP_ENV,
+    _K_CLASS_RELION_X_HALF_MSTEP_ENV,
     _LOCAL_ADAPTIVE_PASS2_DENOMINATOR_SUPPORT_ENV,
     _LOCAL_ADAPTIVE_PASS2_FULL_PARENT_ENV,
     _LOCAL_ADAPTIVE_PASS2_ROTATION_ONLY_ENV,
@@ -638,6 +640,12 @@ def _score_half_dense(
                 cs_for_engine,
             )
         k1_relion_x_half_mstep = _k1_relion_x_half_mstep_enabled()
+        if symmetry != "C1" and not k1_relion_x_half_mstep:
+            raise RuntimeError(
+                f"{symmetry} reconstruction requires RELION x-half BPref accumulation; "
+                "RECOVAR_K1_RELION_X_HALF_MSTEP=0, CPU-only execution, or disabled "
+                "custom CUDA is unsupported for non-C1 symmetry"
+            )
         means_single = jnp.asarray(means_k)[None, :]
         rot_pmap_for_collapse = None
         trans_pmap_for_collapse = None
@@ -1288,6 +1296,13 @@ def _score_half_local(
     )
     if diagnostic_score_only:
         local_relion_x_half_mstep = False
+    if symmetry != "C1" and not diagnostic_score_only and not local_relion_x_half_mstep:
+        env_name = _K_CLASS_RELION_X_HALF_MSTEP_ENV if k_class_enabled else _K1_RELION_X_HALF_MSTEP_ENV
+        raise RuntimeError(
+            f"{symmetry} exact-local reconstruction requires RELION x-half BPref "
+            f"accumulation; {env_name}=0, CPU-only execution, or disabled custom CUDA "
+            "is unsupported for non-C1 symmetry"
+        )
     if local_relion_x_half_mstep:
         logger.info(
             "RELION local %s M-step: using x-half BPref-layout backprojection",
