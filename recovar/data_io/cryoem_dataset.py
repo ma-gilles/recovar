@@ -163,7 +163,7 @@ class CryoEMDataset:
         voxel_size: float,
         metadata: ImageMetadata,
         ctf_evaluator=None,
-        dtype: type | np.dtype | None = None,
+        dtype: type | np.dtype = np.complex64,
         dataset_indices: Optional[NDArray[np.integer]] = None,
         grid_size: Optional[int] = None,
         tilt_series_flag: bool = False,
@@ -173,8 +173,9 @@ class CryoEMDataset:
             image_source,
             tilt_series_flag=tilt_series_flag,
         )
-        if dtype is None:
-            dtype = getattr(image_source, "dtype", np.complex64)
+        # The public default is complex64 whatever the image source stores;
+        # double-precision callers (load_dataset, subset, reload) pass their
+        # dtype explicitly.
         normalized_dtype = np.dtype(dtype)
         if normalized_dtype not in (np.dtype(np.complex64), np.dtype(np.complex128)):
             raise TypeError(f"dtype must be complex64 or complex128, got {normalized_dtype}")
