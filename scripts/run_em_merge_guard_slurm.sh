@@ -53,6 +53,9 @@ cd "${REPO_ROOT}"
 unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV
 export PYTHONNOUSERSITE=1
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
+# Pin the production JAX memory cap; login-node profiles export .50 and sbatch
+# propagates the submitting shell's environment.
+export XLA_PYTHON_CLIENT_MEM_FRACTION=.90
 export RELION_SRC_DIR="${RELION_SRC_DIR}"
 if [[ -f /etc/profile.d/modules.sh ]]; then
   source /etc/profile.d/modules.sh

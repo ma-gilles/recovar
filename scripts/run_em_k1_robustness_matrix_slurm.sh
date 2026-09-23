@@ -635,6 +635,9 @@ export CMAKE_INCLUDE_PATH="${PIXI_ENV_ROOT}/include/fftw:${PIXI_ENV_ROOT}/includ
 export CMAKE_LIBRARY_PATH="${PIXI_ENV_ROOT}/lib:\${CMAKE_LIBRARY_PATH:-}"
 export PYTHONFAULTHANDLER="\${PYTHONFAULTHANDLER:-1}"
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
+# Pin the production JAX memory cap; login-node profiles export .50 and sbatch
+# propagates the submitting shell's environment.
+export XLA_PYTHON_CLIENT_MEM_FRACTION=.90
 export PIXI_FROZEN=true
 export TMPDIR="${RUNTIME_ROOT}/${job_name}_\${SLURM_JOB_ID}/tmp"
 export PIXI_HOME="${RUNTIME_ROOT}/${job_name}_\${SLURM_JOB_ID}/pixi_home"

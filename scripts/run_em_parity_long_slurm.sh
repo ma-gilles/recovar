@@ -140,6 +140,9 @@ export RECOVAR_RELION_BIND_BUILD_DIR="${SCRATCH_DIR}/relion_bind_build"
 export RELION_SRC_DIR="${RELION_SRC_DIR}"
 mkdir -p "\${TMPDIR}" "\${PIXI_HOME}" "\${RATTLER_CACHE_DIR}" "\${RECOVAR_CUDA_CACHE_DIR}"
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
+# Pin the production JAX memory cap; login-node profiles export .50 and sbatch
+# propagates the submitting shell's environment.
+export XLA_PYTHON_CLIENT_MEM_FRACTION=.90
 
 echo "=== EM-long parity Slurm job ${job_name} ==="
 echo "Repo: ${REPO_ROOT}"

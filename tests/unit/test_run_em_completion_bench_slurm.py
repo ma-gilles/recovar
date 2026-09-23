@@ -334,3 +334,19 @@ def test_completion_setup_defaults_to_cpu_partition(tmp_path):
     assert submission_env.exists()
     assert "#SBATCH --partition=cpu" in setup_script.read_text()
     assert "EM_COMPLETION_SETUP_PARTITION=cpu" in submission_env.read_text()
+
+
+def test_completion_jobs_pin_production_jax_memory_fraction(tmp_path):
+    """GPU jobs do not inherit the submitting shell's JAX memory cap.
+
+    The della login-node profile exports ``XLA_PYTHON_CLIENT_MEM_FRACTION=.50``
+    and sbatch propagates it; K=1 100k/256 completions then planned against a
+    42 GB limit on 80 GB GPUs. Every job shares the preamble, so K=1 covers K=4.
+    """
+    scratch = tmp_path / "scratch"
+    env = _launcher_env(tmp_path, scratch)
+    env["XLA_PYTHON_CLIENT_MEM_FRACTION"] = ".50"
+    _run_launcher(env, "--k1-only")
+    k1_text = (scratch / "jobs" / "em_completion_k1_100k256.sh").read_text()
+    assert "export XLA_PYTHON_CLIENT_MEM_FRACTION=.90\n" in k1_text
+    assert "XLA_PYTHON_CLIENT_MEM_FRACTION=.50" not in k1_text

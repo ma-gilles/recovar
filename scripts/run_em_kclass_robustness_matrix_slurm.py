@@ -1484,6 +1484,9 @@ if [[ ! -f "${{RELION_SRC_DIR}}/projector.h" ]]; then
   exit 2
 fi
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
+# Pin the production JAX memory cap; login-node profiles export .50 and sbatch
+# propagates the submitting shell's environment.
+export XLA_PYTHON_CLIENT_MEM_FRACTION=.90
 export PIXI_FROZEN=true
 export EM_KCLASS_MATRIX_VENV={q(matrix_venv)}
 export PIXI_PY={q(matrix_python)}
