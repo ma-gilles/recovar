@@ -41,8 +41,8 @@ resolve failures before interpreting map comparisons.
 
 Read the applicable guides explicitly before working across these boundaries.
 Do not assume a particular agent automatically loaded a guide:
-- `recovar/em/CLAUDE.md` — EM module: RELION-parity plan, engine
-  performance, more on the volume conventions, test rules
+- relax's `relax/CLAUDE.md` (https://github.com/ma-gilles/relax) — EM code, which
+  now lives in relax: RELION-parity plan, engine performance, volume conventions, test rules
 - `recovar/cuda/CLAUDE.md` — CUDA kernel coordinate convention (k0=row,
   k1=col), build via pixi, JAX FFI headers
 - `recovar/gui_v2/CLAUDE.md` — GUI v2 architecture

@@ -124,5 +124,5 @@ limitations, reproduction commands, artifact paths, `git status --short --branch
 and `git diff HEAD --stat`. Distinguish executed, quality-accepted and
 performance-qualified results. Do not claim completion with required jobs pending.
 
-This file and root `CLAUDE.md` must remain byte-for-byte identical. The same rule
-applies to the EM AGENTS/CLAUDE pair. Check both with `cmp` after editing.
+This file and root `CLAUDE.md` must remain byte-for-byte identical. Check with
+`python scripts/check_agent_guides.py` after editing. The EM guides now live in relax.

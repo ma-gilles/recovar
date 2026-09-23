@@ -58,7 +58,7 @@ the public headers `include/recovar_cuda_common.cuh` and `include/device_scratch
 (`recovar.cuda_build.include_dir()`); the EM Makefile adds that directory to the
 include path. Both units keep their items verbatim and in the original order, so
 per-kernel SASS equals the former single library (check with the relax-split
-`native_snapshot.py compare`). The EM headers in `recovar/em/cuda/`
+`native_snapshot.py compare`). The EM headers in relax's `relax/cuda/`
 (`relion_vdam_mstep.cuh`, `relion_scoring.cuh` with `relion_coarse_diff2_projector_body.inc`,
 `relion_preprocess.cuh`, `relion_posterior.cuh`, `sparse_pass2_posterior.cuh`,
 `relion_translate_sum.cuh`, `noise_residual.cuh`, `vdam_trace.cuh`) are included by
@@ -69,7 +69,7 @@ aligned when changing these boundaries.
 ## Runtime and interface
 
 `recovar/cuda_backproject.py` loads `libcuda_backproject.so` and registers its kernels through JAX XLA FFI;
-`recovar/em/cuda/kernels.py` loads `librelax_cuda.so` through `recovar.cuda_build.NativeLibrary`
+relax's `relax/cuda/kernels.py` loads `librelax_cuda.so` through `recovar.cuda_build.NativeLibrary`
 (explicit path: `RECOVAR_RELAX_CUDA_LIB`) and registers the EM targets.
 `core/slicing.py` dispatches projection/backprojection operations to custom
 CUDA by default on GPU. The loader can build a missing or stale library;
