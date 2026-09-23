@@ -80,6 +80,7 @@ def compute_pass2_stats_sparse(
     preserve_bpref_particle_order: bool = False,
     source_faithful_spectrum_norm: bool = False,
     symmetry_label: str = "C1",
+    relion_translation_angle_scale: float = 1.0,
 ):
     """Exact sparse pass 2 over per-image significant coarse samples.
 
@@ -282,12 +283,21 @@ def compute_pass2_stats_sparse(
             preserve_bpref_particle_order=preserve_bpref_particle_order,
             source_faithful_spectrum_norm=source_faithful_spectrum_norm,
             **({"symmetry_label": symmetry_label} if symmetry_label != "C1" else {}),
+            **(
+                {"relion_translation_angle_scale": float(relion_translation_angle_scale)}
+                if float(relion_translation_angle_scale) != 1.0
+                else {}
+            ),
         )
 
     if any(value is not None for value in (
         relion_f32_normalization_sum_weight, relion_coarse_hard_assignment, relion_coarse_max_posterior,
     )):
         raise NotImplementedError("coarse float32 normalization requires bucketed sparse pass 2")
+    if float(relion_translation_angle_scale) != 1.0:
+        raise NotImplementedError(
+            "RELION model/optics translation-angle scaling requires the bucketed sparse pass-2 path"
+        )
     if relion_projector_half is not None:
         raise NotImplementedError("RELION projector sparse pass-2 requires the bucketed implementation")
     if reconstruction_current_size is not None:

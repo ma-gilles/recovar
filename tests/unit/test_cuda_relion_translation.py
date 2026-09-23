@@ -38,6 +38,111 @@ def test_relion_translation_angles_match_captured_float32_bits():
     )
 
 
+def test_relion_translation_angle_scale_changes_only_final_angle_operand():
+    """Final-Q aa0eccbfd4: the model/optics scale multiplies only the angle operand."""
+    from recovar.em.sparse_pass2.sparse_pass2_bucket_io import _relion_translation_angles_f32
+
+    translations = np.asarray([[0.25, -1.75]], dtype=np.float64)
+    baseline_translations = translations.copy()
+    angle_scale = np.float64("0.99999976470593788")
+    angles = _relion_translation_angles_f32(
+        translations,
+        (384, 384),
+        angle_scale=angle_scale,
+    )
+    expected = np.asarray(
+        -2.0 * np.pi * translations * angle_scale / 384.0,
+        dtype=np.float32,
+    )
+
+    np.testing.assert_array_equal(angles.view(np.uint32), expected.view(np.uint32))
+    np.testing.assert_array_equal(translations, baseline_translations)
+
+
+def test_relion_k1_translation_angle_scale_uses_model_over_optics_pixel_size():
+    from recovar.em.refinement.iteration_loop import _relion_k1_translation_angle_scale
+
+    scale = _relion_k1_translation_angle_scale(
+        n_classes=1,
+        model_pixel_size=544.0 / 384.0,
+        optics_pixel_sizes=np.asarray([1.416667], dtype=np.float64),
+    )
+    assert scale == pytest.approx(0.99999976470593788, rel=0.0, abs=1e-16)
+    assert _relion_k1_translation_angle_scale(
+        n_classes=4,
+        model_pixel_size=544.0 / 384.0,
+        optics_pixel_sizes=np.asarray([1.416667], dtype=np.float64),
+    ) == 1.0
+
+
+def test_relion_k1_translation_angle_scale_rejects_heterogeneous_optics():
+    from recovar.em.refinement.iteration_loop import _relion_k1_translation_angle_scale
+
+    with pytest.raises(NotImplementedError, match="one shared optics pixel size"):
+        _relion_k1_translation_angle_scale(
+            n_classes=1,
+            model_pixel_size=1.5,
+            optics_pixel_sizes=np.asarray([1.5, 1.6], dtype=np.float64),
+        )
+
+
+def test_unit_translation_angle_scale_keeps_every_angle_producer_bitwise():
+    """Equal pixel sizes must leave the RELION angle operands untouched."""
+    from recovar.em.sparse_pass2.sparse_pass2_bucket_io import (
+        _relion_translation_angles_f32,
+        _relion_translation_angles_f64,
+    )
+
+    rng = np.random.default_rng(20260922)
+    translations = rng.uniform(-5.0, 5.0, size=(17, 2)).astype(np.float32)
+    reference = -2.0 * np.pi * np.asarray(translations, dtype=np.float64) / 256.0
+    np.testing.assert_array_equal(
+        _relion_translation_angles_f64(translations, (256, 256)).view(np.uint64),
+        reference.view(np.uint64),
+    )
+    np.testing.assert_array_equal(
+        _relion_translation_angles_f32(translations, (256, 256), angle_scale=1.0).view(np.uint32),
+        reference.astype(np.float32).view(np.uint32),
+    )
+    with pytest.raises(ValueError, match="positive and finite"):
+        _relion_translation_angles_f64(translations, (256, 256), angle_scale=0.0)
+
+
+def test_non_unit_translation_angle_scale_is_forwarded_or_refused_by_every_scorer():
+    """The scale reaches each exact scorer; routes without RELION angles refuse it."""
+    import inspect
+
+    from recovar.em.classification import k_class
+    from recovar.em.dense import em_engine
+    from recovar.em.local import local_em_engine
+    from recovar.em.refinement import half_scoring, local_search_iteration
+    from recovar.em.scoring import significance
+    from recovar.em.sparse_pass2 import dispatch, resident_local_pass2, resident_pass2, sparse_pass2_bucketed
+
+    assert k_class._translation_angle_scale_kwargs({}) == {}
+    assert k_class._translation_angle_scale_kwargs({"relion_translation_angle_scale": 1.0}) == {}
+    assert k_class._translation_angle_scale_kwargs({"relion_translation_angle_scale": 0.5}) == {
+        "relion_translation_angle_scale": 0.5
+    }
+    for function in (
+        half_scoring._score_half_dense,
+        half_scoring._score_half_local,
+        local_search_iteration._run_local_search_iteration,
+        local_em_engine.run_local_em_exact,
+        significance._compute_k_class_significance_batched,
+        dispatch.compute_pass2_stats_sparse,
+        sparse_pass2_bucketed.compute_pass2_stats_sparse_bucketed,
+        resident_pass2.compute_pass2_stats_resident,
+        resident_local_pass2.compute_local_search_resident,
+        em_engine.run_em,
+    ):
+        assert inspect.signature(function).parameters["relion_translation_angle_scale"].default == 1.0
+    k_class_source = inspect.getsource(k_class)
+    assert k_class_source.count("**_translation_angle_scale_kwargs(") == 4
+    with pytest.raises(NotImplementedError, match="translation-angle scaling"):
+        em_engine.run_em(None, None, None, None, None, None, "linear_interp", relion_translation_angle_scale=0.5)
+
+
 def test_relion_translation_cuda_source_preserves_explicit_arithmetic():
     source = read_cuda_source()
 

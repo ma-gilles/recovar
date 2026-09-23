@@ -341,6 +341,11 @@ def run_k1_local_adaptive_pass2(
         include_unweighted_norm_high_shell=True,
         source_faithful_spectrum_norm=bool(common.get("source_faithful_spectrum_norm", False)),
         debug_iteration=engine_kwargs.get("debug_iteration"),
+        **(
+            {"relion_translation_angle_scale": float(common["relion_translation_angle_scale"])}
+            if float(common.get("relion_translation_angle_scale", 1.0)) != 1.0
+            else {}
+        ),
         **execution_flags,
     )
     return result._replace(

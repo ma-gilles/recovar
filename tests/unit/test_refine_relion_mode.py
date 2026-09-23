@@ -12555,6 +12555,120 @@ class TestRelionModeSmokeTest:
         assert (out_dir / "it000_half1_unreg.mrc").exists()
         assert (out_dir / "it000_half2_unreg.mrc").exists()
 
+    @pytest.mark.parametrize(
+        ("optics_pixel", "expected_scale"),
+        [(None, 1.0), (1.0, 1.0), (1.0 + 2.0**-20, 1.0 / (1.0 + 2.0**-20))],
+    )
+    def test_loop_forwards_the_model_over_optics_translation_angle_scale(
+        self,
+        half_datasets,
+        init_volume,
+        translations,
+        monkeypatch,
+        optics_pixel,
+        expected_scale,
+    ):
+        """Final-Q aa0eccbfd4: the K=1 loop hands the scale to half-set scoring."""
+
+        class _Captured(Exception):
+            pass
+
+        captured = {}
+
+        def capture(**kwargs):
+            captured.update(kwargs)
+            raise _Captured
+
+        monkeypatch.setattr(iteration_loop_module, "_score_half_dense_in_bpref_scope", capture)
+        model_pixel = float(half_datasets[0].voxel_size)
+        parity = (
+            RelionParityOptions()
+            if optics_pixel is None
+            else RelionParityOptions(
+                relion_optics_image_sizes=[IMAGE_SHAPE[0]],
+                relion_optics_pixel_sizes=[optics_pixel * model_pixel],
+                relion_model_pixel_size=model_pixel,
+            )
+        )
+        with pytest.raises(_Captured):
+            refine_single_volume(
+                half_datasets,
+                init_volume,
+                jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
+                jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
+                translations,
+                options=RefinementOptions(
+                    disc_type="linear_interp",
+                    schedule=RefinementSchedule(
+                        max_iter=1,
+                        init_current_size=16,
+                        init_healpix_order=2,
+                        max_healpix_order=3,
+                    ),
+                    batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=N_ROTATIONS),
+                    adaptive=AdaptiveOptions(adaptive_oversampling=0),
+                    parity=parity,
+                ),
+            )
+        assert captured["relion_translation_angle_scale"] == expected_scale
+
+    @pytest.mark.gpu
+    @pytest.mark.parametrize("adaptive_oversampling", [0, 1])
+    def test_translation_angle_scale_reaches_the_exact_cuda_angles(
+        self,
+        half_datasets,
+        init_volume,
+        translations,
+        monkeypatch,
+        custom_cuda_lib,
+        gpu_device,
+        adaptive_oversampling,
+    ):
+        """Adaptive K=1 scores with the scaled RELION angles; dense run_em refuses the scale."""
+
+        import jax
+
+        from recovar.em.sparse_pass2 import sparse_pass2_bucket_io, sparse_pass2_bucketed
+
+        monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
+        calls = []
+        original = sparse_pass2_bucket_io._relion_cuda_score_translation_angles_if_available
+
+        def spy(*args, **kwargs):
+            angles = original(*args, **kwargs)
+            calls.append((kwargs.get("angle_scale", 1.0), angles is not None))
+            return angles
+
+        monkeypatch.setattr(sparse_pass2_bucketed, "_relion_cuda_score_translation_angles_if_available", spy)
+        model_pixel = float(half_datasets[0].voxel_size)
+        expected_scale = 1.0 / (1.0 + 2.0**-20)
+        options = RefinementOptions(
+            disc_type="linear_interp",
+            schedule=RefinementSchedule(max_iter=2, init_current_size=4, init_healpix_order=2, max_healpix_order=2),
+            batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=N_ROTATIONS),
+            adaptive=AdaptiveOptions(adaptive_oversampling=adaptive_oversampling),
+            parity=RelionParityOptions(
+                relion_optics_image_sizes=[IMAGE_SHAPE[0]],
+                relion_optics_pixel_sizes=[(1.0 + 2.0**-20) * model_pixel],
+                relion_model_pixel_size=model_pixel,
+            ),
+        )
+        args = (
+            half_datasets,
+            init_volume,
+            jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
+            jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
+            translations,
+        )
+        with jax.default_device(gpu_device):
+            if adaptive_oversampling == 0:
+                with pytest.raises(NotImplementedError, match="translation-angle scaling"):
+                    refine_single_volume(*args, options=options)
+                return
+            refine_single_volume(*args, options=options)
+        assert calls
+        assert all(scale == expected_scale and produced for scale, produced in calls)
+
     @pytest.mark.parametrize("n_classes", [1, 2])
     def test_save_intermediates_writes_source_aligned_particle_states(
         self,

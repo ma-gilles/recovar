@@ -302,6 +302,7 @@ def _score_half_dense(
     coarse_rotation_ids=None,
     preserve_bpref_particle_order: bool = False,
     source_faithful_spectrum_norm: bool = False,
+    relion_translation_angle_scale: float = 1.0,
     coarse_scoring_rotations=None,
     symmetry: str = "C1",
 ) -> HalfScoreResult:
@@ -371,6 +372,10 @@ def _score_half_dense(
         em_kwargs["preserve_bpref_particle_order"] = True
     if source_faithful_spectrum_norm:
         em_kwargs["source_faithful_spectrum_norm"] = True
+    if float(relion_translation_angle_scale) != 1.0:
+        if k_class_enabled:
+            raise ValueError("the RELION model/optics translation-angle scale is K=1-only")
+        em_kwargs["relion_translation_angle_scale"] = float(relion_translation_angle_scale)
     diagnostic_float64_pass2 = _diagnostic_float64_pass2_matches(debug_iteration)
     if diagnostic_float64_pass2:
         logger.info(
@@ -947,6 +952,7 @@ def _score_half_local(
     relion_projector_half=None,
     relion_projector_r_max: int | None = None,
     source_faithful_spectrum_norm: bool = False,
+    relion_translation_angle_scale: float = 1.0,
     symmetry: str = "C1",
 ) -> HalfScoreResult:
     """Local-search E+M scoring for one half-set.
@@ -1098,6 +1104,10 @@ def _score_half_local(
         "translation_prior_centers": trans_prior_center_for_engine,
         "source_faithful_spectrum_norm": source_faithful_spectrum_norm,
     }
+    if float(relion_translation_angle_scale) != 1.0:
+        if k_class_enabled:
+            raise ValueError("the RELION model/optics translation-angle scale is K=1-only")
+        common_local_kwargs["relion_translation_angle_scale"] = float(relion_translation_angle_scale)
     pass2_layout = None
     relion_significant_counts_k = None
     local_adaptive_pass2_parent_mode = "none"

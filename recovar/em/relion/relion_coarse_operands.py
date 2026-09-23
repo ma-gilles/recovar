@@ -463,11 +463,13 @@ def _relion_coarse_gaussian_square_operands_sincosf(
     image_shape,
     *,
     translation_phase_source=None,
+    relion_translation_angle_scale=1.0,
     return_unshifted=False,
 ):
     """Build corrected coarse images with RELION's CUDA sin/cos path."""
 
     from recovar import cuda_backproject
+    from recovar.em.sparse_pass2.sparse_pass2_bucket_io import _relion_translation_angles_f64
     score_indices = jnp.asarray(score_indices, dtype=jnp.int32)
     if translation_phase_source is None:
         translation_phase_source = translations
@@ -491,10 +493,11 @@ def _relion_coarse_gaussian_square_operands_sincosf(
     real_dtype = jnp.float64 if use_float64 else jnp.float32
     angle_dtype = np.float64 if use_float64 else np.float32
     translation_angles = np.asarray(
-        -2.0
-        * np.pi
-        * np.asarray(translation_phase_source, dtype=np.float64)
-        / float(image_shape[0]),
+        _relion_translation_angles_f64(
+            translation_phase_source,
+            image_shape,
+            angle_scale=relion_translation_angle_scale,
+        ),
         dtype=angle_dtype,
     )
     translate_score = (
@@ -577,6 +580,7 @@ def _assemble_relion_exact_coarse_gaussian_operands(
     current_size,
     runtime_current_size=None,
     use_float64_scoring: bool = False,
+    relion_translation_angle_scale: float = 1.0,
 ) -> RelionExactCoarseGaussianOperands:
     """Assemble the single exact-source operand set without generic formulas."""
 
@@ -626,7 +630,7 @@ def _assemble_relion_exact_coarse_gaussian_operands(
         scale_corrections_enabled=bool(scale_corrections_enabled),
     )
     translation_angles = jnp.asarray(
-        angle_fn(translations_source, image_shape),
+        angle_fn(translations_source, image_shape, angle_scale=relion_translation_angle_scale),
         dtype=real_dtype,
     )
     shifted_corrected = translate_fn(

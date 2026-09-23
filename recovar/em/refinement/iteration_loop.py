@@ -245,6 +245,38 @@ def _fresh_k1_spectrum_norm_default(
     )
 
 
+def _relion_k1_translation_angle_scale(
+    *,
+    n_classes: int,
+    model_pixel_size: float,
+    optics_pixel_sizes,
+) -> float:
+    """Convert K=1 model-pixel translations to the shared optics pixel size.
+
+    RELION keeps sampling translations in Angstrom and converts them with the
+    particle's optics pixel size (HealpixSampling::getTranslationsInPixel),
+    while RECOVAR's translation grid is in model pixels. The scale
+    model_pixel_size / optics_pixel_size is exactly 1.0 when the serialized
+    sizes agree; it multiplies only the RELION translation-phase operand.
+    """
+
+    if int(n_classes) != 1 or optics_pixel_sizes is None:
+        return 1.0
+    model_pixel_size = float(model_pixel_size)
+    optics = np.asarray(optics_pixel_sizes, dtype=np.float64).reshape(-1)
+    if not np.isfinite(model_pixel_size) or model_pixel_size <= 0.0:
+        raise ValueError("RELION model pixel size must be positive and finite")
+    if optics.size == 0 or not np.all(np.isfinite(optics)) or np.any(optics <= 0.0):
+        raise ValueError("RELION optics pixel sizes must be non-empty, positive, and finite")
+    unique_optics = np.unique(optics)
+    if unique_optics.size != 1:
+        raise NotImplementedError(
+            "K=1 exact RELION translation phases currently require one shared optics pixel size; "
+            "per-particle optics scaling is not yet implemented"
+        )
+    return model_pixel_size / float(unique_optics[0])
+
+
 # RELION's --minres_map default: do not add the Wiener prior term to the
 # lowest Fourier shells during MAP reconstruction.
 RELION_MINRES_MAP = 5
@@ -603,6 +635,19 @@ def refine_single_volume(
     )
     if not np.isfinite(model_pixel_size) or model_pixel_size <= 0.0:
         raise ValueError(f"RELION model pixel size must be positive, got {model_pixel_size}")
+    relion_translation_angle_scale = _relion_k1_translation_angle_scale(
+        n_classes=n_classes,
+        model_pixel_size=model_pixel_size,
+        optics_pixel_sizes=optics_pixel_sizes,
+    )
+    if relion_translation_angle_scale != 1.0:
+        logger.info(
+            "RELION K=1 translation phases: model_pixel_size=%.12g "
+            "optics_pixel_size=%.12g angle_scale=%.17g",
+            model_pixel_size,
+            float(optics_pixel_sizes[0]),
+            relion_translation_angle_scale,
+        )
     _validate_bpref_particle_order_scope(
         preserve_bpref_particle_order=parity.preserve_bpref_particle_order,
         n_classes=n_classes,
@@ -2441,6 +2486,7 @@ def refine_single_volume(
                     relion_projector_half=relion_projector_half_by_half[k],
                     relion_projector_r_max=relion_projector_r_max_by_half[k],
                     source_faithful_spectrum_norm=source_faithful_spectrum_norm,
+                    relion_translation_angle_scale=relion_translation_angle_scale,
                     **({"symmetry": symmetry} if symmetry != "C1" else {}),
                 )
                 ha_k = local_result.ha
@@ -2496,6 +2542,7 @@ def refine_single_volume(
                     outputs=per_half,
                     preserve_bpref_particle_order=parity.preserve_bpref_particle_order,
                     source_faithful_spectrum_norm=source_faithful_spectrum_norm,
+                    relion_translation_angle_scale=relion_translation_angle_scale,
                     relion_projector_half=relion_projector_half_by_half[k],
                     relion_projector_r_max=relion_projector_r_max_by_half[k],
                     debug_iteration=numbered_relion_iteration,
@@ -4722,6 +4769,7 @@ def refine_single_volume(
                 local_profile_history=history.local_profile_history,
                 relion_projector_half=final_relion_projector_half_by_half[k],
                 relion_projector_r_max=final_relion_projector_r_max_by_half[k],
+                relion_translation_angle_scale=relion_translation_angle_scale,
                 **({"symmetry": symmetry} if symmetry != "C1" else {}),
             )
         else:
@@ -4771,6 +4819,7 @@ def refine_single_volume(
                 debug_iteration=final_sampling_relion_iteration,
                 preserve_bpref_particle_order=parity.preserve_bpref_particle_order,
                 source_faithful_spectrum_norm=source_faithful_spectrum_norm,
+                relion_translation_angle_scale=relion_translation_angle_scale,
                 **({"symmetry": symmetry} if symmetry != "C1" else {}),
             )
         if final_result.best_pose_translations is not None:

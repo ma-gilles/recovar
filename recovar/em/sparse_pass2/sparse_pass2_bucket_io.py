@@ -81,37 +81,38 @@ def _translation_phase_table_for_indices(
     return translation_phases_half[:, pixel_indices]
 
 
-def _relion_translation_angles_f32(translations, image_shape):
+def _relion_translation_angles_f64(translations, image_shape, *, angle_scale=1.0):
+    """Return RELION double-ACC ``(tx, ty)`` translation radians.
+
+    RELION stores sampling translations in Angstrom and converts them with the
+    particle's optics pixel size (HealpixSampling::getTranslationsInPixel);
+    RECOVAR's translations are in model pixels. ``angle_scale`` is
+    model_pixel_size / optics_pixel_size and changes only this phase operand;
+    the candidate grid and reported pose coordinates stay in model pixels.
+    """
+
+    image_size = int(image_shape[0])
+    if image_size <= 0:
+        raise ValueError(f"image_shape must be positive, got {image_shape}")
+    translations_f64 = np.asarray(translations, dtype=np.float64)
+    if translations_f64.ndim != 2 or translations_f64.shape[1] != 2:
+        raise ValueError(
+            "RELION score translations must have shape (T, 2), got "
+            f"{translations_f64.shape}"
+        )
+    angle_scale = float(angle_scale)
+    if not np.isfinite(angle_scale) or angle_scale <= 0.0:
+        raise ValueError("RELION translation angle scale must be positive and finite")
+    return -2.0 * np.pi * (translations_f64 * angle_scale) / float(image_size)
+
+
+def _relion_translation_angles_f32(translations, image_shape, *, angle_scale=1.0):
     """Return RELION fine-score ``(tx, ty)`` radians with host rounding."""
 
-    image_size = int(image_shape[0])
-    if image_size <= 0:
-        raise ValueError(f"image_shape must be positive, got {image_shape}")
-    translations_f64 = np.asarray(translations, dtype=np.float64)
-    if translations_f64.ndim != 2 or translations_f64.shape[1] != 2:
-        raise ValueError(
-            "RELION score translations must have shape (T, 2), got "
-            f"{translations_f64.shape}"
-        )
     return np.asarray(
-        -2.0 * np.pi * translations_f64 / float(image_size),
+        _relion_translation_angles_f64(translations, image_shape, angle_scale=angle_scale),
         dtype=np.float32,
     )
-
-
-def _relion_translation_angles_f64(translations, image_shape):
-    """Return RELION double-ACC ``(tx, ty)`` translation radians."""
-
-    image_size = int(image_shape[0])
-    if image_size <= 0:
-        raise ValueError(f"image_shape must be positive, got {image_shape}")
-    translations_f64 = np.asarray(translations, dtype=np.float64)
-    if translations_f64.ndim != 2 or translations_f64.shape[1] != 2:
-        raise ValueError(
-            "RELION score translations must have shape (T, 2), got "
-            f"{translations_f64.shape}"
-        )
-    return -2.0 * np.pi * translations_f64 / float(image_size)
 
 
 def _relion_cuda_score_translation_angles_if_available(
@@ -120,6 +121,7 @@ def _relion_cuda_score_translation_angles_if_available(
     *,
     enabled,
     dtype=np.float32,
+    angle_scale=1.0,
 ):
     """Prepare exact score-translation angles or retain the JAX fallback."""
 
@@ -142,7 +144,7 @@ def _relion_cuda_score_translation_angles_if_available(
     )
     return jnp.asarray(
         np.asarray(
-            -2.0 * np.pi * np.asarray(translations, dtype=np.float64) / float(image_shape[0]),
+            _relion_translation_angles_f64(translations, image_shape, angle_scale=angle_scale),
             dtype=dtype,
         ),
         dtype=dtype,

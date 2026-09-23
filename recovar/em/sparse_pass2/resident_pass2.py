@@ -1213,6 +1213,7 @@ def compute_pass2_stats_resident(
     preserve_bpref_particle_order: bool = False,
     source_faithful_spectrum_norm: bool = False,
     symmetry_label: str = "C1",
+    relion_translation_angle_scale: float = 1.0,
 ):
     """Device-resident K=1 sparse pass 2; same signature and return as the compact engine.
 
@@ -1536,6 +1537,7 @@ def compute_pass2_stats_resident(
         image_shape,
         enabled=True,
         dtype=np.float64 if use_float64_scoring else np.float32,
+        angle_scale=relion_translation_angle_scale,
     )
     if relion_score_translation_angles is None:
         raise ValueError("the resident scoring stage requires RELION translation angles")

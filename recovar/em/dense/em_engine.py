@@ -627,6 +627,7 @@ def run_em(
     relion_half_volume_mstep: bool = False,
     return_half_volume_accumulators: bool = False,
     symmetry_label: str = "C1",
+    relion_translation_angle_scale: float = 1.0,
 ) -> DenseEMResult:
     """Score and accumulate one grid using blockwise posterior normalization.
 
@@ -740,6 +741,10 @@ def run_em(
         layout before returning. This is intended for K-class callers that
         immediately reconstruct from the accumulators.
     """
+    if float(relion_translation_angle_scale) != 1.0:
+        raise NotImplementedError(
+            "RELION model/optics translation-angle scaling requires the exact sparse or local scorer"
+        )
     overall_t0 = time.time()
     n_rot = rotations.shape[0]
     n_trans = translations.shape[0]

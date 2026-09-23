@@ -372,6 +372,7 @@ def compute_local_search_resident(
     return_reconstruction_sample_indices=False,
     return_profile=False,
     stats_use_reconstruction_probs=True,
+    relion_translation_angle_scale=1.0,
     translation_prior_centers=None,
     normalization_log_z=None,
     normalization_log_evidence=None,
@@ -527,6 +528,7 @@ def compute_local_search_resident(
         image_shape,
         enabled=True,
         dtype=np.float32,
+        angle_scale=relion_translation_angle_scale,
     )
     if relion_score_translation_angles is None:
         raise ValueError("the resident local scorer requires RELION translation angles")

@@ -392,6 +392,7 @@ def run_local_em_exact(
     score_with_masked_images: bool = True,
     half_spectrum_scoring: bool = False,
     relion_exact_score_translation: bool = False,
+    relion_translation_angle_scale: float = 1.0,
     use_float64_scoring: bool = False,
     use_float64_normalization: bool = True,
     use_float64_projections: bool = False,
@@ -1601,8 +1602,14 @@ def run_local_em_exact(
             image_shape,
             enabled=relion_exact_score_translation,
             dtype=np.float64 if use_float64_scoring else np.float32,
+            angle_scale=relion_translation_angle_scale,
         )
     )
+    if float(relion_translation_angle_scale) != 1.0 and relion_score_translation_angles is None:
+        raise NotImplementedError(
+            "RELION model/optics translation-angle scaling requires the exact CUDA "
+            "translation angles; the JAX phase fallback translates in model pixels"
+        )
     if return_profile:
         _block_until_ready(translation_phases_half)
     translation_phase_time = time.time() - phase_t0

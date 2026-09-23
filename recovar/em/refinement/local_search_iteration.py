@@ -120,6 +120,7 @@ def _run_local_search_iteration(
     stats_use_reconstruction_probs=False,
     score_only=False,
     source_faithful_spectrum_norm=False,
+    relion_translation_angle_scale=1.0,
     rotation_grid_mstep_rotations=None,
     generate_relion_mstep_rotations=False,
     symmetry: str = "C1",
@@ -459,6 +460,7 @@ def _run_local_search_iteration(
             translation_prior_centers=translation_prior_centers,
             normalization_log_evidence=normalization_log_evidence,
             source_faithful_spectrum_norm=source_faithful_spectrum_norm,
+            relion_translation_angle_scale=relion_translation_angle_scale,
             class_log_priors=None,
             score_only=score_only,
         )
@@ -535,6 +537,7 @@ def _run_local_search_iteration(
             stats_use_reconstruction_probs=stats_use_reconstruction_probs,
             score_only=score_only,
             source_faithful_spectrum_norm=source_faithful_spectrum_norm,
+            relion_translation_angle_scale=relion_translation_angle_scale,
             **({"symmetry_label": symmetry} if symmetry != "C1" else {}),
         )
 

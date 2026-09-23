@@ -979,6 +979,7 @@ def _compute_k_class_significance_batched(
     pad_final_image_batch: bool = False,
     stable_fourier_window_shapes: bool = False,
     coarse_gemm_diagnostic_scope: CoarseGaussianGemmDiagnosticScope | None = None,
+    relion_translation_angle_scale: float = 1.0,
 ):
     """Find significant samples from one posterior over ``class x rotation x translation``."""
 
@@ -1786,7 +1787,11 @@ def _compute_k_class_significance_batched(
                 for class_index in range(n_classes)
             ]
             coarse_gaussian_translation_angles = jnp.asarray(
-                _relion_translation_angles_f32(translations_source, image_shape),
+                _relion_translation_angles_f32(
+                    translations_source,
+                    image_shape,
+                    angle_scale=relion_translation_angle_scale,
+                ),
                 dtype=jnp.float32,
             )
             if (
@@ -2016,7 +2021,11 @@ def _compute_k_class_significance_batched(
             dtype=jnp.int32,
         )
         tree_rescore_translation_angles = jnp.asarray(
-            _relion_translation_angles_f32(translations_source, image_shape),
+            _relion_translation_angles_f32(
+                translations_source,
+                image_shape,
+                angle_scale=relion_translation_angle_scale,
+            ),
             dtype=jnp.float32,
         )
         logger.warning(
@@ -3173,6 +3182,7 @@ def _compute_k_class_significance_batched(
                             translations,
                             image_shape,
                             translation_phase_source=translations_source,
+                            relion_translation_angle_scale=relion_translation_angle_scale,
                             return_unshifted=True,
                         )
                     else:
@@ -3203,6 +3213,7 @@ def _compute_k_class_significance_batched(
                         score_indices_np=coarse_gaussian_score_indices_np,
                         score_active_mask=coarse_gaussian_score_active_mask,
                         translations_source=translations_source,
+                        relion_translation_angle_scale=relion_translation_angle_scale,
                         image_shape=image_shape,
                         noise_variance_half=noise_variance_half,
                         scale_corrections_enabled=scale_corrections is not None,

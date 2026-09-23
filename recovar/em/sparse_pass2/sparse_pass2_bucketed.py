@@ -621,6 +621,7 @@ def compute_pass2_stats_sparse_bucketed(
     preserve_bpref_particle_order: bool = False,
     source_faithful_spectrum_norm: bool = False,
     symmetry_label: str = "C1",
+    relion_translation_angle_scale: float = 1.0,
 ):
     """Bucketed batched implementation of sparse pass-2 oversampling.
 
@@ -1511,8 +1512,14 @@ def compute_pass2_stats_sparse_bucketed(
             image_shape,
             enabled=use_exact_relion_gaussian or relion_exact_bpref_operands,
             dtype=np.float64 if use_float64_scoring else np.float32,
+            angle_scale=relion_translation_angle_scale,
         )
     )
+    if float(relion_translation_angle_scale) != 1.0 and relion_score_translation_angles is None:
+        raise NotImplementedError(
+            "RELION model/optics translation-angle scaling requires the exact CUDA "
+            "translation angles; the JAX phase fallback translates in model pixels"
+        )
     translation_phases_half = None if windowed_prepare else half_translation_phase_table(fine_translations, image_shape)
 
     exact_raw_diff2_cache_limit_bytes = 0

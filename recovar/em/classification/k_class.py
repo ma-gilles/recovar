@@ -672,6 +672,7 @@ def _run_sparse_k_class_adaptive_pass2(
         source_faithful_spectrum_norm=source_faithful_spectrum_norm,
         **({"symmetry_label": base_engine_kwargs["symmetry_label"]}
            if base_engine_kwargs.get("symmetry_label", "C1") != "C1" else {}),
+        **_translation_angle_scale_kwargs(base_engine_kwargs),
     )
     if n_classes == 1 and base_engine_kwargs.get("relion_f32_normalization_sum_weight") is not None:
         common["relion_f32_normalization_sum_weight"] = base_engine_kwargs["relion_f32_normalization_sum_weight"]
@@ -1241,6 +1242,7 @@ def _run_dense_k_class_joint_firstiter_score_probe(
         coarse_rotation_ids=engine_kwargs.get("coarse_rotation_ids"),
         translation_phase_source=engine_kwargs.get("translation_phase_source"),
         **({"symmetry_label": engine_kwargs["symmetry_label"]} if engine_kwargs.get("symmetry_label", "C1") != "C1" else {}),
+        **_translation_angle_scale_kwargs(engine_kwargs),
     )[-1]
     from recovar.em.diagnostics.global_winner_summary import maybe_dump_global_winner_summary
 
@@ -1304,6 +1306,13 @@ def _subset_image_axis_engine_kwargs(kwargs: dict, image_indices: np.ndarray, n_
         if array.ndim > 0 and int(array.shape[0]) == int(n_images):
             out[name] = array[image_indices]
     return out
+
+
+def _translation_angle_scale_kwargs(kwargs: dict) -> dict:
+    """Forward a non-unit RELION model/optics translation-angle scale (K=1 only)."""
+
+    scale = float(kwargs.get("relion_translation_angle_scale", 1.0))
+    return {} if scale == 1.0 else {"relion_translation_angle_scale": scale}
 
 
 def _projection_float64_from_kwargs(kwargs: dict) -> bool:
@@ -1695,6 +1704,7 @@ def _run_sparse_firstiter_global_winner_subset_pass2(
         source_faithful_spectrum_norm=source_faithful_spectrum_norm,
         **({"symmetry_label": pass2_kwargs["symmetry_label"]}
            if pass2_kwargs.get("symmetry_label", "C1") != "C1" else {}),
+        **_translation_angle_scale_kwargs(pass2_kwargs),
     )
     _apply_bpref_particle_order_policy(
         common,
@@ -2880,6 +2890,7 @@ def run_dense_k_class_em_adaptive(
                 class_log_priors=log_priors,
                 **sig_kwargs,
                 **({"symmetry_label": engine_kwargs["symmetry_label"]} if engine_kwargs.get("symmetry_label", "C1") != "C1" else {}),
+                **_translation_angle_scale_kwargs(engine_kwargs),
             )
         if _full_coarse_stats is None or "significant_cutoff_counts" not in _full_coarse_stats:
             raise RuntimeError("K-class significance did not return RELION cutoff-rank counts")
