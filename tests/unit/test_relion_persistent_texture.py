@@ -370,6 +370,27 @@ def test_persistent_texture_preserves_nyquist_and_current_radius(
             np.testing.assert_array_equal(np.asarray(actual).view(np.uint32), np.asarray(expected).view(np.uint32))
 
 
+
+
+def test_loader_stays_on_the_ffi_bound_library(monkeypatch, tmp_path):
+    """After FFI registration the loader neither re-resolves nor loads another copy."""
+    import recovar.cuda_backproject as cb
+
+    bound = tmp_path / "bound" / "libcuda_backproject.so"
+    handle = object()
+    monkeypatch.setattr(cb, "_ffi_registered", True)
+    monkeypatch.setattr(cb, "_lib_handle", handle)
+    monkeypatch.setattr(cb, "_loaded_lib_path", bound.resolve())
+    monkeypatch.setattr(cb, "_existing_lib_path", lambda: pytest.fail("bound loader re-resolved the library"))
+    monkeypatch.setattr(cb.ctypes, "CDLL", lambda path: pytest.fail(f"bound loader opened {path}"))
+
+    monkeypatch.delenv("RECOVAR_CUDA_LIB", raising=False)
+    assert cb._get_lib() is handle
+    monkeypatch.setenv("RECOVAR_CUDA_LIB", str(bound))
+    assert cb._get_lib() is handle
+    monkeypatch.setenv("RECOVAR_CUDA_LIB", str(tmp_path / "other" / "libcuda_backproject.so"))
+    with pytest.raises(RuntimeError, match="bound to"):
+        cb._get_lib()
 @pytest.mark.gpu
 def test_bound_cuda_library_keeps_persistent_texture_handles_live(
     monkeypatch, tmp_path, custom_cuda_lib, gpu_device
