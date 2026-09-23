@@ -467,11 +467,11 @@ def _relion_wavg_chunk_bytes_per_image(
     """Device bytes one image adds to an image chunk of the Wavg triplet stage.
 
     Counts the chunk-local arrays: the translated rectangle and its exact
-    gather (complex64, one row per translation), their float32 powers, the
-    per-rotation exact ``[XA, AA, diff2]`` terms with the working set of the
-    sequential translation reducer (reference re/im, three accumulators and
-    the loop temporaries), and the zero-filled and embedded rectangle terms
-    handed to the atomic add.
+    gather (complex64, one row per translation), the rectangle's float32
+    power and, on the algebraic path, the exact float32 power, and the
+    zero-filled and embedded rectangle terms handed to the atomic add.
+    Whole-batch operands (``_relion_wavg_add_triplet_pixels_chunked``) are
+    not part of a chunk.
     """
 
     t, r, rect, exact = (
@@ -482,9 +482,8 @@ def _relion_wavg_chunk_bytes_per_image(
     )
     translated = t * (rect + exact) * 8
     powers = t * (rect + exact) * 4
-    exact_terms = r * exact * 4 * 11
     rectangle_terms = r * rect * 4 * 3 * 2
-    return translated + powers + exact_terms + rectangle_terms
+    return translated + powers + rectangle_terms
 
 
 def _relion_wavg_image_chunk_ranges(batch: int, bytes_per_image: int, max_block_bytes: int):
@@ -559,12 +558,18 @@ def _relion_wavg_add_triplet_pixels_chunked(
     ``[images, translations, pixels]`` rectangle and its gather only ever
     exist for one image chunk, sized by ``max_block_bytes``.
 
-    Every per-image stage is elementwise over images and is computed per
-    chunk. The two contractions over translations (rectangle image power and,
-    on the algebraic path, the exact image power) run once over the whole
-    batch on operands assembled from the chunks: a batched GEMM's algorithm,
-    and with it the summation order, may depend on the batch count, so
-    splitting it would change the float32 result. The rectangle power is
+    Translation, exact gather, squaring, embedding and the atomic add are
+    elementwise over images and run per chunk. Three stages run once over the
+    whole batch, on operands assembled in place from the chunks: the two
+    contractions over translations (rectangle image power and, on the
+    algebraic path, the exact image power), because a batched GEMM's
+    algorithm, and with it the summation order, may depend on the batch
+    count; and the sequential exact terms, whose translation loop synchronizes
+    the host once per translation, so one call per bucket keeps the bucket
+    tail's host round trips at their whole-bucket count. The whole-batch
+    operands are the rectangle's float32 power and the exact gather
+    (complex64, sequential path) or its float32 power (algebraic path); the
+    complex64 rectangle itself only exists per chunk. The rectangle power is
     squared in its own program exactly as inside the fused rectangle program;
     the algebraic path squares with the same eager operations its own body
     uses. The atomic add receives the same per-image summands in either
@@ -606,19 +611,13 @@ def _relion_wavg_add_triplet_pixels_chunked(
             batch,
         )
         del raw_rectangle
-        if raw_ctf is None:
-            exact_chunk = _relion_wavg_shifted_power(raw_exact)
-        else:
-            exact_chunk = _relion_wavg_sequential_triplet_terms(
-                _image_rows(proj, start, stop, batch),
-                _image_rows(raw_ctf, start, stop, batch),
-                _image_rows(scale, start, stop, batch),
-                raw_exact,
-                _image_rows(posterior, start, stop, batch),
-            )
+        exact_values = _place_image_rows(
+            exact_values,
+            _relion_wavg_shifted_power(raw_exact) if raw_ctf is None else raw_exact,
+            start,
+            batch,
+        )
         del raw_exact
-        exact_values = _place_image_rows(exact_values, exact_chunk, start, batch)
-        del exact_chunk
 
     image_power = _relion_wavg_rectangle_power_contraction_jit(rectangle_power, posterior)
     del rectangle_power
@@ -637,7 +636,8 @@ def _relion_wavg_add_triplet_pixels_chunked(
         )
         del exact_power
     else:
-        exact_terms, exact_values = exact_values, None
+        exact_terms = _relion_wavg_sequential_triplet_terms(proj, raw_ctf, scale, exact_values, posterior)
+        del exact_values
 
     accumulated = []
     for start, stop in image_ranges:

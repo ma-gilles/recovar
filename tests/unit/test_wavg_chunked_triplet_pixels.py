@@ -329,13 +329,13 @@ def test_chunked_wavg_device_peak_is_bounded_by_the_chunk_budget():
     """Measured allocator peak of one bucket's Wavg stage, current_size 154 geometry.
 
     48 images x 116 translations x 12012 rectangle pixels: the whole-bucket
-    complex64 rectangle is 0.54 GB and its exact gather 0.41 GB. Chunked, only
-    whole-bucket float32 operands of the contractions remain besides one
-    chunk.
+    complex64 rectangle is 0.54 GB and its exact gather 0.41 GB. Chunked, the
+    rectangle exists per chunk only; the whole-bucket operands are its float32
+    power and the exact gather.
     """
 
     batch, translations, rotations = 48, 116, 8
-    images_per_chunk = 4
+    images_per_chunk = 2
     chunked = _probe_peak("chunked", images_per_chunk)
     whole = _probe_peak("whole")
     rectangle_pixels, exact_pixels = chunked["rectangle_pixels"], chunked["exact_pixels"]
@@ -345,16 +345,21 @@ def test_chunked_wavg_device_peak_is_bounded_by_the_chunk_budget():
         translations, rotations, rectangle_pixels, exact_pixels
     )
     budget = images_per_chunk * chunked["per_image"]
-    # Whole-bucket residents: float32 rectangle power, rectangle image power,
-    # exact terms (sequential), the result accumulator and the assembled output.
+    # Whole-bucket residents: float32 rectangle power, complex64 exact gather
+    # and the copy of it the sequential reducer's loop carries, that reducer's
+    # working set (reference re/im, three accumulators, loop temporaries,
+    # stacked terms), the rectangle image power, the result accumulator and
+    # the assembled output.
     residents = (
         batch * translations * rectangle_pixels * 4
+        + 2 * batch * translations * exact_pixels * 8
+        + batch * rotations * exact_pixels * 4 * 11
         + batch * rotations * rectangle_pixels * 4
-        + batch * rotations * exact_pixels * 3 * 4
         + 2 * batch * rectangle_pixels * 3 * 4
     )
     slack = 64 << 20
     assert chunked["delta"] <= residents + budget + slack, (chunked, residents, budget)
-    whole_rectangle = batch * translations * (rectangle_pixels + exact_pixels) * 8
-    assert whole["delta"] >= whole_rectangle, whole
-    assert chunked["delta"] < whole["delta"] - whole_rectangle // 2, (chunked, whole)
+    # The whole-bucket composition, which also holds the complex64 rectangle,
+    # does not fit that bound.
+    assert whole["delta"] >= batch * translations * (rectangle_pixels + exact_pixels) * 8, whole
+    assert whole["delta"] > residents + budget + slack, (whole, residents, budget)
