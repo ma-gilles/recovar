@@ -6,7 +6,7 @@ import numpy as np
 import recovar.jax_config
 
 from recovar.output import output
-from recovar.simulation import simulator
+from recovar.simulation import simulator, solvent_contrast
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +32,7 @@ def make_test_dataset(
     atomic_solvent_correction=False,
     solvent_contrast_a=None,
     solvent_contrast_B=None,
+    atomic_bfactor=None,
 ):
     """Generate a synthetic test dataset used by integration tests and examples.
 
@@ -42,8 +43,9 @@ def make_test_dataset(
     - ``n_tilts``: number of tilts for ``tilt_series=True`` (default: 27)
     - ``noise_rng_batch_size``: fixed simulator RNG chunk size for
       reproducible particles across memory-driven processing batch sizes
-    - ``atomic_solvent_correction``, ``solvent_contrast_a``, ``solvent_contrast_B``:
-      opt-in solvent-contrast filter for atomic-model volumes, forwarded to
+    - ``atomic_solvent_correction``, ``solvent_contrast_a``, ``solvent_contrast_B``,
+      ``atomic_bfactor``: opt-in EM-development transform for atomic-model
+      volumes (solvent contrast plus B-factor), forwarded to
       :func:`recovar.simulation.simulator.generate_synthetic_dataset`
     """
     if seed is not None:
@@ -100,6 +102,7 @@ def make_test_dataset(
             atomic_solvent_correction=atomic_solvent_correction,
             solvent_contrast_a=solvent_contrast_a,
             solvent_contrast_B=solvent_contrast_B,
+            atomic_bfactor=atomic_bfactor,
         )
     else:
         image_stack, sim_info = simulator.generate_synthetic_dataset(
@@ -128,6 +131,7 @@ def make_test_dataset(
             atomic_solvent_correction=atomic_solvent_correction,
             solvent_contrast_a=solvent_contrast_a,
             solvent_contrast_B=solvent_contrast_B,
+            atomic_bfactor=atomic_bfactor,
         )
 
     logger.info("Finished generating dataset %s", output_folder)
@@ -186,27 +190,7 @@ def main():
         default=None,
         help="Fixed simulator noise RNG chunk size for reproducible generation across processing batch sizes",
     )
-    parser.add_argument(
-        "--atomic-solvent-correction",
-        action="store_true",
-        help=(
-            "Apply the Henderson-McMullan (2013) solvent-contrast filter H(q) = 1 - a exp(-B |q|^2 / 4) to the "
-            "input volumes before projection. Only for volumes computed from atomic models without solvent. "
-            "Ground-truth loading applies it automatically."
-        ),
-    )
-    parser.add_argument(
-        "--solvent-contrast-a",
-        type=float,
-        default=None,
-        help="Solvent-contrast amplitude a in [0, 1] (default 0.8); requires --atomic-solvent-correction",
-    )
-    parser.add_argument(
-        "--solvent-contrast-b",
-        type=float,
-        default=None,
-        help="Solvent-contrast B in angstrom^2, >= 0 (default 2000); requires --atomic-solvent-correction",
-    )
+    solvent_contrast.add_cli_arguments(parser)
 
     args = parser.parse_args()
 
@@ -227,9 +211,7 @@ def main():
         n_tilts=args.n_tilts,
         premultiplied_ctf=args.premultiplied_ctf,
         noise_rng_batch_size=args.noise_rng_batch_size,
-        atomic_solvent_correction=args.atomic_solvent_correction,
-        solvent_contrast_a=args.solvent_contrast_a,
-        solvent_contrast_B=args.solvent_contrast_b,
+        **solvent_contrast.kwargs_from_cli_args(args),
     )
 
 

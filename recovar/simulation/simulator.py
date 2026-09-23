@@ -645,26 +645,30 @@ def generate_synthetic_dataset(
     atomic_solvent_correction=False,
     solvent_contrast_a=None,
     solvent_contrast_B=None,
+    atomic_bfactor=None,
 ):
     """Generate a synthetic cryo-EM particle dataset.
 
     Parameters
     ----------
     atomic_solvent_correction : bool, default False
-        Apply the Henderson-McMullan (2013) solvent-contrast filter
-        ``H(q) = 1 - a exp(-B |q|^2 / 4)`` (``q`` in cycles/angstrom at
-        ``voxel_size``) to the clean input volumes before projection. Only for
-        volumes computed from atomic models without solvent; never inferred
-        from the input files. The filter follows the global ``scale_vol``
-        normalization, so the attenuation is kept at fixed noise. The record
-        stored in ``simulation_info["atomic_solvent_correction"]`` makes
+        EM-development preset for volumes computed from atomic models without
+        solvent or B-factors. Multiplies the clean input volumes' Fourier
+        transform by ``(1 - a exp(-B |q|^2 / 4)) exp(-B_atomic |q|^2 / 4)``
+        (Henderson-McMullan 2013 solvent contrast, then a B-factor; ``q`` in
+        cycles/angstrom at ``voxel_size``) before projection. Never inferred
+        from the input files; leave off for experimental or already-corrected
+        maps. The filter follows the global ``scale_vol`` normalization, so the
+        attenuation is kept at fixed noise. The record stored in
+        ``simulation_info["atomic_solvent_correction"]`` makes
         :func:`recovar.simulation.synthetic_dataset.load_ground_truth_volumes`
-        apply the same operator. Also applied to the outlier volume. See
+        apply the same operator. Also applied to the outlier volume.
+        ``solvent_contrast.EM_DEVELOPMENT_PRESET`` spells out the keywords. See
         ``docs/math/atomic_solvent_contrast.md``.
-    solvent_contrast_a, solvent_contrast_B : float, optional
-        Override the filter amplitude ``a`` (default 0.8, in [0, 1]) and ``B``
-        (default 2000 angstrom^2, non-negative). Only valid with
-        ``atomic_solvent_correction=True``.
+    solvent_contrast_a, solvent_contrast_B, atomic_bfactor : float, optional
+        Override ``a`` (default 0.8, in [0, 1]), ``B`` (default 2000
+        angstrom^2) and ``B_atomic`` (default 100 angstrom^2; 0 disables the
+        B-factor term). Only valid with ``atomic_solvent_correction=True``.
     relion_normalize : bool, default False
         If True, apply RELION-style per-particle background normalization
         (mean subtraction + per-particle scale division using pixels outside
@@ -738,10 +742,13 @@ def generate_synthetic_dataset(
             grid_size=grid_size,
             a=solvent_contrast.DEFAULT_A if solvent_contrast_a is None else solvent_contrast_a,
             B=solvent_contrast.DEFAULT_B if solvent_contrast_B is None else solvent_contrast_B,
+            atomic_bfactor=solvent_contrast.DEFAULT_ATOMIC_BFACTOR if atomic_bfactor is None else atomic_bfactor,
             applied_to_outlier_volume=outlier_file_input is not None,
         )
-    elif solvent_contrast_a is not None or solvent_contrast_B is not None:
-        raise ValueError("solvent_contrast_a/solvent_contrast_B require atomic_solvent_correction=True")
+    elif solvent_contrast_a is not None or solvent_contrast_B is not None or atomic_bfactor is not None:
+        raise ValueError(
+            "solvent_contrast_a/solvent_contrast_B/atomic_bfactor require atomic_solvent_correction=True"
+        )
     else:
         solvent_record = solvent_contrast.make_record(False)
 
@@ -1012,7 +1019,7 @@ def _warn_on_mrc_voxel_size_mismatch(volumes_path_root, trailing_zero_format_in_
     implied_voxel_size = header_voxel_size * mrc_grid_size / grid_size
     if abs(implied_voxel_size - voxel_size) > 0.01 * voxel_size:
         logger.warning(
-            "Atomic solvent correction uses voxel_size=%.4g A, but %s implies %.4g A at grid_size %d.",
+            "Atomic volume transform uses voxel_size=%.4g A, but %s implies %.4g A at grid_size %d.",
             voxel_size,
             first_file,
             implied_voxel_size,

@@ -24,7 +24,15 @@ def main(
     Bfactor=60,
     noise_level_tests=None,
     show_plots=False,
+    **atomic_volume_kwargs,
 ):
+    """Hard-assignment experiment on simulated spike datasets.
+
+    ``atomic_volume_kwargs`` are forwarded to ``generate_synthetic_dataset``
+    (for example ``**solvent_contrast.EM_DEVELOPMENT_PRESET``). The volumes are
+    already B-factored with ``Bfactor``, so pass ``atomic_bfactor=0`` to add
+    only the solvent-contrast term.
+    """
     output_folder = os.fspath(output_folder)
     pdb_folder = os.fspath(pdb_folder)
     output.mkdir_safe(output_folder)
@@ -93,6 +101,7 @@ def main(
             noise_scale_std=0,
             contrast_std=0,
             disc_type=disc_type_sim,
+            **atomic_volume_kwargs,
         )
 
         # Volumes are scaled so that images are normalized.
