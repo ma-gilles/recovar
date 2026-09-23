@@ -36,10 +36,16 @@ def test_half_staging_preserves_current_crop_mask_and_scaling(
     calls = []
     monkeypatch.setattr(p, "_cuda_projection_available", lambda: True)
 
-    def direct(half, rows, radius, *, image_shape, padding_factor):
+    def direct(half, rows, radius, *, image_shape, padding_factor, image_r_max=None):
         assert half is slab and rows is rotations
         assert radius.shape == () and radius.dtype == jnp.int32 and int(radius) == 16
         assert image_shape == (output_size, output_size)
+        # 41128dcd0: without the exact-disk diagnostic the native kernel owns
+        # image clipping at the current-image radius (sparse_projection_radius.md).
+        if mask_disk:
+            assert image_r_max is None
+        else:
+            assert int(image_r_max) == (output_size - 4) // 2
         calls.append(padding_factor)
         return raw
 
@@ -83,18 +89,21 @@ def test_half_staging_preserves_current_crop_mask_and_scaling(
 
 
 @pytest.mark.parametrize(
-    "rotation_dtype,output_size,padding_factor",
+    "rotation_dtype,output_size,padding_factor,expected_route",
     [
-        (jnp.float64, 32, 2),
-        (jnp.float32, 31, 2),
-        (jnp.float32, 32, 3),
+        (jnp.float64, 32, 2, "full"),
+        # 41128dcd0 stages these complex64/float32 slabs (odd output, padding 3)
+        # through the direct half-storage texture instead of the cubic buffer.
+        (jnp.float32, 31, 2, "half_texture"),
+        (jnp.float32, 32, 3, "half_texture"),
     ],
 )
-def test_nonqualified_geometry_keeps_existing_staging(
+def test_geometry_outside_the_capacity_kernel_keeps_its_staging_route(
     monkeypatch,
     rotation_dtype,
     output_size,
     padding_factor,
+    expected_route,
 ):
     size = 32 * padding_factor + 3
     slab = jnp.zeros((size, size, size // 2 + 1), dtype=jnp.complex64)
@@ -106,8 +115,15 @@ def test_nonqualified_geometry_keeps_existing_staging(
         calls.append("full")
         return jnp.zeros((size, size, size), dtype=jnp.complex64)
 
+    def half_texture(value, rotations, *, current_size, padding_factor, projector_max_r):
+        assert value is slab and rotations.dtype == jnp.float32
+        assert (current_size, projector_max_r) == (output_size, 16)
+        calls.append("half_texture")
+        return jnp.zeros((1, output_size * (output_size // 2 + 1)), dtype=jnp.complex64)
+
     monkeypatch.setattr(p, "relion_projector_half_to_texture_full", full_stage)
     monkeypatch.setattr(cb, "project_relion_half_capacity", lambda *a, **kw: pytest.fail("unqualified route"))
+    monkeypatch.setattr(cb, "relion_projector_half_texture_f32", half_texture)
     monkeypatch.setattr(
         p,
         "project_half_spectrum",
@@ -116,7 +132,7 @@ def test_nonqualified_geometry_keeps_existing_staging(
     p._project_relion_projector_texture(
         slab, rows, (32, 32), r_max=16, projector_output_size=output_size, padding_factor=padding_factor
     )
-    assert calls == ["full"]
+    assert calls == [expected_route]
 
 
 @pytest.mark.gpu
@@ -177,4 +193,26 @@ def test_gpu_half_staging_matches_previous_full_staging(padding_factor, compact,
         mask_current_image_disk=mask_disk,
         current_image_mask_size=output_size - 4,
     )
-    np.testing.assert_array_equal(np.asarray(got).view(np.uint32), np.asarray(expected).view(np.uint32))
+    got = np.ascontiguousarray(np.asarray(got))
+    expected = np.ascontiguousarray(np.asarray(expected))
+    if mask_disk:
+        np.testing.assert_array_equal(got.view(np.uint32), expected.view(np.uint32))
+        return
+    # Without the exact-disk diagnostic the native kernel owns image clipping
+    # (41128dcd0; docs/math/sparse_projection_radius.md): a rotated,
+    # integer-truncated radius test at current_image_mask_size // 2. The
+    # staging must not change any retained value: inside the disk every value
+    # is bitwise the full-staging value, beyond one pixel outside it every value
+    # is zero, and in the boundary annulus each value is either.
+    flat = np.arange(48 * 25) if indices is None else np.asarray(indices)
+    ky = flat // 25 - 24
+    kx = flat % 25
+    r2 = ky**2 + kx**2
+    image_radius = (output_size - 4) // 2
+    inside = r2 <= image_radius**2
+    outside = r2 > (image_radius + 1) ** 2
+    same = got.view(np.uint64) == expected.view(np.uint64)
+    zero = got == 0
+    np.testing.assert_array_equal(got[:, inside].view(np.uint64), expected[:, inside].view(np.uint64))
+    assert np.all(zero[:, outside])
+    assert np.all(same | zero)
