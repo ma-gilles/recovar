@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 
 from recovar import cuda_backproject as cb
+from recovar.em.cuda import kernels as em_cuda_kernels
 from recovar.em.local import local_big_jit as local
 from recovar.em.sparse_pass2 import sparse_pass2_wavg as sparse
 
@@ -48,11 +49,11 @@ def _inputs(random=False):
 
 def _legacy(args):
     raw, _, proj, ctf, scale, posterior, positions, indices, ne, nr = args
-    exact = cb.relion_wavg_sequential_runtime_triplet_f32(
+    exact = em_cuda_kernels.relion_wavg_sequential_runtime_triplet_f32(
         proj, ctf[:, indices].astype(jnp.float32), scale, raw[:, :, positions], posterior, ne
     )
     rectangle = sparse._relion_wavg_rectangle_triplet_terms(exact, raw, posterior, positions)
-    atomic = cb.relion_wavg_rotation_atomic_runtime_triplet_add_f32(
+    atomic = em_cuda_kernels.relion_wavg_rotation_atomic_runtime_triplet_add_f32(
         rectangle, jnp.zeros((raw.shape[0], raw.shape[2], 3), dtype=jnp.float32), nr
     )
     return atomic, rectangle
@@ -79,25 +80,25 @@ def test_factored_power_keeps_original_contraction_bitwise():
 def test_operand_dtype_rejected_before_registration(monkeypatch, index, dtype):
     args = _inputs()
     args[index] = args[index].astype(dtype)
-    monkeypatch.setattr(cb, "_ensure_wavg_native_prefix_ffi", lambda: pytest.fail("registered invalid ABI"))
+    monkeypatch.setattr(em_cuda_kernels, "_ensure_wavg_native_prefix_ffi", lambda: pytest.fail("registered invalid ABI"))
     with pytest.raises(ValueError, match="dtype"):
-        cb.relion_wavg_native_prefix_f32(*args)
+        em_cuda_kernels.relion_wavg_native_prefix_f32(*args)
 
 
 @pytest.mark.parametrize("index", [1, 4, 5, 6, 7, 8, 9])
 def test_shape_rejected_before_registration(monkeypatch, index):
     args = _inputs()
     args[index] = args[index].reshape(-1) if index in (8, 9) else args[index][:-1]
-    monkeypatch.setattr(cb, "_ensure_wavg_native_prefix_ffi", lambda: pytest.fail("registered invalid ABI"))
+    monkeypatch.setattr(em_cuda_kernels, "_ensure_wavg_native_prefix_ffi", lambda: pytest.fail("registered invalid ABI"))
     with pytest.raises(ValueError, match="geometry"):
-        cb.relion_wavg_native_prefix_f32(*args)
+        em_cuda_kernels.relion_wavg_native_prefix_f32(*args)
 
 
 @pytest.mark.parametrize("debug", [False, True])
 def test_exact_ffi_operand_forwarding_without_materialization(monkeypatch, debug):
     args = _inputs()
     captured = {}
-    monkeypatch.setattr(cb, "_ensure_wavg_native_prefix_ffi", lambda: None)
+    monkeypatch.setattr(em_cuda_kernels, "_ensure_wavg_native_prefix_ffi", lambda: None)
 
     def ffi(target, outputs, **options):
         captured.update(target=target, outputs=outputs, options=options)
@@ -109,10 +110,10 @@ def test_exact_ffi_operand_forwarding_without_materialization(monkeypatch, debug
         return call
 
     monkeypatch.setattr(jax.ffi, "ffi_call", ffi)
-    assert cb.relion_wavg_native_prefix_f32(*args, debug=debug) == "result"
+    assert em_cuda_kernels.relion_wavg_native_prefix_f32(*args, debug=debug) == "result"
     assert all(a is b for a, b in zip(args, captured["values"], strict=True))
     assert captured["target"] == (
-        cb._TARGET_RELION_WAVG_NATIVE_PREFIX_DEBUG_F32 if debug else cb._TARGET_RELION_WAVG_NATIVE_PREFIX_F32
+        em_cuda_kernels._TARGET_RELION_WAVG_NATIVE_PREFIX_DEBUG_F32 if debug else em_cuda_kernels._TARGET_RELION_WAVG_NATIVE_PREFIX_F32
     )
     if debug:
         assert captured["outputs"][1].shape == (2, 3, 6, 3)
@@ -122,13 +123,15 @@ def test_exact_ffi_operand_forwarding_without_materialization(monkeypatch, debug
 
 
 def test_old_library_remains_compatible_but_optional_target_fails(monkeypatch):
-    monkeypatch.setattr(cb, "_wavg_native_prefix_ffi_registered", False)
+    monkeypatch.setattr(em_cuda_kernels, "_wavg_native_prefix_ffi_registered", False)
     monkeypatch.setattr(cb, "_ensure_ffi", lambda: None)
+    monkeypatch.setattr(em_cuda_kernels, "_ensure_ffi", lambda: None)
     monkeypatch.setattr(cb, "_get_lib", lambda: SimpleNamespace())
+    monkeypatch.setattr(em_cuda_kernels, "_get_lib", lambda: SimpleNamespace())
     assert all("NativePrefix" not in symbol for _, symbol in cb._FFI_REGISTRATIONS)
     with pytest.raises(RuntimeError, match="explicitly rebuilt"):
-        cb._ensure_wavg_native_prefix_ffi()
-    assert not cb._wavg_native_prefix_ffi_registered
+        em_cuda_kernels._ensure_wavg_native_prefix_ffi()
+    assert not em_cuda_kernels._wavg_native_prefix_ffi_registered
 
 
 def test_shell_boundary_native_receives_one_original_translation(monkeypatch):
@@ -148,7 +151,7 @@ def test_shell_boundary_native_receives_one_original_translation(monkeypatch):
         np.testing.assert_array_equal(received[1], power)
         return jnp.ones((2, 6, 3), dtype=jnp.float32)
 
-    monkeypatch.setattr(cb, "relion_wavg_native_prefix_f32", native)
+    monkeypatch.setattr(em_cuda_kernels, "relion_wavg_native_prefix_f32", native)
     shells, cutoff = local._relion_wavg_direct_triplet_shells(
         jnp.zeros((2, 8), dtype=jnp.complex64),
         jnp.zeros((3, 2), dtype=jnp.float32),
@@ -180,14 +183,14 @@ def test_shell_boundary_native_receives_one_original_translation(monkeypatch):
 def test_real_cuda_preatomic_bitwise_and_dyadic_atomic(random):
     assert jax.default_backend() == "gpu" and jax.config.x64_enabled
     args = _inputs(random=random)
-    actual, terms = cb.relion_wavg_native_prefix_f32(*args, debug=True)
+    actual, terms = em_cuda_kernels.relion_wavg_native_prefix_f32(*args, debug=True)
     expected, expected_terms = _legacy(args)
     np.testing.assert_array_equal(np.asarray(terms).view(np.uint32), np.asarray(expected_terms).view(np.uint32))
     if not random:
         np.testing.assert_array_equal(np.asarray(actual).view(np.uint32), np.asarray(expected).view(np.uint32))
     np.testing.assert_array_equal(np.asarray(terms)[:, :, 5], 0.0)
     # A second executable explicitly exercises the production scratch path.
-    production = cb.relion_wavg_native_prefix_f32(*args)
+    production = em_cuda_kernels.relion_wavg_native_prefix_f32(*args)
     if not random:
         np.testing.assert_array_equal(production, expected)
 
@@ -227,13 +230,13 @@ def test_real_cuda_invalid_map_or_count_poisoned(case):
         args[8] = jnp.asarray(5, dtype=jnp.int32)
     elif case == "large_rectangle":
         args[9] = jnp.asarray(7, dtype=jnp.int32)
-    assert np.isnan(np.asarray(cb.relion_wavg_native_prefix_f32(*args))).all()
+    assert np.isnan(np.asarray(em_cuda_kernels.relion_wavg_native_prefix_f32(*args))).all()
 
 
 @pytest.mark.gpu
 def test_real_cuda_runtime_counts_reuse_one_executable():
     args = _inputs()
-    compiled = jax.jit(cb.relion_wavg_native_prefix_f32)
+    compiled = jax.jit(em_cuda_kernels.relion_wavg_native_prefix_f32)
     first = compiled(*args)
     changed = list(args)
     changed[8] = jnp.asarray(4, dtype=jnp.int32)

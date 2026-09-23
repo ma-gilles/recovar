@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 from recovar import cuda_backproject as cb
+from recovar.em.cuda import kernels as em_cuda_kernels
 from recovar.em.helpers import projection
 from recovar.em.scoring import significance
 
@@ -41,8 +42,9 @@ def test_invalid_optin(monkeypatch):
 @pytest.mark.parametrize("radius", [np.float32(13), np.array([13], np.int32)])
 def test_image_radius_validated_before_loading_cuda(monkeypatch, radius):
     monkeypatch.setattr(cb, "_ensure_optional_ffi", lambda _target: pytest.fail("loaded before validation"))
+    monkeypatch.setattr(em_cuda_kernels, "_ensure_optional_ffi", lambda _target: pytest.fail("loaded before validation"))
     with pytest.raises(ValueError, match="image_r_max must be an S32 scalar"):
-        cb.project_relion_half_capacity(
+        em_cuda_kernels.project_relion_half_capacity(
             jnp.ones((33, 33, 17), jnp.complex64),
             jnp.asarray(_ROTATION),
             jnp.int32(15),
@@ -71,7 +73,7 @@ def test_compact_boundary_survives_runtime_image_radius(monkeypatch):
         calls.append((half.shape, radius.aval, kw["image_r_max"].aval))
         return jnp.ones((1, 32 * 17), jnp.complex64)
 
-    monkeypatch.setattr(cb, "project_relion_half_capacity", projected)
+    monkeypatch.setattr(em_cuda_kernels, "project_relion_half_capacity", projected)
 
     @jax.jit
     def run(radius):
@@ -99,15 +101,15 @@ def test_gpu_rotated_boundary_and_original_texture():
     values = np.arange(33 * 33 * 17, dtype=np.float32).reshape(33, 33, 17)
     volume = jnp.asarray((values + 1j * (values + 1)).astype(np.complex64))
     rotations = jnp.asarray(_ROTATION)
-    old = cb.project_relion_half_capacity(volume, rotations, jnp.int32(15), image_shape=(32, 32))
-    clipped = cb.project_relion_half_capacity(
+    old = em_cuda_kernels.project_relion_half_capacity(volume, rotations, jnp.int32(15), image_shape=(32, 32))
+    clipped = em_cuda_kernels.project_relion_half_capacity(
         volume,
         rotations,
         jnp.int32(15),
         image_shape=(32, 32),
         image_r_max=jnp.int32(13),
     )
-    equal_radius = cb.project_relion_half_capacity(
+    equal_radius = em_cuda_kernels.project_relion_half_capacity(
         volume,
         rotations,
         jnp.int32(15),
@@ -127,7 +129,7 @@ def test_gpu_rotated_boundary_and_original_texture():
 @pytest.mark.parametrize("radius", [-1, 17])
 def test_gpu_invalid_image_radius_is_nan(radius):
     assert jax.default_backend() == "gpu"
-    result = cb.project_relion_half_capacity(
+    result = em_cuda_kernels.project_relion_half_capacity(
         jnp.ones((33, 33, 17), jnp.complex64),
         jnp.asarray(_ROTATION),
         jnp.int32(15),
@@ -152,7 +154,7 @@ def test_default_texture_passes_active_image_radius_to_kernel(monkeypatch, activ
         calls.append(int(kwargs["image_r_max"]))
         return jnp.ones((1, 32 * 17), dtype=jnp.complex64)
 
-    monkeypatch.setattr(cb, "project_relion_half_capacity", projected)
+    monkeypatch.setattr(em_cuda_kernels, "project_relion_half_capacity", projected)
     result = projection._project_relion_projector_texture(
         jnp.ones((33, 33, 17), dtype=jnp.complex64),
         jnp.asarray(_ROTATION), (32, 32), r_max=15,

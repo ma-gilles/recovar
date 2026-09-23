@@ -1076,7 +1076,7 @@ def _compute_k_class_significance_batched(
             use_float64_projections=use_float64_projections,
         )
     if projection_padding_factor > 1 and not use_relion_projector:
-        from recovar.reconstruction.relion_functions import pad_volume_for_projection
+        from recovar.em.reconstruction.relion_functions_relion import pad_volume_for_projection
 
         means_for_proj = []
         proj_volume_shape = None
@@ -2299,6 +2299,7 @@ def _compute_k_class_significance_batched(
         """Invoke the mature fused scorer and record observed execution."""
 
         from recovar import cuda_backproject
+        from recovar.em.cuda import kernels as em_cuda_kernels
 
         if not coarse_fused_projector_enabled:
             raise RuntimeError("fused coarse scorer was not enabled")
@@ -2320,9 +2321,9 @@ def _compute_k_class_significance_batched(
         if actual_image_count <= 0:
             raise ValueError("fused coarse scorer requires actual image rows")
         coarse_projector = (
-            cuda_backproject.relion_coarse_diff2_projector_multistream_f32
+            em_cuda_kernels.relion_coarse_diff2_projector_multistream_f32
             if coarse_multistream_enabled
-            else cuda_backproject.relion_coarse_diff2_projector_f32
+            else em_cuda_kernels.relion_coarse_diff2_projector_f32
         )
         coarse_projector_kwargs = {}
         if coarse_multistream_enabled:
@@ -2494,7 +2495,7 @@ def _compute_k_class_significance_batched(
             ):
                 return score_result
 
-            from recovar import cuda_backproject
+            from recovar.em.cuda import kernels as em_cuda_kernels
 
             macro_scores, projected_reference, _projected_reference_abs2 = score_result
             active = jnp.arange(batch_size, dtype=jnp.int32) < jnp.asarray(
@@ -2516,7 +2517,7 @@ def _compute_k_class_significance_batched(
                 jnp.asarray(coarse_gaussian_initial_diff2, dtype=jnp.float32),
                 jnp.zeros((), dtype=jnp.float32),
             )
-            direct_diff2 = cuda_backproject.relion_coarse_diff2_rectangular_f32(
+            direct_diff2 = em_cuda_kernels.relion_coarse_diff2_rectangular_f32(
                 jnp.asarray(projected_reference, dtype=jnp.complex64),
                 direct_shifted,
                 direct_weight,
@@ -2540,9 +2541,9 @@ def _compute_k_class_significance_batched(
             )
 
         if coarse_gaussian_score_backend is _CoarseGaussianScoreBackend.NATIVE_TEXTURE:
-            from recovar import cuda_backproject
+            from recovar.em.cuda import kernels as em_cuda_kernels
 
-            diff2 = cuda_backproject.relion_coarse_diff2_native_texture_rectangular_f32(
+            diff2 = em_cuda_kernels.relion_coarse_diff2_native_texture_rectangular_f32(
                 coarse_gaussian_projector_full,
                 jnp.asarray(rots_b, dtype=jnp.float32),
                 coarse_gaussian_unshifted_corrected,
@@ -2557,7 +2558,7 @@ def _compute_k_class_significance_batched(
             return -diff2
         proj_half_b, proj_abs2_half_b = _project_block(class_index, mean_for_proj, rots_b)
         if coarse_gaussian_ffi_enabled:
-            from recovar import cuda_backproject
+            from recovar.em.cuda import kernels as em_cuda_kernels
 
             proj_score = (
                 proj_half_b
@@ -2567,9 +2568,9 @@ def _compute_k_class_significance_batched(
             coarse_complex_dtype = jnp.complex128 if use_float64_scoring else jnp.complex64
             proj_score = jnp.asarray(proj_score, dtype=coarse_complex_dtype)
             coarse_diff2 = (
-                cuda_backproject.relion_coarse_diff2_rectangular_f64
+                em_cuda_kernels.relion_coarse_diff2_rectangular_f64
                 if use_float64_scoring
-                else cuda_backproject.relion_coarse_diff2_rectangular_f32
+                else em_cuda_kernels.relion_coarse_diff2_rectangular_f32
             )
             diff2 = coarse_diff2(
                 proj_score,

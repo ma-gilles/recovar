@@ -25,10 +25,10 @@ def test_c1_finalizer_is_exact_historical_x0_callthrough(monkeypatch):
         raise AssertionError("C1 must not dispatch point-group CUDA")
 
     monkeypatch.setattr(half_volume_mstep, "enforce_half_volume_x0", fake_x0)
-    import recovar.cuda_backproject as cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     monkeypatch.setattr(
-        cuda_backproject,
+        em_cuda_kernels,
         "relion_point_group_symmetrise_bpref",
         forbidden_cuda,
     )

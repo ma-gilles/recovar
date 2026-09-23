@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 
 from recovar import cuda_backproject as cb
+from recovar.em.cuda import kernels as em_cuda_kernels
 from test_bpref_optional_denominator import arguments, device
 
 pytestmark = pytest.mark.unit
@@ -47,8 +48,9 @@ def padded_arguments(stable, active=2, capacity=4):
 @pytest.mark.parametrize("value", [None, 0, 1, "false", np.bool_(False)])
 def test_mask_requires_python_bool_before_cuda(monkeypatch, value):
     monkeypatch.setattr(cb, "_ensure_ffi", lambda: pytest.fail("loaded CUDA before validation"))
+    monkeypatch.setattr(em_cuda_kernels, "_ensure_ffi", lambda: pytest.fail("loaded CUDA before validation"))
     with pytest.raises(TypeError, match="particle_tail_mask must be a Python bool"):
-        cb.relion_vdam_mstep_fused_projector_x_half.__wrapped__(**arguments(True, True), particle_tail_mask=value)
+        em_cuda_kernels.relion_vdam_mstep_fused_projector_x_half.__wrapped__(**arguments(True, True), particle_tail_mask=value)
 
 
 @pytest.mark.parametrize(
@@ -73,24 +75,27 @@ def test_mask_requires_python_bool_before_cuda(monkeypatch, value):
 )
 def test_mask_rejects_unsupported_modes_before_cuda(monkeypatch, override):
     monkeypatch.setattr(cb, "_ensure_ffi", lambda: pytest.fail("loaded CUDA before validation"))
+    monkeypatch.setattr(em_cuda_kernels, "_ensure_ffi", lambda: pytest.fail("loaded CUDA before validation"))
     _, values = padded_arguments(True)
     values.update(override)
     with pytest.raises(ValueError, match="particle_tail_mask requires"):
-        cb.relion_vdam_mstep_fused_projector_x_half.__wrapped__(**values)
+        em_cuda_kernels.relion_vdam_mstep_fused_projector_x_half.__wrapped__(**values)
 
 
 def test_mask_rejects_single_group_before_cuda(monkeypatch):
     monkeypatch.setattr(cb, "_ensure_ffi", lambda: pytest.fail("loaded CUDA before validation"))
+    monkeypatch.setattr(em_cuda_kernels, "_ensure_ffi", lambda: pytest.fail("loaded CUDA before validation"))
     _, values = padded_arguments(True)
     for name in ("data_volume", "weight_volume"):
         values[name] = values[name][:1]
     with pytest.raises(ValueError, match="at least two accumulator groups"):
-        cb.relion_vdam_mstep_fused_projector_x_half.__wrapped__(**values)
+        em_cuda_kernels.relion_vdam_mstep_fused_projector_x_half.__wrapped__(**values)
 
 
 @pytest.mark.parametrize("stable", [False, True])
 def test_mask_is_default_off_and_changes_only_ffi_attribute(monkeypatch, stable):
     monkeypatch.setattr(cb, "_ensure_ffi", lambda: None)
+    monkeypatch.setattr(em_cuda_kernels, "_ensure_ffi", lambda: None)
     records = []
 
     def ffi(target, outputs, **options):
@@ -101,7 +106,7 @@ def test_mask_is_default_off_and_changes_only_ffi_attribute(monkeypatch, stable)
         return call
 
     monkeypatch.setattr(jax.ffi, "ffi_call", ffi)
-    fn = cb.relion_vdam_mstep_fused_projector_x_half.__wrapped__
+    fn = em_cuda_kernels.relion_vdam_mstep_fused_projector_x_half.__wrapped__
     assert inspect.signature(fn).parameters["particle_tail_mask"].default is False
     values, _ = padded_arguments(stable)
     for mask in (False, True):
@@ -123,7 +128,7 @@ def test_mask_is_default_off_and_changes_only_ffi_attribute(monkeypatch, stable)
 @pytest.mark.parametrize("active,capacity", [(1, 4), (2, 4), (2, 2)])
 def test_gpu_nonzero_tail_is_excluded_bitwise(stable, active, capacity):
     assert jax.default_backend() == "gpu"
-    fn = cb.relion_vdam_mstep_fused_projector_x_half
+    fn = em_cuda_kernels.relion_vdam_mstep_fused_projector_x_half
     prefix, padded = padded_arguments(stable, active, capacity)
     original = jax.block_until_ready(fn(**device(prefix)))
     actual = jax.block_until_ready(fn(**device(padded)))
@@ -151,7 +156,7 @@ def test_gpu_invalid_prefix_and_legacy_negative_groups_fail(groups, mask):
     _, values = padded_arguments(True)
     values.update(reconstruction_group_ids=np.asarray(groups, np.int32), particle_tail_mask=mask)
     with pytest.raises((ValueError, RuntimeError), match="INTERNAL: CUDA: invalid argument"):
-        jax.block_until_ready(cb.relion_vdam_mstep_fused_projector_x_half(**device(values)))
+        jax.block_until_ready(em_cuda_kernels.relion_vdam_mstep_fused_projector_x_half(**device(values)))
 
 
 @pytest.mark.gpu
@@ -178,7 +183,7 @@ def test_gpu_raw_ffi_rejects_invalid_mask_attributes(monkeypatch, override):
         return invoke
 
     monkeypatch.setattr(jax.ffi, "ffi_call", ffi)
-    fn = cb.relion_vdam_mstep_fused_projector_x_half
+    fn = em_cuda_kernels.relion_vdam_mstep_fused_projector_x_half
     fn.clear_cache()
     try:
         _, values = padded_arguments(True)

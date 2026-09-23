@@ -315,7 +315,9 @@ def _gpu_case(monkeypatch, custom_cuda_lib):
     monkeypatch.setattr(cuda_backproject, "_cuda_ok", None)
     if not cuda_backproject.relion_translate_sum_flat_rows_f32_supported():
         pytest.skip("loaded CUDA library predates the translate-and-sum target")
-    return cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
+
+    return em_cuda_kernels
 
 
 def _resident_operands(case):

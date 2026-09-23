@@ -725,7 +725,7 @@ def _relion_bpref_maps_from_sparse_support(
     n_coarse_rot = int(rotation_grid_size(nside_level))
 
     if projection_padding_factor > 1:
-        from recovar.reconstruction.relion_functions import pad_volume_for_projection
+        from recovar.em.reconstruction.relion_functions_relion import pad_volume_for_projection
 
         projection_volumes = [
             pad_volume_for_projection(

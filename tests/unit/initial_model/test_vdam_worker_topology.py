@@ -454,7 +454,7 @@ def test_captured_particle_issue_replay_rejects_untraced_selected_particle(
 def test_particle_issue_order_reorders_every_particle_operand_and_serializes_controller(
     monkeypatch,
 ):
-    from recovar import cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     captured = {}
 
@@ -472,7 +472,7 @@ def test_particle_issue_order_reorders_every_particle_operand_and_serializes_con
         return args[0], args[1], None
 
     monkeypatch.setattr(
-        cuda_backproject,
+        em_cuda_kernels,
         "relion_vdam_mstep_fused_projector_x_half",
         fake_fused_projector,
     )

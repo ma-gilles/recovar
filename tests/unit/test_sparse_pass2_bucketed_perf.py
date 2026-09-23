@@ -2446,7 +2446,7 @@ def test_relion_x_half_bp_per_particle_launch_preserves_ownership_and_order(monk
 
 
 def test_relion_x_half_bp_fused_atomics_threads_both_accumulators_per_particle(monkeypatch):
-    import recovar.cuda_backproject as cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
     from recovar.em.sparse_pass2 import sparse_pass2_bucketed as bucketed_mod
 
     values = jnp.arange(2 * 3 * 2, dtype=jnp.float32).reshape(2, 3, 2).astype(jnp.complex64)
@@ -2481,7 +2481,7 @@ def test_relion_x_half_bp_fused_atomics_threads_both_accumulators_per_particle(m
     monkeypatch.setenv("RECOVAR_RELION_X_HALF_BP_PER_PARTICLE_LAUNCH", "1")
     monkeypatch.setenv("RECOVAR_RELION_X_HALF_BP_BLOCK_TOPOLOGY", "1")
     monkeypatch.setenv("RECOVAR_RELION_X_HALF_BP_FUSED_ATOMICS", "1")
-    monkeypatch.setattr(cuda_backproject, "relion_fused_x_half_backproject_indexed", fake_fused)
+    monkeypatch.setattr(em_cuda_kernels, "relion_fused_x_half_backproject_indexed", fake_fused)
 
     y_volume, ctf_volume = bucketed_mod._accumulate_relion_x_half_per_particle_launches(
         values,
@@ -2511,7 +2511,7 @@ def test_relion_x_half_bp_fused_atomics_threads_both_accumulators_per_particle(m
 
 
 def test_fresh_k1_particle_pool_preserves_consecutive_particle_order(monkeypatch):
-    import recovar.cuda_backproject as cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
     from recovar.em.sparse_pass2 import sparse_pass2_bucketed as bucketed_mod
 
     values = jnp.arange(2 * 3 * 2, dtype=jnp.float32).reshape(2, 3, 2).astype(jnp.complex64)
@@ -2539,7 +2539,7 @@ def test_fresh_k1_particle_pool_preserves_consecutive_particle_order(monkeypatch
         return y_volume, ctf_volume
 
     monkeypatch.setenv("RECOVAR_K1_RELION_X_HALF_BP_PARTICLE_POOL_SIZE", "2")
-    monkeypatch.setattr(cuda_backproject, "relion_fused_x_half_backproject_indexed", fake_fused)
+    monkeypatch.setattr(em_cuda_kernels, "relion_fused_x_half_backproject_indexed", fake_fused)
 
     bucketed_mod._accumulate_relion_x_half_per_particle_launches(
         values,
@@ -2597,7 +2597,7 @@ def test_particle_pool_rejects_non_fresh_k1_path(monkeypatch):
 
 
 def test_fresh_k1_firstiter_cc_uses_fused_atomics_without_diagnostic_env(monkeypatch):
-    import recovar.cuda_backproject as cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
     from recovar.em.sparse_pass2 import sparse_pass2_bucketed as bucketed_mod
 
     monkeypatch.delenv("RECOVAR_RELION_X_HALF_BP_PER_PARTICLE_LAUNCH", raising=False)
@@ -2617,7 +2617,7 @@ def test_fresh_k1_firstiter_cc_uses_fused_atomics_without_diagnostic_env(monkeyp
         calls.append((np.asarray(particle_values), np.asarray(particle_ctf_values)))
         return y_volume, ctf_volume
 
-    monkeypatch.setattr(cuda_backproject, "relion_fused_x_half_backproject_indexed", fake_fused)
+    monkeypatch.setattr(em_cuda_kernels, "relion_fused_x_half_backproject_indexed", fake_fused)
 
     bucketed_mod._accumulate_relion_x_half_per_particle_launches(
         jnp.ones((1, 1, 1), dtype=jnp.complex64),
@@ -2641,7 +2641,7 @@ def test_fresh_k1_firstiter_cc_uses_fused_atomics_without_diagnostic_env(monkeyp
 
 
 def test_fresh_k1_firstiter_cc_casts_rows_to_bpref_accumulator_dtype(monkeypatch):
-    import recovar.cuda_backproject as cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
     from recovar.em.sparse_pass2 import sparse_pass2_bucketed as bucketed_mod
 
     monkeypatch.delenv("RECOVAR_RELION_X_HALF_BP_PER_PARTICLE_LAUNCH", raising=False)
@@ -2655,7 +2655,7 @@ def test_fresh_k1_firstiter_cc_casts_rows_to_bpref_accumulator_dtype(monkeypatch
         observed["weight_dtype"] = args[3].dtype
         return args[0], args[1]
 
-    monkeypatch.setattr(cuda_backproject, "relion_fused_x_half_backproject_indexed", fake_fused)
+    monkeypatch.setattr(em_cuda_kernels, "relion_fused_x_half_backproject_indexed", fake_fused)
 
     bucketed_mod._accumulate_relion_x_half_per_particle_launches(
         jnp.ones((1, 1, 1), dtype=jnp.complex128),
@@ -2718,6 +2718,7 @@ def test_later_soft_posterior_scoped_fused_signature_fixture(
     """Separate translation-order, scatter-topology, and signature effects."""
 
     import recovar.cuda_backproject as cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
     from recovar.em.sparse_pass2 import sparse_pass2_bucketed as bucketed_mod
 
     monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
@@ -2844,7 +2845,7 @@ def test_later_soft_posterior_scoped_fused_signature_fixture(
             "RECOVAR_BPREF_DEVICE_SIGNATURE_DUMP_DIR",
             str(tmp_path / "device-signatures"),
         )
-        with cuda_backproject.bpref_device_signature_scope(True):
+        with em_cuda_kernels.bpref_device_signature_scope(True):
             c_data, c_weight = bucketed_mod._accumulate_relion_x_half_per_particle_launches(
                 *sequential_rows,
                 rotations,
@@ -2865,9 +2866,9 @@ def test_later_soft_posterior_scoped_fused_signature_fixture(
         # prepared-operand inertness internally.
         d_data = jnp.asarray(initial_data_np)
         d_weight = jnp.asarray(initial_weight_np)
-        with cuda_backproject.bpref_device_signature_scope(True):
+        with em_cuda_kernels.bpref_device_signature_scope(True):
             for particle_index, count in enumerate(actual_counts.tolist()):
-                outputs = cuda_backproject.relion_fused_x_half_backproject_signature_indexed(
+                outputs = em_cuda_kernels.relion_fused_x_half_backproject_signature_indexed(
                     d_data,
                     d_weight,
                     data_rows=sequential_rows[0][particle_index, :count],
@@ -5525,6 +5526,7 @@ def test_compact_pair_dense_mstep_budget_env_override(monkeypatch):
 
 def test_native_dual_weighted_sums_defaults_only_on_exact_gpu_contract(monkeypatch):
     import recovar.cuda_backproject as cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     monkeypatch.delenv("RECOVAR_SPARSE_KCLASS_NATIVE_DUAL_WEIGHTED_SUMS", raising=False)
     kwargs = dict(
@@ -5534,13 +5536,16 @@ def test_native_dual_weighted_sums_defaults_only_on_exact_gpu_contract(monkeypat
     )
     monkeypatch.setattr(jax, "default_backend", lambda: "cpu")
     monkeypatch.setattr(cuda_backproject, "custom_cuda_requested", lambda: True)
+    monkeypatch.setattr(em_cuda_kernels, "custom_cuda_requested", lambda: True)
     assert not _native_dual_weighted_sums_enabled_for_pass(**kwargs)
 
     monkeypatch.setattr(jax, "default_backend", lambda: "gpu")
     monkeypatch.setattr(cuda_backproject, "custom_cuda_requested", lambda: False)
+    monkeypatch.setattr(em_cuda_kernels, "custom_cuda_requested", lambda: False)
     assert not _native_dual_weighted_sums_enabled_for_pass(**kwargs)
 
     monkeypatch.setattr(cuda_backproject, "custom_cuda_requested", lambda: True)
+    monkeypatch.setattr(em_cuda_kernels, "custom_cuda_requested", lambda: True)
     assert _native_dual_weighted_sums_enabled_for_pass(**kwargs)
     for disabled_contract_key in kwargs:
         disabled = dict(kwargs)
@@ -6056,7 +6061,7 @@ def test_prepare_bucket_io_windowed_shifted_matches_full_half_slice(monkeypatch)
 def test_prepare_bucket_io_routes_direct_score_translation_through_relion_cuda(
     monkeypatch,
 ):
-    from recovar import cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     ds = MockDataset(n_images=3, seed=20260727)
     batch_indices = np.asarray([0, 2], dtype=np.int64)
@@ -6098,7 +6103,7 @@ def test_prepare_bucket_io_routes_direct_score_translation_through_relion_cuda(
         )
 
     monkeypatch.setattr(
-        cuda_backproject,
+        em_cuda_kernels,
         "relion_translate_score_f32",
         fake_translate,
     )
@@ -6213,7 +6218,7 @@ def test_prepare_bucket_io_exact_bpref_translation_keeps_recovar_fft_units_and_n
     both trees accumulate, must be identical to Q's; the native triple carries
     Q's normalized-image assertion.
     """
-    from recovar import cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
     from recovar.em.relion import relion_ctf
 
     ds = MockDataset(n_images=1, seed=1701)
@@ -6248,12 +6253,12 @@ def test_prepare_bucket_io_exact_bpref_translation_keeps_recovar_fft_units_and_n
         del pixel_indices, image_shape
         return jnp.repeat(images * weights, int(angles.shape[0]), axis=0)
 
-    monkeypatch.setattr(cuda_backproject, "relion_translate_bpref_f32", fake_translate)
+    monkeypatch.setattr(em_cuda_kernels, "relion_translate_bpref_f32", fake_translate)
 
     def fake_translate_score(images, angles, _pixel_indices, _image_shape):
         return jnp.repeat(jnp.asarray(images), int(angles.shape[0]), axis=0)
 
-    monkeypatch.setattr(cuda_backproject, "relion_translate_score_f32", fake_translate_score)
+    monkeypatch.setattr(em_cuda_kernels, "relion_translate_score_f32", fake_translate_score)
     noise = np.linspace(0.75, 1.25, n_half, dtype=np.float64)
     result = _prepare_bucket_io(
         experiment_dataset=ds,
@@ -10041,7 +10046,7 @@ def test_sparse_pass2_native_firstiter_preserves_prefix_and_normalizes_once(
 ):
     """The production driver launches native groups once and normalizes after both."""
 
-    from recovar import cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
     from recovar.em.sparse_pass2 import firstiter_bpref, sparse_pass2_policy, sparse_pass2_projection_blocks
     from recovar.em.diagnostics import bpref_diagnostics
     from recovar.em.relion import relion_ctf
@@ -10115,12 +10120,12 @@ def test_sparse_pass2_native_firstiter_preserves_prefix_and_normalizes_once(
         return jnp.repeat(jnp.asarray(images), int(angles.shape[0]), axis=0)
 
     monkeypatch.setattr(
-        cuda_backproject,
+        em_cuda_kernels,
         "relion_translate_bpref_f32",
         fake_translate_bpref,
     )
     monkeypatch.setattr(
-        cuda_backproject,
+        em_cuda_kernels,
         "relion_translate_score_f32",
         fake_translate_score,
     )
@@ -10237,7 +10242,7 @@ def test_sparse_pass2_deferred_firstiter_bpref_runs_full_driver_lifecycle(
 ):
     """The K=1 driver must stage every score group before releasing and replaying."""
 
-    from recovar import cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
     from recovar.em.sparse_pass2 import dispatch as sparse_dispatch
     from recovar.em.sparse_pass2 import firstiter_bpref, sparse_pass2_policy, sparse_pass2_projection_blocks
     from recovar.em.diagnostics import bpref_diagnostics
@@ -10313,12 +10318,12 @@ def test_sparse_pass2_deferred_firstiter_bpref_runs_full_driver_lifecycle(
         return jnp.repeat(jnp.asarray(images), int(angles.shape[0]), axis=0)
 
     monkeypatch.setattr(
-        cuda_backproject,
+        em_cuda_kernels,
         "relion_translate_bpref_f32",
         fake_translate_bpref,
     )
     monkeypatch.setattr(
-        cuda_backproject,
+        em_cuda_kernels,
         "relion_translate_score_f32",
         fake_translate_score,
     )

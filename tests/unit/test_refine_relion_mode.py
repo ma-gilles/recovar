@@ -31,7 +31,7 @@ import recovar.em.local.local_layout as local_layout_module
 import recovar.em.refinement.iteration_loop as iteration_loop_module
 import recovar.em.refinement.projector_preparation as projector_preparation
 import recovar.em.sampling as sampling_module
-import recovar.reconstruction.regularization as regularization_module
+from recovar.em.reconstruction import regularization_relion
 from recovar import core
 from recovar.core.configs import ForwardModelConfig
 from recovar.em.classification.k_class import run_dense_k_class_em, run_local_k_class_em
@@ -2913,7 +2913,7 @@ def test_bucket_local_hypothesis_layout_aligns_preserved_chunks_to_pool_three(mo
 
 
 def test_relion_physical_particle_grid_fuses_masked_data_and_weight(monkeypatch):
-    import recovar.cuda_backproject as cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     captured = {}
 
@@ -2940,7 +2940,7 @@ def test_relion_physical_particle_grid_fuses_masked_data_and_weight(monkeypatch)
         return data_volume + 1, weight_volume + 2
 
     monkeypatch.setattr(
-        cuda_backproject,
+        em_cuda_kernels,
         "relion_fused_x_half_backproject_particle_grid_indexed",
         fake_particle_grid,
     )
@@ -3048,7 +3048,7 @@ def test_source_faithful_bpref_particle_cap_is_wired_into_grouped_vdam():
 
 
 def test_fused_serial_vdam_particles_use_one_worker_lane(monkeypatch):
-    from recovar import cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     captured = {}
 
@@ -3057,7 +3057,7 @@ def test_fused_serial_vdam_particles_use_one_worker_lane(monkeypatch):
         return args[0], args[1], jnp.zeros((2, 3, 4), dtype=jnp.float32)
 
     monkeypatch.setattr(
-        cuda_backproject,
+        em_cuda_kernels,
         "relion_vdam_mstep_fused_projector_x_half",
         fake_fused,
     )
@@ -3501,7 +3501,7 @@ def test_texture_projector_compact_indices_bypass_full_scatter(monkeypatch):
 
 
 def test_texture_projector_compact_implementation_never_builds_full_box(monkeypatch):
-    from recovar import cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
     from recovar.em.helpers import projection as projection_helpers
 
     crop = jnp.asarray([[0.0 + 1.0j, 1.0 + 2.0j, 2.0 + 3.0j, 3.0 + 4.0j]])
@@ -3517,7 +3517,7 @@ def test_texture_projector_compact_implementation_never_builds_full_box(monkeypa
         lambda *args, **kwargs: crop,
     )
     monkeypatch.setattr(
-        cuda_backproject,
+        em_cuda_kernels,
         "project_relion_half_capacity",
         lambda *args, **kwargs: crop,
     )
@@ -7645,7 +7645,7 @@ def test_local_big_jit_relion_translation_is_scoped_to_score_operand():
         src.index("def _translate_score_weighted_half") :
         src.index("def _translate_weighted_half_window")
     ]
-    assert "cuda_backproject.relion_translate_score_f32" in translate_block
+    assert "em_cuda_kernels.relion_translate_score_f32" in translate_block
     shift_block = src[src.index("if use_window:") : src.index("batch_norm = jnp.sum(")]
     assert "shifted_score = _translate_score_weighted_half" in shift_block
     assert "shifted_half = _translate_score_weighted_half" in shift_block
@@ -7657,7 +7657,7 @@ def test_local_big_jit_float64_relion_translation_covers_mstep_operand():
     from recovar.em.local import local_big_jit
 
     src = inspect.getsource(local_big_jit.run_local_bucket_big_jit)
-    assert "cuda_backproject.relion_translate_score_f64" in src
+    assert "em_cuda_kernels.relion_translate_score_f64" in src
     assert "relion_score_translation_angles is not None and use_float64_scoring" in src
 
 
@@ -7684,8 +7684,8 @@ def test_local_big_jit_source_ordered_vdam_mstep_is_strictly_guarded():
         "not disable_adjoint_ctf",
     ):
         assert fused_guard in source_ordered_block
-    assert "cuda_backproject.relion_vdam_mstep_fused_x_half(" in source_ordered_block
-    assert "cuda_backproject.relion_vdam_mstep_denominator_f32(" in source_ordered_block
+    assert "em_cuda_kernels.relion_vdam_mstep_fused_x_half(" in source_ordered_block
+    assert "em_cuda_kernels.relion_vdam_mstep_denominator_f32(" in source_ordered_block
     assert "elif return_source_vdam_operands:" in source_ordered_block
     assert "not disable_adjoint_y or not disable_adjoint_ctf" in source_ordered_block
     assert "summed = jnp.zeros_like(proj_for_noise)" not in source_ordered_block
@@ -7709,7 +7709,7 @@ def test_local_big_jit_source_ordered_vdam_mstep_is_strictly_guarded():
         engine_src.index("elif return_big_jit_mstep_tensors:", engine_src.index("elif return_big_jit_mstep_tensors and return_source_vdam_operands:"))
     ]
     assert "if bpref_contribution_capture_active:" in source_capture_block
-    assert "cuda_backproject.relion_vdam_mstep_sums_f32(" in source_capture_block
+    assert "em_cuda_kernels.relion_vdam_mstep_sums_f32(" in source_capture_block
     assert "inline_projector_data_volumes" in engine_src
     assert "_accumulate_relion_vdam_physical_particle_grid(" in engine_src
 
@@ -7741,8 +7741,8 @@ def test_local_exact_relion_translation_supports_float64_scoring():
 def test_run_local_em_exact_windowed_relion_projector_big_jit_matches_split(monkeypatch, rng):
     import weakref
     from recovar.em.local import local_em_engine as engine_module
-    from recovar.core.relion_project import centered_full_to_relion_half
-    from recovar.reconstruction import relion_functions
+    from recovar.em.relion.relion_project import centered_full_to_relion_half
+    from recovar.em.reconstruction import relion_functions_relion
 
     dataset = RawRealImageDataset(3, rng)
     mean = _hermitian_volume(VOLUME_SHAPE, seed=565)
@@ -7770,7 +7770,7 @@ def test_run_local_em_exact_windowed_relion_projector_big_jit_matches_split(monk
         raise AssertionError("supplied RELION Projector must bypass native projection padding")
 
     monkeypatch.setattr(
-        relion_functions,
+        relion_functions_relion,
         "pad_volume_for_projection",
         fail_if_native_projection_padding_is_built,
     )
@@ -7842,7 +7842,7 @@ def test_run_local_em_exact_windowed_relion_projector_big_jit_matches_split(monk
 
 
 def test_run_local_em_exact_relion_projection_cache_matches_uncached_big_jit(monkeypatch, rng):
-    from recovar.core.relion_project import centered_full_to_relion_half
+    from recovar.em.relion.relion_project import centered_full_to_relion_half
 
     dataset = RawRealImageDataset(3, rng)
     mean = _hermitian_volume(VOLUME_SHAPE, seed=568)
@@ -9031,7 +9031,7 @@ class TestRelionModeSmokeTest:
             return jnp.ones(VOLUME_SIZE, dtype=jnp.complex64)
 
         monkeypatch.setattr(
-            regularization_module,
+            regularization_relion,
             "compute_relion_tau2_from_weights",
             fake_tau2_from_weights,
         )
@@ -9493,7 +9493,7 @@ class TestRelionModeSmokeTest:
         """RELION joins low-res half accumulators before the first local output iter."""
 
         join_calls = []
-        original_join = regularization_module.join_halves_at_low_resolution
+        original_join = regularization_relion.join_halves_at_low_resolution
 
         def spy_join(*args, **kwargs):
             join_calls.append(
@@ -9506,7 +9506,7 @@ class TestRelionModeSmokeTest:
             return original_join(*args, **kwargs)
 
         monkeypatch.setattr(
-            regularization_module,
+            regularization_relion,
             "join_halves_at_low_resolution",
             spy_join,
         )
@@ -9644,7 +9644,7 @@ class TestRelionModeSmokeTest:
     ):
         """Final all-data tau2 uses half weights; only final reconstruction sums them."""
         original_update = iteration_loop_module.update_refinement_state
-        original_tau2 = regularization_module.compute_relion_tau2_from_weights
+        original_tau2 = regularization_relion.compute_relion_tau2_from_weights
         ctf_values = [2.0, 4.0, 7.0, 11.0]
         run_em_call = {"idx": 0}
         whole_tau2_calls = []
@@ -9696,7 +9696,7 @@ class TestRelionModeSmokeTest:
             force_convergence_after_first_iter,
         )
         monkeypatch.setattr(half_scoring, "run_em", fake_run_em)
-        monkeypatch.setattr(regularization_module, "compute_relion_tau2_from_weights", spy_tau2)
+        monkeypatch.setattr(regularization_relion, "compute_relion_tau2_from_weights", spy_tau2)
 
         result = refine_single_volume(
             half_datasets,
@@ -11243,13 +11243,13 @@ class TestRelionModeSmokeTest:
 
         import jax
 
-        from recovar import cuda_backproject
+        from recovar.em.cuda import kernels as em_cuda_kernels
 
         monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
         monkeypatch.setenv("RECOVAR_K1_COARSE_GAUSSIAN_FFI", "1")
         monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
         coarse_pixel_counts = []
-        original_coarse_diff2 = cuda_backproject.relion_coarse_diff2_rectangular_f32
+        original_coarse_diff2 = em_cuda_kernels.relion_coarse_diff2_rectangular_f32
 
         def capture_square_crop(reference, shifted_image, weight, initial_diff2, full_to_compact):
             coarse_pixel_counts.append(
@@ -11269,7 +11269,7 @@ class TestRelionModeSmokeTest:
             )
 
         monkeypatch.setattr(
-            cuda_backproject,
+            em_cuda_kernels,
             "relion_coarse_diff2_rectangular_f32",
             capture_square_crop,
         )
@@ -11808,6 +11808,7 @@ class TestRelionModeSmokeTest:
         """The direct-texture replay replaces every bounded native winner."""
 
         import recovar.cuda_backproject as cuda_backproject
+        from recovar.em.cuda import kernels as em_cuda_kernels
         import recovar.em.helpers.projection as projection_module
         import recovar.em.scoring.scoring as scoring_module
         import recovar.em.scoring.significance as significance_module
@@ -11827,6 +11828,7 @@ class TestRelionModeSmokeTest:
         )
         monkeypatch.setattr(significance_module.jax, "default_backend", lambda: "gpu")
         monkeypatch.setattr(cuda_backproject, "custom_cuda_requested", lambda: True)
+        monkeypatch.setattr(em_cuda_kernels, "custom_cuda_requested", lambda: True)
         monkeypatch.setattr(cuda_backproject, "cuda_available", lambda: True)
         monkeypatch.setattr(
             relion_ctf,
@@ -12198,19 +12200,19 @@ class TestRelionModeSmokeTest:
         double_scoring,
     ):
         """RELION mode should compute tau2 from Ft_ctf weights + FSC (RELION order)."""
-        from recovar.reconstruction import regularization
+        from recovar.em.reconstruction import regularization_relion
 
         monkeypatch.setitem(iteration_loop_module._DENSE_EM_STATIC_KWARGS, "use_float64_scoring", double_scoring)
         monkeypatch.setenv("RECOVAR_USE_FLOAT64_SCORING", "1" if double_scoring else "0")
         called = {"tau2": 0}
 
-        original_tau2 = regularization.compute_relion_tau2_from_weights
+        original_tau2 = regularization_relion.compute_relion_tau2_from_weights
 
         def wrap_tau2(*args, **kwargs):
             called["tau2"] += 1
             return original_tau2(*args, **kwargs)
 
-        monkeypatch.setattr(regularization, "compute_relion_tau2_from_weights", wrap_tau2)
+        monkeypatch.setattr(regularization_relion, "compute_relion_tau2_from_weights", wrap_tau2)
 
         scoring_priors = []
         scoring_rotations = []
@@ -12278,7 +12280,7 @@ class TestRelionModeSmokeTest:
         monkeypatch,
     ):
         """GUI auto-refine default does not solvent-correct FSC for tau2."""
-        from recovar.reconstruction import regularization
+        from recovar.em.reconstruction import regularization_relion
 
         grid_size = int(np.sqrt(IMAGE_SIZE))
         n_shells = grid_size // 2 + 1
@@ -12288,7 +12290,7 @@ class TestRelionModeSmokeTest:
         corrected_called = {"value": False}
 
         monkeypatch.setattr(
-            regularization,
+            regularization_relion,
             "compute_relion_fsc_from_backprojector",
             lambda *_args, **_kwargs: jnp.asarray(raw_fsc),
         )
@@ -12298,18 +12300,18 @@ class TestRelionModeSmokeTest:
             raise AssertionError("solvent FSC correction should be disabled")
 
         monkeypatch.setattr(
-            regularization,
+            regularization_relion,
             "compute_relion_solvent_corrected_true_fsc",
             fail_corrected_fsc,
         )
 
-        original_tau2 = regularization.compute_relion_tau2_from_weights
+        original_tau2 = regularization_relion.compute_relion_tau2_from_weights
 
         def wrap_tau2(Ft_ctf_0, Ft_ctf_1, fsc, *args, **kwargs):
             tau2_fsc_inputs.append(np.asarray(fsc, dtype=np.float32).copy())
             return original_tau2(Ft_ctf_0, Ft_ctf_1, fsc, *args, **kwargs)
 
-        monkeypatch.setattr(regularization, "compute_relion_tau2_from_weights", wrap_tau2)
+        monkeypatch.setattr(regularization_relion, "compute_relion_tau2_from_weights", wrap_tau2)
 
         result = refine_single_volume(
             half_datasets,
@@ -12345,7 +12347,7 @@ class TestRelionModeSmokeTest:
         monkeypatch,
     ):
         """If RELION enables solvent FSC correction, the corrected curve drives tau2."""
-        from recovar.reconstruction import regularization
+        from recovar.em.reconstruction import regularization_relion
 
         grid_size = int(np.sqrt(IMAGE_SIZE))
         n_shells = grid_size // 2 + 1
@@ -12356,7 +12358,7 @@ class TestRelionModeSmokeTest:
         tau2_fsc_inputs = []
 
         monkeypatch.setattr(
-            regularization,
+            regularization_relion,
             "compute_relion_fsc_from_backprojector",
             lambda *_args, **_kwargs: jnp.asarray(raw_fsc),
         )
@@ -12371,18 +12373,18 @@ class TestRelionModeSmokeTest:
             }
 
         monkeypatch.setattr(
-            regularization,
+            regularization_relion,
             "compute_relion_solvent_corrected_true_fsc",
             fake_corrected_fsc,
         )
 
-        original_tau2 = regularization.compute_relion_tau2_from_weights
+        original_tau2 = regularization_relion.compute_relion_tau2_from_weights
 
         def wrap_tau2(Ft_ctf_0, Ft_ctf_1, fsc, *args, **kwargs):
             tau2_fsc_inputs.append(np.asarray(fsc, dtype=np.float32).copy())
             return original_tau2(Ft_ctf_0, Ft_ctf_1, fsc, *args, **kwargs)
 
-        monkeypatch.setattr(regularization, "compute_relion_tau2_from_weights", wrap_tau2)
+        monkeypatch.setattr(regularization_relion, "compute_relion_tau2_from_weights", wrap_tau2)
 
         result = refine_single_volume(
             half_datasets,
@@ -12806,7 +12808,7 @@ class TestRelionModeSmokeTest:
         def fail_old_dvp(*args, **kwargs):
             raise AssertionError("RELION mode should not call compute_data_vs_prior")
 
-        monkeypatch.setattr(regularization_module, "compute_data_vs_prior", fail_old_dvp)
+        monkeypatch.setattr(regularization_relion, "compute_data_vs_prior", fail_old_dvp)
 
         result = refine_single_volume(
             half_datasets,
@@ -14744,7 +14746,7 @@ def test_kclass_recomputes_mstep_tau2_from_iref_power_spectrum(
     else:
         monkeypatch.delenv("RECOVAR_KCLASS_DUMP_DIR", raising=False)
     floor_calls = []
-    shell_stats = regularization_module._compute_relion_weight_shell_stats
+    shell_stats = regularization_relion._compute_relion_weight_shell_stats
 
     def record_shell_stats(*args, **kwargs):
         result = shell_stats(*args, **kwargs)
@@ -14752,7 +14754,7 @@ def test_kclass_recomputes_mstep_tau2_from_iref_power_spectrum(
             floor_calls.append(result)
         return result
 
-    monkeypatch.setattr(regularization_module, "_compute_relion_weight_shell_stats", record_shell_stats)
+    monkeypatch.setattr(regularization_relion, "_compute_relion_weight_shell_stats", record_shell_stats)
 
     half_datasets = [MockDataset(1, rng), MockDataset(1, rng)]
     n_classes = 2
@@ -14839,7 +14841,7 @@ def test_kclass_recomputes_mstep_tau2_from_iref_power_spectrum(
             best_pose_rotation_ids=jnp.zeros(n_images, dtype=jnp.int32),
         )
 
-    monkeypatch.setattr(regularization_module, "compute_relion_tau2_from_iref_power_spectrum", fake_iref_tau2)
+    monkeypatch.setattr(regularization_relion, "compute_relion_tau2_from_iref_power_spectrum", fake_iref_tau2)
     monkeypatch.setattr(half_scoring, "run_dense_k_class_em", fake_run_dense_k_class_em)
 
     result = refine_single_volume(
@@ -15413,7 +15415,7 @@ def test_texture_centered_crop_preserves_kernel_owned_rounded_outer_shell():
 def test_local_k4_batch_and_rotation_blocks_match_float64_oracle(rng):
     """K=4 production scoring is invariant to chunking and agrees with its f64 oracle."""
 
-    from recovar.core.relion_project import centered_full_to_relion_half
+    from recovar.em.relion.relion_project import centered_full_to_relion_half
 
     dataset = MockDataset(3, rng)
     means = jnp.stack(
@@ -15596,7 +15598,7 @@ def test_local_k4_batch_and_rotation_blocks_match_float64_oracle(rng):
 def test_local_k4_f32_ctf_batch_block_wide_split_factorial(monkeypatch):
     """K=4 exact-local results survive real f32 operands across execution shapes."""
 
-    from recovar.core.relion_project import centered_full_to_relion_half
+    from recovar.em.relion.relion_project import centered_full_to_relion_half
     from recovar.reconstruction import relion_functions
 
     # Seed 2909 was held out while the dtype-derived numerical contract below
@@ -16477,6 +16479,7 @@ def test_large_host_reconstruction_padding_retains_device_window(monkeypatch):
     """The donating host gather is crop-only; Fourier padding stays on device."""
     from recovar.em.refinement import mean_helpers as mean_helpers_module
     from recovar.reconstruction import relion_functions
+    from recovar.em.reconstruction import relion_functions_relion
 
     events = []
     host_boundary = np.ones((4, 4, 3), dtype=np.complex64)
@@ -16523,17 +16526,17 @@ def test_large_host_reconstruction_padding_retains_device_window(monkeypatch):
         reject_donating_stage,
     )
     monkeypatch.setattr(
-        relion_functions,
+        relion_functions_relion,
         "_divide_large_relion_half_numerator_donate_numerator",
         reject_donating_stage,
     )
     monkeypatch.setattr(
-        relion_functions,
+        relion_functions_relion,
         "_regularize_large_relion_half_filter_donate_ctf",
         reject_donating_stage,
     )
     monkeypatch.setattr(
-        relion_functions,
+        relion_functions_relion,
         "_finish_large_relion_postprocess_from_fftw_half",
         fake_finish,
     )

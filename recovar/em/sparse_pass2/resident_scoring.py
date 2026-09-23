@@ -20,7 +20,7 @@ one rectangular ``(B, R, T)`` program per bucket shape; this module dispatches
 one flat ``(C_R, T)`` program per capacity class, with ``row_image_ids``
 carrying the row-to-image addressing. ``n_valid_rows`` / ``n_valid_images`` are
 runtime int32 operands, and the RELION current size is the runtime scalar of
-:func:`recovar.cuda_backproject.relion_fine_diff2_fused_translate_runtime_flat_rows_f32`,
+:func:`recovar.em.cuda.kernels.relion_fine_diff2_fused_translate_runtime_flat_rows_f32`,
 so a chunk's program is keyed only on
 ``(row_capacity, image_capacity, n_fine_trans, n_score_pixels)``.
 
@@ -518,7 +518,7 @@ def _score_flat_rows(
     every statement below is common, so the two routes cannot drift apart.
     """
 
-    from recovar import cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     weights = _relion_cuda_fine_pixel_weights(
         chunk_corr, jnp.asarray(half_weights)[None, :]
@@ -526,7 +526,7 @@ def _score_flat_rows(
     # Padded rows are handed to the kernel as image -1: it writes +inf for the
     # whole row and skips the pixel traversal.
     kernel_row_image_ids = jnp.where(row_is_valid, row_image_local, jnp.int32(-1))
-    raw_from_kernel = cuda_backproject.relion_fine_diff2_fused_translate_runtime_flat_rows_f32(
+    raw_from_kernel = em_cuda_kernels.relion_fine_diff2_fused_translate_runtime_flat_rows_f32(
         reference,
         kernel_row_image_ids,
         chunk_image,

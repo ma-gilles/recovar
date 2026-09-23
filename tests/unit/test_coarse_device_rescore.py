@@ -5,7 +5,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from recovar import cuda_backproject as cb
+from recovar.em.cuda import kernels as em_cuda_kernels
 from recovar.em.scoring import coarse_device_rescore as module
 from recovar.em.scoring import scoring
 from recovar.em.scoring.coarse_device_selection import decode_device_coarse_selection
@@ -71,8 +71,8 @@ def install_cpu_double(monkeypatch, *, invalid=False, execution_log=None):
             result = result.at[0, 0, 0, 0].set(jnp.nan)
         return result
 
-    monkeypatch.setattr(cb, "relion_coarse_diff2_rotation_blocks_f32", selected)
-    monkeypatch.setattr(cb, "relion_coarse_diff2_rotation_blocks_runtime_f32", selected)
+    monkeypatch.setattr(em_cuda_kernels, "relion_coarse_diff2_rotation_blocks_f32", selected)
+    monkeypatch.setattr(em_cuda_kernels, "relion_coarse_diff2_rotation_blocks_runtime_f32", selected)
     module._rescore_coarse_rotation_blocks_jit.clear_cache()
     return selected
 

@@ -67,7 +67,7 @@ def analyze(
     import jax
     import jax.numpy as jnp
 
-    from recovar import cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
     from recovar.em.helpers.fourier_window import make_fourier_window_indices_np
     from recovar.em.helpers.half_spectrum import make_scoring_half_image_weights
     from recovar.em.helpers.projection import compute_relion_projector_projections_block
@@ -194,7 +194,7 @@ def analyze(
         )
         pair_references = projected_weighted[[rotation_row, rotation_row]]
         pair_shifted = shifted_unweighted[[first_translation, second_translation]]
-        diff2 = cuda_backproject.relion_fine_diff2_pairs_f32(
+        diff2 = em_cuda_kernels.relion_fine_diff2_pairs_f32(
             jnp.asarray(pair_references[None], dtype=jnp.complex64),
             jnp.asarray(pair_shifted[None], dtype=jnp.complex64),
             jnp.asarray(direct_weight[None], dtype=jnp.float32),

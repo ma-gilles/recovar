@@ -15,7 +15,7 @@ from pathlib import Path
 import numpy as np
 import starfile
 
-from recovar.reconstruction import regularization
+from recovar.em.reconstruction import regularization_relion
 from recovar.utils.file_hash import sha256_file as _sha256
 
 SCHEMA = "recovar-saved-bpref-fsc-precision-audit-v2"
@@ -247,7 +247,7 @@ def audit(args) -> dict[str, object]:
         )
 
     production = np.asarray(
-        regularization.compute_relion_fsc_from_backprojector(
+        regularization_relion.compute_relion_fsc_from_backprojector(
             arrays["Ft_y_0"],
             arrays["Ft_y_1"],
             arrays["Ft_ctf_0"],

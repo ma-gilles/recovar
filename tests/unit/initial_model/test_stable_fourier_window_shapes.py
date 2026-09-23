@@ -316,7 +316,7 @@ def test_stable_coarse_projector_keeps_logical_disk_boundary(monkeypatch):
     # (docs/math/sparse_projection_radius.md): the physical-size-96 projection
     # must hand the kernel the logical size-86 radius, and the embedding helper
     # must then preserve the kernel's values.
-    from recovar import cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
     from recovar.em.helpers import projection
 
     kernel_calls = []
@@ -328,7 +328,7 @@ def test_stable_coarse_projector_keeps_logical_disk_boundary(monkeypatch):
         kernel_calls.append((tuple(image_shape), int(image_r_max)))
         return kernel_crop
 
-    monkeypatch.setattr(cuda_backproject, "project_relion_half_capacity", capture_capacity_kernel)
+    monkeypatch.setattr(em_cuda_kernels, "project_relion_half_capacity", capture_capacity_kernel)
     default_route = np.asarray(
         projection._project_relion_projector_texture(
             np.zeros((5, 5, 3), dtype=np.complex64),
@@ -861,6 +861,7 @@ def test_stable_bpref_wrapper_packs_logical_rows_and_poison_tail(monkeypatch):
     import jax.numpy as jnp
 
     from recovar import cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     image_shape = (8, 8)
     plan = make_stable_fourier_window_shape_plan(
@@ -892,6 +893,7 @@ def test_stable_bpref_wrapper_packs_logical_rows_and_poison_tail(monkeypatch):
 
     monkeypatch.delenv("RECOVAR_VDAM_EXTERNAL_HOST_REPLAY_LIBRARY", raising=False)
     monkeypatch.setattr(cuda_backproject, "_ensure_ffi", lambda: None)
+    monkeypatch.setattr(em_cuda_kernels, "_ensure_ffi", lambda: None)
     monkeypatch.setattr(cuda_backproject.jax.ffi, "ffi_call", fake_ffi_call)
     images = jnp.arange(1, compact_count + 1, dtype=jnp.float32).astype(
         jnp.complex64
@@ -902,7 +904,7 @@ def test_stable_bpref_wrapper_packs_logical_rows_and_poison_tail(monkeypatch):
     )
 
     _, _, compact_denominator = (
-        cuda_backproject.relion_vdam_mstep_fused_projector_x_half.__wrapped__(
+        em_cuda_kernels.relion_vdam_mstep_fused_projector_x_half.__wrapped__(
             jnp.zeros(volume_count, dtype=jnp.complex64),
             jnp.zeros(volume_count, dtype=jnp.float32),
             images,
@@ -1023,6 +1025,7 @@ def test_runtime_bpref_lowering_and_jit_cache_ignore_logical_size(monkeypatch):
     import jax.numpy as jnp
 
     from recovar import cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     observed = []
 
@@ -1040,8 +1043,9 @@ def test_runtime_bpref_lowering_and_jit_cache_ignore_logical_size(monkeypatch):
 
     monkeypatch.delenv("RECOVAR_VDAM_EXTERNAL_HOST_REPLAY_LIBRARY", raising=False)
     monkeypatch.setattr(cuda_backproject, "_ensure_ffi", lambda: None)
+    monkeypatch.setattr(em_cuda_kernels, "_ensure_ffi", lambda: None)
     monkeypatch.setattr(cuda_backproject.jax.ffi, "ffi_call", fake_ffi_call)
-    function = cuda_backproject.relion_vdam_mstep_fused_projector_x_half
+    function = em_cuda_kernels.relion_vdam_mstep_fused_projector_x_half
     function.clear_cache()
 
     image_shape = (128, 128)

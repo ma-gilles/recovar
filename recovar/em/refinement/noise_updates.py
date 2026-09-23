@@ -297,6 +297,7 @@ def update_posterior_noise_variance(
     first-iter noise update).
     """
 
+    from recovar.em.reconstruction import noise_relion
     from recovar.reconstruction import noise
 
     if noise_stats_per_half[0] is None or noise_stats_per_half[1] is None:
@@ -324,7 +325,7 @@ def update_posterior_noise_variance(
         combined_noise_stats = _combined_noise_stats(noise_stats_per_half)
         if combined_noise_stats is None:
             raise RuntimeError("K-class noise update expected at least one NoiseStats object")
-        noise_shared = noise.normalize_wsum_to_sigma2_noise(
+        noise_shared = noise_relion.normalize_wsum_to_sigma2_noise(
             np.asarray(combined_noise_stats.wsum_sigma2_noise, dtype=np.float64),
             np.asarray(combined_noise_stats.wsum_img_power, dtype=np.float64),
             combined_noise_stats.sumw,
@@ -339,7 +340,7 @@ def update_posterior_noise_variance(
     else:
         noise_from_res_per_half = []
         for k_noise, stats_k in enumerate(noise_stats_per_half):
-            noise_k = noise.normalize_wsum_to_sigma2_noise(
+            noise_k = noise_relion.normalize_wsum_to_sigma2_noise(
                 np.asarray(stats_k.wsum_sigma2_noise, dtype=np.float64),
                 np.asarray(stats_k.wsum_img_power, dtype=np.float64),
                 stats_k.sumw,

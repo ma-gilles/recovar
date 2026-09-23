@@ -310,6 +310,7 @@ def _accumulate_relion_firstiter_bpref_fused_impl(
     """Shared operand preparation and ordered firstiter particle launches."""
 
     from recovar import cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     if split_accumulators:
         data_volume_real, data_volume_imag, weight_volume = accumulators
@@ -421,7 +422,7 @@ def _accumulate_relion_firstiter_bpref_fused_impl(
         ).transpose(0, 2, 1)
         if split_accumulators:
             data_volume_real, data_volume_imag, weight_volume = (
-                cuda_backproject.relion_firstiter_bpref_fused_x_half_split(
+                em_cuda_kernels.relion_firstiter_bpref_fused_x_half_split(
                     data_volume_real,
                     data_volume_imag,
                     weight_volume,
@@ -440,7 +441,7 @@ def _accumulate_relion_firstiter_bpref_fused_impl(
             )
         else:
             data_volume, weight_volume = (
-                cuda_backproject.relion_firstiter_bpref_fused_x_half(
+                em_cuda_kernels.relion_firstiter_bpref_fused_x_half(
                     data_volume,
                     weight_volume,
                     dense_images[particle_index],
@@ -458,7 +459,7 @@ def _accumulate_relion_firstiter_bpref_fused_impl(
             )
         if capture_particle:
             isolated_data, isolated_weight = (
-                cuda_backproject.relion_firstiter_bpref_fused_x_half(
+                em_cuda_kernels.relion_firstiter_bpref_fused_x_half(
                     jnp.zeros_like(data_volume),
                     jnp.zeros_like(weight_volume),
                     dense_images[particle_index],

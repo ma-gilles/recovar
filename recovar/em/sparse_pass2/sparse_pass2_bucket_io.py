@@ -704,18 +704,18 @@ def _prepare_bucket_io(
     def _cuda_translate_score(values, pixel_indices):
         if relion_score_translation_angles is None:
             return None
-        from recovar import cuda_backproject
+        from recovar.em.cuda import kernels as em_cuda_kernels
 
         values = jnp.asarray(values)
         pixel_indices = jnp.asarray(pixel_indices, dtype=jnp.int32)
         if values.dtype == jnp.complex128:
-            return cuda_backproject.relion_translate_score_f64(
+            return em_cuda_kernels.relion_translate_score_f64(
                 values,
                 jnp.asarray(relion_score_translation_angles, dtype=jnp.float64),
                 pixel_indices,
                 image_shape,
             )
-        return cuda_backproject.relion_translate_score_f32(
+        return em_cuda_kernels.relion_translate_score_f32(
             jnp.asarray(values, dtype=jnp.complex64),
             jnp.asarray(relion_score_translation_angles, dtype=jnp.float32),
             pixel_indices,
@@ -767,12 +767,12 @@ def _prepare_bucket_io(
                     raise ValueError(
                         "exact RELION BPref operands require RELION translation angles"
                     )
-                from recovar import cuda_backproject
+                from recovar.em.cuda import kernels as em_cuda_kernels
 
                 translate_bpref = (
-                    cuda_backproject.relion_translate_bpref_f64
+                    em_cuda_kernels.relion_translate_bpref_f64
                     if use_float64_scoring
-                    else cuda_backproject.relion_translate_bpref_f32
+                    else em_cuda_kernels.relion_translate_bpref_f32
                 )
                 complex_dtype = jnp.complex128 if use_float64_scoring else jnp.complex64
                 shifted_recon_half = translate_bpref(
@@ -812,12 +812,12 @@ def _prepare_bucket_io(
                     raise ValueError(
                         "exact RELION BPref operands require RELION translation angles"
                     )
-                from recovar import cuda_backproject
+                from recovar.em.cuda import kernels as em_cuda_kernels
 
                 translate_bpref = (
-                    cuda_backproject.relion_translate_bpref_f64
+                    em_cuda_kernels.relion_translate_bpref_f64
                     if use_float64_scoring
-                    else cuda_backproject.relion_translate_bpref_f32
+                    else em_cuda_kernels.relion_translate_bpref_f32
                 )
                 complex_dtype = jnp.complex128 if use_float64_scoring else jnp.complex64
                 exact_shifted_recon_half = translate_bpref(
@@ -902,7 +902,7 @@ def _prepare_bucket_io(
                 dtype=jnp.int32,
             )
         if relion_score_translation_angles is not None:
-            from recovar import cuda_backproject
+            from recovar.em.cuda import kernels as em_cuda_kernels
 
             shifted_corrected_score_half = _cuda_translate_score(
                 direct_score_input,

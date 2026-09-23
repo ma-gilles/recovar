@@ -596,7 +596,7 @@ def _relion_wavg_add_triplet_pixels_chunked(
     accumulator is returned.
     """
 
-    from recovar.cuda_backproject import relion_wavg_rotation_atomic_triplet_add_f32
+    from recovar.em.cuda.kernels import relion_wavg_rotation_atomic_triplet_add_f32
 
     batch, n_rotations, n_translations = (int(v) for v in posterior.shape)
     exact_positions = rectangle.exact_positions
@@ -892,10 +892,10 @@ def _relion_wavg_sequential_triplet_terms(
         else bool(relion_wavg_sequential_cuda)
     )
     if use_cuda:
-        from recovar import cuda_backproject
+        from recovar.em.cuda import kernels as em_cuda_kernels
 
         if logical_pixel_count is not None:
-            return cuda_backproject.relion_wavg_sequential_runtime_triplet_f32(
+            return em_cuda_kernels.relion_wavg_sequential_runtime_triplet_f32(
                 jnp.asarray(proj, dtype=jnp.complex64),
                 jnp.asarray(raw_ctf, dtype=jnp.float32),
                 jnp.asarray(scale, dtype=jnp.float32).reshape(-1),
@@ -903,7 +903,7 @@ def _relion_wavg_sequential_triplet_terms(
                 jnp.asarray(posterior, dtype=jnp.float32),
                 jnp.asarray(logical_pixel_count, dtype=jnp.int32),
             )
-        return cuda_backproject.relion_wavg_sequential_triplet_f32(
+        return em_cuda_kernels.relion_wavg_sequential_triplet_f32(
             jnp.asarray(proj, dtype=jnp.complex64),
             jnp.asarray(raw_ctf, dtype=jnp.float32),
             jnp.asarray(scale, dtype=jnp.float32).reshape(-1),
@@ -1088,12 +1088,12 @@ def _relion_cuda_translate_wavg_norm_images(
 ):
     """Translate the raw masked image at RELION's Wavg input boundary."""
 
-    from recovar import cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     processed_score_half = jnp.asarray(processed_score_half, dtype=jnp.complex64)
     score_window_indices = jnp.asarray(score_window_indices, dtype=jnp.int32)
     translation_angles = jnp.asarray(translation_angles, dtype=jnp.float32)
-    translated = cuda_backproject.relion_translate_score_f32(
+    translated = em_cuda_kernels.relion_translate_score_f32(
         processed_score_half[:, score_window_indices],
         translation_angles,
         score_window_indices,

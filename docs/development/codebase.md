@@ -37,6 +37,8 @@ their semantics already match:
 | `scoring/`, `sparse_pass2/` | Coarse scores/support and sparse second-pass execution |
 | `helpers/` | Shared array layouts, operators, batching, precision and statistics |
 | `relion/` | Runtime RELION metadata, normalization, CTF and native adapters |
+| `cuda/` | EM FFI wrappers (`kernels.py`), noise-residual wrapper and the EM CUDA headers included by `recovar/cuda/cuda_backproject.cu` |
+| `reconstruction/` | EM-only RELION variants split from `recovar.reconstruction` (`regularization_relion`, `relion_functions_relion`, `noise_relion`) |
 | `diagnostics/` | Optional capture writers, replay and intervention tools |
 | `reference/` | Independent earlier EM/covariance formulations and deterministic numerical replays |
 | `ppca_refinement/` | Pose-marginal PPCA workflow and its K-class bridge |
@@ -80,9 +82,9 @@ required. Historical logger names remain stable.
 | Particle loading and batch identity | [`CryoEMDataset`](../../recovar/data_io/cryoem_dataset.py), image loaders and half-set utilities | Original image/particle IDs, subset-local positions, half-set membership, image backend and CTF metadata |
 | Forward-model configuration and state | [`core.configs`](../../recovar/core/configs.py) | `ForwardModelConfig` static fields versus dynamic `ModelState` arrays; changing a static value may change JIT specialization |
 | Fourier transforms and volume I/O | [`fourier_transform_utils`](../../recovar/core/fourier_transform_utils.py), [`utils.helpers`](../../recovar/utils/helpers.py) | Centered Fourier conventions, flattened arrays, full versus half spectrum, and the RELION axis/sign conversion |
-| Mean, noise and regularization | [`homogeneous`](../../recovar/reconstruction/homogeneous.py), [`noise`](../../recovar/reconstruction/noise.py), [`regularization`](../../recovar/reconstruction/regularization.py) | Half-set ownership, shell support, normalization, prior construction and reconstruction units |
+| Mean, noise and regularization | [`homogeneous`](../../recovar/reconstruction/homogeneous.py), [`noise`](../../recovar/reconstruction/noise.py), [`regularization`](../../recovar/reconstruction/regularization.py); EM-only RELION variants in [`em/reconstruction`](../../recovar/em/reconstruction/regularization_relion.py) | Half-set ownership, shell support, normalization, prior construction and reconstruction units |
 | Saved results | [`output`](../../recovar/output/output.py), [`ResultPaths`](../../recovar/output/output_paths.py) | Serialized field names, shapes, original IDs, and downstream `PipelineOutput` consumers |
-| CUDA and RELION references | [`cuda_backproject`](../../recovar/cuda_backproject.py), [`relion_bind`](../../recovar/relion_bind/__init__.py) | Loaded binary identity, device placement, native layouts and independent reference behavior |
+| CUDA and RELION references | [`cuda_backproject`](../../recovar/cuda_backproject.py) (loader, pipeline kernels), [`em/cuda/kernels`](../../recovar/em/cuda/kernels.py) (EM FFI wrappers), [`relion_bind`](../../recovar/relion_bind/__init__.py) | Loaded binary identity, device placement, native layouts and independent reference behavior |
 
 The [source conventions](../../recovar/CLAUDE.md) give the exact FFT and
 RELION-frame rules. Follow those helpers when loading volumes for a comparison;

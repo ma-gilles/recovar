@@ -20,6 +20,7 @@ import pathlib
 import pytest
 
 from recovar import cuda_backproject as cb
+from recovar.em.cuda import kernels as em_cuda_kernels
 
 pytestmark = pytest.mark.unit
 
@@ -27,13 +28,18 @@ pytestmark = pytest.mark.unit
 def test_ffi_registrations_cover_all_target_constants():
     """Every target is eager or explicitly optional; optional ABIs stay lazy."""
     targets_in_table = {target for target, _symbol in cb._FFI_REGISTRATIONS}
-    target_constants = {v for k, v in vars(cb).items() if k.startswith("_TARGET_") and isinstance(v, str)}
+    target_constants = {
+        v
+        for module in (cb, em_cuda_kernels)
+        for k, v in vars(module).items()
+        if k.startswith("_TARGET_") and isinstance(v, str)
+    }
     optional_targets = {
         *cb._OPTIONAL_FFI_REGISTRATIONS,
-        cb._TARGET_RELION_WAVG_NATIVE_PREFIX_F32,
-        cb._TARGET_RELION_WAVG_NATIVE_PREFIX_DEBUG_F32,
-        cb._TARGET_RELION_COARSE_POSTERIOR_TRANSACTION_F32,
-        cb._TARGET_RELION_COARSE_SHARED_PRETRANSLATED_RUNTIME_F32,
+        em_cuda_kernels._TARGET_RELION_WAVG_NATIVE_PREFIX_F32,
+        em_cuda_kernels._TARGET_RELION_WAVG_NATIVE_PREFIX_DEBUG_F32,
+        em_cuda_kernels._TARGET_RELION_COARSE_POSTERIOR_TRANSACTION_F32,
+        em_cuda_kernels._TARGET_RELION_COARSE_SHARED_PRETRANSLATED_RUNTIME_F32,
     }
     assert targets_in_table.isdisjoint(optional_targets)
     assert target_constants == targets_in_table | optional_targets

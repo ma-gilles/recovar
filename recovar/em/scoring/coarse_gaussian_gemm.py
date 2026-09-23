@@ -688,7 +688,7 @@ def _compute_coarse_gaussian_gemm_hybrid_batch(
     fused projector/scorer without paying for it on selected-rescore batches.
     """
 
-    from recovar import cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
     from recovar.em.scoring.coarse_gemm_hybrid import validate_coarse_gemm_certificate_topology
 
     validate_coarse_gemm_certificate_topology(topology)
@@ -945,15 +945,15 @@ def _compute_coarse_gaussian_gemm_hybrid_batch(
             jnp.asarray(topology.full_to_compact),
         )
         if logical_full_pixel_count is None:
-            full_diff2 = cuda_backproject.relion_coarse_diff2_rectangular_f32(
+            full_diff2 = em_cuda_kernels.relion_coarse_diff2_rectangular_f32(
                 *full_operands,
             )
             full_dense_kernel = "rectangular"
         else:
             scorer = (
-                cuda_backproject.relion_coarse_diff2_shared_pretranslated_runtime_f32
+                em_cuda_kernels.relion_coarse_diff2_shared_pretranslated_runtime_f32
                 if shared_pretranslated
-                else cuda_backproject.relion_coarse_diff2_rectangular_runtime_f32
+                else em_cuda_kernels.relion_coarse_diff2_rectangular_runtime_f32
             )
             full_diff2 = scorer(
                 *full_operands,

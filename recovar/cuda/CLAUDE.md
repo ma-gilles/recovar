@@ -63,6 +63,9 @@ unit is introduced.
 opt-in fused sparse pass-2 posterior handlers (`RECOVAR_SPARSE_PASS2_CUDA_POSTERIOR=1`);
 it is included last because it reuses the pinned Ampere scan helper. Keep build,
 packaging and loader-staleness inputs aligned when changing these boundaries.
+Since the relax split (P1) the EM headers above and the `.inc` live in
+`recovar/em/cuda/` and are included as `../em/cuda/<name>` (still one translation
+unit and one library); their Python FFI wrappers live in `recovar/em/cuda/kernels.py`.
 
 ## Runtime and interface
 

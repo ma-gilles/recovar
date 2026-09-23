@@ -6,7 +6,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from recovar import cuda_backproject
+from recovar.em.cuda import kernels as em_cuda_kernels
 from recovar.em.helpers.bpref_transaction import BprefTransactionQueue
 from recovar.em.helpers.env_flags import parse_env_binary_flag
 from recovar.em.local import local_em_engine as engine
@@ -47,7 +47,7 @@ def test_unsupported_route_rejected_before_dataset_access(monkeypatch):
 
 @pytest.mark.parametrize("queued", [False, True], ids=["immediate", "queued"])
 def test_helper_masks_rows_before_projector_dispatch(monkeypatch, queued):
-    signature = inspect.signature(cuda_backproject.relion_vdam_mstep_fused_projector_x_half)
+    signature = inspect.signature(em_cuda_kernels.relion_vdam_mstep_fused_projector_x_half)
     calls = []
 
     def callback(*args, **kwargs):
@@ -62,7 +62,7 @@ def test_helper_masks_rows_before_projector_dispatch(monkeypatch, queued):
             None,
         )
 
-    monkeypatch.setattr(cuda_backproject, "relion_vdam_mstep_fused_projector_x_half", callback)
+    monkeypatch.setattr(em_cuda_kernels, "relion_vdam_mstep_fused_projector_x_half", callback)
     queue = BprefTransactionQueue() if queued else None
     data = jnp.zeros(1, jnp.complex64)
     weight = jnp.zeros(1, jnp.float32)

@@ -31,9 +31,9 @@ def _translate_bpref_images(images, weighted_ctf_half, translation_angles, image
     """Keep BPref image/CTF operand rounding separate from score translation."""
     if translation_angles is None:
         raise ValueError("exact RELION BPref operands require RELION translation angles")
-    from recovar import cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
-    return cuda_backproject.relion_translate_bpref_f32(
+    return em_cuda_kernels.relion_translate_bpref_f32(
         jnp.asarray(images, dtype=jnp.complex64),
         jnp.asarray(weighted_ctf_half, dtype=jnp.float32),
         jnp.asarray(translation_angles, dtype=jnp.float32),
@@ -198,20 +198,20 @@ def prepare_local_bucket(
         else shift_processed_score_half * shift_ctf_half / shift_noise_half
     )
     if relion_score_translation_angles is not None:
-        from recovar import cuda_backproject
+        from recovar.em.cuda import kernels as em_cuda_kernels
 
         translation_dtype = jnp.asarray(relion_score_translation_angles).dtype
 
         def _cuda_translate(weighted_half):
             pixel_indices = jnp.arange(weighted_half.shape[1], dtype=jnp.int32)
             if translation_dtype == jnp.dtype(jnp.float64):
-                return cuda_backproject.relion_translate_score_f64(
+                return em_cuda_kernels.relion_translate_score_f64(
                     jnp.asarray(weighted_half, dtype=jnp.complex128),
                     jnp.asarray(relion_score_translation_angles, dtype=jnp.float64),
                     pixel_indices,
                     config.image_shape,
                 )
-            return cuda_backproject.relion_translate_score_f32(
+            return em_cuda_kernels.relion_translate_score_f32(
                 jnp.asarray(weighted_half, dtype=jnp.complex64),
                 jnp.asarray(relion_score_translation_angles, dtype=jnp.float32),
                 pixel_indices,

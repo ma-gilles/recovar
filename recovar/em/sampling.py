@@ -712,7 +712,7 @@ def _relion_device_scoring_rotations_f32(
     if jax.default_backend() != "gpu":
         return None
 
-    from recovar import cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     eulers_f32 = np.asarray(eulers_deg, dtype=np.float32).reshape(-1, 3)
     do_right = right_matrix is not None
@@ -722,7 +722,7 @@ def _relion_device_scoring_rotations_f32(
         right_f32 = np.asarray(right_matrix, dtype=np.float32)
         if right_f32.shape != (3, 3):
             raise ValueError(f"right_matrix must have shape (3, 3), got {right_f32.shape}")
-    rotations = cuda_backproject.relion_make_scoring_rotations_f32(
+    rotations = em_cuda_kernels.relion_make_scoring_rotations_f32(
         jnp.asarray(eulers_f32),
         jnp.asarray(right_f32),
         do_right=do_right,
@@ -757,9 +757,9 @@ def _relion_device_scoring_rotations_f64(
             raise ValueError(f"right_matrix must have shape (3, 3), got {right_f64.shape}")
 
     if jax.default_backend() == "gpu":
-        from recovar import cuda_backproject
+        from recovar.em.cuda import kernels as em_cuda_kernels
 
-        rotations = cuda_backproject.relion_make_scoring_rotations_f64(
+        rotations = em_cuda_kernels.relion_make_scoring_rotations_f64(
             jnp.asarray(eulers_f64),
             jnp.asarray(right_f64),
             do_right=do_right,

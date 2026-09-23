@@ -263,31 +263,32 @@ def relion_cuda_f32_coarse_posterior(
     use_native_cuda = False
     if jax.default_backend() == "gpu":
         from recovar import cuda_backproject
+        from recovar.em.cuda import kernels as em_cuda_kernels
 
         use_native_cuda = cuda_backproject.custom_cuda_requested()
     if use_native_cuda:
         finite_scores = jnp.where(finite, scores_f32, -jnp.inf)
         batched_primitives = (
-            cuda_backproject.relion_batched_posterior_primitives_requested()
+            em_cuda_kernels.relion_batched_posterior_primitives_requested()
         )
         if batched_primitives:
-            raw_weights = cuda_backproject.relion_exponentiate_batched_f32(
+            raw_weights = em_cuda_kernels.relion_exponentiate_batched_f32(
                 finite_scores,
                 exponent_add,
             )
         else:
-            raw_weights = jax.vmap(cuda_backproject.relion_exponentiate_f32)(
+            raw_weights = jax.vmap(em_cuda_kernels.relion_exponentiate_f32)(
                 finite_scores,
                 exponent_add,
             )
         sort_scan = (
-            cuda_backproject.relion_cub_positive_sort_scan_f32
+            em_cuda_kernels.relion_cub_positive_sort_scan_f32
             if filter_positive_before_sort
-            else cuda_backproject.relion_cub_sort_scan_f32
+            else em_cuda_kernels.relion_cub_sort_scan_f32
         )
         if batched_primitives and not filter_positive_before_sort:
             sorted_weights, cumulative = (
-                cuda_backproject.relion_cub_sort_scan_batched_f32(raw_weights)
+                em_cuda_kernels.relion_cub_sort_scan_batched_f32(raw_weights)
             )
         else:
             sorted_weights, cumulative = jax.vmap(sort_scan)(raw_weights)
@@ -354,12 +355,12 @@ def relion_cuda_f32_coarse_posterior(
     safe_sum_weight = jnp.where(has_mass, sum_weight, jnp.float32(1.0))
     if use_native_cuda:
         if batched_primitives:
-            probabilities = cuda_backproject.relion_divide_batched_f32(
+            probabilities = em_cuda_kernels.relion_divide_batched_f32(
                 raw_weights,
                 safe_sum_weight,
             )
         else:
-            probabilities = jax.vmap(cuda_backproject.relion_divide_f32)(
+            probabilities = jax.vmap(em_cuda_kernels.relion_divide_f32)(
                 raw_weights,
                 safe_sum_weight,
             )

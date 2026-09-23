@@ -26,7 +26,7 @@ from recovar.em.helpers.orientation_priors import (
     make_relion_direction_log_prior,
 )
 from recovar.em.helpers.resolution import shell_index_to_resolution_angstrom
-from recovar.reconstruction import regularization
+from recovar.em.reconstruction import regularization_relion
 
 logger = logging.getLogger(__name__)
 
@@ -269,7 +269,7 @@ def join_half_accumulators_at_low_resolution(
         grid_size=grid_size,
         voxel_size=voxel_size,
     )
-    return regularization.join_halves_at_low_resolution(
+    return regularization_relion.join_halves_at_low_resolution(
         Ft_y_0,
         Ft_y_1,
         Ft_ctf_0,
@@ -308,7 +308,7 @@ def _class_tau2_from_iref_power_spectrum(
     RECOVAR-frame radial shells, all in the RELION result dtype.
     """
 
-    mean_signal_variance_relion, details = regularization.compute_relion_tau2_from_iref_power_spectrum(
+    mean_signal_variance_relion, details = regularization_relion.compute_relion_tau2_from_iref_power_spectrum(
         iref_fourier,
         volume_shape,
         padding_factor=padding_factor,
@@ -349,7 +349,7 @@ def _class_tau2_update_details(
     ``None``. Returns ``(data_vs_prior, details)``.
     """
 
-    data_vs_prior = regularization.compute_data_vs_prior(
+    data_vs_prior = regularization_relion.compute_data_vs_prior(
         Ft_ctf_class,
         tau2_shells_recovar_frame,
         volume_shape,
@@ -495,6 +495,7 @@ def _reconstruct_volume_eager(
     letting the local exact path keep its accumulators in packed half-volume
     layout until the final iDFT boundary.
     """
+    from recovar.em.reconstruction import relion_functions_relion
     from recovar.reconstruction import relion_functions
 
     Ft_ctf, Ft_y = _pack_compact_full_accumulators_for_large_relion_ifft(
@@ -614,7 +615,7 @@ def _reconstruct_volume_eager(
             stage_a_filter.dtype,
         )
         regularized_filter_device = (
-            relion_functions._regularize_large_relion_half_filter_donate_ctf(
+            relion_functions_relion._regularize_large_relion_half_filter_donate_ctf(
                 stage_a_filter,
                 tau,
                 vol_shape,
@@ -681,7 +682,7 @@ def _reconstruct_volume_eager(
                     tuple(stage_a_numerator.shape),
                     stage_a_numerator.dtype,
                 )
-        wiener_half_device = relion_functions._divide_large_relion_half_numerator_donate_numerator(
+        wiener_half_device = relion_functions_relion._divide_large_relion_half_numerator_donate_numerator(
             stage_a_numerator,
             regularized_filter_device,
             padding_factor,
@@ -757,7 +758,7 @@ def _reconstruct_volume_eager(
         )
         del fftw_half_host
         gc.collect()
-        result = relion_functions._finish_large_relion_postprocess_from_unpadded_real(
+        result = relion_functions_relion._finish_large_relion_postprocess_from_unpadded_real(
             unpadded_real_host,
             vol_shape,
             padding_factor,
@@ -770,7 +771,7 @@ def _reconstruct_volume_eager(
             gridding_padding_factor=projection_padding_factor,
         )
     else:
-        result = relion_functions._finish_large_relion_postprocess_from_fftw_half(
+        result = relion_functions_relion._finish_large_relion_postprocess_from_fftw_half(
             fftw_half_host,
             vol_shape,
             padding_factor,

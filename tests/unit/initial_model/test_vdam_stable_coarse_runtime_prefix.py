@@ -161,7 +161,9 @@ def _configure_cuda(monkeypatch, custom_cuda_lib):
     monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
     monkeypatch.setenv("RECOVAR_RELION_VDAM_STABLE_FOURIER_WINDOW_QUANTUM", "32")
     cuda_backproject._cuda_ok = None
-    return cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
+
+    return em_cuda_kernels
 
 
 @pytest.mark.parametrize("translation_count", [29, 25])

@@ -14,7 +14,7 @@ import numpy as np
 
 from recovar import core
 from recovar.cuda_backproject import cuda_available as _cuda_projection_available
-from recovar.cuda_backproject import project_indexed
+from recovar.em.cuda.kernels import project_indexed
 from recovar.em.helpers.env_flags import parse_env_strict_flag
 from recovar.em.helpers.half_spectrum import bin_shell_values_jax
 
@@ -45,7 +45,7 @@ def project_relion_projector_half_spectrum(
     module docstring); it is off by default.
     """
 
-    from recovar.core.relion_project import relion_project_half
+    from recovar.em.relion.relion_project import relion_project_half
 
     image_size = int(image_shape[0])
     project_one = lambda R: relion_project_half(
@@ -509,9 +509,7 @@ def _project_relion_projector_texture(
             raise ValueError("persistent texture requires a fixed current-image radius")
         if runtime_r_max is not None or image_r_max is not None:
             raise ValueError("persistent texture requires a fixed model and image radius")
-        from recovar.cuda_backproject import (
-            relion_projector_persistent_half_texture_f32,
-        )
+        from recovar.em.cuda.kernels import relion_projector_persistent_half_texture_f32
         projection_crop = relion_projector_persistent_half_texture_f32(
             persistent_texture, jnp.asarray(rotations_block, dtype=jnp.float32),
             current_size=int(projector_output_size), padding_factor=int(padding_factor),
@@ -520,7 +518,7 @@ def _project_relion_projector_texture(
     elif image_r_max is not None:
         if mask_current_image_disk:
             raise ValueError("rotated image radius cannot be combined with an exact image-disk mask")
-        from recovar.cuda_backproject import project_relion_half_capacity
+        from recovar.em.cuda.kernels import project_relion_half_capacity
 
         projection_crop = project_relion_half_capacity(
             volume_relion_half, rotations_block,
@@ -547,7 +545,7 @@ def _project_relion_projector_texture(
         # The half-storage kernel stages the same texels without a cubic
         # transpose/zero-fill buffer. Output image extent is independent of
         # model radius; keep crop, mask, gather and scaling unchanged below.
-        from recovar.cuda_backproject import project_relion_half_capacity
+        from recovar.em.cuda.kernels import project_relion_half_capacity
 
         projection_crop = project_relion_half_capacity(
             volume_relion_half, rotations_block, jnp.asarray(r_max, jnp.int32),
@@ -566,7 +564,7 @@ def _project_relion_projector_texture(
             int(r_max) * int(padding_factor) + 2,
         )
     ):
-        from recovar.cuda_backproject import relion_projector_half_texture_f32
+        from recovar.em.cuda.kernels import relion_projector_half_texture_f32
         projection_crop = relion_projector_half_texture_f32(
             volume_relion_half, rotations_block,
             current_size=int(projector_output_size), padding_factor=int(padding_factor),
@@ -585,7 +583,7 @@ def _project_relion_projector_texture(
             relion_texture_interp=True,
         )
     else:
-        from recovar.cuda_backproject import project_relion_half_capacity
+        from recovar.em.cuda.kernels import project_relion_half_capacity
 
         projection_crop = project_relion_half_capacity(
             volume_relion_half, rotations_block, runtime_r_max,

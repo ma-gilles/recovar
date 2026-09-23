@@ -279,7 +279,7 @@ def finalize_half_volume_bpref(
         right_operators.shape[0],
         support_radius,
     )
-    from recovar import cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     use_host = (
         (data.dtype == jnp.dtype(jnp.complex64)
@@ -287,8 +287,8 @@ def finalize_half_volume_bpref(
         if force_host is None else bool(force_host)
     )
     finalize = (
-        cuda_backproject.relion_point_group_symmetrise_bpref_host
-        if use_host else cuda_backproject.relion_point_group_symmetrise_bpref
+        em_cuda_kernels.relion_point_group_symmetrise_bpref_host
+        if use_host else em_cuda_kernels.relion_point_group_symmetrise_bpref
     )
     return finalize(
         data,
@@ -596,9 +596,9 @@ def finalize_split_relion_x_half_bpref(
         right_operators.shape[0],
         support_radius,
     )
-    from recovar import cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
-    return cuda_backproject.relion_point_group_symmetrise_bpref_split_host(
+    return em_cuda_kernels.relion_point_group_symmetrise_bpref_split_host(
         data_real,
         data_imag,
         weight,

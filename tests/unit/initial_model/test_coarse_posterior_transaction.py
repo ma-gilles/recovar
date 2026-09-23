@@ -5,6 +5,7 @@ import numpy as np
 import pytest
 
 from recovar import cuda_backproject as cuda
+from recovar.em.cuda import kernels as em_cuda_kernels
 from recovar.em.scoring.coarse_publication import _posterior_statistics
 
 pytestmark = pytest.mark.unit
@@ -17,7 +18,7 @@ def operands(shape=(3, 17)):
 
 
 def test_policy_keeps_parsed_float32_fraction_and_unlimited_support():
-    fraction, maximum = cuda._validate_coarse_posterior_transaction(*operands(), .999, None)
+    fraction, maximum = em_cuda_kernels._validate_coarse_posterior_transaction(*operands(), .999, None)
     assert fraction.dtype == np.float32 and fraction == np.float32(.999)
     assert maximum == 0
 
@@ -36,7 +37,7 @@ def test_invalid_contract_rejected_before_gpu_dispatch(which, value, error):
     args = [*operands(), .999, 500]
     args[which] = value
     with pytest.raises(error):
-        cuda._validate_coarse_posterior_transaction(*args)
+        em_cuda_kernels._validate_coarse_posterior_transaction(*args)
 
 
 @pytest.mark.gpu
@@ -65,7 +66,7 @@ def test_same_scores_match_cuda_posterior_bitwise(monkeypatch, case, width, maxs
     scores, maxima = jnp.asarray(values), jnp.asarray(raw_max)
     reference = jax.device_get(_posterior_statistics(scores, maxima, None,
         adaptive_fraction=.999, max_significants=maxsig, tie_score_ulps=0))
-    statistics, indices, support, count = jax.device_get(cuda.relion_coarse_posterior_transaction_f32(
+    statistics, indices, support, count = jax.device_get(em_cuda_kernels.relion_coarse_posterior_transaction_f32(
         scores, maxima, jnp.asarray(3, jnp.int32), adaptive_fraction=.999, max_significants=maxsig))
     for column, key in enumerate(('best_score','pmax','sum_weight','threshold')):
         want = np.asarray(reference[key], np.float32)

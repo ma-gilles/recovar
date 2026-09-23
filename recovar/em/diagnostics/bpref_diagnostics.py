@@ -1119,7 +1119,7 @@ def _maybe_dump_bpref_contribution_rows(
     device_signature_path = None
     device_dump_dir = os.environ.get("RECOVAR_BPREF_DEVICE_SIGNATURE_DUMP_DIR", "").strip()
     if device_dump_dir:
-        from recovar import cuda_backproject
+        from recovar.em.cuda import kernels as em_cuda_kernels
 
         _require_bpref_device_soft_particle_arm(
             use_relion_x_half_mstep=bool(use_relion_x_half_mstep),
@@ -1197,7 +1197,7 @@ def _maybe_dump_bpref_contribution_rows(
                 jnp.asarray(rotations_np[particle_row, :row_count], dtype=jnp.float32),
             )
             if contributor_rows.size:
-                signature_outputs = cuda_backproject.relion_fused_x_half_backproject_signature_indexed(
+                signature_outputs = em_cuda_kernels.relion_fused_x_half_backproject_signature_indexed(
                     *ffi_args,
                     jnp.asarray(particle_rotation_keys, dtype=jnp.int32),
                     jnp.asarray(contributor_rows, dtype=jnp.int32),
@@ -1220,7 +1220,7 @@ def _maybe_dump_bpref_contribution_rows(
             else:
                 # Preserve the native all-row launch even when no row passes
                 # its Fweight>0 gate; only the signature-only launch is absent.
-                accumulators = cuda_backproject.relion_fused_x_half_backproject_indexed(
+                accumulators = em_cuda_kernels.relion_fused_x_half_backproject_indexed(
                     *ffi_args,
                     tuple(int(value) for value in image_shape),
                     tuple(int(value) for value in volume_shape),

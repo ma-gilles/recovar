@@ -61,7 +61,9 @@ def _cuda_backproject(monkeypatch, custom_cuda_lib):
         cuda_backproject.relion_wavg_rotation_atomic_runtime_flat_rows_triplet_add_f32_supported()
     ):
         pytest.skip("loaded CUDA library predates the flat-row Wavg atomics")
-    return cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
+
+    return em_cuda_kernels
 
 
 def _assert_bitwise(actual, expected):
@@ -328,10 +330,11 @@ def test_flat_rows_wavg_all_padding_rows_leave_operands_untouched(
 
 def test_flat_rows_wavg_fails_closed_without_gpu(monkeypatch):
     import recovar.cuda_backproject as cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     monkeypatch.setattr(cuda_backproject.jax, "default_backend", lambda: "cpu")
     with pytest.raises(RuntimeError, match="requires a JAX GPU backend"):
-        cuda_backproject.relion_wavg_sequential_runtime_flat_rows_triplet_f32.__wrapped__(
+        em_cuda_kernels.relion_wavg_sequential_runtime_flat_rows_triplet_f32.__wrapped__(
             jnp.zeros((1, 1), dtype=jnp.complex64),
             jnp.zeros((1,), dtype=jnp.int32),
             jnp.zeros((1, 1), dtype=jnp.float32),
@@ -354,7 +357,7 @@ def test_flat_rows_wavg_fails_closed_without_gpu(monkeypatch):
     ],
 )
 def test_flat_rows_wavg_rejects_inconsistent_operands(mutate, message):
-    import recovar.cuda_backproject as cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     args = [
         jnp.zeros((1, 1), dtype=jnp.complex64),
@@ -367,7 +370,7 @@ def test_flat_rows_wavg_rejects_inconsistent_operands(mutate, message):
     ]
     mutate(args)
     with pytest.raises(ValueError, match=message):
-        cuda_backproject.relion_wavg_sequential_runtime_flat_rows_triplet_f32.__wrapped__(*args)
+        em_cuda_kernels.relion_wavg_sequential_runtime_flat_rows_triplet_f32.__wrapped__(*args)
 
 
 @pytest.mark.parametrize(
@@ -379,7 +382,7 @@ def test_flat_rows_wavg_rejects_inconsistent_operands(mutate, message):
     ],
 )
 def test_flat_rows_wavg_atomics_reject_inconsistent_operands(mutate, message):
-    import recovar.cuda_backproject as cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     args = [
         jnp.zeros((1, 1, 3), dtype=jnp.float32),
@@ -390,7 +393,7 @@ def test_flat_rows_wavg_atomics_reject_inconsistent_operands(mutate, message):
     mutate(args)
     with pytest.raises(ValueError, match=message):
         wrapped = (
-            cuda_backproject
+            em_cuda_kernels
             .relion_wavg_rotation_atomic_runtime_flat_rows_triplet_add_f32
             .__wrapped__
         )

@@ -7,7 +7,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from recovar import cuda_backproject as cb
+from recovar.em.cuda import kernels as em_cuda_kernels
 from recovar.em.helpers import projection
 from recovar.em.helpers.env_flags import parse_env_binary_flag
 from recovar.em.local import local_em_engine as engine
@@ -113,7 +113,7 @@ def test_actual_selection_and_cuda_forwarding_preserve_all_other_operands(monkey
         captured.append((args, kwargs))
         return result_y, result_ctf, object()
 
-    monkeypatch.setattr(cb, "relion_vdam_mstep_fused_projector_x_half", cuda)
+    monkeypatch.setattr(em_cuda_kernels, "relion_vdam_mstep_fused_projector_x_half", cuda)
     b, r, t, p = 2, 2, 3, 2
     images = jnp.arange(b * p, dtype=jnp.float32).reshape(b, p).astype(jnp.complex64) + 1j
     ctf, invnoise = jnp.ones((b, p), jnp.float32) * 0.75, jnp.ones((b, p), jnp.float32) * 2
@@ -163,7 +163,7 @@ def test_actual_selection_and_cuda_forwarding_preserve_all_other_operands(monkey
 
 
 def test_runtime_radius_cannot_escape_to_preprojected_helper(monkeypatch):
-    monkeypatch.setattr(cb, "relion_vdam_mstep_fused_x_half", lambda *a, **k: pytest.fail("preprojected CUDA called"))
+    monkeypatch.setattr(em_cuda_kernels, "relion_vdam_mstep_fused_x_half", lambda *a, **k: pytest.fail("preprojected CUDA called"))
     with pytest.raises(ValueError, match="requires the inline projector"):
         engine._accumulate_relion_vdam_physical_particle_grid(
             *([None] * 10), pixel_indices=None, image_shape=(32, 32), volume_shape=(11, 11, 11), max_r=4,

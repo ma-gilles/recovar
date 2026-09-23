@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 
 from recovar import cuda_backproject as cuda
+from recovar.em.cuda import kernels as em_cuda_kernels
 from recovar.em.helpers import deferred_vdam_host_pack as helper
 from recovar.em.helpers.env_flags import parse_env_binary_flag
 from recovar.em.local import local_em_engine as engine
@@ -54,7 +55,7 @@ def operands(batch=2, case="valid"):
 @pytest.mark.parametrize("batch", [1, 2, 3])
 def test_shape_contract(batch):
     args = operands(batch)
-    outputs = cuda._deferred_vdam_host_pack_shapes(*args)
+    outputs = em_cuda_kernels._deferred_vdam_host_pack_shapes(*args)
     assert [x.shape for x in outputs] == [
         (batch, 3, 4),
         (batch, 3),
@@ -97,7 +98,7 @@ def test_invalid_abi_rejected(case):
     elif case == "flat_take":
         args[8] = args[8][:1]
     with pytest.raises((TypeError, ValueError)):
-        cuda._deferred_vdam_host_pack_shapes(*args)
+        em_cuda_kernels._deferred_vdam_host_pack_shapes(*args)
 
 
 @pytest.mark.parametrize(
@@ -126,7 +127,9 @@ def test_requires_host_plan_before_dataset_access(monkeypatch):
 def test_older_library_supported_until_new_transaction_requested(monkeypatch):
     assert all(symbol != "DeferredVdamHostPack" for _, symbol in cuda._FFI_REGISTRATIONS)
     monkeypatch.setattr(cuda, "_ensure_ffi", lambda: None)
+    monkeypatch.setattr(em_cuda_kernels, "_ensure_ffi", lambda: None)
     monkeypatch.setattr(cuda, "_get_lib", lambda: SimpleNamespace())
+    monkeypatch.setattr(em_cuda_kernels, "_get_lib", lambda: SimpleNamespace())
     monkeypatch.setattr(cuda, "_optional_ffi_registered", set())
     with pytest.raises(RuntimeError, match="explicit build with DeferredVdamHostPack"):
         cuda._ensure_optional_ffi(cuda._TARGET_DEFERRED_VDAM_HOST_PACK)
@@ -159,7 +162,7 @@ def test_raw_ffi_rejects_bad_buffers(case):
     assert jax.default_backend() == "gpu"
     cuda._ensure_optional_ffi(cuda._TARGET_DEFERRED_VDAM_HOST_PACK)
     arrays = operands()
-    outputs = list(cuda._deferred_vdam_host_pack_shapes(*arrays))
+    outputs = list(em_cuda_kernels._deferred_vdam_host_pack_shapes(*arrays))
     args = [jnp.asarray(x) for x in arrays]
     if case == "dtype":
         args[7] = jnp.ones(args[7].shape, jnp.int32)

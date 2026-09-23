@@ -440,7 +440,7 @@ def test_translated_wavg_low_shell_power_preserves_per_pixel_boundary():
 
 
 def test_relion_wavg_norm_translation_uses_raw_windowed_image(monkeypatch):
-    from recovar import cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     processed = jnp.asarray(
         [[1 + 2j, 3 + 4j, 5 + 6j, 7 + 8j]],
@@ -456,7 +456,7 @@ def test_relion_wavg_norm_translation_uses_raw_windowed_image(monkeypatch):
         assert image_shape == (4, 4)
         return jnp.arange(6, dtype=jnp.float32).astype(jnp.complex64).reshape(2, 3)
 
-    monkeypatch.setattr(cuda_backproject, "relion_translate_score_f32", fake_translate)
+    monkeypatch.setattr(em_cuda_kernels, "relion_translate_score_f32", fake_translate)
     actual = _relion_cuda_translate_wavg_norm_images(
         processed,
         angles,

@@ -782,7 +782,7 @@ def run_em(
     debug_options = _DenseDebugOptions.from_env(current_size)
     # Pad volume in real space for smoother trilinear projection.
     if projection_padding_factor > 1:
-        from recovar.reconstruction.relion_functions import pad_volume_for_projection
+        from recovar.em.reconstruction.relion_functions_relion import pad_volume_for_projection
 
         mean_for_proj, proj_volume_shape = pad_volume_for_projection(
             mean,

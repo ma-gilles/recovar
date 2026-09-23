@@ -298,6 +298,7 @@ def _compare_particle(
     production_preprocessed_real = raw_real_image[None, ...]
     if preprocess_backend == "relion_cuda":
         from recovar import cuda_backproject
+        from recovar.em.cuda import kernels as em_cuda_kernels
 
         def optics_value(name: str) -> float:
             return float(optics_row[name] if name in optics_row else optics_row[f"_{name}"])
@@ -370,12 +371,13 @@ def _compare_particle(
         native_ctf_replay**2 * native_inverse_noise_replay / n4
     ).astype(np.float32)
     from recovar import cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     translation_angles = jnp.asarray(
         _relion_translation_angles_f32(pass2["fine_translations"], (image_size, image_size)),
         dtype=jnp.float32,
     )
-    cuda_translated_all = cuda_backproject.relion_translate_score_f32(
+    cuda_translated_all = em_cuda_kernels.relion_translate_score_f32(
         jnp.asarray(rec_processed[None, :], dtype=jnp.complex64),
         translation_angles,
         jnp.asarray(centered, dtype=jnp.int32),

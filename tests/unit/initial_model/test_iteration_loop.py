@@ -633,7 +633,7 @@ class TestRunVdamIterations:
         assert out.sigma2_offset == pytest.approx(90.3125)
 
     def test_updates_sigma2_noise_from_estep_meta_in_relion_units(self):
-        from recovar.reconstruction import noise
+        from recovar.em.reconstruction import noise_relion
 
         state = initialise_denovo_state(
             ori_size=8,
@@ -652,7 +652,7 @@ class TestRunVdamIterations:
 
         out = update_noise_from_estep_meta(state, meta, do_grad=False)
 
-        expected_engine_units = noise.normalize_wsum_to_sigma2_noise(
+        expected_engine_units = noise_relion.normalize_wsum_to_sigma2_noise(
             meta["wsum_sigma2_noise"],
             meta["wsum_img_power"],
             meta["noise_sumw"],
@@ -663,7 +663,7 @@ class TestRunVdamIterations:
         np.testing.assert_allclose(state.sigma2_noise, 0.01)
 
     def test_updates_sigma2_noise_with_vdam_momentum_on_subset_iterations(self):
-        from recovar.reconstruction import noise
+        from recovar.em.reconstruction import noise_relion
 
         state = initialise_denovo_state(
             ori_size=8,
@@ -683,7 +683,7 @@ class TestRunVdamIterations:
 
         out = update_noise_from_estep_meta(state, meta, do_grad=True, mu=0.9)
 
-        expected_engine_units = noise.normalize_wsum_to_sigma2_noise(
+        expected_engine_units = noise_relion.normalize_wsum_to_sigma2_noise(
             meta["wsum_sigma2_noise"],
             meta["wsum_img_power"],
             meta["noise_sumw"],

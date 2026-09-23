@@ -369,7 +369,7 @@ def _open_persistent_relion_projector_texture(
     ):
         return None
 
-    from recovar.cuda_backproject import RelionPersistentHalfTextureF32
+    from recovar.em.cuda.kernels import RelionPersistentHalfTextureF32
 
     # Match the bucketed float32 consumer cast, before any device upload.
     relion_projector_half = np.asarray(relion_projector_half, dtype=np.complex64)

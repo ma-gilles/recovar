@@ -5,6 +5,7 @@ import numpy as np
 import pytest
 import jax.numpy as jnp
 import recovar.cuda_backproject as cuda_backproject
+from recovar.em.cuda import kernels as em_cuda_kernels
 pytestmark = pytest.mark.unit
 
 def test_relion_firstiter_bpref_cuda_source_preserves_native_interface_and_pass_loop():
@@ -59,6 +60,7 @@ def test_relion_firstiter_bpref_wrapper_uses_split_native_operands_and_static_sc
         return call
 
     monkeypatch.setattr(cuda_backproject, "_ensure_ffi", lambda: None)
+    monkeypatch.setattr(em_cuda_kernels, "_ensure_ffi", lambda: None)
     monkeypatch.setattr(cuda_backproject.jax.ffi, "ffi_call", fake_ffi_call)
 
     image_shape = (4, 4)
@@ -74,7 +76,7 @@ def test_relion_firstiter_bpref_wrapper_uses_split_native_operands_and_static_sc
     native_eulers = jnp.broadcast_to(jnp.eye(3, dtype=jnp.float32), (2, 3, 3))
 
     data_out, weight_out = (
-        cuda_backproject._relion_firstiter_bpref_fused_x_half_static.__wrapped__(
+        em_cuda_kernels._relion_firstiter_bpref_fused_x_half_static.__wrapped__(
             data_volume,
             weight_volume,
             image,
@@ -115,7 +117,7 @@ def test_relion_firstiter_bpref_split_wrapper_preserves_three_ffi_aliases(
     monkeypatch,
 ):
     split_jit_source = inspect.getsource(
-        cuda_backproject._relion_firstiter_bpref_fused_x_half_split_static,
+        em_cuda_kernels._relion_firstiter_bpref_fused_x_half_split_static,
     )
     assert "donate_argnums=(0, 1, 2)" in split_jit_source
 
@@ -134,6 +136,7 @@ def test_relion_firstiter_bpref_split_wrapper_preserves_three_ffi_aliases(
         return call
 
     monkeypatch.setattr(cuda_backproject, "_ensure_ffi", lambda: None)
+    monkeypatch.setattr(em_cuda_kernels, "_ensure_ffi", lambda: None)
     monkeypatch.setattr(cuda_backproject.jax.ffi, "ffi_call", fake_ffi_call)
     monkeypatch.setattr(
         cuda_backproject.jax.lax,
@@ -157,7 +160,7 @@ def test_relion_firstiter_bpref_split_wrapper_preserves_three_ffi_aliases(
     native_eulers = jnp.broadcast_to(jnp.eye(3, dtype=jnp.float32), (2, 3, 3))
 
     outputs = (
-        cuda_backproject._relion_firstiter_bpref_fused_x_half_split_static.__wrapped__(
+        em_cuda_kernels._relion_firstiter_bpref_fused_x_half_split_static.__wrapped__(
             data_real,
             data_imag,
             weight,
@@ -210,7 +213,7 @@ def test_relion_firstiter_bpref_exact_native_ffi_smoke(
     minvsigma2 = np.full(12, np.float32(0.5), dtype=np.float32)
 
     with cuda_backproject.jax.default_device(gpu_device):
-        data_out, weight_out = cuda_backproject.relion_firstiter_bpref_fused_x_half(
+        data_out, weight_out = em_cuda_kernels.relion_firstiter_bpref_fused_x_half(
             jnp.zeros(volume_size, dtype=jnp.complex64),
             jnp.zeros(volume_size, dtype=jnp.float32),
             jnp.asarray(image),
@@ -257,7 +260,7 @@ def test_split_firstiter_repeated_launches_consume_owned_accumulators(
         for value in [2 + 3j, 4 - 1j]:
             image = jnp.zeros(12, dtype=jnp.complex64).at[0].set(value)
             old = accumulators
-            accumulators = cuda_backproject.relion_firstiter_bpref_fused_x_half_split(
+            accumulators = em_cuda_kernels.relion_firstiter_bpref_fused_x_half_split(
                 *old, image, ctf, noise,
                 jnp.ones((1, 1), dtype=jnp.float32),
                 jnp.zeros((1, 2), dtype=jnp.float32),
@@ -292,12 +295,13 @@ def test_relion_split_symmetry_range_has_bounded_outputs_and_no_aliases(monkeypa
         return call
 
     monkeypatch.setattr(cuda_backproject, "_ensure_ffi", lambda: None)
+    monkeypatch.setattr(em_cuda_kernels, "_ensure_ffi", lambda: None)
     monkeypatch.setattr(cuda_backproject.jax.ffi, "ffi_call", fake_ffi_call)
     volume_shape = (7, 7, 7)
     volume_size = 7 * 7 * 4
     range_voxels = 17
     outputs = (
-        cuda_backproject._relion_point_group_symmetrise_bpref_split_range_static.__wrapped__(
+        em_cuda_kernels._relion_point_group_symmetrise_bpref_split_range_static.__wrapped__(
             jnp.zeros(volume_size, dtype=jnp.float32),
             jnp.zeros(volume_size, dtype=jnp.float32),
             jnp.zeros(volume_size, dtype=jnp.float32),

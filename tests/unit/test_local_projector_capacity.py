@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 from scipy.spatial.transform import Rotation
 
-from recovar import cuda_backproject as cb
+from recovar.em.cuda import kernels as em_cuda_kernels
 from recovar.core import slicing
 from recovar.em.helpers import projection as proj
 from recovar.em.helpers.env_flags import parse_env_binary_flag
@@ -111,7 +111,7 @@ def test_compact_mapping_scaling_and_runtime_trace(monkeypatch):
         records.append((half.shape, radius.aval, kw))
         return crop + radius.astype(jnp.complex64) * 0
 
-    monkeypatch.setattr(cb, "project_relion_half_capacity", capacity)
+    monkeypatch.setattr(em_cuda_kernels, "project_relion_half_capacity", capacity)
     kwargs = _local_kwargs(q, 1, 15)
     rotations = jnp.eye(3, dtype=jnp.float32)[None]
     old = big._project_local_half_spectrum(None, jnp.asarray(_logical(15, 1)), rotations, **kwargs)
@@ -219,7 +219,7 @@ def test_engine_rejects_optin_before_nonstable_dataset_access(monkeypatch):
     ],
 )
 def test_capacity_helper_rejects_unsupported_contract(monkeypatch, override):
-    monkeypatch.setattr(cb, "project_relion_half_capacity", lambda *a, **k: pytest.fail("entered CUDA"))
+    monkeypatch.setattr(em_cuda_kernels, "project_relion_half_capacity", lambda *a, **k: pytest.fail("entered CUDA"))
     kwargs = dict(
         r_max=0,
         padding_factor=1,

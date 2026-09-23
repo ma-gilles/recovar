@@ -7,6 +7,7 @@ import numpy as np
 
 from recovar import cuda_backproject as cb
 
+
 def _output_shapes(proj, abs2, summed, ctf, variance, mask):
     if proj.ndim != 3 or proj.dtype not in (jnp.complex64, jnp.complex128):
         raise ValueError("Residual projections must be complex B,R,P")

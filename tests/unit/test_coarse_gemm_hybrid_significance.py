@@ -8,7 +8,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from recovar import cuda_backproject
+from recovar.em.cuda import kernels as em_cuda_kernels
 from recovar.em.diagnostics import coarse_score_diagnostics
 from recovar.em.scoring import coarse_gaussian_gemm, significance
 from recovar.em.scoring.coarse_gemm_hybrid import (
@@ -398,7 +398,7 @@ def test_hybrid_publishes_only_selected_exact_source16_scores(monkeypatch, share
         raise AssertionError("eligible selected rescore must keep callback lazy")
 
     monkeypatch.setattr(
-        cuda_backproject,
+        em_cuda_kernels,
         "relion_coarse_diff2_rectangular_f32",
         reject_full_fallback,
     )
@@ -469,12 +469,12 @@ def test_every_hybrid_full_dense_exit_uses_lazy_callback(
         ).reshape(shifted.shape[0], cache.shape[1], shifted.shape[1])
 
     monkeypatch.setattr(
-        cuda_backproject,
+        em_cuda_kernels,
         "relion_coarse_diff2_rectangular_f32",
         reject_rectangular,
     )
     monkeypatch.setattr(
-        cuda_backproject,
+        em_cuda_kernels,
         "relion_coarse_diff2_rectangular_runtime_f32",
         reject_rectangular,
     )
@@ -619,7 +619,7 @@ def test_hybrid_compact_posterior_retains_ordered_ids_without_dense_scatter(
         reject_dense,
     )
     monkeypatch.setattr(
-        cuda_backproject,
+        em_cuda_kernels,
         "relion_coarse_diff2_rectangular_f32",
         reject_full_fallback,
     )
@@ -688,7 +688,7 @@ def test_compact_hybrid_chooses_dense_before_certificate_when_not_smaller(
         reject_certificate,
     )
     monkeypatch.setattr(
-        cuda_backproject,
+        em_cuda_kernels,
         "relion_coarse_diff2_rectangular_f32",
         full_direct,
     )
@@ -744,7 +744,7 @@ def test_compact_hybrid_latched_overflow_skips_certificate(monkeypatch):
         reject_certificate,
     )
     monkeypatch.setattr(
-        cuda_backproject,
+        em_cuda_kernels,
         "relion_coarse_diff2_rectangular_f32",
         full_direct,
     )
@@ -803,7 +803,7 @@ def test_hybrid_capacity_overflow_uses_one_full_direct_batch(monkeypatch):
         reject_selected,
     )
     monkeypatch.setattr(
-        cuda_backproject,
+        em_cuda_kernels,
         "relion_coarse_diff2_rectangular_f32",
         full_direct,
     )
@@ -877,7 +877,7 @@ def test_hybrid_invalid_selected_output_falls_back_for_whole_batch(
         invalid_selected,
     )
     monkeypatch.setattr(
-        cuda_backproject,
+        em_cuda_kernels,
         "relion_coarse_diff2_rectangular_f32",
         full_direct,
     )
@@ -992,7 +992,7 @@ def test_full_scoring_dispatch_preserves_operands_and_reports_kernel(
         ("rectangular_runtime", "relion_coarse_diff2_rectangular_runtime_f32"),
         ("shared_pretranslated", "relion_coarse_diff2_shared_pretranslated_runtime_f32"),
     ):
-        monkeypatch.setattr(cuda_backproject, name, scorer(kernel))
+        monkeypatch.setattr(em_cuda_kernels, name, scorer(kernel))
     result = significance._compute_coarse_gaussian_gemm_hybrid_batch(
         jnp.asarray(cache), jnp.asarray(shifted), jnp.asarray(weight), jnp.asarray(initial),
         topology=topology, actual_image_count=2, class_log_prior=0.0,

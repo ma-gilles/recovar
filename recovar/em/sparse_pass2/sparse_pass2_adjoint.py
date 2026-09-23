@@ -158,6 +158,7 @@ def _accumulate_relion_x_half_per_particle_launches(
         )
     if use_fused_atomics:
         import recovar.cuda_backproject as cuda_backproject
+        from recovar.em.cuda import kernels as em_cuda_kernels
 
         if (
             diagnostic_fused_atomics
@@ -271,7 +272,7 @@ def _accumulate_relion_x_half_per_particle_launches(
                 raise RuntimeError(
                     "RELION fused-atomics diagnostic requires linear interpolation and a half-volume accumulator"
                 )
-            y_volume, ctf_volume = cuda_backproject.relion_fused_x_half_backproject_indexed(
+            y_volume, ctf_volume = em_cuda_kernels.relion_fused_x_half_backproject_indexed(
                 y_volume,
                 ctf_volume,
                 particle_values,

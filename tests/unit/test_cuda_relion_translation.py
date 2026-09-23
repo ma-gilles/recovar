@@ -162,7 +162,7 @@ def test_relion_translation_cuda_source_preserves_explicit_arithmetic():
 def test_relion_vdam_fused_source_uses_native_separate_accumulator_storage():
     import inspect
 
-    from recovar import cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
     from recovar.em.local import local_em_engine
 
     source = read_cuda_source()
@@ -288,13 +288,13 @@ def test_relion_vdam_fused_source_uses_native_separate_accumulator_storage():
     assert "std::this_thread::sleep_until(target - spin_guard)" in projector_launcher
     assert "captured_particle_timing_replay && parallel_worker_replay" in projector_launcher
 
-    wrapper = inspect.getsource(cuda_backproject.relion_vdam_mstep_fused_x_half)
+    wrapper = inspect.getsource(em_cuda_kernels.relion_vdam_mstep_fused_x_half)
     assert "data_real_volume = jnp.asarray(data_volume.real" in wrapper
     assert "data_imag_volume = jnp.asarray(data_volume.imag" in wrapper
     assert "fused_data = jax.lax.complex(fused_real, fused_imag)" in wrapper
 
     projector_wrapper = inspect.getsource(
-        cuda_backproject.relion_vdam_mstep_fused_projector_x_half
+        em_cuda_kernels.relion_vdam_mstep_fused_projector_x_half
     )
     assert "data_real_volume = jnp.asarray(data_volume.real" in projector_wrapper
     assert "data_imag_volume = jnp.asarray(data_volume.imag" in projector_wrapper
@@ -500,6 +500,7 @@ def test_relion_translate_score_f32_matches_float32_reference(
     """
 
     import recovar.cuda_backproject as cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
     monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
@@ -524,7 +525,7 @@ def test_relion_translate_score_f32_matches_float32_reference(
     )
 
     with jax.default_device(gpu_device):
-        actual = cuda_backproject.relion_translate_score_f32(
+        actual = em_cuda_kernels.relion_translate_score_f32(
             jnp.asarray(images),
             jnp.asarray(angles),
             jnp.asarray(pixel_indices),
@@ -570,6 +571,7 @@ def test_relion_translate_score_f32_matches_sealed_relion_bits(
     """Match a fixed RELION 5.0 stack-42988 translation sample bitwise."""
 
     import recovar.cuda_backproject as cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
     monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
@@ -618,7 +620,7 @@ def test_relion_translate_score_f32_matches_sealed_relion_bits(
     )
 
     with jax.default_device(gpu_device):
-        actual = cuda_backproject.relion_translate_score_f32(
+        actual = em_cuda_kernels.relion_translate_score_f32(
             jnp.asarray(images),
             jnp.asarray(angles),
             jnp.asarray(pixel_indices),
@@ -631,10 +633,11 @@ def test_relion_translate_score_f32_matches_sealed_relion_bits(
 
 def test_relion_translate_score_f32_fails_closed_without_gpu(monkeypatch):
     import recovar.cuda_backproject as cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     monkeypatch.setattr(cuda_backproject.jax, "default_backend", lambda: "cpu")
     with pytest.raises(RuntimeError, match="requires a JAX GPU backend"):
-        cuda_backproject.relion_translate_score_f32.__wrapped__(
+        em_cuda_kernels.relion_translate_score_f32.__wrapped__(
             jnp.zeros((1, 2), dtype=jnp.complex64),
             jnp.zeros((1, 2), dtype=jnp.float32),
             jnp.asarray([0, 1], dtype=jnp.int32),
@@ -643,10 +646,10 @@ def test_relion_translate_score_f32_fails_closed_without_gpu(monkeypatch):
 
 
 def test_relion_translate_score_f64_validates_input_dtype():
-    import recovar.cuda_backproject as cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     with pytest.raises(TypeError, match="images must be complex128"):
-        cuda_backproject.relion_translate_score_f64.__wrapped__(
+        em_cuda_kernels.relion_translate_score_f64.__wrapped__(
             jnp.zeros((1, 2), dtype=jnp.complex64),
             jnp.zeros((1, 2), dtype=jnp.float64),
             jnp.asarray([0, 1], dtype=jnp.int32),
@@ -673,6 +676,7 @@ def test_relion_translate_score_f64_matches_double_sincos_reference(
     unaffected: the two labels agree everywhere else.
     """
     import recovar.cuda_backproject as cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
     monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
@@ -684,7 +688,7 @@ def test_relion_translate_score_f64_matches_double_sincos_reference(
     angles = np.asarray([[0.0, 0.0], [0.018312519416213036, -0.006231173872947693]], dtype=np.float64)
 
     with jax.default_device(gpu_device):
-        actual = cuda_backproject.relion_translate_score_f64(
+        actual = em_cuda_kernels.relion_translate_score_f64(
             jnp.asarray(images),
             jnp.asarray(angles),
             jnp.asarray(pixel_indices),
@@ -707,10 +711,10 @@ def test_relion_translate_score_f64_matches_double_sincos_reference(
 
 
 def test_relion_translate_bpref_f32_validates_weight_shape(monkeypatch):
-    import recovar.cuda_backproject as cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     with pytest.raises(ValueError, match="weighted_ctf must have shape"):
-        cuda_backproject.relion_translate_bpref_f32.__wrapped__(
+        em_cuda_kernels.relion_translate_bpref_f32.__wrapped__(
             jnp.zeros((2, 3), dtype=jnp.complex64),
             jnp.zeros((1, 3), dtype=jnp.float32),
             jnp.zeros((1, 2), dtype=jnp.float32),
@@ -720,10 +724,10 @@ def test_relion_translate_bpref_f32_validates_weight_shape(monkeypatch):
 
 
 def test_relion_translate_bpref_f64_validates_input_dtype():
-    import recovar.cuda_backproject as cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     with pytest.raises(TypeError, match="images must be complex128"):
-        cuda_backproject.relion_translate_bpref_f64.__wrapped__(
+        em_cuda_kernels.relion_translate_bpref_f64.__wrapped__(
             jnp.zeros((1, 2), dtype=jnp.complex64),
             jnp.zeros((1, 2), dtype=jnp.float64),
             jnp.zeros((1, 2), dtype=jnp.float64),
@@ -733,10 +737,10 @@ def test_relion_translate_bpref_f64_validates_input_dtype():
 
 
 def test_relion_vdam_mstep_denominator_f32_validates_batch_shape():
-    import recovar.cuda_backproject as cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     with pytest.raises(ValueError, match="posterior batch dimension must match ctf"):
-        cuda_backproject.relion_vdam_mstep_denominator_f32.__wrapped__(
+        em_cuda_kernels.relion_vdam_mstep_denominator_f32.__wrapped__(
             jnp.ones((2, 3), dtype=jnp.float32),
             jnp.ones((2, 3), dtype=jnp.float32),
             jnp.ones((1, 4, 5), dtype=jnp.float32),
@@ -744,10 +748,10 @@ def test_relion_vdam_mstep_denominator_f32_validates_batch_shape():
 
 
 def test_relion_vdam_mstep_fused_x_half_validates_reference_shape():
-    import recovar.cuda_backproject as cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     with pytest.raises(ValueError, match="reference must have shape"):
-        cuda_backproject.relion_vdam_mstep_fused_x_half.__wrapped__(
+        em_cuda_kernels.relion_vdam_mstep_fused_x_half.__wrapped__(
             jnp.zeros((196,), dtype=jnp.complex64),
             jnp.zeros((196,), dtype=jnp.float32),
             jnp.zeros((1, 3), dtype=jnp.complex64),
@@ -765,14 +769,14 @@ def test_relion_vdam_mstep_fused_x_half_validates_reference_shape():
 
 
 def test_relion_vdam_mstep_fused_projector_x_half_validates_projector_shape():
-    import recovar.cuda_backproject as cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     # 41128dcd0 also admits a radius-matched logical half slab; a 2-D array is
     # neither that nor a cube.
     with pytest.raises(
         TypeError, match="projector_full must be a complex64 cube or radius-matched logical half slab"
     ):
-        cuda_backproject.relion_vdam_mstep_fused_projector_x_half.__wrapped__(
+        em_cuda_kernels.relion_vdam_mstep_fused_projector_x_half.__wrapped__(
             jnp.zeros((196,), dtype=jnp.complex64),
             jnp.zeros((196,), dtype=jnp.float32),
             jnp.zeros((1, 3), dtype=jnp.complex64),
@@ -798,6 +802,7 @@ def test_relion_vdam_mstep_sums_f32_matches_source_order_and_translation(
     gpu_device,
 ):
     import recovar.cuda_backproject as cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
     monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
@@ -825,7 +830,7 @@ def test_relion_vdam_mstep_sums_f32_matches_source_order_and_translation(
     pixel_indices = np.asarray([0, 1, 2], dtype=np.int32)
 
     with jax.default_device(gpu_device):
-        actual_num, actual_den = cuda_backproject.relion_vdam_mstep_sums_f32(
+        actual_num, actual_den = em_cuda_kernels.relion_vdam_mstep_sums_f32(
             jnp.asarray(images),
             jnp.asarray(ctf),
             jnp.asarray(minvsigma2),
@@ -835,7 +840,7 @@ def test_relion_vdam_mstep_sums_f32_matches_source_order_and_translation(
             jnp.asarray(reference),
             (8, 8),
         )
-        translated = cuda_backproject.relion_translate_bpref_f32(
+        translated = em_cuda_kernels.relion_translate_bpref_f32(
             jnp.asarray(images),
             jnp.ones_like(jnp.asarray(ctf)),
             jnp.asarray(translation_angles),
@@ -883,6 +888,7 @@ def test_relion_vdam_mstep_denominator_f32_is_bitwise_equal_to_full_reducer(
     gpu_device,
 ):
     import recovar.cuda_backproject as cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
     monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
@@ -913,7 +919,7 @@ def test_relion_vdam_mstep_denominator_f32_is_bitwise_equal_to_full_reducer(
     ).astype(np.complex64)
 
     with jax.default_device(gpu_device):
-        _, full_denominator = cuda_backproject.relion_vdam_mstep_sums_f32(
+        _, full_denominator = em_cuda_kernels.relion_vdam_mstep_sums_f32(
             jnp.asarray(images),
             jnp.asarray(ctf),
             jnp.asarray(minvsigma2),
@@ -923,7 +929,7 @@ def test_relion_vdam_mstep_denominator_f32_is_bitwise_equal_to_full_reducer(
             jnp.asarray(reference),
             (16, 16),
         )
-        denominator_only = cuda_backproject.relion_vdam_mstep_denominator_f32(
+        denominator_only = em_cuda_kernels.relion_vdam_mstep_denominator_f32(
             jnp.asarray(ctf),
             jnp.asarray(minvsigma2),
             jnp.asarray(posterior),
@@ -943,6 +949,7 @@ def test_relion_vdam_mstep_fused_x_half_matches_two_stage_interior_source_order(
     gpu_device,
 ):
     import recovar.cuda_backproject as cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
     monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
@@ -995,7 +1002,7 @@ def test_relion_vdam_mstep_fused_x_half_matches_two_stage_interior_source_order(
     actual_weight0 = jnp.zeros((volume_size,), dtype=jnp.float32)
 
     with jax.default_device(gpu_device):
-        sums, denominator = cuda_backproject.relion_vdam_mstep_sums_f32(
+        sums, denominator = em_cuda_kernels.relion_vdam_mstep_sums_f32(
             jnp.asarray(images),
             jnp.asarray(ctf),
             jnp.asarray(minvsigma2),
@@ -1006,7 +1013,7 @@ def test_relion_vdam_mstep_fused_x_half_matches_two_stage_interior_source_order(
             image_shape,
         )
         expected_data, expected_weight = (
-            cuda_backproject.relion_fused_x_half_backproject_particle_grid_indexed(
+            em_cuda_kernels.relion_fused_x_half_backproject_particle_grid_indexed(
                 expected_data0,
                 expected_weight0,
                 sums,
@@ -1020,7 +1027,7 @@ def test_relion_vdam_mstep_fused_x_half_matches_two_stage_interior_source_order(
         )
         jax.block_until_ready((expected_data, expected_weight, denominator))
         actual_data, actual_weight, actual_denominator = (
-            cuda_backproject.relion_vdam_mstep_fused_x_half(
+            em_cuda_kernels.relion_vdam_mstep_fused_x_half(
                 actual_data0,
                 actual_weight0,
                 jnp.asarray(images),
@@ -1062,6 +1069,7 @@ def test_relion_vdam_mstep_fused_x_half_uses_native_sgd_y_boundaries(
     gpu_device,
 ):
     import recovar.cuda_backproject as cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
     monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
@@ -1075,7 +1083,7 @@ def test_relion_vdam_mstep_fused_x_half_uses_native_sgd_y_boundaries(
 
     with jax.default_device(gpu_device):
         actual_data, actual_weight, actual_denominator = (
-            cuda_backproject.relion_vdam_mstep_fused_x_half(
+            em_cuda_kernels.relion_vdam_mstep_fused_x_half(
                 jnp.zeros((volume_size,), dtype=jnp.complex64),
                 jnp.zeros((volume_size,), dtype=jnp.float32),
                 jnp.ones((1, 2), dtype=jnp.complex64),
@@ -1108,6 +1116,7 @@ def test_relion_vdam_mstep_fused_projector_zero_matches_preprojected_zero(
     gpu_device,
 ):
     import recovar.cuda_backproject as cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
     monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
@@ -1139,7 +1148,7 @@ def test_relion_vdam_mstep_fused_projector_zero_matches_preprojected_zero(
             jnp.asarray(angles),
             jnp.asarray(pixel_indices),
         )
-        expected = cuda_backproject.relion_vdam_mstep_fused_x_half(
+        expected = em_cuda_kernels.relion_vdam_mstep_fused_x_half(
             *common,
             jnp.zeros((1, 2, pixel_indices.size), dtype=jnp.complex64),
             rotations,
@@ -1147,7 +1156,7 @@ def test_relion_vdam_mstep_fused_projector_zero_matches_preprojected_zero(
             volume_shape,
             max_r,
         )
-        actual = cuda_backproject.relion_vdam_mstep_fused_projector_x_half(
+        actual = em_cuda_kernels.relion_vdam_mstep_fused_projector_x_half(
             *common,
             jnp.zeros((11, 11, 11), dtype=jnp.complex64),
             rotations,
@@ -1157,20 +1166,7 @@ def test_relion_vdam_mstep_fused_projector_zero_matches_preprojected_zero(
             4,
             1,
         )
-        f64_a = cuda_backproject.relion_vdam_mstep_fused_projector_x_half(
-            *common,
-            jnp.zeros((11, 11, 11), dtype=jnp.complex64),
-            rotations,
-            image_shape,
-            volume_shape,
-            max_r,
-            4,
-            1,
-            worker_lane_ids=jnp.zeros((1,), dtype=jnp.int32),
-            serial_rotation_replay=True,
-            float64_accumulator_replay=True,
-        )
-        f64_b = cuda_backproject.relion_vdam_mstep_fused_projector_x_half(
+        f64_a = em_cuda_kernels.relion_vdam_mstep_fused_projector_x_half(
             *common,
             jnp.zeros((11, 11, 11), dtype=jnp.complex64),
             rotations,
@@ -1183,7 +1179,20 @@ def test_relion_vdam_mstep_fused_projector_zero_matches_preprojected_zero(
             serial_rotation_replay=True,
             float64_accumulator_replay=True,
         )
-        serial = cuda_backproject.relion_vdam_mstep_fused_projector_x_half(
+        f64_b = em_cuda_kernels.relion_vdam_mstep_fused_projector_x_half(
+            *common,
+            jnp.zeros((11, 11, 11), dtype=jnp.complex64),
+            rotations,
+            image_shape,
+            volume_shape,
+            max_r,
+            4,
+            1,
+            worker_lane_ids=jnp.zeros((1,), dtype=jnp.int32),
+            serial_rotation_replay=True,
+            float64_accumulator_replay=True,
+        )
+        serial = em_cuda_kernels.relion_vdam_mstep_fused_projector_x_half(
             *common,
             jnp.zeros((11, 11, 11), dtype=jnp.complex64),
             rotations,
@@ -1195,7 +1204,7 @@ def test_relion_vdam_mstep_fused_projector_zero_matches_preprojected_zero(
             worker_lane_ids=jnp.zeros((1,), dtype=jnp.int32),
             serial_rotation_replay=True,
         )
-        persistent = cuda_backproject.relion_vdam_mstep_fused_projector_x_half(
+        persistent = em_cuda_kernels.relion_vdam_mstep_fused_projector_x_half(
             *common,
             jnp.zeros((11, 11, 11), dtype=jnp.complex64),
             rotations,
@@ -1213,7 +1222,7 @@ def test_relion_vdam_mstep_fused_projector_zero_matches_preprojected_zero(
             rng.normal(size=(11, 11, 11))
             + 1j * rng.normal(size=(11, 11, 11))
         ).astype(np.complex64) * np.float32(1.0e-3)
-        persistent_nonzero = cuda_backproject.relion_vdam_mstep_fused_projector_x_half(
+        persistent_nonzero = em_cuda_kernels.relion_vdam_mstep_fused_projector_x_half(
             *common,
             jnp.asarray(projector_values),
             rotations,
@@ -1228,7 +1237,7 @@ def test_relion_vdam_mstep_fused_projector_zero_matches_preprojected_zero(
             parallel_worker_replay=False,
         )
         launch_serial_nonzero = (
-            cuda_backproject.relion_vdam_mstep_fused_projector_x_half(
+            em_cuda_kernels.relion_vdam_mstep_fused_projector_x_half(
                 *common,
                 jnp.asarray(projector_values),
                 rotations,
@@ -1256,7 +1265,7 @@ def test_relion_vdam_mstep_fused_projector_zero_matches_preprojected_zero(
             )
         )
         monkeypatch.setenv("RECOVAR_VDAM_PREPROJECT_PERSISTENT_ROTATIONS", "1")
-        preprojected_nonzero = cuda_backproject.relion_vdam_mstep_fused_projector_x_half(
+        preprojected_nonzero = em_cuda_kernels.relion_vdam_mstep_fused_projector_x_half(
             *common,
             jnp.asarray(projector_values),
             rotations,
@@ -1273,7 +1282,7 @@ def test_relion_vdam_mstep_fused_projector_zero_matches_preprojected_zero(
         jax.block_until_ready(preprojected_nonzero)
         monkeypatch.setenv("RECOVAR_VDAM_PRECOMPUTE_PERSISTENT_RESIDUALS", "1")
         precomputed_nonzero = (
-            cuda_backproject.relion_vdam_mstep_fused_projector_x_half(
+            em_cuda_kernels.relion_vdam_mstep_fused_projector_x_half(
                 *common,
                 jnp.asarray(projector_values),
                 rotations,
@@ -1297,7 +1306,7 @@ def test_relion_vdam_mstep_fused_projector_zero_matches_preprojected_zero(
         )
         monkeypatch.setenv("RECOVAR_VDAM_PRECOMPUTE_ORDERED_RESIDUALS", "1")
         precomputed_launch_serial_nonzero = (
-            cuda_backproject.relion_vdam_mstep_fused_projector_x_half(
+            em_cuda_kernels.relion_vdam_mstep_fused_projector_x_half(
                 *common,
                 jnp.asarray(projector_values),
                 rotations,
@@ -1326,7 +1335,7 @@ def test_relion_vdam_mstep_fused_projector_zero_matches_preprojected_zero(
         )
         with pytest.raises(jax.errors.JaxRuntimeError, match="CUDA: invalid argument"):
             invalid_multi_lane = (
-                cuda_backproject.relion_vdam_mstep_fused_projector_x_half(
+                em_cuda_kernels.relion_vdam_mstep_fused_projector_x_half(
                     *multi_particle_common,
                     jnp.asarray(projector_values),
                     jnp.repeat(rotations, 2, axis=0),
@@ -1371,6 +1380,7 @@ def test_relion_vdam_ordered_scatter_cuda_graph_matches_launch_serial(
     gpu_device,
 ):
     import recovar.cuda_backproject as cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
     monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
@@ -1456,7 +1466,7 @@ def test_relion_vdam_ordered_scatter_cuda_graph_matches_launch_serial(
             "parallel_worker_replay": False,
         }
         launch_serial = (
-            cuda_backproject.relion_vdam_mstep_fused_projector_x_half(
+            em_cuda_kernels.relion_vdam_mstep_fused_projector_x_half(
                 *arguments,
                 **options,
             )
@@ -1465,7 +1475,7 @@ def test_relion_vdam_ordered_scatter_cuda_graph_matches_launch_serial(
 
         monkeypatch.setenv("RECOVAR_VDAM_ORDERED_SCATTER_CUDA_GRAPH", "1")
         graph_replay = (
-            cuda_backproject.relion_vdam_mstep_fused_projector_x_half(
+            em_cuda_kernels.relion_vdam_mstep_fused_projector_x_half(
                 *arguments,
                 **options,
             )
@@ -1492,6 +1502,7 @@ def test_relion_vdam_captured_rotation_order_matches_reverse_replay(
     gpu_device,
 ):
     import recovar.cuda_backproject as cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
     monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
@@ -1529,22 +1540,22 @@ def test_relion_vdam_captured_rotation_order_matches_reverse_replay(
     }
 
     with jax.default_device(gpu_device):
-        reverse = cuda_backproject.relion_vdam_mstep_fused_projector_x_half(
+        reverse = em_cuda_kernels.relion_vdam_mstep_fused_projector_x_half(
             *common,
             reverse_rotation_replay=True,
             **options,
         )
-        captured = cuda_backproject.relion_vdam_mstep_fused_projector_x_half(
+        captured = em_cuda_kernels.relion_vdam_mstep_fused_projector_x_half(
             *common,
             rotation_replay_order=jnp.asarray([[1, 0]], dtype=jnp.int32),
             **options,
         )
         single_common = common[:5] + (common[5].at[:, 0, :].set(0.0),) + common[6:]
-        full_zero_padded = cuda_backproject.relion_vdam_mstep_fused_projector_x_half(
+        full_zero_padded = em_cuda_kernels.relion_vdam_mstep_fused_projector_x_half(
             *single_common,
             worker_lane_ids=jnp.zeros((1,), dtype=jnp.int32),
         )
-        exact_native_grid = cuda_backproject.relion_vdam_mstep_fused_projector_x_half(
+        exact_native_grid = em_cuda_kernels.relion_vdam_mstep_fused_projector_x_half(
             *single_common,
             worker_lane_ids=jnp.zeros((1,), dtype=jnp.int32),
             rotation_replay_order=jnp.asarray([[1, 0]], dtype=jnp.int32),
@@ -1567,6 +1578,7 @@ def test_relion_vdam_mstep_fused_projector_routes_reconstruction_groups(
     gpu_device,
 ):
     import recovar.cuda_backproject as cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
     monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
@@ -1593,7 +1605,7 @@ def test_relion_vdam_mstep_fused_projector_routes_reconstruction_groups(
     group_ids = np.asarray([0, 1, 0, 1, 1, 0], dtype=np.int32)
 
     with jax.default_device(gpu_device):
-        grouped = cuda_backproject.relion_vdam_mstep_fused_projector_x_half(
+        grouped = em_cuda_kernels.relion_vdam_mstep_fused_projector_x_half(
             jnp.zeros((2, volume_size), dtype=jnp.complex64),
             jnp.zeros((2, volume_size), dtype=jnp.float32),
             jnp.asarray(images),
@@ -1615,7 +1627,7 @@ def test_relion_vdam_mstep_fused_projector_routes_reconstruction_groups(
         for group_index in range(2):
             select = group_ids == group_index
             separate.append(
-                cuda_backproject.relion_vdam_mstep_fused_projector_x_half(
+                em_cuda_kernels.relion_vdam_mstep_fused_projector_x_half(
                     jnp.zeros((volume_size,), dtype=jnp.complex64),
                     jnp.zeros((volume_size,), dtype=jnp.float32),
                     jnp.asarray(images[select]),
@@ -1652,6 +1664,7 @@ def test_relion_translate_bpref_f32_matches_translate_then_weight(
     gpu_device,
 ):
     import recovar.cuda_backproject as cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
     monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
@@ -1677,14 +1690,14 @@ def test_relion_translate_bpref_f32_matches_translate_then_weight(
     )
 
     with jax.default_device(gpu_device):
-        actual = cuda_backproject.relion_translate_bpref_f32(
+        actual = em_cuda_kernels.relion_translate_bpref_f32(
             jnp.asarray(images),
             jnp.asarray(weighted_ctf),
             jnp.asarray(angles),
             jnp.asarray(pixel_indices),
             image_shape,
         )
-        translated = cuda_backproject.relion_translate_score_f32(
+        translated = em_cuda_kernels.relion_translate_score_f32(
             jnp.asarray(images),
             jnp.asarray(angles),
             jnp.asarray(pixel_indices),
@@ -1711,6 +1724,7 @@ def test_relion_translate_bpref_f64_matches_translate_then_weight(
     gpu_device,
 ):
     import recovar.cuda_backproject as cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
     monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
@@ -1736,14 +1750,14 @@ def test_relion_translate_bpref_f64_matches_translate_then_weight(
     )
 
     with jax.default_device(gpu_device):
-        actual = cuda_backproject.relion_translate_bpref_f64(
+        actual = em_cuda_kernels.relion_translate_bpref_f64(
             jnp.asarray(images),
             jnp.asarray(weighted_ctf),
             jnp.asarray(angles),
             jnp.asarray(pixel_indices),
             image_shape,
         )
-        translated = cuda_backproject.relion_translate_score_f64(
+        translated = em_cuda_kernels.relion_translate_score_f64(
             jnp.asarray(images),
             jnp.asarray(angles),
             jnp.asarray(pixel_indices),
@@ -1757,10 +1771,10 @@ def test_relion_translate_bpref_f64_matches_translate_then_weight(
 
 
 def test_relion_vdam_mstep_sums_f32_validates_reference_shape():
-    import recovar.cuda_backproject as cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     with pytest.raises(ValueError, match="reference must have shape"):
-        cuda_backproject.relion_vdam_mstep_sums_f32.__wrapped__(
+        em_cuda_kernels.relion_vdam_mstep_sums_f32.__wrapped__(
             jnp.zeros((2, 3), dtype=jnp.complex64),
             jnp.ones((2, 3), dtype=jnp.float32),
             jnp.ones((2, 3), dtype=jnp.float32),
@@ -1797,6 +1811,7 @@ def test_relion_translate_score_labels_the_nyquist_row_as_relion_does(
     """
 
     import recovar.cuda_backproject as cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
     monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
@@ -1820,7 +1835,7 @@ def test_relion_translate_score_labels_the_nyquist_row_as_relion_does(
 
     with jax.default_device(gpu_device):
         actual = np.asarray(
-            cuda_backproject.relion_translate_score_f32(
+            em_cuda_kernels.relion_translate_score_f32(
                 jnp.asarray(images),
                 jnp.asarray(angles),
                 jnp.asarray(pixel_indices),
@@ -1872,6 +1887,7 @@ def test_relion_translate_bpref_labels_the_nyquist_row_as_relion_does(
     """
 
     import recovar.cuda_backproject as cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
     monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
@@ -1893,7 +1909,7 @@ def test_relion_translate_bpref_labels_the_nyquist_row_as_relion_does(
 
     with jax.default_device(gpu_device):
         actual = np.asarray(
-            cuda_backproject.relion_translate_bpref_f32(
+            em_cuda_kernels.relion_translate_bpref_f32(
                 jnp.asarray(images),
                 jnp.asarray(weighted_ctf),
                 jnp.asarray(angles),
@@ -1936,6 +1952,7 @@ def test_relion_vdam_mstep_sums_labels_the_nyquist_row_as_relion_does(
     """
 
     import recovar.cuda_backproject as cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
     monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
@@ -1957,7 +1974,7 @@ def test_relion_vdam_mstep_sums_labels_the_nyquist_row_as_relion_does(
     )
 
     with jax.default_device(gpu_device):
-        summed, ctf_probs = cuda_backproject.relion_vdam_mstep_sums_f32(
+        summed, ctf_probs = em_cuda_kernels.relion_vdam_mstep_sums_f32(
             jnp.asarray(images),
             jnp.asarray(ctf),
             jnp.asarray(minvsigma2),
@@ -2001,6 +2018,7 @@ def test_relion_translate_bpref_f32_matches_native_captured_bits(
     gpu_device,
 ):
     import recovar.cuda_backproject as cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
     monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
@@ -2042,7 +2060,7 @@ def test_relion_translate_bpref_f32_matches_native_captured_bits(
     )
 
     with jax.default_device(gpu_device):
-        actual = cuda_backproject.relion_translate_bpref_f32(
+        actual = em_cuda_kernels.relion_translate_bpref_f32(
             jnp.asarray(images),
             jnp.asarray(weighted_ctf),
             jnp.asarray(angles),

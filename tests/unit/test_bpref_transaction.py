@@ -9,7 +9,7 @@ pytestmark = pytest.mark.unit
 
 
 def test_cuda_packing_queue_dispatch_preserves_bucket_boundaries(monkeypatch):
-    from recovar import cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
     from recovar.em.helpers.bpref_transaction import _pad_particle_fields
 
     packed_calls = []
@@ -19,7 +19,7 @@ def test_cuda_packing_queue_dispatch_preserves_bucket_boundaries(monkeypatch):
         # The existing JAX implementation is the CPU semantic reference.
         return _pad_particle_fields(columns, capacity, 5)
 
-    monkeypatch.setattr(cuda_backproject, "pack_bpref_particle_fields", observed)
+    monkeypatch.setattr(em_cuda_kernels, "pack_bpref_particle_fields", observed)
     common, calls, callback = setup()
     queue = BprefTransactionQueue(stable_particle_capacity=True, cuda_packing=True)
     data = np.zeros((2, 1), np.complex64)

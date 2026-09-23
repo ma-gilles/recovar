@@ -220,7 +220,7 @@ def _bits(values):
     ],
 )
 def test_chunked_wavg_operands_are_bitwise_the_whole_bucket_operands(monkeypatch, sequential, shape, images_per_chunk):
-    from recovar import cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     case = _wavg_case(seed=images_per_chunk, **shape)
     expected = np.asarray(_whole_bucket_rectangle_terms(case, sequential=sequential))
@@ -231,7 +231,7 @@ def test_chunked_wavg_operands_are_bitwise_the_whole_bucket_operands(monkeypatch
         issued.append(np.asarray(terms))
         return accumulator + jnp.sum(terms, axis=1)
 
-    monkeypatch.setattr(cuda_backproject, "relion_wavg_rotation_atomic_triplet_add_f32", capture_atomic_add)
+    monkeypatch.setattr(em_cuda_kernels, "relion_wavg_rotation_atomic_triplet_add_f32", capture_atomic_add)
     batch = shape["batch"]
     accumulator = jnp.zeros((batch, case["rectangle"].centered_indices.size, 3), dtype=jnp.float32)
     _chunked(
@@ -258,14 +258,14 @@ def test_chunked_wavg_operands_are_bitwise_the_whole_bucket_operands(monkeypatch
 def test_chunked_wavg_atomic_accumulator_is_bitwise_per_image(sequential):
     """One rotation per image: each accumulator cell receives one real atomic add."""
 
-    from recovar import cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     case = _wavg_case(batch=9, translations=7, rotations=1, image_size=64, current_size=24, seed=3)
     rng = np.random.default_rng(4)
     accumulator = jnp.asarray(
         rng.standard_normal((9, case["rectangle"].centered_indices.size, 3)).astype(np.float32),
     )
-    expected = cuda_backproject.relion_wavg_rotation_atomic_triplet_add_f32(
+    expected = em_cuda_kernels.relion_wavg_rotation_atomic_triplet_add_f32(
         _whole_bucket_rectangle_terms(case, sequential=sequential),
         accumulator,
     )

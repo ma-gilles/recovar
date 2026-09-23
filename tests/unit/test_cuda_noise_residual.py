@@ -4,7 +4,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from recovar import cuda_noise_residual as nr
+from recovar.em.cuda import noise_residual as nr
 from recovar import cuda_backproject as cb
 from recovar.em.helpers import projection
 from recovar.em.helpers.half_spectrum import bin_shell_values_jax

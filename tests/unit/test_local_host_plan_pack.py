@@ -10,7 +10,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from recovar import cuda_backproject as cuda
+from recovar.em.cuda import kernels as em_cuda_kernels
 from recovar.em.helpers import deferred_vdam_host_pack as helper
 from recovar.em.helpers.env_flags import parse_env_binary_flag
 from recovar.em.local import local_em_engine as engine
@@ -145,6 +145,22 @@ def test_disabled_packing_statement_order_matches_frozen_parent():
                 return ast.Subscript(value=array, slice=ast.Slice(upper=n_rows), ctx=ast.Load())
             return self.generic_visit(node)
 
+        def visit_Name(self, node):
+            # The relax split (P1) moved the EM FFI wrappers from recovar.cuda_backproject to
+            # recovar.em.cuda.kernels. Compare the parent's module object and import.
+            if node.id == "em_cuda_kernels":
+                return ast.copy_location(ast.Name(id="cuda_backproject", ctx=node.ctx), node)
+            return node
+
+        def visit_ImportFrom(self, node):
+            if node.module == "recovar.em.cuda" and [(a.name, a.asname) for a in node.names] == [
+                ("kernels", "em_cuda_kernels")
+            ]:
+                return ast.copy_location(
+                    ast.ImportFrom(module="recovar", names=[ast.alias(name="cuda_backproject")], level=0), node
+                )
+            return node
+
         def visit_If(self, node):
             if ast.unparse(node.test) == "host_plan_pack_enabled":
                 return [self.visit(n) for n in node.orelse]
@@ -223,7 +239,7 @@ def _execute(
         returned.append(result)
         return result
 
-    monkeypatch.setattr(cuda, "relion_vdam_mstep_denominator_f32", denominator)
+    monkeypatch.setattr(em_cuda_kernels, "relion_vdam_mstep_denominator_f32", denominator)
     # The packed rotation gather owns the M-step rotation call, so the stand-in has to
     # replace the engine's module attribute, not only the name in the exec environment.
     from recovar.em.local import local_bucket_stages

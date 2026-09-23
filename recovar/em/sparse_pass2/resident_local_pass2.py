@@ -390,6 +390,7 @@ def compute_local_search_resident(
     """
 
     from recovar import cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     overall_t0 = time.time()
     image_shape = experiment_dataset.image_shape
@@ -826,7 +827,7 @@ def compute_local_search_resident(
             image_tables=image_tables,
             Ft_y_total=Ft_y_total,
             Ft_ctf_total=Ft_ctf_total,
-            cuda_backproject=cuda_backproject,
+            cuda_backproject=em_cuda_kernels,
             significant_counts=significant_counts,
         )
     loop_s = time.time() - loop_t0

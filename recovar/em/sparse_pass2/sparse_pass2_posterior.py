@@ -68,9 +68,9 @@ class FusedPass2Posterior(NamedTuple):
 def cuda_logsumexp_pass2_bucket_score_only(scores):
     """CUDA counterpart of :func:`_logsumexp_pass2_bucket_score_only`."""
 
-    from recovar import cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
-    return cuda_backproject.sparse_pass2_log_z_f64(jnp.asarray(scores, dtype=jnp.float32))
+    return em_cuda_kernels.sparse_pass2_log_z_f64(jnp.asarray(scores, dtype=jnp.float32))
 
 
 def cuda_fused_pass2_posterior(
@@ -90,7 +90,7 @@ def cuda_fused_pass2_posterior(
     exactly as in :func:`_relion_f32_fine_posterior`.
     """
 
-    from recovar import cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     scores = jnp.asarray(scores, dtype=jnp.float32)
     log_z = jnp.asarray(log_z, dtype=jnp.float64)
@@ -100,7 +100,7 @@ def cuda_fused_pass2_posterior(
     else:
         external = jnp.asarray(normalization_sum_weight, dtype=jnp.float32)
         use_external = True
-    outputs = cuda_backproject.sparse_pass2_posterior_f32(
+    outputs = em_cuda_kernels.sparse_pass2_posterior_f32(
         scores,
         log_z,
         external,
@@ -360,6 +360,7 @@ def _relion_f32_fine_posterior(
     use_native_cuda = False
     if jax.default_backend() == "gpu":
         from recovar import cuda_backproject
+        from recovar.em.cuda import kernels as em_cuda_kernels
 
         use_native_cuda = cuda_backproject.custom_cuda_requested()
     if use_native_cuda:
@@ -371,23 +372,23 @@ def _relion_f32_fine_posterior(
         # on Hopper, so the CUDA primitive pins that policy explicitly.
         finite_scores = jnp.where(finite, flat_scores, -jnp.inf)
         batched_primitives = (
-            cuda_backproject.relion_batched_posterior_primitives_requested()
+            em_cuda_kernels.relion_batched_posterior_primitives_requested()
         )
         if batched_primitives:
-            raw_weights = cuda_backproject.relion_exponentiate_batched_f32(
+            raw_weights = em_cuda_kernels.relion_exponentiate_batched_f32(
                 finite_scores,
                 exponent_add,
             )
             sorted_weights, cumulative = (
-                cuda_backproject.relion_cub_sort_scan_batched_f32(raw_weights)
+                em_cuda_kernels.relion_cub_sort_scan_batched_f32(raw_weights)
             )
         else:
-            raw_weights = jax.vmap(cuda_backproject.relion_exponentiate_f32)(
+            raw_weights = jax.vmap(em_cuda_kernels.relion_exponentiate_f32)(
                 finite_scores,
                 exponent_add,
             )
             sorted_weights, cumulative = jax.vmap(
-                cuda_backproject.relion_cub_sort_scan_f32,
+                em_cuda_kernels.relion_cub_sort_scan_f32,
             )(raw_weights)
     else:
         shifted = jnp.where(
@@ -434,12 +435,12 @@ def _relion_f32_fine_posterior(
     safe_sum_weight = jnp.where(has_mass, sum_weight, jnp.float32(1.0))
     if use_native_cuda:
         if batched_primitives:
-            normalized_weights = cuda_backproject.relion_divide_batched_f32(
+            normalized_weights = em_cuda_kernels.relion_divide_batched_f32(
                 raw_weights,
                 safe_sum_weight,
             )
         else:
-            normalized_weights = jax.vmap(cuda_backproject.relion_divide_f32)(
+            normalized_weights = jax.vmap(em_cuda_kernels.relion_divide_f32)(
                 raw_weights,
                 safe_sum_weight,
             )

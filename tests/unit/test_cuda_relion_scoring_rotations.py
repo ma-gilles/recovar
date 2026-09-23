@@ -96,7 +96,7 @@ def _f32_from_bits(bits, shape):
 def test_relion_scoring_rotations_match_frozen_device_replay_bitwise(monkeypatch, custom_cuda_lib, gpu_device):
     """All 36 scorer floats equal transpose(RELION inverse-projector dump)."""
 
-    import recovar.cuda_backproject as cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
     monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
@@ -105,7 +105,7 @@ def test_relion_scoring_rotations_match_frozen_device_replay_bitwise(monkeypatch
     relion_inverse = _f32_from_bits(_RELION_INVERSE_PROJECTOR_BITS, (4, 3, 3))
 
     with jax.default_device(gpu_device):
-        actual = cuda_backproject.relion_make_scoring_rotations_f32(jnp.asarray(eulers), jnp.asarray(right_matrix))
+        actual = em_cuda_kernels.relion_make_scoring_rotations_f32(jnp.asarray(eulers), jnp.asarray(right_matrix))
 
     np.testing.assert_array_equal(
         np.asarray(actual).view(np.uint32),
@@ -115,12 +115,12 @@ def test_relion_scoring_rotations_match_frozen_device_replay_bitwise(monkeypatch
 
 @pytest.mark.gpu
 def test_relion_scoring_rotations_support_empty_batch(monkeypatch, custom_cuda_lib, gpu_device):
-    import recovar.cuda_backproject as cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
     monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
     with jax.default_device(gpu_device):
-        actual = cuda_backproject.relion_make_scoring_rotations_f32(
+        actual = em_cuda_kernels.relion_make_scoring_rotations_f32(
             jnp.empty((0, 3), dtype=jnp.float32),
             jnp.eye(3, dtype=jnp.float32),
         )
@@ -139,18 +139,19 @@ def test_relion_scoring_rotations_support_empty_batch(monkeypatch, custom_cuda_l
     ],
 )
 def test_relion_scoring_rotations_reject_invalid_inputs(eulers, right_matrix, error_type, error):
-    import recovar.cuda_backproject as cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     with pytest.raises(error_type, match=error):
-        cuda_backproject.relion_make_scoring_rotations_f32.__wrapped__(jnp.asarray(eulers), jnp.asarray(right_matrix))
+        em_cuda_kernels.relion_make_scoring_rotations_f32.__wrapped__(jnp.asarray(eulers), jnp.asarray(right_matrix))
 
 
 def test_relion_scoring_rotations_fails_closed_without_gpu(monkeypatch):
     import recovar.cuda_backproject as cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     monkeypatch.setattr(cuda_backproject.jax, "default_backend", lambda: "cpu")
     with pytest.raises(RuntimeError, match="requires a JAX GPU backend"):
-        cuda_backproject.relion_make_scoring_rotations_f32.__wrapped__(
+        em_cuda_kernels.relion_make_scoring_rotations_f32.__wrapped__(
             jnp.zeros((1, 3), dtype=jnp.float32),
             jnp.eye(3, dtype=jnp.float32),
         )
@@ -158,11 +159,12 @@ def test_relion_scoring_rotations_fails_closed_without_gpu(monkeypatch):
 
 def test_relion_scoring_rotations_fails_closed_when_custom_cuda_disabled(monkeypatch):
     import recovar.cuda_backproject as cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     monkeypatch.setattr(cuda_backproject.jax, "default_backend", lambda: "gpu")
     monkeypatch.setenv("RECOVAR_DISABLE_CUDA", "1")
     with pytest.raises(RuntimeError, match="custom CUDA is disabled"):
-        cuda_backproject.relion_make_scoring_rotations_f32.__wrapped__(
+        em_cuda_kernels.relion_make_scoring_rotations_f32.__wrapped__(
             jnp.zeros((1, 3), dtype=jnp.float32),
             jnp.eye(3, dtype=jnp.float32),
         )
@@ -170,6 +172,7 @@ def test_relion_scoring_rotations_fails_closed_when_custom_cuda_disabled(monkeyp
 
 def test_relion_scoring_rotations_ffi_has_no_aliases(monkeypatch):
     import recovar.cuda_backproject as cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     call_options = {}
 
@@ -183,9 +186,11 @@ def test_relion_scoring_rotations_ffi_has_no_aliases(monkeypatch):
 
     monkeypatch.setattr(cuda_backproject.jax, "default_backend", lambda: "gpu")
     monkeypatch.setattr(cuda_backproject, "custom_cuda_requested", lambda: True)
+    monkeypatch.setattr(em_cuda_kernels, "custom_cuda_requested", lambda: True)
     monkeypatch.setattr(cuda_backproject, "_ensure_ffi", lambda: None)
+    monkeypatch.setattr(em_cuda_kernels, "_ensure_ffi", lambda: None)
     monkeypatch.setattr(cuda_backproject.jax.ffi, "ffi_call", fake_ffi_call)
-    result = cuda_backproject.relion_make_scoring_rotations_f32.__wrapped__(
+    result = em_cuda_kernels.relion_make_scoring_rotations_f32.__wrapped__(
         jnp.zeros((2, 3), dtype=jnp.float32),
         jnp.eye(3, dtype=jnp.float32),
         do_right=False,
@@ -197,6 +202,7 @@ def test_relion_scoring_rotations_ffi_has_no_aliases(monkeypatch):
 
 def test_relion_scoring_rotations_f64_ffi_dtype_and_target(monkeypatch):
     import recovar.cuda_backproject as cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     call = {}
 
@@ -211,9 +217,11 @@ def test_relion_scoring_rotations_f64_ffi_dtype_and_target(monkeypatch):
 
     monkeypatch.setattr(cuda_backproject.jax, "default_backend", lambda: "gpu")
     monkeypatch.setattr(cuda_backproject, "custom_cuda_requested", lambda: True)
+    monkeypatch.setattr(em_cuda_kernels, "custom_cuda_requested", lambda: True)
     monkeypatch.setattr(cuda_backproject, "_ensure_ffi", lambda: None)
+    monkeypatch.setattr(em_cuda_kernels, "_ensure_ffi", lambda: None)
     monkeypatch.setattr(cuda_backproject.jax.ffi, "ffi_call", fake_ffi_call)
-    result = cuda_backproject.relion_make_scoring_rotations_f64.__wrapped__(
+    result = em_cuda_kernels.relion_make_scoring_rotations_f64.__wrapped__(
         jnp.zeros((2, 3), dtype=jnp.float64),
         jnp.eye(3, dtype=jnp.float64),
         do_right=False,
@@ -234,9 +242,9 @@ def test_relion_scoring_rotations_f64_ffi_dtype_and_target(monkeypatch):
     ],
 )
 def test_relion_scoring_rotations_f64_rejects_narrow_inputs(monkeypatch, eulers, right_matrix, error):
-    import recovar.cuda_backproject as cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     with pytest.raises(TypeError, match=error):
-        cuda_backproject.relion_make_scoring_rotations_f64.__wrapped__(
+        em_cuda_kernels.relion_make_scoring_rotations_f64.__wrapped__(
             jnp.asarray(eulers), jnp.asarray(right_matrix)
         )

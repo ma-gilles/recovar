@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 from recovar import cuda_backproject
+from recovar.em.cuda import kernels as em_cuda_kernels
 from recovar.em.helpers.bpref_transaction import BprefTransactionQueue
 from recovar.em.helpers.env_flags import parse_env_binary_flag
 from recovar.em.local import local_em_engine
@@ -18,7 +19,9 @@ def test_old_library_needs_new_symbol_only_for_requested_packing(monkeypatch):
 
     assert all(symbol != "BprefParticlePack" for _, symbol in cuda_backproject._FFI_REGISTRATIONS)
     monkeypatch.setattr(cuda_backproject, "_ensure_ffi", lambda: None)
+    monkeypatch.setattr(em_cuda_kernels, "_ensure_ffi", lambda: None)
     monkeypatch.setattr(cuda_backproject, "_get_lib", lambda: SimpleNamespace())
+    monkeypatch.setattr(em_cuda_kernels, "_get_lib", lambda: SimpleNamespace())
     monkeypatch.setattr(cuda_backproject, "_optional_ffi_registered", set())
     with pytest.raises(RuntimeError, match="explicit build with BprefParticlePack"):
         cuda_backproject._ensure_optional_ffi(cuda_backproject._TARGET_BPREF_PARTICLE_PACK)
@@ -70,7 +73,7 @@ def numpy_expected(columns, capacity):
 )
 def test_pack_shape_contract(counts, capacity):
     columns = columns_for(counts)
-    shapes = cuda_backproject._bpref_particle_pack_shapes(columns, capacity)
+    shapes = em_cuda_kernels._bpref_particle_pack_shapes(columns, capacity)
     expected = numpy_expected(columns, capacity)
     assert [(s.shape, s.dtype) for s in shapes] == [(a.shape, a.dtype) for a in expected]
 
@@ -78,7 +81,7 @@ def test_pack_shape_contract(counts, capacity):
 @pytest.mark.parametrize("capacity", [0, -1, 257, True, 1.0, "2", None])
 def test_bad_capacity_rejected(capacity):
     with pytest.raises(ValueError, match="capacity"):
-        cuda_backproject._bpref_particle_pack_shapes(columns_for((1,)), capacity)
+        em_cuda_kernels._bpref_particle_pack_shapes(columns_for((1,)), capacity)
 
 
 @pytest.mark.parametrize(
@@ -106,7 +109,7 @@ def test_bad_input_contract_rejected(case):
     elif case == "zero":
         columns[0][0] = np.zeros((0, 7), np.complex64)
     with pytest.raises((TypeError, ValueError)):
-        cuda_backproject._bpref_particle_pack_shapes(tuple(map(tuple, columns)), capacity)
+        em_cuda_kernels._bpref_particle_pack_shapes(tuple(map(tuple, columns)), capacity)
 
 
 @pytest.mark.parametrize(
@@ -150,7 +153,7 @@ def test_cuda_pack_preserves_every_bit_and_bucket_worker_ids(counts, capacity):
     columns = columns_for(counts)
     originals = tuple(tuple(x.tobytes() for x in column) for column in columns)
     device = jax.tree.map(jnp.asarray, columns)
-    result = cuda_backproject.pack_bpref_particle_fields(device, capacity)
+    result = em_cuda_kernels.pack_bpref_particle_fields(device, capacity)
     control = _pad_particle_fields(device, capacity, 5)
     expected = numpy_expected(columns, capacity)
     for actual, wanted in zip(result, expected, strict=True):
@@ -172,7 +175,7 @@ def test_raw_cuda_pack_rejects_malformed_buffers(case):
     assert jax.default_backend() == "gpu"
     cuda_backproject._ensure_optional_ffi(cuda_backproject._TARGET_BPREF_PARTICLE_PACK)
     columns = columns_for((2, 3))
-    outputs = list(cuda_backproject._bpref_particle_pack_shapes(columns, 8))
+    outputs = list(em_cuda_kernels._bpref_particle_pack_shapes(columns, 8))
     args = [jnp.asarray(x) for column in columns for x in column]
     if case == "input_count":
         args.pop()

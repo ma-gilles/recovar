@@ -115,7 +115,7 @@ def test_certificate_topology_validator_recomputes_fp64_gammas() -> None:
 
 
 def test_selected_source16_wrapper_forwards_only_the_owned_lookup(monkeypatch) -> None:
-    from recovar import cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     topology = _topology()
     operands = _selected_block_operands()
@@ -127,7 +127,7 @@ def test_selected_source16_wrapper_forwards_only_the_owned_lookup(monkeypatch) -
         return marker
 
     monkeypatch.setattr(
-        cuda_backproject,
+        em_cuda_kernels,
         "relion_coarse_diff2_rotation_blocks_f32",
         fake_selected_blocks,
     )
@@ -162,7 +162,7 @@ def test_selected_source16_wrapper_forwards_only_the_owned_lookup(monkeypatch) -
 def test_selected_source16_wrapper_rejects_tampering_before_dispatch(
     monkeypatch,
 ) -> None:
-    from recovar import cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     topology = _topology()
     changed = topology.full_to_compact.copy()
@@ -173,7 +173,7 @@ def test_selected_source16_wrapper_rejects_tampering_before_dispatch(
         raise AssertionError("invalid topology reached CUDA dispatch")
 
     monkeypatch.setattr(
-        cuda_backproject,
+        em_cuda_kernels,
         "relion_coarse_diff2_rotation_blocks_f32",
         unexpected_dispatch,
     )
@@ -187,13 +187,13 @@ def test_selected_source16_wrapper_rejects_tampering_before_dispatch(
 def test_selected_source16_wrapper_rejects_dtype_mismatch_before_dispatch(
     monkeypatch,
 ) -> None:
-    from recovar import cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     def unexpected_dispatch(*_args):
         raise AssertionError("invalid operands reached CUDA dispatch")
 
     monkeypatch.setattr(
-        cuda_backproject,
+        em_cuda_kernels,
         "relion_coarse_diff2_rotation_blocks_f32",
         unexpected_dispatch,
     )
@@ -220,13 +220,13 @@ def test_selected_source16_wrapper_rejects_shape_or_count_mismatch(
     monkeypatch,
     operands,
 ) -> None:
-    from recovar import cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     def unexpected_dispatch(*_args):
         raise AssertionError("invalid operands reached CUDA dispatch")
 
     monkeypatch.setattr(
-        cuda_backproject,
+        em_cuda_kernels,
         "relion_coarse_diff2_rotation_blocks_f32",
         unexpected_dispatch,
     )

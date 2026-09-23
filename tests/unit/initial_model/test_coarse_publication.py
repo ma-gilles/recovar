@@ -133,7 +133,7 @@ def packed_one_winner(monkeypatch, one_winner):
     """Mock only CUDA arithmetic; exercise the real packing/publication boundary."""
     import jax
 
-    from recovar import cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     def transaction(values, raw_max, actual, **policy):
         reference = jax.device_get(pub._posterior_statistics(values, raw_max, None, tie_score_ulps=0, **policy))
@@ -146,7 +146,7 @@ def packed_one_winner(monkeypatch, one_winner):
         support[: len(positions)] = positions
         return statistics, indices, support, np.asarray(len(positions), np.int32)
 
-    monkeypatch.setattr(cuda_backproject, "relion_coarse_posterior_transaction_f32", transaction)
+    monkeypatch.setattr(em_cuda_kernels, "relion_coarse_posterior_transaction_f32", transaction)
     return transaction
 
 
@@ -174,7 +174,7 @@ def test_packed_transfer_uses_bounded_capacity(monkeypatch, count, capacity):
 
 @pytest.mark.parametrize("corruption", ["total", "row_count", "padding", "unordered", "duplicate", "inactive_slot"])
 def test_corrupt_packed_support_fails_closed(monkeypatch, packed_one_winner, corruption):
-    from recovar import cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     def corrupt(*args, **kwargs):
         stats, indices, support, count = packed_one_winner(*args, **kwargs)
@@ -193,7 +193,7 @@ def test_corrupt_packed_support_fails_closed(monkeypatch, packed_one_winner, cor
             indices[0, 0] = args[0].shape[1]
         return stats, indices, support, count
 
-    monkeypatch.setattr(cuda_backproject, "relion_coarse_posterior_transaction_f32", corrupt)
+    monkeypatch.setattr(em_cuda_kernels, "relion_coarse_posterior_transaction_f32", corrupt)
     with pytest.raises(ValueError, match="Packed coarse"):
         publish(mixed_groups(), posterior_backend="cuda")
 
@@ -244,6 +244,7 @@ def test_actual_significance_engine_publishes_identical_complete_state(
     from pathlib import Path
 
     from recovar import cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
     from recovar.em.helpers import oversampling, projection
     from recovar.em.scoring import coarse_partition, significance
     from recovar.em.scoring.coarse_partition import CoarseRowGroup, CoarseRowPlan
@@ -290,7 +291,7 @@ def test_actual_significance_engine_publishes_identical_complete_state(
         lambda processed, **kwargs: jnp.zeros(processed.shape[0], jnp.float32),
     )
     monkeypatch.setattr(
-        cuda_backproject,
+        em_cuda_kernels,
         "relion_translate_score_f32",
         lambda images, angles, pixels, shape: jnp.repeat(images[:, None, :], len(angles), axis=1).reshape(
             len(images) * len(angles), -1

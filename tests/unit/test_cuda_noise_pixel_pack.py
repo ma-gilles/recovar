@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 
 from recovar import cuda_backproject as cuda
+from recovar.em.cuda import kernels as em_cuda_kernels
 from recovar.em.dense.deferred_noise_pack import _pad_noise_pixels, pack_noise_pixel_capacity
 from recovar.em.helpers.env_flags import parse_env_binary_flag
 from recovar.em.local import local_em_engine as engine
@@ -34,7 +35,7 @@ def operands(batch=11, wide=False):
 @pytest.mark.parametrize("wide", [False, True])
 def test_shape_contract(wide):
     args = operands(wide=wide)
-    out = cuda._noise_pixel_pack_shapes(*args, target_batch=42)
+    out = em_cuda_kernels._noise_pixel_pack_shapes(*args, target_batch=42)
     assert [x.shape for x in out] == [(42, 3, 7), (42, 3, 5), (42, 3, 5), (42,)]
     assert [x.dtype for x in out] == [x.dtype for x in args[:4]]
 
@@ -81,7 +82,7 @@ def test_bad_abi(case):
     elif case == "float_target":
         target = 42.0
     with pytest.raises((TypeError, ValueError)):
-        cuda._noise_pixel_pack_shapes(*args, target_batch=target)
+        em_cuda_kernels._noise_pixel_pack_shapes(*args, target_batch=target)
 
 
 @pytest.mark.parametrize("no_spare", [False, True])
@@ -91,7 +92,7 @@ def test_noop_returns_original_objects_before_cuda(no_spare, monkeypatch):
     def forbidden(*args, **kwargs):
         raise AssertionError("No-op entered CUDA")
 
-    monkeypatch.setattr(cuda, "pad_noise_pixels_cuda", forbidden)
+    monkeypatch.setattr(em_cuda_kernels, "pad_noise_pixels_cuda", forbidden)
     result = pack_noise_pixel_capacity(
         *args[:4],
         target_batch=42 if no_spare else 11,
@@ -129,7 +130,9 @@ def test_requires_pixel_capacity_before_dataset_access(monkeypatch):
 def test_optional_symbol(monkeypatch):
     assert all(symbol != "NoisePixelPack" for _, symbol in cuda._FFI_REGISTRATIONS)
     monkeypatch.setattr(cuda, "_ensure_ffi", lambda: None)
+    monkeypatch.setattr(em_cuda_kernels, "_ensure_ffi", lambda: None)
     monkeypatch.setattr(cuda, "_get_lib", lambda: SimpleNamespace())
+    monkeypatch.setattr(em_cuda_kernels, "_get_lib", lambda: SimpleNamespace())
     monkeypatch.setattr(cuda, "_optional_ffi_registered", set())
     with pytest.raises(RuntimeError, match="explicit build with NoisePixelPack"):
         cuda._ensure_optional_ffi(cuda._TARGET_NOISE_PIXEL_PACK)
@@ -146,7 +149,7 @@ def test_public_helper_forwards_original_buffers_and_dynamic_spare(monkeypatch):
         assert int(values[4]) == 3000
         return sentinel
 
-    monkeypatch.setattr(cuda, "pad_noise_pixels_cuda", record)
+    monkeypatch.setattr(em_cuda_kernels, "pad_noise_pixels_cuda", record)
     assert (
         pack_noise_pixel_capacity(*args[:4], target_batch=42, n_images=3000, norm_capacity=3072, cuda_packing=True)
         is sentinel
@@ -163,7 +166,7 @@ def test_gpu_all_prefix_tail_and_input_bytes(batch, target, wide):
     arrays = operands(batch, wide)
     inputs = tuple(jnp.asarray(x) for x in arrays)
     reference = _pad_noise_pixels(*inputs, target_batch=target)
-    actual = cuda.pad_noise_pixels_cuda(*inputs, target_batch=target)
+    actual = em_cuda_kernels.pad_noise_pixels_cuda(*inputs, target_batch=target)
     jax.block_until_ready((reference, actual))
     for a, b in zip(actual, reference, strict=True):
         assert a.shape == b.shape and a.dtype == b.dtype
@@ -180,7 +183,7 @@ def test_gpu_all_prefix_tail_and_input_bytes(batch, target, wide):
 def test_raw_ffi_rejects_before_copy(case):
     cuda._ensure_optional_ffi(cuda._TARGET_NOISE_PIXEL_PACK)
     args = [jnp.asarray(a) for a in operands()]
-    outputs = list(cuda._noise_pixel_pack_shapes(*args, target_batch=42))
+    outputs = list(em_cuda_kernels._noise_pixel_pack_shapes(*args, target_batch=42))
     target = 42
     if case == "rank":
         args[0] = args[0].reshape(-1)

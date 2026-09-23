@@ -22,7 +22,7 @@ changes neither the packed storage layout nor the translation convention.
 The current runtime-radius path uses
 [`prepare_relion_projector_capacity`](../../recovar/em/helpers/projection.py)
 to preserve the logical slab and its ghost planes in larger storage, then
-[`project_relion_half_capacity`](../../recovar/cuda_backproject.py) projects it.
+[`project_relion_half_capacity`](../../recovar/em/cuda/kernels.py) projects it.
 The existing compact gather labels full-box row zero as positive Nyquist;
 smaller crops omit that row. The eight-case support regression in
 [`test_relion_projector_capacity.py`](../../tests/unit/test_relion_projector_capacity.py)

@@ -621,7 +621,7 @@ soft spherical mask, optionally applies a supplied mask, optionally applies
 gridding correction, and returns the Fourier map.
 
 For RELION-style tau2 updates from half-map weights, RECOVAR implements
-[`regularization.compute_relion_tau2_from_weights`](../../recovar/reconstruction/regularization.py):
+[`regularization_relion.compute_relion_tau2_from_weights`](../../recovar/em/reconstruction/regularization_relion.py):
 
 ```text
 SSNR[s] = FSC[s] / (1 - FSC[s]) * tau2_fudge
@@ -629,7 +629,7 @@ sigma2[s] = 1 / (padding_factor^3 * avg_weight[s])
 tau2[s] = SSNR[s] * sigma2[s]
 ```
 
-[`regularization.compute_data_vs_prior`](../../recovar/reconstruction/regularization.py)
+[`regularization_relion.compute_data_vs_prior`](../../recovar/em/reconstruction/regularization_relion.py)
 computes RELION's resolution-control ratio:
 
 ```text

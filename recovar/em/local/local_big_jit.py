@@ -365,7 +365,7 @@ def _relion_wavg_direct_triplet_shells(
 ):
     """Return RELION Wavg shells and optional per-image cutoff triplets."""
 
-    from recovar import cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     raw_rectangle = _relion_cuda_translate_wavg_norm_images(
         processed_score_half,
@@ -386,7 +386,7 @@ def _relion_wavg_direct_triplet_shells(
         from recovar.em.sparse_pass2.sparse_pass2_wavg import _relion_wavg_rectangle_image_power
 
         image_power = _relion_wavg_rectangle_image_power(raw_rectangle, reconstruction_probs)
-        atomic = cuda_backproject.relion_wavg_native_prefix_f32(
+        atomic = em_cuda_kernels.relion_wavg_native_prefix_f32(
             raw_rectangle,
             image_power,
             proj_for_noise,
@@ -444,12 +444,12 @@ def _relion_wavg_direct_triplet_shells(
                 dtype=jnp.float32,
             )
             if logical_rectangle_pixel_count is None:
-                atomic = cuda_backproject.relion_wavg_rotation_atomic_triplet_add_f32(
+                atomic = em_cuda_kernels.relion_wavg_rotation_atomic_triplet_add_f32(
                     rectangle_terms,
                     atomic_accumulator,
                 )
             else:
-                atomic = cuda_backproject.relion_wavg_rotation_atomic_runtime_triplet_add_f32(
+                atomic = em_cuda_kernels.relion_wavg_rotation_atomic_runtime_triplet_add_f32(
                     rectangle_terms,
                     atomic_accumulator,
                     jnp.asarray(logical_rectangle_pixel_count, dtype=jnp.int32),
@@ -627,7 +627,7 @@ def _compute_native_noise_residual(
     compute_scale,
 ):
     """Finish compact CUDA statistics with the existing JAX shell/cast policy."""
-    from recovar.cuda_noise_residual import residual_statistics
+    from recovar.em.cuda.noise_residual import residual_statistics
 
     mask = (
         jnp.ones(projection.shape[-1], dtype=bool)
@@ -2329,6 +2329,7 @@ def run_local_bucket_big_jit(
         relion_score_translation_angles = relion_score_translation_angles.astype(precision_policy.score_real_dtype)
     if use_relion_cuda_preprocess:
         from recovar import cuda_backproject
+        from recovar.em.cuda import kernels as em_cuda_kernels
 
         normalized_images, masked_images = cuda_backproject.relion_preprocess_real_f32(
             jnp.asarray(batch, dtype=jnp.float32),
@@ -2380,16 +2381,16 @@ def run_local_bucket_big_jit(
 
     def _translate_score_weighted_half(weighted_half, pixel_indices):
         if relion_score_translation_angles is not None:
-            from recovar import cuda_backproject
+            from recovar.em.cuda import kernels as em_cuda_kernels
 
             if use_float64_scoring:
-                return cuda_backproject.relion_translate_score_f64(
+                return em_cuda_kernels.relion_translate_score_f64(
                     jnp.asarray(weighted_half, dtype=jnp.complex128),
                     relion_score_translation_angles,
                     jnp.asarray(pixel_indices, dtype=jnp.int32),
                     image_shape,
                 )
-            return cuda_backproject.relion_translate_score_f32(
+            return em_cuda_kernels.relion_translate_score_f32(
                 jnp.asarray(weighted_half, dtype=jnp.complex64),
                 relion_score_translation_angles,
                 jnp.asarray(pixel_indices, dtype=jnp.int32),
@@ -2773,6 +2774,7 @@ def run_local_bucket_big_jit(
     direct_scores = None
     if relion_exact_fine_diff2:
         from recovar import cuda_backproject
+        from recovar.em.cuda import kernels as em_cuda_kernels
 
         pixel_correction = _relion_cuda_pixel_correction_from_rfloat_ctf(
             scale_corrections[:, None],
@@ -2811,7 +2813,7 @@ def run_local_bucket_big_jit(
                 )
                 if stable_fourier_window_shapes:
                     direct_diff2_jobs = (
-                        cuda_backproject.relion_fine_diff2_fused_translate_runtime_jobs_f32(
+                        em_cuda_kernels.relion_fine_diff2_fused_translate_runtime_jobs_f32(
                             *fine_job_args,
                             runtime_logical_current_size,
                             direct_highres,
@@ -2819,7 +2821,7 @@ def run_local_bucket_big_jit(
                     )
                 else:
                     direct_diff2_jobs = (
-                        cuda_backproject.relion_fine_diff2_fused_translate_jobs_f32(
+                        em_cuda_kernels.relion_fine_diff2_fused_translate_jobs_f32(
                             *fine_job_args,
                             direct_highres,
                             current_size=norm_current_size,
@@ -2881,7 +2883,7 @@ def run_local_bucket_big_jit(
                 )
                 if stable_fourier_window_shapes:
                     direct_diff2_flat = (
-                        cuda_backproject.relion_fine_diff2_fused_translate_runtime_flat_rows_f32(
+                        em_cuda_kernels.relion_fine_diff2_fused_translate_runtime_flat_rows_f32(
                             *direct_flat_args,
                             runtime_logical_current_size,
                             direct_highres,
@@ -2889,7 +2891,7 @@ def run_local_bucket_big_jit(
                     )
                 else:
                     direct_diff2_flat = (
-                        cuda_backproject.relion_fine_diff2_fused_translate_flat_rows_f32(
+                        em_cuda_kernels.relion_fine_diff2_fused_translate_flat_rows_f32(
                             *direct_flat_args,
                             direct_highres,
                             current_size=norm_current_size,
@@ -2914,14 +2916,14 @@ def run_local_bucket_big_jit(
             )
             if stable_fourier_window_shapes:
                 direct_diff2 = (
-                    cuda_backproject.relion_fine_diff2_fused_translate_runtime_rectangular_f32(
+                    em_cuda_kernels.relion_fine_diff2_fused_translate_runtime_rectangular_f32(
                         *direct_rectangular_args,
                         runtime_logical_current_size,
                         direct_highres,
                     )
                 )
             else:
-                direct_diff2 = cuda_backproject.relion_fine_diff2_fused_translate_rectangular_f32(
+                direct_diff2 = em_cuda_kernels.relion_fine_diff2_fused_translate_rectangular_f32(
                     *direct_rectangular_args,
                     direct_highres,
                     current_size=norm_current_size,
@@ -3162,6 +3164,7 @@ def run_local_bucket_big_jit(
             processed_score_half_for_return = jnp.zeros((1, 1), dtype=processed_score_half.dtype)
         if return_deferred_source_vdam_operands:
             from recovar import cuda_backproject
+            from recovar.em.cuda import kernels as em_cuda_kernels
 
             if not use_packed_local_projection:
                 raise ValueError(
@@ -3206,7 +3209,7 @@ def run_local_bucket_big_jit(
                 )
             else:
                 deferred_source_vdam_ctf_probs = (
-                    cuda_backproject.relion_vdam_mstep_denominator_f32(
+                    em_cuda_kernels.relion_vdam_mstep_denominator_f32(
                         deferred_source_vdam_ctf,
                         deferred_source_vdam_minvsigma2,
                         jnp.asarray(reconstruction_probs, dtype=jnp.float32),
@@ -3347,8 +3350,9 @@ def run_local_bucket_big_jit(
         raise ValueError("source VDAM operands require the guarded RELION VDAM M-step route")
     if source_ordered_vdam_mstep:
         from recovar import cuda_backproject
+        from recovar.em.cuda import kernels as em_cuda_kernels
         if source_ordered_vdam_scattered:
-            Ft_y, Ft_ctf, ctf_probs = cuda_backproject.relion_vdam_mstep_fused_x_half(
+            Ft_y, Ft_ctf, ctf_probs = em_cuda_kernels.relion_vdam_mstep_fused_x_half(
                 Ft_y,
                 Ft_ctf,
                 jnp.asarray(
@@ -3371,13 +3375,13 @@ def run_local_bucket_big_jit(
             # numerator in physical RELION launch order.  Only its denominator
             # is consumed inside this JIT for the noise statistics, so avoid a
             # duplicate image translation/reference subtraction pass here.
-            ctf_probs = cuda_backproject.relion_vdam_mstep_denominator_f32(
+            ctf_probs = em_cuda_kernels.relion_vdam_mstep_denominator_f32(
                 bpref_ctf,
                 jnp.asarray(bpref_minvsigma2, dtype=jnp.float32),
                 jnp.asarray(reconstruction_probs, dtype=jnp.float32),
             )
         else:
-            summed, ctf_probs = cuda_backproject.relion_vdam_mstep_sums_f32(
+            summed, ctf_probs = em_cuda_kernels.relion_vdam_mstep_sums_f32(
                 jnp.asarray(
                     processed_recon_half[:, bpref_pixel_indices],
                     dtype=jnp.complex64,

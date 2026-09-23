@@ -157,7 +157,8 @@ def test_project_cuda_vs_jax(order, half_vol, half_img, N, gpu_device):
 def test_project_indexed_matches_full_project_gather(order, half_vol, half_img, N, gpu_device):
     """Indexed CUDA project must match full CUDA project gathered at the same pixels."""
     _skip_if_no_cuda()
-    from recovar.cuda_backproject import project, project_indexed
+    from recovar.cuda_backproject import project
+    from recovar.em.cuda.kernels import project_indexed
     import recovar.core.fourier_transform_utils as ftu
 
     rng = np.random.default_rng(2026)
@@ -219,7 +220,8 @@ def test_project_indexed_matches_full_project_gather(order, half_vol, half_img, 
 def test_project_indexed_matches_full_project_gather_with_max_r(half_img, gpu_device):
     """Indexed projection must preserve the full-projection radius clipping contract."""
     _skip_if_no_cuda()
-    from recovar.cuda_backproject import project, project_indexed
+    from recovar.cuda_backproject import project
+    from recovar.em.cuda.kernels import project_indexed
 
     rng = np.random.default_rng(2027)
     N = 32

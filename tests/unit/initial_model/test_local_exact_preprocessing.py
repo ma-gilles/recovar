@@ -77,7 +77,7 @@ def test_prepare_local_exact_bucket_preserves_relion_bpref_operand_orders(
     monkeypatch,
     score_with_masked_images,
 ):
-    import recovar.cuda_backproject as cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     # This test exercises host operand assembly, not preprocessing or CUDA kernels.
     dataset = SimpleNamespace(image_shape=(8, 8))
@@ -125,7 +125,7 @@ def test_prepare_local_exact_bucket_preserves_relion_bpref_operand_orders(
         # The requested translation is exactly zero; its phase is identity.
         return images[:, None, :].reshape(-1, images.shape[1])
 
-    monkeypatch.setattr(cuda_backproject, "relion_translate_score_f32", fake_translate_score)
+    monkeypatch.setattr(em_cuda_kernels, "relion_translate_score_f32", fake_translate_score)
     captured_bpref = {}
 
     def fake_relion_translate_bpref(
@@ -145,7 +145,7 @@ def test_prepare_local_exact_bucket_preserves_relion_bpref_operand_orders(
         return (images[:, None, :] * weighted_ctf[:, None, :]).reshape(-1, images.shape[1])
 
     monkeypatch.setattr(
-        cuda_backproject,
+        em_cuda_kernels,
         "relion_translate_bpref_f32",
         fake_relion_translate_bpref,
     )

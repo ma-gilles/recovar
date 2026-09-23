@@ -137,6 +137,7 @@ def _relion_coarse_normalized_cc_rescore(
             )
     if jax.default_backend() == "gpu":
         from recovar import cuda_backproject
+        from recovar.em.cuda import kernels as em_cuda_kernels
 
         if cuda_backproject.custom_cuda_requested():
             n_pixels = int(shifted.shape[-1])
@@ -177,7 +178,7 @@ def _relion_coarse_normalized_cc_rescore(
                         -1, n_pixels
                     )
                 native_scores = (
-                    cuda_backproject.relion_coarse_normalized_cc_native_texture_pairs_f32(
+                    em_cuda_kernels.relion_coarse_normalized_cc_native_texture_pairs_f32(
                         jnp.asarray(projector_full, dtype=jnp.complex64),
                         rotations.reshape(-1, 3, 3),
                         shifted.reshape(-1, n_pixels),
@@ -197,7 +198,7 @@ def _relion_coarse_normalized_cc_rescore(
                     "preprojected normalized-CC replay requires projection candidates"
                 )
             native_shape = (1, int(shifted.size // n_pixels), n_pixels)
-            native_scores = cuda_backproject.relion_coarse_normalized_cc_pairs_f32(
+            native_scores = em_cuda_kernels.relion_coarse_normalized_cc_pairs_f32(
                 shifted.reshape(native_shape),
                 score_weight.reshape(native_shape),
                 projection.reshape(native_shape),
@@ -237,7 +238,7 @@ def _relion_coarse_diff2_rotation_blocks_from_topology_f32(
     ID fail-closed semantics.
     """
 
-    from recovar import cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
     from recovar.em.scoring.coarse_gemm_hybrid import (
         SOURCE_ROTATION_BLOCK_SIZE,
         validate_coarse_gemm_certificate_topology,
@@ -307,9 +308,9 @@ def _relion_coarse_diff2_rotation_blocks_from_topology_f32(
         )
 
     scorer = (
-        cuda_backproject.relion_coarse_diff2_rotation_blocks_f32
+        em_cuda_kernels.relion_coarse_diff2_rotation_blocks_f32
         if logical_full_pixel_count is None
-        else cuda_backproject.relion_coarse_diff2_rotation_blocks_runtime_f32
+        else em_cuda_kernels.relion_coarse_diff2_rotation_blocks_runtime_f32
     )
     operands = (
         reference,

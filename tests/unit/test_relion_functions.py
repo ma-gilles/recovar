@@ -8,7 +8,9 @@ import jax.numpy as jnp
 from recovar import jax_config
 from recovar import core
 from recovar.reconstruction import regularization
+from recovar.em.reconstruction import regularization_relion
 from recovar.reconstruction import relion_functions as rf
+from recovar.em.reconstruction import relion_functions_relion
 
 
 def test_gridding_correct_invalid_order_raises():
@@ -129,7 +131,7 @@ def test_relion_weight_shell_stats_uses_relion_half_up_rounding(monkeypatch, lay
     padding_factor = 2
     padded_shape = tuple(dim * padding_factor for dim in volume_shape)
     if force_host:
-        monkeypatch.setattr(regularization, "_RELION_SHELL_STATS_DEVICE_REDUCTION_MAX_VOXELS", 1)
+        monkeypatch.setattr(regularization_relion, "_RELION_SHELL_STATS_DEVICE_REDUCTION_MAX_VOXELS", 1)
 
     if layout == "half":
         weight = np.zeros(ftu.volume_shape_to_half_volume_shape(padded_shape), dtype=np.float32)
@@ -138,7 +140,7 @@ def test_relion_weight_shell_stats_uses_relion_half_up_rounding(monkeypatch, lay
         weight = np.zeros(padded_shape, dtype=np.float32)
         weight[4, 4, 5] = 1.0  # centered full-grid x index 5 is Fourier coordinate +1.
 
-    stats = regularization._compute_relion_weight_shell_stats(
+    stats = regularization_relion._compute_relion_weight_shell_stats(
         jnp.asarray(weight).reshape(-1),
         volume_shape,
         padding_factor=padding_factor,
@@ -183,15 +185,15 @@ def test_projection_padding_host_path_matches_device_path(monkeypatch):
     real = rng.standard_normal(volume_shape).astype(np.float32)
     ft = ftu.get_dft3(jnp.asarray(real)).reshape(-1)
 
-    device_padded, device_shape = rf.pad_volume_for_projection(
+    device_padded, device_shape = relion_functions_relion.pad_volume_for_projection(
         ft,
         volume_shape,
         2,
         do_gridding_correction=True,
         current_size=4,
     )
-    monkeypatch.setattr(rf, "_RELION_PROJECTION_PAD_HOST_FFT_MIN_VOXELS", 1)
-    host_padded, host_shape = rf.pad_volume_for_projection(
+    monkeypatch.setattr(relion_functions_relion, "_RELION_PROJECTION_PAD_HOST_FFT_MIN_VOXELS", 1)
+    host_padded, host_shape = relion_functions_relion.pad_volume_for_projection(
         ft,
         volume_shape,
         2,
@@ -225,12 +227,12 @@ def test_pad_volume_for_projection_host_preserves_double_precision():
     ft64 = np.fft.fftshift(np.fft.fftn(np.fft.fftshift(real64)))
     ft32 = ft64.astype(np.complex64)
 
-    padded64, _ = rf._pad_volume_for_projection_host(ft64, volume_shape, 2)
-    padded32, _ = rf._pad_volume_for_projection_host(ft32, volume_shape, 2)
-    padded64_grid, _ = rf._pad_volume_for_projection_host(
+    padded64, _ = relion_functions_relion._pad_volume_for_projection_host(ft64, volume_shape, 2)
+    padded32, _ = relion_functions_relion._pad_volume_for_projection_host(ft32, volume_shape, 2)
+    padded64_grid, _ = relion_functions_relion._pad_volume_for_projection_host(
         ft64, volume_shape, 2, do_gridding_correction=True, current_size=6
     )
-    padded32_grid, _ = rf._pad_volume_for_projection_host(
+    padded32_grid, _ = relion_functions_relion._pad_volume_for_projection_host(
         ft32, volume_shape, 2, do_gridding_correction=True, current_size=6
     )
 
@@ -947,7 +949,7 @@ def test_join_halves_at_low_resolution_half_matches_full():
     ft_ctf_0_full = np.asarray(ftu.half_volume_to_full_volume(jnp.array(ft_ctf_0_half), volume_shape)).reshape(-1).real
     ft_ctf_1_full = np.asarray(ftu.half_volume_to_full_volume(jnp.array(ft_ctf_1_half), volume_shape)).reshape(-1).real
 
-    full_joined = regularization.join_halves_at_low_resolution(
+    full_joined = regularization_relion.join_halves_at_low_resolution(
         jnp.array(ft_y_0_full),
         jnp.array(ft_y_1_full),
         jnp.array(ft_ctf_0_full),
@@ -958,7 +960,7 @@ def test_join_halves_at_low_resolution_half_matches_full():
         low_resol_join_halves_angstrom=12.0,
         current_resolution_angstrom=18.0,
     )
-    half_joined = regularization.join_halves_at_low_resolution(
+    half_joined = regularization_relion.join_halves_at_low_resolution(
         jnp.array(ft_y_0_half),
         jnp.array(ft_y_1_half),
         jnp.array(ft_ctf_0_half),
@@ -990,7 +992,7 @@ def test_join_halves_at_low_resolution_uses_relion_squared_radius_boundary():
     ft_y_0[idx_boundary] = 20.0
     ft_y_1[idx_boundary] = 4.0
 
-    joined0, joined1, _, _ = regularization.join_halves_at_low_resolution(
+    joined0, joined1, _, _ = regularization_relion.join_halves_at_low_resolution(
         jnp.array(ft_y_0.reshape(-1)),
         jnp.array(ft_y_1.reshape(-1)),
         jnp.array(ft_ctf_0.reshape(-1)),
@@ -1032,7 +1034,7 @@ def test_join_halves_at_low_resolution_host_fallback_matches_join(monkeypatch):
         low_resol_join_halves_angstrom=40.0,
     )
     monkeypatch.setenv("RECOVAR_LOWRES_JOIN_HOST_FALLBACK", "never")
-    device_joined = regularization.join_halves_at_low_resolution(
+    device_joined = regularization_relion.join_halves_at_low_resolution(
         jnp.array(ft_y_0.reshape(-1)),
         jnp.array(ft_y_1.reshape(-1)),
         jnp.array(ft_ctf_0.reshape(-1)),
@@ -1041,7 +1043,7 @@ def test_join_halves_at_low_resolution_host_fallback_matches_join(monkeypatch):
     )
 
     monkeypatch.setenv("RECOVAR_LOWRES_JOIN_HOST_FALLBACK", "always")
-    host_joined = regularization.join_halves_at_low_resolution(
+    host_joined = regularization_relion.join_halves_at_low_resolution(
         jnp.array(ft_y_0.reshape(-1)),
         jnp.array(ft_y_1.reshape(-1)),
         jnp.array(ft_ctf_0.reshape(-1)),
@@ -1074,11 +1076,11 @@ def test_low_resolution_join_host_fallback_auto_catches_padded_384(monkeypatch):
     unpadded_384_half_size = 384 * 384 * (384 // 2 + 1)
     padded_384_half_size = (2 * 384) * (2 * 384) * (384 + 1)
 
-    assert not regularization._low_resolution_join_host_fallback_enabled_for_size(
+    assert not regularization_relion._low_resolution_join_host_fallback_enabled_for_size(
         unpadded_384_half_size,
         1,
     )
-    assert regularization._low_resolution_join_host_fallback_enabled_for_size(
+    assert regularization_relion._low_resolution_join_host_fallback_enabled_for_size(
         padded_384_half_size,
         1,
     )
@@ -1098,27 +1100,27 @@ def test_relion_weight_shell_stats_half_matches_full():
     fsc = np.linspace(0.95, 0.2, volume_shape[0] // 2 + 1, dtype=np.float32)
     tau2 = np.linspace(0.5, 1.0, volume_shape[0] // 2 + 1, dtype=np.float32)
 
-    prior_full, fsc_full = regularization.compute_relion_tau2_from_weights(
+    prior_full, fsc_full = regularization_relion.compute_relion_tau2_from_weights(
         jnp.array(weight_full),
         jnp.array(weight_full * 1.1),
         jnp.array(fsc),
         volume_shape,
         padding_factor=padding_factor,
     )
-    prior_half, fsc_half = regularization.compute_relion_tau2_from_weights(
+    prior_half, fsc_half = regularization_relion.compute_relion_tau2_from_weights(
         jnp.array(weight_half),
         jnp.array(weight_half * 1.1),
         jnp.array(fsc),
         volume_shape,
         padding_factor=padding_factor,
     )
-    dvp_full = regularization.compute_data_vs_prior(
+    dvp_full = regularization_relion.compute_data_vs_prior(
         jnp.array(weight_full),
         jnp.array(tau2),
         volume_shape,
         padding_factor=padding_factor,
     )
-    dvp_half = regularization.compute_data_vs_prior(
+    dvp_half = regularization_relion.compute_data_vs_prior(
         jnp.array(weight_half),
         jnp.array(tau2),
         volume_shape,
@@ -1137,7 +1139,7 @@ def test_relion_tau2_final_join_uses_summed_half_weights():
     weight = jnp.ones(volume_shape, dtype=jnp.float32).reshape(-1)
     fsc = jnp.full(volume_shape[0] // 2 + 1, 0.5, dtype=jnp.float32)
 
-    _, _, avg_details = regularization.compute_relion_tau2_from_weights(
+    _, _, avg_details = regularization_relion.compute_relion_tau2_from_weights(
         weight,
         weight,
         fsc,
@@ -1145,7 +1147,7 @@ def test_relion_tau2_final_join_uses_summed_half_weights():
         return_details=True,
         weight_combination="average",
     )
-    _, _, sum_details = regularization.compute_relion_tau2_from_weights(
+    _, _, sum_details = regularization_relion.compute_relion_tau2_from_weights(
         weight,
         weight,
         fsc,
@@ -1185,7 +1187,7 @@ def test_relion_weight_shell_stats_accepts_odd_accumulator_shape_half_and_full()
     ).reshape(-1).real
     fsc = np.linspace(0.9, 0.2, volume_shape[0] // 2 + 1, dtype=np.float32)
 
-    _, _, half_details = regularization.compute_relion_tau2_from_weights(
+    _, _, half_details = regularization_relion.compute_relion_tau2_from_weights(
         jnp.asarray(weight_half).reshape(-1),
         jnp.asarray(weight_half).reshape(-1),
         jnp.asarray(fsc),
@@ -1194,7 +1196,7 @@ def test_relion_weight_shell_stats_accepts_odd_accumulator_shape_half_and_full()
         accumulator_volume_shape=accumulator_shape,
         return_details=True,
     )
-    _, _, full_details = regularization.compute_relion_tau2_from_weights(
+    _, _, full_details = regularization_relion.compute_relion_tau2_from_weights(
         jnp.asarray(weight_full),
         jnp.asarray(weight_full),
         jnp.asarray(fsc),
@@ -2024,10 +2026,10 @@ def test_large_host_staged_pre_ifft_split_matches_monolith_bitwise(monkeypatch):
     for compiled in (
         rf.post_process_from_filter_v2,
         rf._post_process_from_filter_v2_donate_numerator,
-        rf._regularize_large_relion_half_filter_donate_ctf,
-        rf._divide_large_relion_half_numerator_donate_numerator,
-        rf._finish_large_relion_postprocess_from_unpadded_real,
-        rf._finish_large_relion_postprocess_from_fftw_half,
+        relion_functions_relion._regularize_large_relion_half_filter_donate_ctf,
+        relion_functions_relion._divide_large_relion_half_numerator_donate_numerator,
+        relion_functions_relion._finish_large_relion_postprocess_from_unpadded_real,
+        relion_functions_relion._finish_large_relion_postprocess_from_fftw_half,
     ):
         clear_cache = getattr(compiled, "clear_cache", None)
         if callable(clear_cache):
@@ -2103,10 +2105,10 @@ def test_large_host_staged_pre_ifft_split_matches_monolith_bitwise(monkeypatch):
     for compiled in (
         rf.post_process_from_filter_v2,
         rf._post_process_from_filter_v2_donate_numerator,
-        rf._regularize_large_relion_half_filter_donate_ctf,
-        rf._divide_large_relion_half_numerator_donate_numerator,
-        rf._finish_large_relion_postprocess_from_unpadded_real,
-        rf._finish_large_relion_postprocess_from_fftw_half,
+        relion_functions_relion._regularize_large_relion_half_filter_donate_ctf,
+        relion_functions_relion._divide_large_relion_half_numerator_donate_numerator,
+        relion_functions_relion._finish_large_relion_postprocess_from_unpadded_real,
+        relion_functions_relion._finish_large_relion_postprocess_from_fftw_half,
     ):
         clear_cache = getattr(compiled, "clear_cache", None)
         if callable(clear_cache):
@@ -2164,8 +2166,8 @@ def test_host_unpadded_tail_matches_existing_fftw_half_finish_bitwise():
     from recovar.em.refinement import mean_helpers
 
     for compiled in (
-        rf._finish_large_relion_postprocess_from_unpadded_real,
-        rf._finish_large_relion_postprocess_from_fftw_half,
+        relion_functions_relion._finish_large_relion_postprocess_from_unpadded_real,
+        relion_functions_relion._finish_large_relion_postprocess_from_fftw_half,
     ):
         clear_cache = getattr(compiled, "clear_cache", None)
         if callable(clear_cache):
@@ -2187,7 +2189,7 @@ def test_host_unpadded_tail_matches_existing_fftw_half_finish_bitwise():
     )
 
     existing = np.asarray(
-        rf._finish_large_relion_postprocess_from_fftw_half(
+        relion_functions_relion._finish_large_relion_postprocess_from_fftw_half(
             jnp.asarray(fftw_half),
             volume_shape,
             2,
@@ -2201,7 +2203,7 @@ def test_host_unpadded_tail_matches_existing_fftw_half_finish_bitwise():
         workers=1,
     )
     host = np.asarray(
-        rf._finish_large_relion_postprocess_from_unpadded_real(
+        relion_functions_relion._finish_large_relion_postprocess_from_unpadded_real(
             unpadded_real,
             volume_shape,
             2,
@@ -2212,8 +2214,8 @@ def test_host_unpadded_tail_matches_existing_fftw_half_finish_bitwise():
     np.testing.assert_array_equal(host, existing)
 
     for compiled in (
-        rf._finish_large_relion_postprocess_from_unpadded_real,
-        rf._finish_large_relion_postprocess_from_fftw_half,
+        relion_functions_relion._finish_large_relion_postprocess_from_unpadded_real,
+        relion_functions_relion._finish_large_relion_postprocess_from_fftw_half,
     ):
         clear_cache = getattr(compiled, "clear_cache", None)
         if callable(clear_cache):
@@ -2282,7 +2284,7 @@ def test_large_host_staged_compact_padding_matches_monolith_bitwise(monkeypatch)
     for compiled in (
         rf.post_process_from_filter_v2,
         rf._post_process_from_filter_v2_donate_numerator,
-        rf._finish_large_relion_postprocess_from_fftw_half,
+        relion_functions_relion._finish_large_relion_postprocess_from_fftw_half,
     ):
         clear_cache = getattr(compiled, "clear_cache", None)
         if callable(clear_cache):
@@ -2369,13 +2371,18 @@ def test_compact_device_accumulator_runs_giant_split_and_normalization(monkeypat
         lambda *_args, **_kwargs: reconstruction_shape,
     )
     monkeypatch.setattr(
+        relion_functions_relion,
+        "_relion_reconstruction_padded_shape",
+        lambda *_args, **_kwargs: reconstruction_shape,
+    )
+    monkeypatch.setattr(
         mean_helpers,
         "_large_relion_host_irfft_enabled",
         lambda *_args, **_kwargs: False,
     )
     monkeypatch.setattr(rf, "post_process_from_filter_v2", fake_stage)
     monkeypatch.setattr(
-        rf,
+        relion_functions_relion,
         "_finish_large_relion_postprocess_from_fftw_half",
         fake_finish,
     )
@@ -2529,13 +2536,18 @@ def test_compact_full_device_accumulator_runs_giant_split_and_normalization(monk
         lambda *_args, **_kwargs: reconstruction_shape,
     )
     monkeypatch.setattr(
+        relion_functions_relion,
+        "_relion_reconstruction_padded_shape",
+        lambda *_args, **_kwargs: reconstruction_shape,
+    )
+    monkeypatch.setattr(
         mean_helpers,
         "_large_relion_host_irfft_enabled",
         lambda *_args, **_kwargs: False,
     )
     monkeypatch.setattr(rf, "post_process_from_filter_v2", fake_stage)
     monkeypatch.setattr(
-        rf,
+        relion_functions_relion,
         "_finish_large_relion_postprocess_from_fftw_half",
         fake_finish,
     )
@@ -2602,7 +2614,7 @@ def test_large_device_accumulator_does_not_enter_host_staged_split(monkeypatch):
 
     monkeypatch.setattr(rf, "post_process_from_filter_v2", fake_monolithic)
     monkeypatch.setattr(
-        rf,
+        relion_functions_relion,
         "_finish_large_relion_postprocess_from_fftw_half",
         reject_split,
     )
@@ -2654,9 +2666,14 @@ def test_large_device_accumulator_normalizes_monolithic_giant_padded_ifft(monkey
         "_relion_reconstruction_padded_shape",
         lambda *_args, **_kwargs: reconstruction_shape,
     )
+    monkeypatch.setattr(
+        relion_functions_relion,
+        "_relion_reconstruction_padded_shape",
+        lambda *_args, **_kwargs: reconstruction_shape,
+    )
     monkeypatch.setattr(rf, "post_process_from_filter_v2", fake_monolithic)
     monkeypatch.setattr(
-        rf,
+        relion_functions_relion,
         "_finish_large_relion_postprocess_from_fftw_half",
         reject_split,
     )
@@ -2752,9 +2769,14 @@ def test_large_host_staged_irfft_uses_backward_transform_then_dynamic_normalizat
         "_relion_reconstruction_padded_shape",
         lambda *_args, **_kwargs: reconstruction_shape,
     )
+    monkeypatch.setattr(
+        relion_functions_relion,
+        "_relion_reconstruction_padded_shape",
+        lambda *_args, **_kwargs: reconstruction_shape,
+    )
     monkeypatch.setattr(rf, "post_process_from_filter_v2", fake_stage)
     monkeypatch.setattr(
-        rf,
+        relion_functions_relion,
         "_finish_large_relion_postprocess_from_fftw_half",
         fake_finish,
     )
@@ -2823,10 +2845,15 @@ def test_large_host_irfft_is_already_normalized(monkeypatch):
         "_relion_reconstruction_padded_shape",
         lambda *_args, **_kwargs: reconstruction_shape,
     )
+    monkeypatch.setattr(
+        relion_functions_relion,
+        "_relion_reconstruction_padded_shape",
+        lambda *_args, **_kwargs: reconstruction_shape,
+    )
     monkeypatch.setattr(rf, "post_process_from_filter_v2", fake_stage)
     monkeypatch.setattr(mean_helpers, "_host_irfft_and_center_crop", fake_host_irfft)
     monkeypatch.setattr(
-        rf,
+        relion_functions_relion,
         "_finish_large_relion_postprocess_from_unpadded_real",
         fake_finish,
     )
@@ -2908,8 +2935,8 @@ def test_large_wiener_split_stage_matches_monolith_bitwise(monkeypatch, current_
     monkeypatch.setenv("RECOVAR_RELION_POSTPROCESS_LARGE_GRID_SINGLE_PRECISION", "always")
     compiled_functions = (
         rf.post_process_from_filter_v2,
-        rf._regularize_large_relion_half_filter_donate_ctf,
-        rf._divide_large_relion_half_numerator_donate_numerator,
+        relion_functions_relion._regularize_large_relion_half_filter_donate_ctf,
+        relion_functions_relion._divide_large_relion_half_numerator_donate_numerator,
     )
     for compiled in compiled_functions:
         clear_cache = getattr(compiled, "clear_cache", None)
@@ -2949,7 +2976,7 @@ def test_large_wiener_split_stage_matches_monolith_bitwise(monkeypatch, current_
         )
     )
     ctf_device = jnp.asarray(ft_ctf.copy())
-    regularized = rf._regularize_large_relion_half_filter_donate_ctf(
+    regularized = relion_functions_relion._regularize_large_relion_half_filter_donate_ctf(
         ctf_device,
         jnp.asarray(tau),
         volume_shape,
@@ -2963,7 +2990,7 @@ def test_large_wiener_split_stage_matches_monolith_bitwise(monkeypatch, current_
     )
     regularized.block_until_ready()
     numerator_device = jnp.asarray(f_ty.copy())
-    actual = rf._divide_large_relion_half_numerator_donate_numerator(
+    actual = relion_functions_relion._divide_large_relion_half_numerator_donate_numerator(
         numerator_device,
         regularized,
         2,
@@ -2995,7 +3022,7 @@ def test_large_wiener_split_stage_aliases_inputs_without_divide_temporary(monkey
 
     with jax.default_device(gpu_device):
         regularize_memory = (
-            rf._regularize_large_relion_half_filter_donate_ctf.lower(
+            relion_functions_relion._regularize_large_relion_half_filter_donate_ctf.lower(
                 jax.ShapeDtypeStruct((half_size,), jnp.float32),
                 jax.ShapeDtypeStruct((volume_shape[0] // 2 + 1,), jnp.float64),
                 volume_shape,
@@ -3011,7 +3038,7 @@ def test_large_wiener_split_stage_aliases_inputs_without_divide_temporary(monkey
             .memory_analysis()
         )
         divide_memory = (
-            rf._divide_large_relion_half_numerator_donate_numerator.lower(
+            relion_functions_relion._divide_large_relion_half_numerator_donate_numerator.lower(
                 jax.ShapeDtypeStruct((half_size,), jnp.complex64),
                 jax.ShapeDtypeStruct((half_size,), jnp.float32),
                 2,
@@ -3042,7 +3069,7 @@ def test_join_halves_host_fallback_retains_bitwise_exact_half0_device_numerator(
     ft_ctf_1 = rng.uniform(0.5, 1.5, volume_shape).astype(np.float32)
 
     monkeypatch.setenv("RECOVAR_LOWRES_JOIN_HOST_FALLBACK", "always")
-    joined = regularization.join_halves_at_low_resolution(
+    joined = regularization_relion.join_halves_at_low_resolution(
         jnp.asarray(ft_y_0).reshape(-1),
         jnp.asarray(ft_y_1).reshape(-1),
         jnp.asarray(ft_ctf_0).reshape(-1),
@@ -3063,7 +3090,7 @@ def test_join_halves_host_fallback_retains_bitwise_exact_half0_device_numerator(
     assert not isinstance(retained_half0, np.ndarray)
     np.testing.assert_array_equal(np.asarray(retained_half0), joined[0])
 
-    padding_joined = regularization.join_halves_at_low_resolution(
+    padding_joined = regularization_relion.join_halves_at_low_resolution(
         jnp.asarray(ft_y_0).reshape(-1),
         jnp.asarray(ft_y_1).reshape(-1),
         jnp.asarray(ft_ctf_0).reshape(-1),
@@ -3099,7 +3126,7 @@ def test_join_halves_host_fallback_reserves_joined_numpy_half0_for_crop(monkeypa
 
     monkeypatch.setenv("RECOVAR_LOWRES_JOIN_HOST_FALLBACK", "always")
     caplog.set_level("INFO", logger=regularization.__name__)
-    joined = regularization.join_halves_at_low_resolution(
+    joined = regularization_relion.join_halves_at_low_resolution(
         ft_y_0,
         ft_y_1,
         ft_ctf_0,
@@ -3124,7 +3151,7 @@ def test_join_halves_host_fallback_reserves_joined_numpy_half0_for_crop(monkeypa
 
 
 def test_joined_value_scatter_lowering_aliases_donated_first_device_buffer():
-    compiled = regularization._scatter_joined_values_into_first_device
+    compiled = regularization_relion._scatter_joined_values_into_first_device
     lowered = compiled.lower(
         regularization.jax.ShapeDtypeStruct((32,), jnp.complex64),
         regularization.jax.ShapeDtypeStruct((5,), jnp.int32),
@@ -3152,7 +3179,7 @@ def test_join_halves_at_low_resolution_host_fallback_can_reuse_numpy_storage(mon
     ft_y_1[idx_outside] = 4.0
 
     monkeypatch.setenv("RECOVAR_LOWRES_JOIN_HOST_FALLBACK", "always")
-    joined = regularization.join_halves_at_low_resolution(
+    joined = regularization_relion.join_halves_at_low_resolution(
         ft_y_0,
         ft_y_1,
         ft_ctf_0,

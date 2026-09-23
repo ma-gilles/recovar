@@ -35,9 +35,11 @@ def _ulp_distance(a, b):
 @pytest.mark.parametrize("backend,custom_cuda,expected", [("cpu", True, False), ("gpu", False, False), ("gpu", True, True)])
 def test_fused_translate_route_requires_supported_gpu(monkeypatch, backend, custom_cuda, expected):
     from recovar import cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     monkeypatch.setattr(jax, "default_backend", lambda: backend)
     monkeypatch.setattr(cuda_backproject, "custom_cuda_requested", lambda: custom_cuda)
+    monkeypatch.setattr(em_cuda_kernels, "custom_cuda_requested", lambda: custom_cuda)
     kwargs = dict(
         use_exact_relion_gaussian=True,
         use_float64_scoring=False,
@@ -74,6 +76,7 @@ def test_fused_translate_compact_pairs_match_gathered_path(
     translations, so the kernel, not the emulation, is the bitwise reference.
     """
     import recovar.cuda_backproject as cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
     monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
@@ -114,7 +117,7 @@ def test_fused_translate_compact_pairs_match_gathered_path(
     highres = rng.uniform(0, 5, (batch,)).astype(np.float32)
 
     with jax.default_device(gpu_device):
-        shifted = cuda_backproject.relion_translate_score_f32(
+        shifted = em_cuda_kernels.relion_translate_score_f32(
             jnp.asarray(image),
             jnp.asarray(angles),
             jnp.asarray(window),

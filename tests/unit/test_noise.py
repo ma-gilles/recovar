@@ -4,6 +4,7 @@ import pytest
 pytest.importorskip("jax")
 
 import recovar.reconstruction.noise as noise
+from recovar.em.reconstruction import noise_relion
 
 pytestmark = pytest.mark.unit
 
@@ -703,7 +704,7 @@ def test_normalize_wsum_to_sigma2_noise_drops_relion_shell_sentinels(monkeypatch
         fake_relion_shell_indices,
     )
 
-    got = noise.normalize_wsum_to_sigma2_noise(
+    got = noise_relion.normalize_wsum_to_sigma2_noise(
         wsum_sigma2_noise=jnp.zeros(n_shells, dtype=jnp.float32),
         wsum_img_power=jnp.asarray([8.0, 20.0, 6.0, 8.0, 10.0], dtype=jnp.float32),
         sumw=2.0,
@@ -744,13 +745,13 @@ def test_normalize_wsum_to_sigma2_noise_preserves_float64_inputs(monkeypatch):
         fake_relion_shell_indices,
     )
 
-    got_f32 = noise.normalize_wsum_to_sigma2_noise(
+    got_f32 = noise_relion.normalize_wsum_to_sigma2_noise(
         wsum_sigma2_noise=jnp.zeros(n_shells, dtype=jnp.float32),
         wsum_img_power=jnp.asarray([8.0, 20.0, 6.0, 8.0, 10.0], dtype=jnp.float32),
         sumw=2.0,
         image_shape=image_shape,
     )
-    got_f64 = noise.normalize_wsum_to_sigma2_noise(
+    got_f64 = noise_relion.normalize_wsum_to_sigma2_noise(
         wsum_sigma2_noise=jnp.zeros(n_shells, dtype=jnp.float64),
         wsum_img_power=jnp.asarray([8.0, 20.0, 6.0, 8.0, 10.0], dtype=jnp.float64),
         sumw=2.0,

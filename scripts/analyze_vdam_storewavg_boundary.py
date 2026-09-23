@@ -534,7 +534,7 @@ def analyze(
     import jax.numpy as jnp
     from recovar.relion_bind._relion_bind_core import get_backprojector_data
 
-    from recovar import cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
     from recovar.em.helpers.projection import compute_relion_projector_projections_block
 
     _require(jax.default_backend() == "gpu", "VDAM StoreWavg replay requires a GPU")
@@ -657,7 +657,7 @@ def analyze(
         )
     native_image = _load_unmasked_image(native_image_path).astype(np.complex64).reshape(-1)[crop_indices]
 
-    translated = cuda_backproject.relion_translate_score_f32(
+    translated = em_cuda_kernels.relion_translate_score_f32(
         jnp.asarray(native_image[None, :]),
         jnp.asarray(native["translation_angles"], dtype=jnp.float32),
         jnp.asarray(centered_indices, dtype=jnp.int32),

@@ -77,21 +77,21 @@ def _maybe_dump_norm_residual_inputs(
     raw_translated_recon = None
     raw_translated_wavg = None
     if relion_score_translation_angles is not None:
-        from recovar import cuda_backproject
+        from recovar.em.cuda import kernels as em_cuda_kernels
 
         recon_indices_jax = jnp.asarray(recon_window_indices, dtype=jnp.int32)
         translation_angles_jax = jnp.asarray(
             relion_score_translation_angles,
             dtype=jnp.float32,
         )
-        raw_translated_recon = cuda_backproject.relion_translate_score_f32(
+        raw_translated_recon = em_cuda_kernels.relion_translate_score_f32(
             jnp.asarray(processed_score_half_for_noise)[selected][:, recon_indices_jax],
             translation_angles_jax,
             recon_indices_jax,
             image_shape,
         ).reshape(target_rows.size, translation_angles_jax.shape[0], -1)
         score_indices_jax = jnp.asarray(score_window_indices, dtype=jnp.int32)
-        raw_translated_wavg = cuda_backproject.relion_translate_score_f32(
+        raw_translated_wavg = em_cuda_kernels.relion_translate_score_f32(
             jnp.asarray(processed_score_half_for_noise)[selected][:, score_indices_jax],
             translation_angles_jax,
             score_indices_jax,

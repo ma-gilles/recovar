@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 from recovar.relion_bind._relion_bind_core import find_current_resolution
 
-from recovar.reconstruction.regularization import resolution_from_data_vs_prior
+from recovar.em.reconstruction.regularization_relion import resolution_from_data_vs_prior
 
 
 class TestM5Parity:

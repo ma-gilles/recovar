@@ -53,7 +53,7 @@ def pack_noise_pixel_capacity(
     if target_batch == probs.shape[0] or norm_capacity == n_images:
         return probs, projection, ctf_probs, indices
     if cuda_packing:
-        from recovar.cuda_backproject import pad_noise_pixels_cuda
+        from recovar.em.cuda.kernels import pad_noise_pixels_cuda
 
         return pad_noise_pixels_cuda(
             probs,

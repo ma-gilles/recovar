@@ -4,7 +4,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from recovar import cuda_backproject
+from recovar.em.cuda import kernels as em_cuda_kernels
 from recovar.em.relion import relion_coarse_operands, relion_ctf
 from recovar.em.sparse_pass2 import sparse_pass2_bucket_io
 
@@ -50,7 +50,7 @@ def test_exact_coarse_assembly_precision_and_padding(
         return jnp.broadcast_to(images[:, None, :], (batch_size, 2, len(score_indices)))
 
     monkeypatch.setattr(
-        cuda_backproject,
+        em_cuda_kernels,
         "relion_translate_score_f64" if use_float64 else "relion_translate_score_f32",
         translate,
     )

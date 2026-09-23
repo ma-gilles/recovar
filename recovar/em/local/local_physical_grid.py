@@ -59,9 +59,9 @@ def _accumulate_relion_physical_particle_grid(
     summed = jnp.where(row_mask[..., None], summed, 0.0)
     ctf_probs = jnp.where(row_mask[..., None], ctf_probs, 0.0)
 
-    from recovar import cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
-    return cuda_backproject.relion_fused_x_half_backproject_particle_grid_indexed(
+    return em_cuda_kernels.relion_fused_x_half_backproject_particle_grid_indexed(
         Ft_y,
         Ft_ctf,
         summed,
@@ -279,7 +279,7 @@ def _accumulate_relion_vdam_physical_particle_grid(
             )
         rotation_replay_order = None
 
-    from recovar import cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     common_args = (
         Ft_y,
@@ -300,7 +300,7 @@ def _accumulate_relion_vdam_physical_particle_grid(
             raise ValueError(
                 "grouped VDAM reconstruction requires the inline projector path"
             )
-        Ft_y, Ft_ctf, _ = cuda_backproject.relion_vdam_mstep_fused_x_half(
+        Ft_y, Ft_ctf, _ = em_cuda_kernels.relion_vdam_mstep_fused_x_half(
             *common_args,
             reference,
             rotations,
@@ -314,9 +314,9 @@ def _accumulate_relion_vdam_physical_particle_grid(
                 "inline RELION VDAM projection requires scoring rotations and projector radius"
             )
         callback = (
-            cuda_backproject._relion_vdam_mstep_fused_projector_x_half_consume
+            em_cuda_kernels._relion_vdam_mstep_fused_projector_x_half_consume
             if consume_accumulators
-            else cuda_backproject.relion_vdam_mstep_fused_projector_x_half
+            else em_cuda_kernels.relion_vdam_mstep_fused_projector_x_half
         )
         if transaction_queue is not None:
             callback = functools.partial(transaction_queue.accumulate, callback)

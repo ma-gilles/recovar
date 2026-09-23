@@ -12,7 +12,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from recovar import cuda_backproject
+from recovar.em.cuda import kernels as em_cuda_kernels
 from recovar.em.scoring.coarse_device_certificate import (
     _certify_coarse_rotation_blocks_jit,
     _prepare_coarse_certificate_inputs,
@@ -97,9 +97,9 @@ def _rescore_coarse_rotation_blocks_jit(
     def rescore(_):
         args = (reference, shifted, weight, initial, selection.block_ids, mapping)
         if logical_count is None:
-            diff2 = cuda_backproject.relion_coarse_diff2_rotation_blocks_f32(*args)
+            diff2 = em_cuda_kernels.relion_coarse_diff2_rotation_blocks_f32(*args)
         else:
-            diff2 = cuda_backproject.relion_coarse_diff2_rotation_blocks_runtime_f32(*args, logical_count)
+            diff2 = em_cuda_kernels.relion_coarse_diff2_rotation_blocks_runtime_f32(*args, logical_count)
         rotations = reference.shape[0]
         rp = jnp.zeros(rotations, jnp.float32) if rotation_prior is None else rotation_prior
         if translation_prior is None:

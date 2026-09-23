@@ -219,7 +219,7 @@ class BprefTransactionQueue:
             names.extend(("worker_lane_ids", "particle_trace_ids"))
             if self.stable_particle_capacity:
                 if self.cuda_packing:
-                    from recovar.cuda_backproject import pack_bpref_particle_fields
+                    from recovar.em.cuda.kernels import pack_bpref_particle_fields
 
                     if tuple(names) != _PARTICLE:
                         raise ValueError("CUDA BPref packing requires all six particle fields")

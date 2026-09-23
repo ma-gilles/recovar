@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 
 from recovar import cuda_backproject
+from recovar.em.cuda import kernels as em_cuda_kernels
 from recovar.em.classification import k_class
 from recovar.em.refinement import half_scoring
 from recovar.em.diagnostics import bpref_diagnostics, local_bpref_capture
@@ -106,12 +107,12 @@ def test_scoped_capture_ignores_all_process_flags_off_target(monkeypatch):
         "high_precision_operand_bundle": False,
     }
     assert not cuda_backproject.relion_x_half_bp_block_topology_enabled()
-    with cuda_backproject.bpref_device_signature_scope(False):
+    with em_cuda_kernels.bpref_device_signature_scope(False):
         assert not cuda_backproject.relion_x_half_bp_block_topology_enabled()
 
     active = bpref_diagnostics._scoped_bpref_diagnostic_flags(active=True)
     assert all(value for name, value in active.items() if name != "device_signature_configured")
-    with cuda_backproject.bpref_device_signature_scope(True):
+    with em_cuda_kernels.bpref_device_signature_scope(True):
         assert cuda_backproject.relion_x_half_bp_block_topology_enabled()
 
 
@@ -334,7 +335,7 @@ def test_zero_contributor_class_capture_writes_manifest_only_signature(
         lambda **_kwargs: None,
     )
     monkeypatch.setattr(
-        cuda_backproject,
+        em_cuda_kernels,
         "relion_fused_x_half_backproject_indexed",
         lambda *args, **_kwargs: args[:2],
     )

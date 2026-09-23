@@ -187,7 +187,7 @@ def test_powerclass_spectrum_norm_preserves_float64_per_image(monkeypatch):
 
 
 def test_norm_capture_slices_and_reshapes_raw_translation_rows(tmp_path, monkeypatch):
-    from recovar import cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     monkeypatch.setenv("RECOVAR_PASS2_DUMP_DIR", str(tmp_path))
     monkeypatch.setenv("RECOVAR_PASS2_DUMP_ORIGINAL_INDICES", "66")
@@ -203,7 +203,7 @@ def test_norm_capture_slices_and_reshapes_raw_translation_rows(tmp_path, monkeyp
         values = jnp.arange(2 * images.shape[1], dtype=jnp.float32).astype(jnp.complex64)
         return values.reshape(2, images.shape[1])
 
-    monkeypatch.setattr(cuda_backproject, "relion_translate_score_f32", fake_translate)
+    monkeypatch.setattr(em_cuda_kernels, "relion_translate_score_f32", fake_translate)
     norm_scale_diagnostics._maybe_dump_norm_residual_inputs(
         experiment_dataset=object(),
         image_indices=np.asarray([66], dtype=np.int64),

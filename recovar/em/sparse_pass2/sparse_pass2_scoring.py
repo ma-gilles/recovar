@@ -270,7 +270,7 @@ def _relion_cuda_fine_diff2_sum(
         _RELION_FINE_DIFF2_FUSED_FFI_ENV,
         default=False,
     ):
-        from recovar import cuda_backproject
+        from recovar.em.cuda import kernels as em_cuda_kernels
 
         if reference.ndim == 4:
             if (
@@ -289,11 +289,11 @@ def _relion_cuda_fine_diff2_sum(
             if (
                 candidate_mask is not None
                 and real_dtype == jnp.float32
-                and cuda_backproject.relion_fine_diff2_rectangular_masked_supported()
+                and em_cuda_kernels.relion_fine_diff2_rectangular_masked_supported()
             ):
                 # RELION-style pair pruning: skip (row, translation) cells the
                 # candidate mask excludes.  Valid cells stay bitwise identical.
-                return cuda_backproject.relion_fine_diff2_rectangular_masked_f32(
+                return em_cuda_kernels.relion_fine_diff2_rectangular_masked_f32(
                     reference[:, :, 0, :],
                     shifted_image[:, 0, :, :],
                     pixel_weight[:, 0, 0, :],
@@ -301,9 +301,9 @@ def _relion_cuda_fine_diff2_sum(
                     jnp.asarray(candidate_mask, dtype=bool),
                 )
             fine_diff2_rectangular = (
-                cuda_backproject.relion_fine_diff2_rectangular_f64
+                em_cuda_kernels.relion_fine_diff2_rectangular_f64
                 if real_dtype == jnp.float64
-                else cuda_backproject.relion_fine_diff2_rectangular_f32
+                else em_cuda_kernels.relion_fine_diff2_rectangular_f32
             )
             return fine_diff2_rectangular(
                 reference[:, :, 0, :],
@@ -318,9 +318,9 @@ def _relion_cuda_fine_diff2_sum(
                 and reference.shape[0] == pixel_weight.shape[0]
             ):
                 fine_diff2_pairs = (
-                    cuda_backproject.relion_fine_diff2_pairs_f64
+                    em_cuda_kernels.relion_fine_diff2_pairs_f64
                     if real_dtype == jnp.float64
-                    else cuda_backproject.relion_fine_diff2_pairs_f32
+                    else em_cuda_kernels.relion_fine_diff2_pairs_f32
                 )
                 return fine_diff2_pairs(
                     reference,
@@ -334,9 +334,9 @@ def _relion_cuda_fine_diff2_sum(
                 and pixel_weight.shape[:2] == (1, 1)
             ):
                 fine_diff2_rectangular = (
-                    cuda_backproject.relion_fine_diff2_rectangular_f64
+                    em_cuda_kernels.relion_fine_diff2_rectangular_f64
                     if real_dtype == jnp.float64
-                    else cuda_backproject.relion_fine_diff2_rectangular_f32
+                    else em_cuda_kernels.relion_fine_diff2_rectangular_f32
                 )
                 return fine_diff2_rectangular(
                     reference[:, 0, :][None, :, :],
@@ -698,14 +698,14 @@ def _relion_powerclass_native_spectrum_highres(processed_score_half, *, image_sh
     appended, together with ``(image_height, image_width, half_width)``.
     """
 
-    from recovar import cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     relion_image, _real_dtype, image_height, image_width, half_width = _relion_powerclass_packed_image(
         processed_score_half, image_shape=image_shape, dtype=jnp.complex64
     )
     relion_image = relion_image.astype(jnp.complex64)
     if runtime_current_size is None:
-        spectrum_and_highres = cuda_backproject.relion_powerclass_spectrum_highres_f32(
+        spectrum_and_highres = em_cuda_kernels.relion_powerclass_spectrum_highres_f32(
             relion_image,
             xdim=half_width,
             ydim=image_height,
@@ -713,7 +713,7 @@ def _relion_powerclass_native_spectrum_highres(processed_score_half, *, image_sh
         )
     else:
         spectrum_and_highres = (
-            cuda_backproject.relion_powerclass_spectrum_highres_runtime_f32(
+            em_cuda_kernels.relion_powerclass_spectrum_highres_runtime_f32(
                 relion_image,
                 jnp.asarray(runtime_current_size, dtype=jnp.int32) // 2 + 1,
                 xdim=half_width,
@@ -1514,7 +1514,7 @@ def _score_pass2_pairs_relion_gpu_diff2_raw_fused_translate(
     With logical_current_size, current_size is the physical capacity and the
     runtime kernel reads only the exact logical prefix of the packed operands.
     """
-    from recovar import cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     proj_half = jnp.asarray(proj_half, dtype=jnp.complex64)
     batch, n_rows, n_pixels = proj_half.shape
@@ -1535,7 +1535,7 @@ def _score_pass2_pairs_relion_gpu_diff2_raw_fused_translate(
         else jnp.asarray(highres_xi2_half, dtype=jnp.float32)
     )
     if logical_current_size is not None:
-        return cuda_backproject.relion_fine_diff2_fused_translate_runtime_pairs_f32(
+        return em_cuda_kernels.relion_fine_diff2_fused_translate_runtime_pairs_f32(
             proj_half.reshape(batch * n_rows, n_pixels),
             jnp.asarray(unshifted_corrected, dtype=jnp.complex64),
             jnp.asarray(translation_angles, dtype=jnp.float32),
@@ -1546,7 +1546,7 @@ def _score_pass2_pairs_relion_gpu_diff2_raw_fused_translate(
             jnp.asarray(logical_current_size, dtype=jnp.int32),
             initial_diff2,
         )
-    return cuda_backproject.relion_fine_diff2_fused_translate_pairs_f32(
+    return em_cuda_kernels.relion_fine_diff2_fused_translate_pairs_f32(
         proj_half.reshape(batch * n_rows, n_pixels),
         jnp.asarray(unshifted_corrected, dtype=jnp.complex64),
         jnp.asarray(translation_angles, dtype=jnp.float32),

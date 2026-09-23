@@ -44,7 +44,7 @@ def test_k1_mean_release_precedes_tau_and_reconstruction():
         "previous_means = _snapshot_and_release_previous_k1_means(means)"
     )
     tau_update = source.index(
-        "regularization.compute_relion_tau2_from_weights(",
+        "regularization_relion.compute_relion_tau2_from_weights(",
         release,
     )
     reconstruction = source.index(

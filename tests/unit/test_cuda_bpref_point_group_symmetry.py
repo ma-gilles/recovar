@@ -60,7 +60,7 @@ def test_streamed_cuda_matches_relion_cpu_oracle(
         apply_point_group_symmetry_to_bpref,
     )
 
-    from recovar.cuda_backproject import relion_point_group_symmetrise_bpref
+    from recovar.em.cuda.kernels import relion_point_group_symmetrise_bpref
     from recovar.em.symmetry import rotational_operators
 
     rng = np.random.default_rng(20260830)
@@ -107,7 +107,7 @@ def test_streamed_cuda_matches_relion_cpu_oracle(
 @pytest.mark.parametrize("symmetry", ["C1", "C2", "I1"])
 def test_split_ranged_cuda_is_bitwise_equal_to_complex_input(symmetry):
     _skip_if_unavailable(require_relion_bind=False)
-    from recovar.cuda_backproject import (
+    from recovar.em.cuda.kernels import (
         relion_point_group_symmetrise_bpref,
         relion_point_group_symmetrise_bpref_split_host,
     )
@@ -149,9 +149,7 @@ def test_split_ranged_cuda_is_bitwise_equal_to_complex_input(symmetry):
 
 def test_split_ranged_c1_is_bitwise_equal_to_historical_host_x0_path():
     _skip_if_unavailable(require_relion_bind=False)
-    from recovar.cuda_backproject import (
-        relion_point_group_symmetrise_bpref_split_host,
-    )
+    from recovar.em.cuda.kernels import relion_point_group_symmetrise_bpref_split_host
     from recovar.em.helpers.half_volume_mstep import (
         enforce_relion_half_volume_x0_hermitian_host,
     )
@@ -211,7 +209,7 @@ def test_split_ranged_c1_is_bitwise_equal_to_historical_host_x0_path():
 
 def test_split_range_zero_pads_only_past_the_final_voxel():
     _skip_if_unavailable(require_relion_bind=False)
-    from recovar import cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
     from recovar.em.symmetry import rotational_operators
 
     rng = np.random.default_rng(20260831)
@@ -220,7 +218,7 @@ def test_split_range_zero_pads_only_past_the_final_voxel():
     ).astype(np.complex64)
     raw_weight = rng.uniform(0.1, 2.0, size=_HALF_SHAPE).astype(np.float32)
     operators = jnp.asarray(rotational_operators("C1", dtype=np.float32))
-    expected_data, expected_weight = cuda_backproject.relion_point_group_symmetrise_bpref(
+    expected_data, expected_weight = em_cuda_kernels.relion_point_group_symmetrise_bpref(
         jnp.asarray(raw_data.reshape(-1)),
         jnp.asarray(raw_weight.reshape(-1)),
         operators,
@@ -231,7 +229,7 @@ def test_split_range_zero_pads_only_past_the_final_voxel():
     valid_count = 5
     range_start = raw_data.size - valid_count
     range_data, range_weight = (
-        cuda_backproject._relion_point_group_symmetrise_bpref_split_range_static(
+        em_cuda_kernels._relion_point_group_symmetrise_bpref_split_range_static(
             jnp.asarray(raw_data.real.reshape(-1)),
             jnp.asarray(raw_data.imag.reshape(-1)),
             jnp.asarray(raw_weight.reshape(-1)),
@@ -258,7 +256,7 @@ def test_split_range_zero_pads_only_past_the_final_voxel():
 
 def test_cuda_negative_x_weight_sum_and_radius_boundary():
     _skip_if_unavailable()
-    from recovar.cuda_backproject import relion_point_group_symmetrise_bpref
+    from recovar.em.cuda.kernels import relion_point_group_symmetrise_bpref
     from recovar.em.symmetry import rotational_operators
 
     center = _PAD_SIZE // 2
@@ -291,7 +289,7 @@ def test_cuda_negative_x_weight_sum_and_radius_boundary():
 @pytest.mark.parametrize("via_finalizer", [False, True])
 def test_complex_ranged_cuda_is_bitwise_equal_to_full_output(symmetry, via_finalizer, monkeypatch):
     _skip_if_unavailable(require_relion_bind=False)
-    from recovar.cuda_backproject import (
+    from recovar.em.cuda.kernels import (
         relion_point_group_symmetrise_bpref,
         relion_point_group_symmetrise_bpref_host,
     )

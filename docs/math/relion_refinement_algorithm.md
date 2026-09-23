@@ -198,7 +198,7 @@ optimization to enable during cleanup.
 
 For bounded normalized-CC rescoring, the stored projector radius and the
 current image radius are distinct. The native rescorer in
-[`relion_scoring.cuh`](../../recovar/cuda/relion_scoring.cuh),
+[`relion_scoring.cuh`](../../recovar/em/cuda/relion_scoring.cuh),
 `launch_relion_coarse_normalized_cc_native_texture_pairs_f32`, preserves the
 model-sized texture but limits rotated frequency support to
 `min(projector_max_r, current_size // 2)`. This follows RELION 5.0.1's
@@ -401,7 +401,7 @@ memory requirements and need their own scientific validation after this cleanup.
 The float32 BPref translation computes the imaginary component as
 `fma(sine, real, round(cosine * imag))`, matching captured RELION output bits.
 [`relion_translate_bpref_f32_kernel`](../../recovar/cuda/cuda_backproject.cu)
-and the fused [`translate_rotate_bpref_f32`](../../recovar/cuda/relion_translate_sum.cuh)
+and the fused [`translate_rotate_bpref_f32`](../../recovar/em/cuda/relion_translate_sum.cuh)
 use that same explicit operand order; weighted CTF multiplication follows the
 complex rotation. The positive-Nyquist coordinate mapping is unchanged.
 [`test_relion_translate_bpref_f32_matches_native_captured_bits`](../../tests/unit/test_cuda_relion_translation.py)

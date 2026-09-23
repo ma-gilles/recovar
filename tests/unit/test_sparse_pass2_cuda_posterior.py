@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 
 from recovar import cuda_backproject as cb
+from recovar.em.cuda import kernels as em_cuda_kernels
 from recovar.em.sparse_pass2 import sparse_pass2_posterior as posterior
 
 pytestmark = pytest.mark.unit
@@ -124,7 +125,7 @@ def test_env_gate_default_off(monkeypatch):
 
 
 def test_row_state_bytes_match_header():
-    header = os.path.join(os.path.dirname(cb.__file__), "cuda", "sparse_pass2_posterior.cuh")
+    header = os.path.join(os.path.dirname(cb.__file__), "em", "cuda", "sparse_pass2_posterior.cuh")
     body = open(header).read().split("struct RowState", 1)[1].split("};", 1)[0]
     sizes = {"float": 4, "double": 8, "int": 4}
     fields = [line.split()[0] for line in body.splitlines() if line.strip() and line.strip()[0] not in "{/"]
@@ -133,7 +134,7 @@ def test_row_state_bytes_match_header():
         size = sizes[kind]
         total = (total + size - 1) // size * size + size
     total = (total + 7) // 8 * 8
-    assert total == cb._SPARSE_PASS2_ROW_STATE_BYTES
+    assert total == em_cuda_kernels._SPARSE_PASS2_ROW_STATE_BYTES
 
 
 @pytest.mark.parametrize(
@@ -160,7 +161,7 @@ def test_wrapper_rejects_bad_operands(case):
     if case == "static_bool":
         kwargs["keep_all"] = 1
     with pytest.raises((TypeError, ValueError)):
-        cb.sparse_pass2_posterior_f32(scores, log_z, external, **kwargs)
+        em_cuda_kernels.sparse_pass2_posterior_f32(scores, log_z, external, **kwargs)
 
 
 def test_wrapper_requires_gpu_backend():
@@ -168,7 +169,7 @@ def test_wrapper_requires_gpu_backend():
         pytest.skip("CPU-only contract")
     scores = jnp.zeros((2, 3, 4), jnp.float32)
     with pytest.raises(RuntimeError, match="GPU backend"):
-        cb.sparse_pass2_log_z_f64(scores)
+        em_cuda_kernels.sparse_pass2_log_z_f64(scores)
     with pytest.raises(RuntimeError, match="GPU backend"):
         posterior.cuda_fused_pass2_posterior(scores, jnp.zeros((2,), jnp.float64), adaptive_fraction=0.999)
 

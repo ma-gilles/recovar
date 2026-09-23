@@ -14,13 +14,13 @@ from typing import NamedTuple
 import jax.numpy as jnp
 import numpy as np
 
-from recovar import cuda_backproject as _cuda_backproject_diagnostics
 from recovar import utils
 from recovar.em.classification.k_class import (
     _sparse_pass2_selected,
     run_dense_k_class_em,
     run_dense_k_class_em_adaptive,
 )
+from recovar.em.cuda import kernels as em_cuda_kernels
 from recovar.em.dense.em_engine import run_em
 from recovar.em.dense.score_outputs import (
     HalfScoreResult,
@@ -868,7 +868,7 @@ def _score_half_dense_in_bpref_scope(
 ) -> HalfScoreResult:
     """Keep all authoritative dense-half work outside diagnostic CUDA scope."""
 
-    with _cuda_backproject_diagnostics.bpref_device_signature_scope(False):
+    with em_cuda_kernels.bpref_device_signature_scope(False):
         return _score_half_dense(
             bpref_device_signature_active=bpref_device_signature_active,
             **kwargs,
@@ -1513,5 +1513,5 @@ def _score_half_local_in_bpref_scope(
         raise RuntimeError(
             "BPref device signature capture is supported only by sparse adaptive pass 2"
         )
-    with _cuda_backproject_diagnostics.bpref_device_signature_scope(False):
+    with em_cuda_kernels.bpref_device_signature_scope(False):
         return _score_half_local(**kwargs)

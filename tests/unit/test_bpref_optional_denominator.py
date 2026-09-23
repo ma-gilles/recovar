@@ -5,6 +5,7 @@ import numpy as np
 import pytest
 
 from recovar import cuda_backproject as cb
+from recovar.em.cuda import kernels as em_cuda_kernels
 
 pytestmark = pytest.mark.unit
 
@@ -41,15 +42,17 @@ def device(values):
 @pytest.mark.parametrize('value', [None, 0, 1, 'false', np.bool_(False)])
 def test_selector_rejects_non_boolean_before_cuda(monkeypatch, value):
     monkeypatch.setattr(cb, '_ensure_ffi', lambda: pytest.fail('CUDA loaded before selector validation'))
+    monkeypatch.setattr(em_cuda_kernels, '_ensure_ffi', lambda: pytest.fail('CUDA loaded before selector validation'))
     with pytest.raises(TypeError, match='Python bool'):
-        cb.relion_vdam_mstep_fused_projector_x_half.__wrapped__(**arguments(False, True), return_denominator=value)
+        em_cuda_kernels.relion_vdam_mstep_fused_projector_x_half.__wrapped__(**arguments(False, True), return_denominator=value)
 
 
 def test_external_replay_rejects_omitted_output_before_cuda(monkeypatch):
     monkeypatch.setenv('RECOVAR_VDAM_EXTERNAL_HOST_REPLAY_LIBRARY', '/nonexistent')
     monkeypatch.setattr(cb, '_ensure_ffi', lambda: pytest.fail('CUDA loaded before mode validation'))
+    monkeypatch.setattr(em_cuda_kernels, '_ensure_ffi', lambda: pytest.fail('CUDA loaded before mode validation'))
     with pytest.raises(ValueError, match='external host replay'):
-        cb.relion_vdam_mstep_fused_projector_x_half.__wrapped__(**arguments(False, True), return_denominator=False)
+        em_cuda_kernels.relion_vdam_mstep_fused_projector_x_half.__wrapped__(**arguments(False, True), return_denominator=False)
 
 
 @pytest.mark.parametrize('grouped', [False, True])
@@ -57,6 +60,7 @@ def test_external_replay_rejects_omitted_output_before_cuda(monkeypatch):
 def test_optional_result_preserves_all_ffi_operands_attributes_and_aliases(monkeypatch, grouped, stable):
     monkeypatch.delenv('RECOVAR_VDAM_EXTERNAL_HOST_REPLAY_LIBRARY', raising=False)
     monkeypatch.setattr(cb, '_ensure_ffi', lambda: None)
+    monkeypatch.setattr(em_cuda_kernels, '_ensure_ffi', lambda: None)
     records = []
 
     def fake_ffi(target, output_types, **options):
@@ -66,7 +70,7 @@ def test_optional_result_preserves_all_ffi_operands_attributes_and_aliases(monke
         return call
 
     monkeypatch.setattr(jax.ffi, 'ffi_call', fake_ffi)
-    fn = cb.relion_vdam_mstep_fused_projector_x_half.__wrapped__
+    fn = em_cuda_kernels.relion_vdam_mstep_fused_projector_x_half.__wrapped__
     values = device(arguments(grouped, stable))
     full = fn(**values)
     compact = fn(**values, return_denominator=False)
@@ -89,7 +93,7 @@ def test_optional_result_preserves_all_ffi_operands_attributes_and_aliases(monke
 @pytest.mark.parametrize('stable', [False, True])
 def test_gpu_single_active_row_accumulators_are_bitwise_exact(grouped, stable):
     assert jax.default_backend() == 'gpu'
-    fn = cb.relion_vdam_mstep_fused_projector_x_half
+    fn = em_cuda_kernels.relion_vdam_mstep_fused_projector_x_half
     values = arguments(grouped, stable)
     full = jax.block_until_ready(fn(**device(values)))
     compact = jax.block_until_ready(fn(**device(values), return_denominator=False))
@@ -110,7 +114,7 @@ def test_gpu_empty_output_abi_rejects_other_shapes(monkeypatch, bad_shape):
         return original(target, (*outputs[:3], jax.ShapeDtypeStruct(bad_shape, jnp.float32)), **options)
 
     monkeypatch.setattr(jax.ffi, 'ffi_call', bad_ffi)
-    fn = cb.relion_vdam_mstep_fused_projector_x_half
+    fn = em_cuda_kernels.relion_vdam_mstep_fused_projector_x_half
     fn.clear_cache()
     try:
         with pytest.raises(RuntimeError, match='inconsistent topology'):

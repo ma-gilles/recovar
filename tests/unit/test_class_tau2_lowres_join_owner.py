@@ -14,7 +14,7 @@ import pytest
 
 from recovar.em.helpers.resolution import shell_index_to_resolution_angstrom
 from recovar.em.refinement import mean_helpers
-from recovar.reconstruction import regularization
+from recovar.em.reconstruction import regularization_relion
 
 pytestmark = pytest.mark.unit
 
@@ -78,7 +78,7 @@ class TestJoinHalfAccumulatorsAtLowResolution:
             calls.append((args, kwargs))
             return sentinel
 
-        monkeypatch.setattr(regularization, "join_halves_at_low_resolution", spy)
+        monkeypatch.setattr(regularization_relion, "join_halves_at_low_resolution", spy)
         ft_y, ft_ctf = _random_accumulators(0)
         result = mean_helpers.join_half_accumulators_at_low_resolution(
             ft_y[0],
@@ -113,7 +113,7 @@ class TestJoinHalfAccumulatorsAtLowResolution:
         expected_cap = mean_helpers._previous_resolution_angstrom_for_half_join(
             pixel_resolutions, current_resolution, grid_size=GRID_SIZE, voxel_size=1.5
         )
-        expected = regularization.join_halves_at_low_resolution(
+        expected = regularization_relion.join_halves_at_low_resolution(
             ft_y[0],
             ft_y[1],
             ft_ctf[0],
@@ -156,7 +156,7 @@ class TestClassTau2FromIrefPowerSpectrum:
             calls.append((iref_fourier, volume_shape, kwargs))
             return relion_tau2, {"tau2_shells": relion_shells, "shell_sum": relion_shells}
 
-        monkeypatch.setattr(regularization, "compute_relion_tau2_from_iref_power_spectrum", fake)
+        monkeypatch.setattr(regularization_relion, "compute_relion_tau2_from_iref_power_spectrum", fake)
         frame_scale = float(GRID_SIZE) ** 4
         tau2, shells_relion, shells_recovar = mean_helpers._class_tau2_from_iref_power_spectrum(
             iref,
@@ -183,7 +183,7 @@ class TestClassTau2UpdateDetails:
         rng = np.random.default_rng(3)
         ft_ctf = jnp.asarray(rng.uniform(0.5, 2.0, int(np.prod(ACCUMULATOR_SHAPE))) + 0j, dtype=jnp.complex64)
         tau2_shells = jnp.asarray(rng.uniform(0.1, 1.0, N_SHELLS), dtype=jnp.float32)
-        shell_stats = regularization._compute_relion_weight_shell_stats(
+        shell_stats = regularization_relion._compute_relion_weight_shell_stats(
             ft_ctf,
             VOLUME_SHAPE,
             padding_factor=PADDING_FACTOR,
@@ -207,7 +207,7 @@ class TestClassTau2UpdateDetails:
             full_half_axis=-1,
             accumulator_volume_shape=ACCUMULATOR_SHAPE,
         )
-        expected_dvp = regularization.compute_data_vs_prior(
+        expected_dvp = regularization_relion.compute_data_vs_prior(
             ft_ctf,
             tau2_shells,
             VOLUME_SHAPE,

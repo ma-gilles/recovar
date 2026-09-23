@@ -12,7 +12,7 @@ import pytest
 pytest.importorskip("jax")
 import jax.numpy as jnp
 
-from recovar.reconstruction.regularization import (
+from recovar.em.reconstruction.regularization_relion import (
     compute_data_vs_prior,
     resolution_from_data_vs_prior,
     compute_current_size_relion,

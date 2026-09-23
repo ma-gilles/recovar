@@ -5,7 +5,7 @@ def test_relion_project_half_uses_projector_matrix_directly():
     """RELION accelerator euler matrices are projector matrices, not inverses."""
     import jax.numpy as jnp
 
-    from recovar.core.relion_project import relion_project_half
+    from recovar.em.relion.relion_project import relion_project_half
 
     n = 8
     volume = np.zeros((n, n, n // 2 + 1), dtype=np.complex128)
@@ -40,7 +40,7 @@ def test_centered_row_projector_transposes_scorer_rotations():
     """Centered-row RECOVAR scoring uses the transpose at the raw Projector handoff."""
     import jax.numpy as jnp
 
-    from recovar.core.relion_project import relion_project_half
+    from recovar.em.relion.relion_project import relion_project_half
     from recovar.em.helpers.projection import project_relion_projector_half_spectrum_centered_rows
 
     n = 8
@@ -96,7 +96,7 @@ def test_centered_row_projector_scatters_cropped_ppref_into_full_box():
     """Cropped RELION ``PPref`` output must land in full-box RECOVAR row order."""
     import jax.numpy as jnp
 
-    from recovar.core.relion_project import relion_project_half
+    from recovar.em.relion.relion_project import relion_project_half
     from recovar.em.helpers.projection import project_relion_projector_half_spectrum_centered_rows
 
     full_n = 8
@@ -150,7 +150,7 @@ def test_centered_row_projector_can_use_explicit_coarse_output_size():
     """RELION pass-1 projects PPref into the current-size Fimg box."""
     import jax.numpy as jnp
 
-    from recovar.core.relion_project import relion_project_half
+    from recovar.em.relion.relion_project import relion_project_half
     from recovar.em.helpers.projection import project_relion_projector_half_spectrum_centered_rows
 
     full_n = 8
@@ -206,7 +206,7 @@ def test_relion_acc_double_floorf_quirk_matches_default_away_from_integer_bounda
     """Away from an integer coordinate, the GPU floorf-narrowing quirk is a no-op."""
     import jax.numpy as jnp
 
-    from recovar.core.relion_project import relion_project_half
+    from recovar.em.relion.relion_project import relion_project_half
 
     n = 16
     rng = np.random.default_rng(23)
@@ -243,7 +243,7 @@ def test_relion_project_half_truncates_rotated_radius_before_clipping():
     """AccProjectorKernel assigns the positive floating r² sum to ``int``."""
     import jax.numpy as jnp
 
-    from recovar.core.relion_project import relion_project_half
+    from recovar.em.relion.relion_project import relion_project_half
 
     n = 8
     r_max = 2
@@ -280,7 +280,7 @@ def test_relion_acc_double_floorf_quirk_flips_bucket_at_integer_boundary():
     """
     import jax.numpy as jnp
 
-    from recovar.core.relion_project import relion_project_half
+    from recovar.em.relion.relion_project import relion_project_half
 
     n = 32
     # xp = 10 - 4e-7: float64 floors to 9. Cast to float32, this value rounds

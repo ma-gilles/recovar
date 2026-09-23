@@ -21,7 +21,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from recovar import cuda_backproject
+from recovar.em.cuda import kernels as em_cuda_kernels
 
 if __package__:
     from .validate_relion_bpref_factor_capture import load_factor_capture
@@ -139,7 +139,7 @@ def _run_particle(factor_path: Path, native: dict[str, Any], repeats: int) -> di
     for _ in range(repeats):
         data_volume = jnp.zeros(native["data"].shape, dtype=jnp.complex64)
         weight_volume = jnp.zeros(native["weight"].shape, dtype=jnp.float32)
-        output_data, output_weight = cuda_backproject.relion_firstiter_bpref_fused_x_half(
+        output_data, output_weight = em_cuda_kernels.relion_firstiter_bpref_fused_x_half(
             data_volume,
             weight_volume,
             jnp.asarray(image),

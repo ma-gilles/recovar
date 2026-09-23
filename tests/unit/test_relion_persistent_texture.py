@@ -40,10 +40,10 @@ def _rotations():
 
 
 def test_persistent_texture_rejects_nonexact_host_inputs():
-    import recovar.cuda_backproject as cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     projector = _projector()
-    constructor = cuda_backproject.RelionPersistentHalfTextureF32
+    constructor = em_cuda_kernels.RelionPersistentHalfTextureF32
     with pytest.raises(TypeError, match="NumPy host array"):
         constructor(
             jnp.asarray(projector),
@@ -79,6 +79,7 @@ def test_persistent_texture_rejects_nonexact_host_inputs():
 
 def _install_fake_texture_runtime(monkeypatch, *, fail_device_put=False):
     import recovar.cuda_backproject as cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     events = []
 
@@ -116,15 +117,17 @@ def _install_fake_texture_runtime(monkeypatch, *, fail_device_put=False):
         lambda backend=None: [device],
     )
     monkeypatch.setattr(cuda_backproject, "custom_cuda_requested", lambda: True)
+    monkeypatch.setattr(em_cuda_kernels, "custom_cuda_requested", lambda: True)
     monkeypatch.setattr(cuda_backproject, "_ensure_ffi", lambda: None)
+    monkeypatch.setattr(em_cuda_kernels, "_ensure_ffi", lambda: None)
     monkeypatch.setattr(
-        cuda_backproject,
+        em_cuda_kernels,
         "_persistent_relion_half_texture_c_api",
         lambda: (create, destroy),
     )
     monkeypatch.setattr(cuda_backproject.jax, "device_put", device_put)
     monkeypatch.setattr(cuda_backproject.jax, "block_until_ready", block_until_ready)
-    return cuda_backproject, device, events
+    return em_cuda_kernels, device, events
 
 
 def test_persistent_texture_reuses_one_upload_and_closes_after_readiness(monkeypatch):
@@ -231,6 +234,7 @@ def test_persistent_host_texture_matches_transient_and_rejects_stale_token(
     gpu_device,
 ):
     import recovar.cuda_backproject as cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
     from recovar.em.helpers.projection import (
         compute_relion_projector_projections_block,
     )
@@ -243,28 +247,28 @@ def test_persistent_host_texture_matches_transient_and_rejects_stale_token(
 
     with jax.default_device(gpu_device):
         rotations_jax = jnp.asarray(rotations)
-        transient = cuda_backproject.relion_projector_half_texture_f32(
+        transient = em_cuda_kernels.relion_projector_half_texture_f32(
             jnp.asarray(projector),
             rotations_jax,
             current_size=16,
             padding_factor=2,
             projector_max_r=7,
         )
-        texture = cuda_backproject.RelionPersistentHalfTextureF32(
+        texture = em_cuda_kernels.RelionPersistentHalfTextureF32(
             projector,
             padding_factor=2,
             projector_max_r=7,
             device=gpu_device,
         )
         handle = texture.owner_handle
-        first = cuda_backproject.relion_projector_persistent_half_texture_f32(
+        first = em_cuda_kernels.relion_projector_persistent_half_texture_f32(
             texture,
             rotations_jax[:4],
             current_size=16,
             padding_factor=2,
             projector_max_r=7,
         )
-        second = cuda_backproject.relion_projector_persistent_half_texture_f32(
+        second = em_cuda_kernels.relion_projector_persistent_half_texture_f32(
             texture,
             rotations_jax[4:],
             current_size=16,
@@ -304,19 +308,19 @@ def test_persistent_host_texture_matches_transient_and_rejects_stale_token(
         np.testing.assert_array_equal(np.asarray(persistent_abs2).view(np.uint32), np.asarray(transient_abs2).view(np.uint32))
 
         same_shape = rotations_jax[:4]
-        cache_size_after_first_owner = cuda_backproject._relion_projector_persistent_half_texture_f32._cache_size()
+        cache_size_after_first_owner = em_cuda_kernels._relion_projector_persistent_half_texture_f32._cache_size()
         stale_token = texture._handle_array
         texture.close()
         texture.close()
 
-        second_texture = cuda_backproject.RelionPersistentHalfTextureF32(
+        second_texture = em_cuda_kernels.RelionPersistentHalfTextureF32(
             projector,
             padding_factor=2,
             projector_max_r=7,
             device=gpu_device,
         )
         assert second_texture.owner_handle != handle
-        cuda_backproject.relion_projector_persistent_half_texture_f32(
+        em_cuda_kernels.relion_projector_persistent_half_texture_f32(
             second_texture,
             same_shape,
             current_size=16,
@@ -324,7 +328,7 @@ def test_persistent_host_texture_matches_transient_and_rejects_stale_token(
             projector_max_r=7,
         )
         assert (
-            cuda_backproject._relion_projector_persistent_half_texture_f32._cache_size() == cache_size_after_first_owner
+            em_cuda_kernels._relion_projector_persistent_half_texture_f32._cache_size() == cache_size_after_first_owner
         )
 
         # A cached executable carrying the old dynamic token must fail while
@@ -332,7 +336,7 @@ def test_persistent_host_texture_matches_transient_and_rejects_stale_token(
         # the stale token from aliasing that new texture.
         with pytest.raises(Exception, match="owner handle is not live"):
             jax.block_until_ready(
-                cuda_backproject._relion_projector_persistent_half_texture_f32(
+                em_cuda_kernels._relion_projector_persistent_half_texture_f32(
                     stale_token,
                     same_shape,
                     current_size=16,
@@ -348,7 +352,7 @@ def test_persistent_host_texture_matches_transient_and_rejects_stale_token(
 def test_persistent_texture_preserves_nyquist_and_current_radius(
     monkeypatch, custom_cuda_lib, gpu_device, radius, current_size
 ):
-    import recovar.cuda_backproject as cb
+    from recovar.em.cuda import kernels as em_cuda_kernels
     from recovar.em.helpers.projection import compute_relion_projector_projections_block
     monkeypatch.setenv('RECOVAR_CUDA_LIB', str(custom_cuda_lib))
     monkeypatch.delenv('RECOVAR_DISABLE_CUDA', raising=False)
@@ -360,10 +364,10 @@ def test_persistent_texture_preserves_nyquist_and_current_radius(
             r_max=radius, padding_factor=2, centered_rows=True, dense_scale=False,
             projector_output_size=current_size, relion_texture_interp=True,
         )
-        with cb.RelionPersistentHalfTextureF32(
+        with em_cuda_kernels.RelionPersistentHalfTextureF32(
             projector, padding_factor=2, projector_max_r=radius, device=gpu_device
         ) as texture:
-            actual = cb.relion_projector_persistent_half_texture_f32(
+            actual = em_cuda_kernels.relion_projector_persistent_half_texture_f32(
                 texture, rotations, current_size=current_size, padding_factor=2,
                 projector_max_r=radius,
             )
@@ -407,6 +411,7 @@ def test_bound_cuda_library_keeps_persistent_texture_handles_live(
     import shutil
 
     import recovar.cuda_backproject as cb
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
     monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
@@ -414,11 +419,11 @@ def test_bound_cuda_library_keeps_persistent_texture_handles_live(
     projector = _projector(r_max=7, padding_factor=2)
 
     def project():
-        with cb.RelionPersistentHalfTextureF32(
+        with em_cuda_kernels.RelionPersistentHalfTextureF32(
             projector, padding_factor=2, projector_max_r=7, device=gpu_device
         ) as texture:
             return np.asarray(
-                cb.relion_projector_persistent_half_texture_f32(
+                em_cuda_kernels.relion_projector_persistent_half_texture_f32(
                     texture, jnp.asarray(_rotations()), current_size=16, padding_factor=2, projector_max_r=7
                 )
             )
@@ -440,7 +445,7 @@ def test_bound_cuda_library_keeps_persistent_texture_handles_live(
 
 
 def test_sparse_pass2_opens_eligible_texture_from_original_host_slab(monkeypatch):
-    import recovar.cuda_backproject as cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
     from recovar.em.sparse_pass2 import dispatch as oversampling
     from recovar.em.helpers import projection
 
@@ -458,7 +463,7 @@ def test_sparse_pass2_opens_eligible_texture_from_original_host_slab(monkeypatch
         lambda *args, **kwargs: True,
     )
     monkeypatch.setattr(
-        cuda_backproject,
+        em_cuda_kernels,
         "RelionPersistentHalfTextureF32",
         fake_constructor,
     )
@@ -603,7 +608,7 @@ def test_sparse_pass2_early_texture_release_precedes_finalize_and_outer_cleanup(
 
 
 def test_large_static_projector_uses_half_storage_without_full_cube(monkeypatch):
-    import recovar.cuda_backproject as cb
+    from recovar.em.cuda import kernels as em_cuda_kernels
     from recovar.em.helpers import projection
     class HostShape:
         dtype = jnp.dtype(jnp.complex64)
@@ -616,7 +621,7 @@ def test_large_static_projector_uses_half_storage_without_full_cube(monkeypatch)
         return jnp.zeros((rotations.shape[0], 40), dtype=jnp.complex64)
     def forbid_full(*args, **kwargs):
         raise AssertionError('large static projector expanded to a full cube')
-    monkeypatch.setattr(cb, 'relion_projector_half_texture_f32', project)
+    monkeypatch.setattr(em_cuda_kernels, 'relion_projector_half_texture_f32', project)
     monkeypatch.setattr(projection, 'relion_projector_half_to_texture_full', forbid_full)
     result = projection._project_relion_projector_texture(
         slab, jnp.eye(3, dtype=jnp.float32)[None], (8, 8),
@@ -659,13 +664,13 @@ def test_projector_class_selection_preserves_host_view(monkeypatch, classes, dty
 def test_host_float32_upload_cast_preserves_double_source(monkeypatch):
     from recovar.em.sparse_pass2 import dispatch
     from recovar.em.helpers import projection
-    from recovar import cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
     source = _projector().astype(np.complex128)
     source += np.float64(2**-27)
     original = source.copy()
     captured = []
     monkeypatch.setattr(projection, "_relion_projector_texture_enabled", lambda value, **kw: value.dtype == np.complex64)
-    monkeypatch.setattr(cuda_backproject, "RelionPersistentHalfTextureF32", lambda value, **kw: captured.append(value) or object())
+    monkeypatch.setattr(em_cuda_kernels, "RelionPersistentHalfTextureF32", lambda value, **kw: captured.append(value) or object())
     assert projection._host_relion_projector_texture_enabled(source, r_max=1, padding_factor=1, allow_float32_cast=True)
     dispatch._open_persistent_relion_projector_texture(source, relion_projector_r_max=1, projection_padding_factor=1)
     assert captured[0].dtype == np.complex64

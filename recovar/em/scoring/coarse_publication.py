@@ -28,9 +28,9 @@ def _packed_support_prefix(support, count):
 
 def _cuda_posterior_host(values, raw_max, compact, actual, *, adaptive_fraction, max_significants):
     """Publish the explicit CUDA primitive without a full posterior mask transfer."""
-    from recovar import cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
-    statistics, indices, support, count = cuda_backproject.relion_coarse_posterior_transaction_f32(
+    statistics, indices, support, count = em_cuda_kernels.relion_coarse_posterior_transaction_f32(
         values,
         raw_max,
         jnp.asarray(actual, jnp.int32),

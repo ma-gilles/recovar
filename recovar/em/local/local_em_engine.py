@@ -869,7 +869,7 @@ def run_local_em_exact(
 
     use_relion_projector = relion_projector_half is not None
     if projection_padding_factor > 1 and not use_relion_projector:
-        from recovar.reconstruction.relion_functions import pad_volume_for_projection
+        from recovar.em.reconstruction.relion_functions_relion import pad_volume_for_projection
 
         mean_for_proj, proj_volume_shape = pad_volume_for_projection(
             mean,
@@ -2935,9 +2935,9 @@ def run_local_em_exact(
                     # the selected capture bucket in RELION's native statement
                     # order.  Recompute the denominator as well so both captured
                     # operands come from the same reducer.
-                    from recovar import cuda_backproject
+                    from recovar.em.cuda import kernels as em_cuda_kernels
 
-                    summed, ctf_probs = cuda_backproject.relion_vdam_mstep_sums_f32(
+                    summed, ctf_probs = em_cuda_kernels.relion_vdam_mstep_sums_f32(
                         source_vdam_images,
                         source_vdam_ctf,
                         source_vdam_minvsigma2,
@@ -3414,10 +3414,10 @@ def run_local_em_exact(
                                 0.0,
                             )
 
-                            from recovar import cuda_backproject
+                            from recovar.em.cuda import kernels as em_cuda_kernels
 
                             packed_source_vdam_ctf_probs = (
-                                cuda_backproject.relion_vdam_mstep_denominator_f32(
+                                em_cuda_kernels.relion_vdam_mstep_denominator_f32(
                                     packed_source_vdam_ctf,
                                     packed_source_vdam_minvsigma2,
                                     packed_source_vdam_posterior,

@@ -898,7 +898,7 @@ def compute_pass2_stats_sparse_bucketed(
 
     # Projection volume + padding
     if projection_padding_factor > 1 and not use_relion_projector:
-        from recovar.reconstruction.relion_functions import pad_volume_for_projection
+        from recovar.em.reconstruction.relion_functions_relion import pad_volume_for_projection
 
         mean_for_proj, proj_volume_shape = pad_volume_for_projection(
             volume,
@@ -5237,7 +5237,7 @@ def compute_k_class_pass2_stats_sparse_fused(
     for class_index in range(n_classes):
         class_volume = volumes[class_index]
         if projection_padding_factor > 1 and not use_relion_projector:
-            from recovar.reconstruction.relion_functions import pad_volume_for_projection
+            from recovar.em.reconstruction.relion_functions_relion import pad_volume_for_projection
 
             mean_for_proj, proj_volume_shape = pad_volume_for_projection(
                 class_volume,

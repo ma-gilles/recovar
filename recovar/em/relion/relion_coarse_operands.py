@@ -468,7 +468,7 @@ def _relion_coarse_gaussian_square_operands_sincosf(
 ):
     """Build corrected coarse images with RELION's CUDA sin/cos path."""
 
-    from recovar import cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
     from recovar.em.sparse_pass2.sparse_pass2_bucket_io import _relion_translation_angles_f64
     score_indices = jnp.asarray(score_indices, dtype=jnp.int32)
     if translation_phase_source is None:
@@ -501,9 +501,9 @@ def _relion_coarse_gaussian_square_operands_sincosf(
         dtype=angle_dtype,
     )
     translate_score = (
-        cuda_backproject.relion_translate_score_f64
+        em_cuda_kernels.relion_translate_score_f64
         if use_float64
-        else cuda_backproject.relion_translate_score_f32
+        else em_cuda_kernels.relion_translate_score_f32
     )
     shifted_corrected = translate_score(
         jnp.asarray(unshifted_corrected, dtype=complex_dtype),
@@ -584,7 +584,7 @@ def _assemble_relion_exact_coarse_gaussian_operands(
 ) -> RelionExactCoarseGaussianOperands:
     """Assemble the single exact-source operand set without generic formulas."""
 
-    from recovar import cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
     from recovar.em.relion.relion_ctf import _relion_exact_ctf_half_from_source_star_host
     from recovar.em.sparse_pass2.sparse_pass2_bucket_io import (
         _relion_translation_angles_f32,
@@ -594,7 +594,7 @@ def _assemble_relion_exact_coarse_gaussian_operands(
     real_dtype = jnp.float64 if use_float64_scoring else jnp.float32
     complex_dtype = jnp.complex128 if use_float64_scoring else jnp.complex64
     angle_fn = _relion_translation_angles_f64 if use_float64_scoring else _relion_translation_angles_f32
-    translate_fn = cuda_backproject.relion_translate_score_f64 if use_float64_scoring else cuda_backproject.relion_translate_score_f32
+    translate_fn = em_cuda_kernels.relion_translate_score_f64 if use_float64_scoring else em_cuda_kernels.relion_translate_score_f32
 
     ctf_half_rfloat_np = np.asarray(
         _relion_exact_ctf_half_from_source_star_host(

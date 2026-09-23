@@ -13,7 +13,7 @@ import numpy as np
 
 from recovar.em.helpers.convergence import healpix_angular_step
 from recovar.em.helpers.fourier_window import quantize_current_size
-from recovar.reconstruction.regularization import (
+from recovar.em.reconstruction.regularization_relion import (
     compute_current_size_relion,
     fsc_to_relion_ssnr,
     resolution_from_data_vs_prior,

@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 from recovar import cuda_backproject as cb
+from recovar.em.cuda import kernels as em_cuda_kernels
 from test_bpref_optional_denominator import arguments, device
 
 pytestmark = pytest.mark.unit
@@ -12,19 +13,21 @@ pytestmark = pytest.mark.unit
 @pytest.mark.parametrize('shape', [(9, 9, 4), (11, 11, 6), (8, 8, 5)])
 def test_invalid_logical_half_rejected_before_cuda(monkeypatch, shape):
     monkeypatch.setattr(cb, '_ensure_ffi', lambda: pytest.fail('unexpected CUDA load'))
+    monkeypatch.setattr(em_cuda_kernels, '_ensure_ffi', lambda: pytest.fail('unexpected CUDA load'))
     values = arguments(False, False)
     values['projector_full'] = np.zeros(shape, np.complex64)
     with pytest.raises(TypeError, match='radius-matched logical half slab'):
-        cb.relion_vdam_mstep_fused_projector_x_half.__wrapped__(**device(values))
+        em_cuda_kernels.relion_vdam_mstep_fused_projector_x_half.__wrapped__(**device(values))
 
 
 def test_logical_half_external_host_replay_rejected(monkeypatch):
     monkeypatch.setenv('RECOVAR_VDAM_EXTERNAL_HOST_REPLAY_LIBRARY', '/nonexistent')
     monkeypatch.setattr(cb, '_ensure_ffi', lambda: pytest.fail('unexpected CUDA load'))
+    monkeypatch.setattr(em_cuda_kernels, '_ensure_ffi', lambda: pytest.fail('unexpected CUDA load'))
     values = arguments(False, False)
     values['projector_full'] = np.zeros((9, 9, 5), np.complex64)
     with pytest.raises(ValueError, match='requires a full projector cube'):
-        cb.relion_vdam_mstep_fused_projector_x_half.__wrapped__(**device(values))
+        em_cuda_kernels.relion_vdam_mstep_fused_projector_x_half.__wrapped__(**device(values))
 
 
 @pytest.mark.gpu
@@ -49,7 +52,7 @@ def test_logical_half_matches_full_cube_bitwise(padding, grouped, stable, denomi
     rotation = np.array([[-c, s, 0], [s, c, 0], [0, 0, -1]], np.float32)
     values['rotation_matrices'][:] = rotation
     values['translation_angles'][:] = (0.13, -0.27)
-    fn = cb.relion_vdam_mstep_fused_projector_x_half
+    fn = em_cuda_kernels.relion_vdam_mstep_fused_projector_x_half
     full = jax.block_until_ready(fn(**device(values), return_denominator=denominator))
     values['projector_full'] = half
     direct = jax.block_until_ready(fn(**device(values), return_denominator=denominator))
@@ -71,7 +74,7 @@ def test_local_physical_carry_consumes_inputs_and_preserves_results(grouped, sta
     rng = np.random.default_rng(177)
     values['projector_full'] = (rng.normal(size=(9, 9, 5))
         + 1j * rng.normal(size=(9, 9, 5))).astype(np.complex64)
-    expected = jax.block_until_ready(cb.relion_vdam_mstep_fused_projector_x_half(
+    expected = jax.block_until_ready(em_cuda_kernels.relion_vdam_mstep_fused_projector_x_half(
         **device(values), parallel_worker_replay=False))
     v = device(values)
     data, weight = v['data_volume'], v['weight_volume']
@@ -158,7 +161,7 @@ _rlnPhaseShift #5
         relion_exact_bpref_operands=True, relion_wavg_sequential_cuda=True,
         preserve_bpref_particle_order=True, mstep_subtract_ctf_projection=True,
     )
-    consume = cb._relion_vdam_mstep_fused_projector_x_half_consume
+    consume = em_cuda_kernels._relion_vdam_mstep_fused_projector_x_half_consume
     calls = []
 
     def observed(*args, **options):
@@ -167,14 +170,14 @@ _rlnPhaseShift #5
         if reference_mode:
             args = list(args)
             args[8] = relion_projector_half_to_texture_full(args[8])
-            result = cb.relion_vdam_mstep_fused_projector_x_half(*args, **options)
+            result = em_cuda_kernels.relion_vdam_mstep_fused_projector_x_half(*args, **options)
         else:
             result = consume(*args, **options)
             assert args[0].is_deleted() and args[1].is_deleted()
         calls.append(reference_mode)
         return result
 
-    monkeypatch.setattr(cb, '_relion_vdam_mstep_fused_projector_x_half_consume', observed)
+    monkeypatch.setattr(em_cuda_kernels, '_relion_vdam_mstep_fused_projector_x_half_consume', observed)
     expected = None
     for reference_mode in (True, False):
         out = run_local_em_exact(

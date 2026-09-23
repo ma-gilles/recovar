@@ -1223,6 +1223,7 @@ def test_coarse_gaussian_gemm_live_k1_cache_builds_once_outside_image_loop(
     """The opt-in cache owns projections once and only serves later blocks."""
 
     from recovar import cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
     from recovar.em.helpers import projection as projection_helpers
     for name, value in {
         "RECOVAR_COARSE_GAUSSIAN_GEMM_MACRO": "1",
@@ -1246,7 +1247,7 @@ def test_coarse_gaussian_gemm_live_k1_cache_builds_once_outside_image_loop(
     monkeypatch.setattr(cuda_backproject, "cuda_available", lambda: True)
     _mock_unit_ctf_and_zero_highres_power(monkeypatch)
     monkeypatch.setattr(
-        cuda_backproject,
+        em_cuda_kernels,
         "relion_translate_score_f32",
         lambda images, translation_angles, pixel_indices, image_shape: jnp.repeat(
             images[:, None, :],
@@ -1397,6 +1398,7 @@ def test_live_k1_hybrid_reuses_exact_scores_in_both_significance_passes(
     """Selected and exact-full-direct hybrid scores are reused in both passes."""
 
     from recovar import cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
     from recovar.em.helpers import oversampling, preprocessing
     from recovar.em.helpers import projection as projection_helpers
     from recovar.em.scoring.coarse_gemm_hybrid import CoarseGemmHybridBlockSelection, CoarseGemmHybridCompactScores
@@ -1475,7 +1477,7 @@ def test_live_k1_hybrid_reuses_exact_scores_in_both_significance_passes(
 
     fake_fused_projector.__name__ = "relion_coarse_diff2_projector_f32"
     monkeypatch.setattr(
-        cuda_backproject,
+        em_cuda_kernels,
         "relion_coarse_diff2_projector_f32",
         fake_fused_projector,
     )
@@ -1521,7 +1523,7 @@ def test_live_k1_hybrid_reuses_exact_scores_in_both_significance_passes(
         ).reshape(images.shape[0] * int(translation_angles.shape[0]), -1)
 
     monkeypatch.setattr(
-        cuda_backproject,
+        em_cuda_kernels,
         "relion_translate_score_f32",
         fake_translate,
     )
@@ -2170,6 +2172,7 @@ def test_coarse_gaussian_gemm_live_k2_priors_multigroup_and_poisoned_tails(
     """Live K-class pass preserves layout, priors, support, and both tail masks."""
 
     from recovar import cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
     from recovar.em.helpers import projection as projection_helpers
     from recovar.em.sparse_pass2 import sparse_pass2_scoring
     for name, value in {
@@ -2216,7 +2219,7 @@ def test_coarse_gaussian_gemm_live_k2_priors_multigroup_and_poisoned_tails(
         lambda processed, **_kwargs: jnp.zeros(processed.shape[0], dtype=jnp.float32),
     )
     monkeypatch.setattr(
-        cuda_backproject,
+        em_cuda_kernels,
         "relion_translate_score_f32",
         lambda images, translation_angles, pixel_indices, image_shape: jnp.repeat(
             images[:, None, :],
@@ -2479,7 +2482,7 @@ def test_coarse_gaussian_gemm_live_k2_priors_multigroup_and_poisoned_tails(
         return -designed_scores(projected, shifted, actual_count)
 
     monkeypatch.setattr(
-        cuda_backproject,
+        em_cuda_kernels,
         "relion_coarse_diff2_rectangular_f32",
         direct_square_stub,
     )

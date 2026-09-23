@@ -15,6 +15,7 @@ import numpy as np
 import pytest
 
 from recovar import cuda_backproject as cb
+from recovar.em.cuda import kernels as em_cuda_kernels
 
 pytestmark = pytest.mark.unit
 
@@ -77,7 +78,7 @@ def _rectangular(scores_2d, log_z, external, *, adaptive_fraction, keep_all):
     """Rectangular oracle: one row per image, named like the segmented outputs."""
 
     use_external = external is not None
-    outputs = cb.sparse_pass2_posterior_f32(
+    outputs = em_cuda_kernels.sparse_pass2_posterior_f32(
         jnp.asarray(scores_2d, dtype=jnp.float32),
         jnp.asarray(log_z, dtype=jnp.float64),
         jnp.asarray(
@@ -100,14 +101,14 @@ def _segmented(
     *,
     adaptive_fraction,
     keep_all,
-    sort_scan_mode=cb.SPARSE_PASS2_SORT_SCAN_SEGMENTED_SORT,
+    sort_scan_mode=em_cuda_kernels.SPARSE_PASS2_SORT_SCAN_SEGMENTED_SORT,
     scratch=False,
 ):
     # The bitwise oracle tests pin a mode that is bitwise with the rectangular
     # handler by construction, so they keep testing the arithmetic rather than
     # whatever the capacity-class default happens to pick for their shape.
     segments = len(offsets) - 1
-    outputs = cb.sparse_pass2_segmented_posterior_f32(
+    outputs = em_cuda_kernels.sparse_pass2_segmented_posterior_f32(
         jnp.asarray(scores_flat, dtype=jnp.float32),
         jnp.asarray(offsets, dtype=jnp.int32),
         jnp.asarray(n_valid, dtype=jnp.int32),
@@ -142,9 +143,9 @@ def _assert_same(actual, expected, context=""):
 def test_segment_state_bytes_match_header():
     """The Python scratch size tracks sizeof(SegmentState) in the CUDA header."""
 
-    header = os.path.join(os.path.dirname(cb.__file__), "cuda", "sparse_pass2_posterior.cuh")
+    header = os.path.join(os.path.dirname(cb.__file__), "em", "cuda", "sparse_pass2_posterior.cuh")
     body = open(header).read().split("struct SegmentState", 1)[1].split("};", 1)[0]
-    sizes = {"RowState": cb._SPARSE_PASS2_ROW_STATE_BYTES, "int": 4, "int64_t": 8}
+    sizes = {"RowState": em_cuda_kernels._SPARSE_PASS2_ROW_STATE_BYTES, "int": 4, "int64_t": 8}
     fields = [line.split()[0] for line in body.splitlines() if line.strip() and line.strip()[0] not in "{/"]
     total = 0
     for kind in fields:
@@ -152,18 +153,18 @@ def test_segment_state_bytes_match_header():
         align = min(size, 8)
         total = (total + align - 1) // align * align + size
     total = (total + 7) // 8 * 8
-    assert total == cb._SPARSE_PASS2_SEGMENT_STATE_BYTES
+    assert total == em_cuda_kernels._SPARSE_PASS2_SEGMENT_STATE_BYTES
 
 
 @pytest.mark.parametrize(
     "cells, segments, expected",
     [
-        (1376256, 128, cb.SPARSE_PASS2_SORT_SCAN_SEGMENTED),   # 10752 cells/segment
-        (5505024, 128, cb.SPARSE_PASS2_SORT_SCAN_SEGMENTED),   # 43008
-        (22020096, 512, cb.SPARSE_PASS2_SORT_SCAN_SEGMENTED),  # 43008
-        (22020096, 128, cb.SPARSE_PASS2_SORT_SCAN_SEGMENTED),  # 172032
-        (22020096, 32, cb.SPARSE_PASS2_SORT_SCAN_PER_SEGMENT),  # 688128
-        (0, 0, cb.SPARSE_PASS2_SORT_SCAN_PER_SEGMENT),
+        (1376256, 128, em_cuda_kernels.SPARSE_PASS2_SORT_SCAN_SEGMENTED),   # 10752 cells/segment
+        (5505024, 128, em_cuda_kernels.SPARSE_PASS2_SORT_SCAN_SEGMENTED),   # 43008
+        (22020096, 512, em_cuda_kernels.SPARSE_PASS2_SORT_SCAN_SEGMENTED),  # 43008
+        (22020096, 128, em_cuda_kernels.SPARSE_PASS2_SORT_SCAN_SEGMENTED),  # 172032
+        (22020096, 32, em_cuda_kernels.SPARSE_PASS2_SORT_SCAN_PER_SEGMENT),  # 688128
+        (0, 0, em_cuda_kernels.SPARSE_PASS2_SORT_SCAN_PER_SEGMENT),
     ],
 )
 def test_auto_mode_follows_the_measured_crossover(cells, segments, expected):
@@ -176,18 +177,18 @@ def test_auto_mode_follows_the_measured_crossover(cells, segments, expected):
     narrowest image capacity fall on the per-segment side.
     """
 
-    assert cb.sparse_pass2_segmented_auto_mode(cells, segments) == expected
+    assert em_cuda_kernels.sparse_pass2_segmented_auto_mode(cells, segments) == expected
 
 
 def test_auto_mode_is_the_default_and_the_environment_names_every_mode():
-    assert cb._SPARSE_PASS2_SORT_SCAN_DEFAULT == cb.SPARSE_PASS2_SORT_SCAN_AUTO
-    assert set(cb._SPARSE_PASS2_SORT_SCAN_NAMES.values()) == {
-        cb.SPARSE_PASS2_SORT_SCAN_AUTO,
-        cb.SPARSE_PASS2_SORT_SCAN_PER_SEGMENT,
-        cb.SPARSE_PASS2_SORT_SCAN_SEGMENTED_SORT,
-        cb.SPARSE_PASS2_SORT_SCAN_SEGMENTED,
-        cb.SPARSE_PASS2_SORT_SCAN_PARTITIONED_SORT,
-        cb.SPARSE_PASS2_SORT_SCAN_PARTITIONED,
+    assert em_cuda_kernels._SPARSE_PASS2_SORT_SCAN_DEFAULT == em_cuda_kernels.SPARSE_PASS2_SORT_SCAN_AUTO
+    assert set(em_cuda_kernels._SPARSE_PASS2_SORT_SCAN_NAMES.values()) == {
+        em_cuda_kernels.SPARSE_PASS2_SORT_SCAN_AUTO,
+        em_cuda_kernels.SPARSE_PASS2_SORT_SCAN_PER_SEGMENT,
+        em_cuda_kernels.SPARSE_PASS2_SORT_SCAN_SEGMENTED_SORT,
+        em_cuda_kernels.SPARSE_PASS2_SORT_SCAN_SEGMENTED,
+        em_cuda_kernels.SPARSE_PASS2_SORT_SCAN_PARTITIONED_SORT,
+        em_cuda_kernels.SPARSE_PASS2_SORT_SCAN_PARTITIONED,
     }
 
 
@@ -255,7 +256,7 @@ def test_wrapper_rejects_bad_operands(case):
     if case == "return_scratch":
         kwargs["return_scratch"] = 1
     with pytest.raises((TypeError, ValueError)):
-        cb.sparse_pass2_segmented_posterior_f32(
+        em_cuda_kernels.sparse_pass2_segmented_posterior_f32(
             scores, offsets, n_valid, log_z, external, **kwargs
         )
 
@@ -267,9 +268,9 @@ def test_wrapper_requires_gpu_backend():
     offsets = jnp.asarray([0, 6, 12], jnp.int32)
     n_valid = jnp.asarray(2, jnp.int32)
     with pytest.raises(RuntimeError, match="GPU backend"):
-        cb.sparse_pass2_segmented_log_z_f64(scores, offsets, n_valid)
+        em_cuda_kernels.sparse_pass2_segmented_log_z_f64(scores, offsets, n_valid)
     with pytest.raises(RuntimeError, match="GPU backend"):
-        cb.sparse_pass2_segmented_posterior_f32(
+        em_cuda_kernels.sparse_pass2_segmented_posterior_f32(
             scores,
             offsets,
             n_valid,
@@ -301,20 +302,20 @@ def test_flattened_rows_match_rectangular(shape, variant, adaptive_fraction):
         scores[:, 0] = scores.reshape(images, -1).max(axis=1)[:, None]
     scores_2d = scores.reshape(images, cells)
     log_z = np.array(
-        cb.sparse_pass2_log_z_f64(jnp.asarray(scores_2d, jnp.float32)), dtype=np.float64
+        em_cuda_kernels.sparse_pass2_log_z_f64(jnp.asarray(scores_2d, jnp.float32)), dtype=np.float64
     )
     if variant == "nan_and_inf_row" and images > 2:
         log_z[2] = np.inf
     offsets = (np.arange(images + 1) * cells).astype(np.int32)
 
     segmented_log_z = np.asarray(
-        cb.sparse_pass2_segmented_log_z_f64(
+        em_cuda_kernels.sparse_pass2_segmented_log_z_f64(
             jnp.asarray(scores_2d.reshape(-1), jnp.float32),
             jnp.asarray(offsets, jnp.int32),
             jnp.asarray(images, jnp.int32),
         )
     )
-    rectangular_log_z = np.asarray(cb.sparse_pass2_log_z_f64(jnp.asarray(scores_2d, jnp.float32)))
+    rectangular_log_z = np.asarray(em_cuda_kernels.sparse_pass2_log_z_f64(jnp.asarray(scores_2d, jnp.float32)))
     assert segmented_log_z.dtype == rectangular_log_z.dtype
     np.testing.assert_array_equal(segmented_log_z, rectangular_log_z, err_msg="segmented log_z")
 
@@ -366,12 +367,12 @@ def test_ragged_segments_match_per_segment_rectangular(adaptive_fraction, keep_a
     for index in range(segments):
         segment = scores[offsets[index] : offsets[index + 1]]
         log_z[index] = np.asarray(
-            cb.sparse_pass2_log_z_f64(jnp.asarray(segment.reshape(1, -1), jnp.float32))
+            em_cuda_kernels.sparse_pass2_log_z_f64(jnp.asarray(segment.reshape(1, -1), jnp.float32))
         )[0]
     external = (np.abs(rng.normal(size=segments)) + 0.5).astype(np.float32) if use_external else None
 
     segmented_log_z = np.asarray(
-        cb.sparse_pass2_segmented_log_z_f64(
+        em_cuda_kernels.sparse_pass2_segmented_log_z_f64(
             jnp.asarray(scores, jnp.float32),
             jnp.asarray(offsets, jnp.int32),
             jnp.asarray(segments, jnp.int32),
@@ -426,7 +427,7 @@ def test_empty_segments_invalid_images_and_padding(adaptive_fraction, keep_all, 
     for index in range(segments):
         begin, end = int(offsets[index]), int(offsets[index + 1])
         log_z[index] = (
-            np.asarray(cb.sparse_pass2_log_z_f64(jnp.asarray(scores[begin:end].reshape(1, -1), jnp.float32)))[0]
+            np.asarray(em_cuda_kernels.sparse_pass2_log_z_f64(jnp.asarray(scores[begin:end].reshape(1, -1), jnp.float32)))[0]
             if end > begin
             else -np.inf
         )
@@ -434,7 +435,7 @@ def test_empty_segments_invalid_images_and_padding(adaptive_fraction, keep_all, 
     external = (np.abs(rng.normal(size=segments)) + 0.5).astype(np.float32) if use_external else None
 
     segmented_log_z = np.asarray(
-        cb.sparse_pass2_segmented_log_z_f64(
+        em_cuda_kernels.sparse_pass2_segmented_log_z_f64(
             jnp.asarray(scores, jnp.float32),
             jnp.asarray(offsets, jnp.int32),
             jnp.asarray(n_valid, jnp.int32),
@@ -508,7 +509,7 @@ def test_capacity_launch_is_independent_of_occupancy(adaptive_fraction):
     for index in range(n_valid):
         segment = scores[live_offsets[index] : live_offsets[index + 1]]
         log_z_live[index] = np.asarray(
-            cb.sparse_pass2_log_z_f64(jnp.asarray(segment.reshape(1, -1), jnp.float32))
+            em_cuda_kernels.sparse_pass2_log_z_f64(jnp.asarray(segment.reshape(1, -1), jnp.float32))
         )[0]
 
     reference = None
@@ -522,7 +523,7 @@ def test_capacity_launch_is_independent_of_occupancy(adaptive_fraction):
         log_z[:n_valid] = log_z_live
 
         segmented_log_z = np.asarray(
-            cb.sparse_pass2_segmented_log_z_f64(
+            em_cuda_kernels.sparse_pass2_segmented_log_z_f64(
                 jnp.asarray(padded_scores, jnp.float32),
                 jnp.asarray(offsets, jnp.int32),
                 jnp.asarray(n_valid, jnp.int32),
@@ -575,7 +576,7 @@ def test_offsets_past_n_valid_images_do_not_leak(adaptive_fraction):
     for index in range(len(lengths)):
         segment = scores[offsets[index] : offsets[index + 1]]
         log_z[index] = np.asarray(
-            cb.sparse_pass2_log_z_f64(jnp.asarray(segment.reshape(1, -1), jnp.float32))
+            em_cuda_kernels.sparse_pass2_log_z_f64(jnp.asarray(segment.reshape(1, -1), jnp.float32))
         )[0]
 
     full = _segmented(
@@ -665,7 +666,7 @@ def make_production_chunk(images, rows, translations, occupancy, seed):
 
 def _chunk_log_z(scores, offsets, images):
     return np.asarray(
-        cb.sparse_pass2_segmented_log_z_f64(
+        em_cuda_kernels.sparse_pass2_segmented_log_z_f64(
             jnp.asarray(scores, jnp.float32),
             jnp.asarray(offsets, jnp.int32),
             jnp.asarray(images, jnp.int32),
@@ -686,7 +687,7 @@ def _float32_ulps(left, right):
 @pytest.mark.gpu
 @pytest.mark.parametrize(
     "mode",
-    [cb.SPARSE_PASS2_SORT_SCAN_SEGMENTED_SORT, cb.SPARSE_PASS2_SORT_SCAN_PARTITIONED_SORT],
+    [em_cuda_kernels.SPARSE_PASS2_SORT_SCAN_SEGMENTED_SORT, em_cuda_kernels.SPARSE_PASS2_SORT_SCAN_PARTITIONED_SORT],
 )
 @pytest.mark.parametrize("images, rows, translations, occupancy", _PRODUCTION_CHUNKS)
 def test_segmented_sort_is_bitwise_on_production_chunks(
@@ -711,8 +712,8 @@ def test_segmented_sort_is_bitwise_on_production_chunks(
             adaptive_fraction=0.999, keep_all=False, sort_scan_mode=mode, scratch=True,
         )
         for mode in (
-            cb.SPARSE_PASS2_SORT_SCAN_PER_SEGMENT,
-            cb.SPARSE_PASS2_SORT_SCAN_PER_SEGMENT,
+            em_cuda_kernels.SPARSE_PASS2_SORT_SCAN_PER_SEGMENT,
+            em_cuda_kernels.SPARSE_PASS2_SORT_SCAN_PER_SEGMENT,
             mode,
         )
     ]
@@ -736,7 +737,7 @@ def test_segmented_sort_is_bitwise_on_production_chunks(
 
 @pytest.mark.gpu
 @pytest.mark.parametrize(
-    "mode", [cb.SPARSE_PASS2_SORT_SCAN_SEGMENTED, cb.SPARSE_PASS2_SORT_SCAN_PARTITIONED]
+    "mode", [em_cuda_kernels.SPARSE_PASS2_SORT_SCAN_SEGMENTED, em_cuda_kernels.SPARSE_PASS2_SORT_SCAN_PARTITIONED]
 )
 @pytest.mark.parametrize("images, rows, translations, occupancy", _PRODUCTION_CHUNKS)
 def test_single_scan_keeps_keys_and_moves_only_near_ties(
@@ -760,7 +761,7 @@ def test_single_scan_keeps_keys_and_moves_only_near_ties(
     reference = _segmented(
         scores, offsets, images, log_z, None,
         adaptive_fraction=0.999, keep_all=False,
-        sort_scan_mode=cb.SPARSE_PASS2_SORT_SCAN_PER_SEGMENT, scratch=True,
+        sort_scan_mode=em_cuda_kernels.SPARSE_PASS2_SORT_SCAN_PER_SEGMENT, scratch=True,
     )
     candidate = _segmented(
         scores, offsets, images, log_z, None,
@@ -829,7 +830,7 @@ def test_modes_agree_on_empty_and_invalid_segments(mode, adaptive_fraction):
     reference = _segmented(
         scores, offsets, n_valid, log_z, None,
         adaptive_fraction=adaptive_fraction, keep_all=False,
-        sort_scan_mode=cb.SPARSE_PASS2_SORT_SCAN_PER_SEGMENT, scratch=True,
+        sort_scan_mode=em_cuda_kernels.SPARSE_PASS2_SORT_SCAN_PER_SEGMENT, scratch=True,
     )
     candidate = _segmented(
         scores, offsets, n_valid, log_z, None,
@@ -854,7 +855,7 @@ def test_modes_agree_on_empty_and_invalid_segments(mode, adaptive_fraction):
 
 @pytest.mark.gpu
 @pytest.mark.parametrize(
-    "mode", [cb.SPARSE_PASS2_SORT_SCAN_SEGMENTED, cb.SPARSE_PASS2_SORT_SCAN_PARTITIONED]
+    "mode", [em_cuda_kernels.SPARSE_PASS2_SORT_SCAN_SEGMENTED, em_cuda_kernels.SPARSE_PASS2_SORT_SCAN_PARTITIONED]
 )
 def test_single_scan_clamps_a_malformed_offset_table_on_the_device(mode):
     """Modes 1 and 2 hand the offsets to CUB, so the device clamps them.
@@ -887,7 +888,7 @@ def test_single_scan_clamps_a_malformed_offset_table_on_the_device(mode):
     expected = _segmented(
         scores, clamped, images, log_z, None,
         adaptive_fraction=0.999, keep_all=False,
-        sort_scan_mode=cb.SPARSE_PASS2_SORT_SCAN_PER_SEGMENT,
+        sort_scan_mode=em_cuda_kernels.SPARSE_PASS2_SORT_SCAN_PER_SEGMENT,
     )
     actual = _segmented(
         scores, malformed, images, _chunk_log_z(scores, malformed, images), None,
@@ -915,8 +916,8 @@ def test_default_call_equals_the_mode_the_policy_names(
     scores, offsets = make_production_chunk(images, rows, translations, occupancy, 23)
     log_z = _chunk_log_z(scores, offsets, images)
     cells = int(np.prod(scores.shape))
-    expected_mode = cb.sparse_pass2_segmented_auto_mode(cells, images)
-    assert cb.sparse_pass2_segmented_sort_scan_mode() == cb.SPARSE_PASS2_SORT_SCAN_AUTO
+    expected_mode = em_cuda_kernels.sparse_pass2_segmented_auto_mode(cells, images)
+    assert em_cuda_kernels.sparse_pass2_segmented_sort_scan_mode() == em_cuda_kernels.SPARSE_PASS2_SORT_SCAN_AUTO
     default = _segmented(
         scores, offsets, images, log_z, None,
         adaptive_fraction=0.999, keep_all=False, sort_scan_mode=None,

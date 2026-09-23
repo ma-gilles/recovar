@@ -70,10 +70,10 @@ def update_noise_from_estep_meta(
             summaries.append(f"dump={dump_path}")
         raise ValueError("noise weighted sums must be finite: " + "; ".join(summaries))
 
-    from recovar.reconstruction import noise
+    from recovar.em.reconstruction import noise_relion
 
     sigma2_relion_units = np.asarray(
-        noise.normalize_wsum_to_sigma2_noise(
+        noise_relion.normalize_wsum_to_sigma2_noise(
             wsum_sigma2_noise, wsum_img_power, float(noise_sumw), (int(state.ori_size), int(state.ori_size))
         ),
         dtype=np.float64,

@@ -192,6 +192,7 @@ def test_pair_sparse_flat_rows_kernel_matches_padded_rows_bitwise(monkeypatch, c
     listed row must equal the padded kernel's row bitwise, rows outside the bucket are zero,
     and the listed order is arbitrary (real rows of every image, then a few repeats)."""
     import recovar.cuda_backproject as cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
     monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
@@ -208,8 +209,8 @@ def test_pair_sparse_flat_rows_kernel_matches_padded_rows_bitwise(monkeypatch, c
         sorted_probs, sorted_trans, offsets = spb._compact_pair_sorted_csr(
             jnp.asarray(probs), jnp.asarray(rows), jnp.asarray(trans), jnp.asarray(mask), n_rotation_rows=n_rows, n_trans=n_trans
         )
-        padded = cuda_backproject.dual_weighted_sums_pairs_f32(sorted_probs, sorted_trans, offsets, jnp.asarray(recon), jnp.asarray(image))
-        flat = cuda_backproject.dual_weighted_sums_pairs_rows_f32(
+        padded = em_cuda_kernels.dual_weighted_sums_pairs_f32(sorted_probs, sorted_trans, offsets, jnp.asarray(recon), jnp.asarray(image))
+        flat = em_cuda_kernels.dual_weighted_sums_pairs_rows_f32(
             sorted_probs, sorted_trans, offsets, jnp.asarray(row_batch), jnp.asarray(row_rotation), jnp.asarray(recon), jnp.asarray(image)
         )
         padded, flat = jax.block_until_ready((padded, flat))

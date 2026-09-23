@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 
 from recovar.core import fourier_transform_utils as ftu
-from recovar.reconstruction import regularization
+from recovar.em.reconstruction import regularization_relion
 from recovar.reconstruction import relion_functions as rf
 
 pytestmark = pytest.mark.unit
@@ -109,6 +109,7 @@ class TestReconstructionOwnership:
         """The retained half-0 buffer must feed Stage A and release before the iFFT."""
         from recovar.em.refinement import mean_helpers as mean_helpers_module
         from recovar.reconstruction import relion_functions
+        from recovar.em.reconstruction import relion_functions_relion
 
         events = []
         host_boundary = np.ones((5, 5, 3), dtype=np.complex64)
@@ -149,9 +150,9 @@ class TestReconstructionOwnership:
             return host_boundary
 
         monkeypatch.setattr(relion_functions, "_large_grid_postprocess_single_precision_enabled", lambda _voxels: True)
-        monkeypatch.setattr(relion_functions, "_regularize_large_relion_half_filter_donate_ctf", fake_regularize)
-        monkeypatch.setattr(relion_functions, "_divide_large_relion_half_numerator_donate_numerator", fake_divide)
-        monkeypatch.setattr(relion_functions, "_finish_large_relion_postprocess_from_fftw_half", fake_finish)
+        monkeypatch.setattr(relion_functions_relion, "_regularize_large_relion_half_filter_donate_ctf", fake_regularize)
+        monkeypatch.setattr(relion_functions_relion, "_divide_large_relion_half_numerator_donate_numerator", fake_divide)
+        monkeypatch.setattr(relion_functions_relion, "_finish_large_relion_postprocess_from_fftw_half", fake_finish)
         monkeypatch.setattr(mean_helpers_module.jax, "device_get", fake_device_get)
         monkeypatch.setattr(mean_helpers_module.gc, "collect", lambda: events.append("collect"))
         caplog.set_level("INFO", logger=mean_helpers_module.__name__)
@@ -181,6 +182,7 @@ class TestReconstructionOwnership:
         """Half 2 must see half 1 freed, then stage/delete its host numerator."""
         from recovar.em.refinement import mean_helpers as mean_helpers_module
         from recovar.reconstruction import relion_functions
+        from recovar.em.reconstruction import relion_functions_relion
 
         volume_shape = (2, 2, 2)
         accumulator_shape = (5, 5, 5)
@@ -220,9 +222,9 @@ class TestReconstructionOwnership:
             return sentinel
 
         monkeypatch.setattr(relion_functions, "_large_grid_postprocess_single_precision_enabled", lambda _voxels: True)
-        monkeypatch.setattr(relion_functions, "_regularize_large_relion_half_filter_donate_ctf", fake_regularize)
-        monkeypatch.setattr(relion_functions, "_divide_large_relion_half_numerator_donate_numerator", fake_divide)
-        monkeypatch.setattr(relion_functions, "_finish_large_relion_postprocess_from_fftw_half", fake_finish)
+        monkeypatch.setattr(relion_functions_relion, "_regularize_large_relion_half_filter_donate_ctf", fake_regularize)
+        monkeypatch.setattr(relion_functions_relion, "_divide_large_relion_half_numerator_donate_numerator", fake_divide)
+        monkeypatch.setattr(relion_functions_relion, "_finish_large_relion_postprocess_from_fftw_half", fake_finish)
         caplog.set_level("INFO", logger=mean_helpers_module.__name__)
         half0 = mean_helpers_module._reconstruct_volume_eager(
             host_ctf,
@@ -265,7 +267,7 @@ def test_relion_reconstruction_tau_shells_match_full_prior_bitwise():
     weight = (0.5 + rng.random(half_shape)).astype(np.float32)
     numerator = (rng.standard_normal(half_shape) + 1j * rng.standard_normal(half_shape)).astype(np.complex64)
     fsc = np.linspace(0.9, 0.1, volume_shape[0] // 2 + 1, dtype=np.float64)
-    tau_full, _, details = regularization.compute_relion_tau2_from_weights(
+    tau_full, _, details = regularization_relion.compute_relion_tau2_from_weights(
         weight,
         weight,
         fsc,
@@ -319,7 +321,7 @@ def test_k1_numpy_join_reservation_reaches_first_stage_a_only(monkeypatch):
     ft_ctf_0 = rng.uniform(0.5, 1.5, half_shape).astype(np.float32)
     ft_ctf_1 = rng.uniform(0.5, 1.5, half_shape).astype(np.float32)
     monkeypatch.setenv("RECOVAR_LOWRES_JOIN_HOST_FALLBACK", "always")
-    joined = regularization.join_halves_at_low_resolution(
+    joined = regularization_relion.join_halves_at_low_resolution(
         ft_y_0,
         ft_y_1,
         ft_ctf_0,

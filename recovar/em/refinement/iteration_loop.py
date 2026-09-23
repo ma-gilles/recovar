@@ -157,6 +157,12 @@ from recovar.em.helpers.resolution import (
 )
 from recovar.em.helpers.types import make_noise_stats, make_relion_stats
 from recovar.em.local.local_layout import _selected_rotation_matrices
+from recovar.em.reconstruction.regularization_relion import (
+    compute_current_size_relion,
+    fsc_to_relion_ssnr,
+    resolution_from_data_vs_prior,
+    update_relion_growth_state_from_fsc,
+)
 from recovar.em.refinement import finalization_policy
 from recovar.em.refinement.firstiter_cc import single_class_bucketed_pass2_selected
 from recovar.em.refinement.half_inputs import (
@@ -218,12 +224,6 @@ from recovar.em.sampling import (
     rotation_grid_size,
 )
 from recovar.em.sparse_pass2 import firstiter_bpref, sparse_pass2_budget
-from recovar.reconstruction.regularization import (
-    compute_current_size_relion,
-    fsc_to_relion_ssnr,
-    resolution_from_data_vs_prior,
-    update_relion_growth_state_from_fsc,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -597,7 +597,7 @@ def refine_single_volume(
 
     options = with_validated_sampling_schedule(options)
 
-    from recovar.reconstruction import regularization
+    from recovar.em.reconstruction import regularization_relion
 
     symmetry = options.symmetry.point_group
     schedule = options.schedule
@@ -2998,7 +2998,7 @@ def refine_single_volume(
                         current_size=current_size,
                         frame_scale=kclass_tau2_frame_scale,
                     )
-                shell_stats_k = regularization._compute_relion_weight_shell_stats(
+                shell_stats_k = regularization_relion._compute_relion_weight_shell_stats(
                     Ft_ctf_combined[class_idx],
                     volume_shape,
                     padding_factor=PADDING_FACTOR,
@@ -3024,7 +3024,7 @@ def refine_single_volume(
                 tau2_update_details_per_class.append(class_tau2_details_k)
                 _kclass_dump_dir = os.environ.get("RECOVAR_KCLASS_DUMP_DIR")
                 if _kclass_dump_dir:
-                    reconstruct_floor_stats_k = regularization._compute_relion_weight_shell_stats(
+                    reconstruct_floor_stats_k = regularization_relion._compute_relion_weight_shell_stats(
                         Ft_ctf_combined[class_idx],
                         volume_shape,
                         padding_factor=PADDING_FACTOR,
@@ -3100,7 +3100,7 @@ def refine_single_volume(
                     Ft_ctf_0=Ft_ctf_0,
                     Ft_ctf_1=Ft_ctf_1,
                 )
-            current_iter_fsc = regularization.compute_relion_fsc_from_backprojector(
+            current_iter_fsc = regularization_relion.compute_relion_fsc_from_backprojector(
                 Ft_y_0,
                 Ft_y_1,
                 Ft_ctf_0,
@@ -3158,7 +3158,7 @@ def refine_single_volume(
                     ),
                     dtype=np.float64,
                 )
-                tau2_fsc_for_update, solvent_fsc_details = regularization.compute_relion_solvent_corrected_true_fsc(
+                tau2_fsc_for_update, solvent_fsc_details = regularization_relion.compute_relion_solvent_corrected_true_fsc(
                     unfiltered_half_maps[0],
                     unfiltered_half_maps[1],
                     solvent_mask,
@@ -3198,7 +3198,7 @@ def refine_single_volume(
             mean_signal_variance_per_half = []
             for half_idx, Ft_ctf_half in enumerate((Ft_ctf_0, Ft_ctf_1)):
                 full_half_axis = per_half.mstep_full_half_axis[half_idx]
-                mean_signal_variance_k, _, tau2_update_details_k = regularization.compute_relion_tau2_from_weights(
+                mean_signal_variance_k, _, tau2_update_details_k = regularization_relion.compute_relion_tau2_from_weights(
                     Ft_ctf_half,
                     Ft_ctf_half,
                     tau2_fsc_for_update,
@@ -4992,7 +4992,7 @@ def refine_single_volume(
                 current_size=final_current_size,
                 frame_scale=kclass_tau2_frame_scale,
             )
-            shell_stats_k = regularization._compute_relion_weight_shell_stats(
+            shell_stats_k = regularization_relion._compute_relion_weight_shell_stats(
                 final_ft_ctf[class_idx],
                 volume_shape,
                 padding_factor=PADDING_FACTOR,
@@ -5033,7 +5033,7 @@ def refine_single_volume(
         )
     else:
         _t_final_tau2 = time.time()
-        final_iter_fsc = regularization.compute_relion_fsc_from_backprojector(
+        final_iter_fsc = regularization_relion.compute_relion_fsc_from_backprojector(
             final_Ft_y_0,
             final_Ft_y_1,
             final_Ft_ctf_0,
@@ -5047,7 +5047,7 @@ def refine_single_volume(
         # RELION's joined-half final reconstruction combines the two half
         # BackProjectors before updateSSNRarrays, then applies the whole-data
         # FSC conversion.
-        final_mean_variance, _, final_tau2_update_details = regularization.compute_relion_tau2_from_weights(
+        final_mean_variance, _, final_tau2_update_details = regularization_relion.compute_relion_tau2_from_weights(
             final_Ft_ctf_0,
             final_Ft_ctf_1,
             final_iter_fsc,

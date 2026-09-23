@@ -9,6 +9,7 @@ import pytest
 from scipy.spatial.transform import Rotation
 
 from recovar import cuda_backproject as cb
+from recovar.em.cuda import kernels as em_cuda_kernels
 from recovar.em.helpers.projection import relion_projector_half_to_texture_full
 
 pytestmark = pytest.mark.unit
@@ -38,22 +39,25 @@ def _inputs(q=32, pf=1):
 )
 def test_invalid_operands_rejected_before_loading_cuda(monkeypatch, which, value, message):
     monkeypatch.setattr(cb, "_ensure_optional_ffi", lambda _target: pytest.fail("loaded CUDA before validation"))
+    monkeypatch.setattr(em_cuda_kernels, "_ensure_optional_ffi", lambda _target: pytest.fail("loaded CUDA before validation"))
     args = list(_inputs())
     args[which] = value
     with pytest.raises(ValueError, match=message):
-        cb.project_relion_half_capacity(*args, image_shape=(32, 32))
+        em_cuda_kernels.project_relion_half_capacity(*args, image_shape=(32, 32))
 
 
 @pytest.mark.parametrize("shape,pf", [((31, 31), 1), ((32, 30), 1), ((32, 32), 3)])
 def test_invalid_static_geometry(monkeypatch, shape, pf):
     monkeypatch.setattr(cb, "_ensure_optional_ffi", lambda _target: pytest.fail("loaded CUDA before validation"))
+    monkeypatch.setattr(em_cuda_kernels, "_ensure_optional_ffi", lambda _target: pytest.fail("loaded CUDA before validation"))
     with pytest.raises(ValueError):
-        cb.project_relion_half_capacity(*_inputs(), image_shape=shape, padding_factor=pf)
+        em_cuda_kernels.project_relion_half_capacity(*_inputs(), image_shape=shape, padding_factor=pf)
 
 
 def test_runtime_radius_is_operand_not_attribute_and_reuses_trace(monkeypatch):
     records = []
     monkeypatch.setattr(cb, "_ensure_optional_ffi", lambda _target: None)
+    monkeypatch.setattr(em_cuda_kernels, "_ensure_optional_ffi", lambda _target: None)
 
     def fake_ffi(target, output, **options):
         def call(half, rotations, radius, **attrs):
@@ -63,10 +67,10 @@ def test_runtime_radius_is_operand_not_attribute_and_reuses_trace(monkeypatch):
         return call
 
     monkeypatch.setattr(jax.ffi, "ffi_call", fake_ffi)
-    cb.project_relion_half_capacity.clear_cache()
+    em_cuda_kernels.project_relion_half_capacity.clear_cache()
     half, rotations, _ = _inputs()
     for radius in (15, 16, 0):
-        result = cb.project_relion_half_capacity(half, rotations, jnp.asarray(radius, jnp.int32), image_shape=(32, 32))
+        result = em_cuda_kernels.project_relion_half_capacity(half, rotations, jnp.asarray(radius, jnp.int32), image_shape=(32, 32))
         np.testing.assert_array_equal(result, np.full(result.shape, radius, np.complex64))
     assert len(records) == 1
     target, _, rotshape, radius_aval, attrs = records[0]
@@ -74,8 +78,8 @@ def test_runtime_radius_is_operand_not_attribute_and_reuses_trace(monkeypatch):
     assert rotshape == (1, 6)
     assert radius_aval.shape == () and radius_aval.dtype == np.dtype(np.int32)
     assert set(attrs) == {"image_h", "image_w", "padding_factor"}
-    assert cb.project_relion_half_capacity._cache_size() == 1
-    cb.project_relion_half_capacity.clear_cache()
+    assert em_cuda_kernels.project_relion_half_capacity._cache_size() == 1
+    em_cuda_kernels.project_relion_half_capacity.clear_cache()
 
 
 @pytest.mark.parametrize(
@@ -92,6 +96,7 @@ def test_qualified_old_library_keeps_old_paths_and_capacity_fails_closed(monkeyp
     monkeypatch.setattr(cb, "_optional_ffi_registered", set())
     monkeypatch.setattr(cb, "_loaded_lib_path", None)
     monkeypatch.setattr(cb, "_get_lib", lambda: library)
+    monkeypatch.setattr(em_cuda_kernels, "_get_lib", lambda: library)
     monkeypatch.setattr(jax.ffi, "pycapsule", lambda symbol: symbol)
     monkeypatch.setattr(jax.ffi, "register_ffi_target", lambda target, *args, **kwargs: registrations.append(target))
     cb._ensure_ffi()
@@ -141,7 +146,7 @@ def test_gpu_old_texture_bitwise_all_logical_radii_and_one_executable(q, pf):
     cb._ensure_ffi()
     rotations = _rotations()
     rng = np.random.default_rng(29)
-    cb.project_relion_half_capacity.clear_cache()
+    em_cuda_kernels.project_relion_half_capacity.clear_cache()
     for radius in range(15, min(42, q // 2) + 1):
         size = 2 * pf * radius + 3
         # Nonzero random ghost planes and poisoned capacity catch support errors.
@@ -158,7 +163,7 @@ def test_gpu_old_texture_bitwise_all_logical_radii_and_one_executable(q, pf):
             max_r=float(radius),
             relion_texture_interp=True,
         )
-        result = cb.project_relion_half_capacity(
+        result = em_cuda_kernels.project_relion_half_capacity(
             jnp.asarray(_pad_with_poison(logical, q, pf)),
             rotations,
             jnp.asarray(radius, jnp.int32),
@@ -166,14 +171,14 @@ def test_gpu_old_texture_bitwise_all_logical_radii_and_one_executable(q, pf):
             padding_factor=pf,
         )
         np.testing.assert_array_equal(np.asarray(result).view(np.uint32), np.asarray(reference).view(np.uint32), err_msg=f"q={q}, pf={pf}, r={radius}")
-    assert cb.project_relion_half_capacity._cache_size() == 1
+    assert em_cuda_kernels.project_relion_half_capacity._cache_size() == 1
 
 
 @pytest.mark.gpu
 @pytest.mark.parametrize("radius", [-1, 17, np.iinfo(np.int32).max])
 def test_gpu_invalid_runtime_radius_is_nonfinite_without_oob(radius):
     half, rotations, _ = _inputs()
-    result = cb.project_relion_half_capacity(half, rotations, jnp.asarray(radius, jnp.int32), image_shape=(32, 32))
+    result = em_cuda_kernels.project_relion_half_capacity(half, rotations, jnp.asarray(radius, jnp.int32), image_shape=(32, 32))
     assert np.isnan(np.asarray(result)).all()
 
 

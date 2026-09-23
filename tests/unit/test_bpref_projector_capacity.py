@@ -12,6 +12,7 @@ import pytest
 from scipy.spatial.transform import Rotation
 
 from recovar import cuda_backproject as cb
+from recovar.em.cuda import kernels as em_cuda_kernels
 from recovar.em.helpers.projection import prepare_relion_projector_capacity, relion_projector_half_to_texture_full
 
 pytestmark = pytest.mark.unit
@@ -61,8 +62,12 @@ def _arguments(pf=1, grouped=False):
 
 def _no_cuda(monkeypatch):
     monkeypatch.setattr(cb, "_ensure_ffi", lambda: pytest.fail("CUDA loaded before validation"))
+    monkeypatch.setattr(em_cuda_kernels, "_ensure_ffi", lambda: pytest.fail("CUDA loaded before validation"))
     monkeypatch.setattr(
         cb, "_ensure_optional_ffi", lambda _target: pytest.fail("capacity CUDA loaded before validation")
+    )
+    monkeypatch.setattr(
+        em_cuda_kernels, "_ensure_optional_ffi", lambda _target: pytest.fail("capacity CUDA loaded before validation")
     )
 
 
@@ -72,7 +77,7 @@ def test_runtime_radius_requires_strong_s32_scalar(monkeypatch, value):
     args, options = _arguments()
     options["runtime_projector_radius"] = value
     with jax.enable_x64(False), pytest.raises((TypeError, ValueError)):
-        getattr(cb, FUNCTION).__wrapped__(*args, **options)
+        getattr(em_cuda_kernels, FUNCTION).__wrapped__(*args, **options)
 
 
 @pytest.mark.parametrize("shape", [(11, 11, 11), (11, 9, 6), (10, 10, 6), (11, 11, 5)])
@@ -81,7 +86,7 @@ def test_capacity_storage_topology_rejected_before_cuda(monkeypatch, shape):
     args, options = _arguments()
     args[8] = np.zeros(shape, np.complex64)
     with pytest.raises((TypeError, ValueError)):
-        getattr(cb, FUNCTION).__wrapped__(*args, **options)
+        getattr(em_cuda_kernels, FUNCTION).__wrapped__(*args, **options)
 
 
 @pytest.mark.parametrize("dtype", [np.float32, np.complex128])
@@ -90,7 +95,7 @@ def test_capacity_storage_dtype_rejected_before_cuda(monkeypatch, dtype):
     args, options = _arguments()
     args[8] = np.zeros(args[8].shape, dtype)
     with jax.enable_x64(False), pytest.raises((TypeError, ValueError)):
-        getattr(cb, FUNCTION).__wrapped__(*args, **options)
+        getattr(em_cuda_kernels, FUNCTION).__wrapped__(*args, **options)
 
 
 @pytest.mark.parametrize("failure", ["static_radius", "padding", "positions", "logical_size"])
@@ -106,16 +111,16 @@ def test_capacity_static_and_runtime_image_contract(monkeypatch, failure):
     else:
         options["logical_current_size"] = None
     with pytest.raises((TypeError, ValueError)):
-        getattr(cb, FUNCTION).__wrapped__(*args, **options)
+        getattr(em_cuda_kernels, FUNCTION).__wrapped__(*args, **options)
 
 
 def test_runtime_radius_appended_without_changing_legacy_static_positions():
-    source = Path(cb.__file__).read_text()
+    source = Path(em_cuda_kernels.__file__).read_text()
     node = next(n for n in ast.parse(source).body if isinstance(n, ast.FunctionDef) and n.name == FUNCTION)
 
     def jit_static_argnums(value):
         # The decorator may spell the positions inline or name a module constant.
-        return getattr(cb, value.id) if isinstance(value, ast.Name) else ast.literal_eval(value)
+        return getattr(em_cuda_kernels, value.id) if isinstance(value, ast.Name) else ast.literal_eval(value)
 
     static = [
         jit_static_argnums(k.value)
@@ -124,7 +129,7 @@ def test_runtime_radius_appended_without_changing_legacy_static_positions():
         for k in decorator.keywords
         if k.arg == "static_argnums"
     ]
-    parameters = inspect.signature(getattr(cb, FUNCTION)).parameters
+    parameters = inspect.signature(getattr(em_cuda_kernels, FUNCTION)).parameters
     assert static == [OLD_STATIC_POSITIONS + (32, 33)]
     assert list(parameters).index("runtime_projector_radius") == 31
     assert list(parameters)[32] == "return_denominator"
@@ -163,7 +168,7 @@ def _logical_and_poisoned_capacity(radius, pf):
 
 def _device_call(args, options):
     # All legacy statics are kept as Python scalars/tuples.
-    return getattr(cb, FUNCTION)(
+    return getattr(em_cuda_kernels, FUNCTION)(
         *[jnp.asarray(v) if isinstance(v, np.ndarray) else v for v in args],
         **{k: jnp.asarray(v) if isinstance(v, np.ndarray) else v for k, v in options.items()},
     )
@@ -202,7 +207,7 @@ def test_gpu_capacity_matches_legacy_all_three_outputs_and_one_executable(pf, gr
             args[8] = capacity
             options["runtime_projector_radius"] = dynamic_radius
             cases.append((args, options, reference))
-    function = getattr(cb, FUNCTION)
+    function = getattr(em_cuda_kernels, FUNCTION)
     function.clear_cache()
     for args, options, reference in cases:
         result = _device_call(args, options)
@@ -245,7 +250,9 @@ def test_optional_registration_preserves_qualified_legacy_library(monkeypatch):
 def test_capacity_radius_operand_preserves_aliases_geometry_and_one_trace(monkeypatch):
     monkeypatch.delenv("RECOVAR_VDAM_EXTERNAL_HOST_REPLAY_LIBRARY", raising=False)
     monkeypatch.setattr(cb, "_ensure_ffi", lambda: None)
+    monkeypatch.setattr(em_cuda_kernels, "_ensure_ffi", lambda: None)
     monkeypatch.setattr(cb, "_ensure_optional_ffi", lambda _target: None)
+    monkeypatch.setattr(em_cuda_kernels, "_ensure_optional_ffi", lambda _target: None)
     records = []
 
     def fake_ffi(target, outputs, **options):
@@ -258,7 +265,7 @@ def test_capacity_radius_operand_preserves_aliases_geometry_and_one_trace(monkey
         return call
 
     monkeypatch.setattr(jax.ffi, "ffi_call", fake_ffi)
-    function = getattr(cb, FUNCTION)
+    function = getattr(em_cuda_kernels, FUNCTION)
     function.clear_cache()
     args, options = _arguments()
     try:
@@ -299,7 +306,7 @@ def test_capacity_unsupported_replay_modes_fail_before_cuda(monkeypatch, name, v
     args, options = _arguments()
     options[name] = value
     with pytest.raises(ValueError, match="replay/trace"):
-        getattr(cb, FUNCTION).__wrapped__(*args, **options)
+        getattr(em_cuda_kernels, FUNCTION).__wrapped__(*args, **options)
 
 
 @pytest.mark.gpu

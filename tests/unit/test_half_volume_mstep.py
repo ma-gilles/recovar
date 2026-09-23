@@ -14,8 +14,9 @@ import jax.numpy as jnp
 import recovar.core.fourier_transform_utils as ftu
 import recovar.core.slicing as slicing
 import recovar.cuda_backproject as cuda_backproject
+from recovar.em.cuda import kernels as em_cuda_kernels
 from recovar.em.helpers import half_volume_mstep
-from recovar.reconstruction import regularization
+from recovar.em.reconstruction import regularization_relion
 
 pytestmark = pytest.mark.unit
 
@@ -414,14 +415,14 @@ def test_relion_x_half_public_full_tau2_shell_stats_use_relion_x_axis(monkeypatc
     )
     fsc = np.full(volume_shape[0] // 2 + 1, 0.5, dtype=np.float64)
 
-    _, _, packed_details = regularization.compute_relion_tau2_from_weights(
+    _, _, packed_details = regularization_relion.compute_relion_tau2_from_weights(
         relion_x_half_weight.reshape(-1),
         relion_x_half_weight.reshape(-1),
         fsc,
         volume_shape,
         return_details=True,
     )
-    _, _, public_full_details = regularization.compute_relion_tau2_from_weights(
+    _, _, public_full_details = regularization_relion.compute_relion_tau2_from_weights(
         relion_x_public_full,
         relion_x_public_full,
         fsc,
@@ -429,7 +430,7 @@ def test_relion_x_half_public_full_tau2_shell_stats_use_relion_x_axis(monkeypatc
         return_details=True,
         full_half_axis=0,
     )
-    _, _, wrong_axis_details = regularization.compute_relion_tau2_from_weights(
+    _, _, wrong_axis_details = regularization_relion.compute_relion_tau2_from_weights(
         relion_x_public_full,
         relion_x_public_full,
         fsc,
@@ -730,6 +731,7 @@ def test_relion_fused_x_half_wrapper_uses_mixed_aliases_and_native_square(monkey
         return call
 
     monkeypatch.setattr(cuda_backproject, "_ensure_ffi", lambda: None)
+    monkeypatch.setattr(em_cuda_kernels, "_ensure_ffi", lambda: None)
     monkeypatch.setattr(cuda_backproject.jax.ffi, "ffi_call", fake_ffi_call)
 
     image_shape = (8, 8)
@@ -745,7 +747,7 @@ def test_relion_fused_x_half_wrapper_uses_mixed_aliases_and_native_square(monkey
     data_volume = jnp.zeros(volume_size, dtype=jnp.complex64)
     weight_volume = jnp.zeros(volume_size, dtype=jnp.float32)
 
-    result = cuda_backproject.relion_fused_x_half_backproject_indexed.__wrapped__(
+    result = em_cuda_kernels.relion_fused_x_half_backproject_indexed.__wrapped__(
         data_volume,
         weight_volume,
         data_rows,
@@ -786,6 +788,7 @@ def test_relion_fused_x_half_wrapper_preserves_double_precision(monkeypatch):
         return call
 
     monkeypatch.setattr(cuda_backproject, "_ensure_ffi", lambda: None)
+    monkeypatch.setattr(em_cuda_kernels, "_ensure_ffi", lambda: None)
     monkeypatch.setattr(cuda_backproject.jax.ffi, "ffi_call", fake_ffi_call)
 
     volume_size = 7 * 7 * 4
@@ -795,7 +798,7 @@ def test_relion_fused_x_half_wrapper_preserves_double_precision(monkeypatch):
         [[[1.0, 0.1, 0.2], [0.3, 1.0, 0.4], [0.5, 0.6, 1.0]]],
         dtype=jnp.float64,
     )
-    cuda_backproject.relion_fused_x_half_backproject_indexed.__wrapped__(
+    em_cuda_kernels.relion_fused_x_half_backproject_indexed.__wrapped__(
         data_volume,
         weight_volume,
         jnp.ones((1, 1), dtype=jnp.complex128),
@@ -827,6 +830,7 @@ def test_relion_fused_x_half_wrapper_rejects_non_relion_dtypes(
     monkeypatch, data_dtype, weight_dtype, index_dtype, error_match
 ):
     monkeypatch.setattr(cuda_backproject, "_ensure_ffi", lambda: None)
+    monkeypatch.setattr(em_cuda_kernels, "_ensure_ffi", lambda: None)
     data_volume = jnp.zeros(7 * 7 * 4, dtype=data_dtype)
     weight_volume = jnp.zeros(7 * 7 * 4, dtype=weight_dtype)
     data_rows = jnp.ones((1, 1), dtype=jnp.complex64)
@@ -835,7 +839,7 @@ def test_relion_fused_x_half_wrapper_rejects_non_relion_dtypes(
     rotations = jnp.eye(3, dtype=jnp.float32)[None]
 
     with pytest.raises(TypeError, match=error_match):
-        cuda_backproject.relion_fused_x_half_backproject_indexed.__wrapped__(
+        em_cuda_kernels.relion_fused_x_half_backproject_indexed.__wrapped__(
             data_volume,
             weight_volume,
             data_rows,
@@ -942,7 +946,7 @@ def test_relion_fused_x_half_signature_inertness_gate_rejects_shadow_mismatch():
         weight_accumulator.copy(),
         *(operand.copy() for operand in expected_operands),
     )
-    cuda_backproject._require_signature_inertness_outputs(outputs, expected_operands)
+    em_cuda_kernels._require_signature_inertness_outputs(outputs, expected_operands)
 
     mismatched = list(outputs)
     mismatched[12] = mismatched[12].copy()
@@ -950,7 +954,7 @@ def test_relion_fused_x_half_signature_inertness_gate_rejects_shadow_mismatch():
         mismatched[12][0, 0], np.float32(np.inf), dtype=np.float32
     )
     with pytest.raises(RuntimeError, match="weight_rows"):
-        cuda_backproject._require_signature_inertness_outputs(
+        em_cuda_kernels._require_signature_inertness_outputs(
             tuple(mismatched), expected_operands
         )
 
@@ -1175,7 +1179,7 @@ def test_relion_fused_x_half_radius_uses_native_rotation_convention_at_exact_rim
     with cuda_backproject.jax.default_device(gpu_device):
         for rotation in rotations:
             outputs.append(
-                cuda_backproject.relion_fused_x_half_backproject_indexed(
+                em_cuda_kernels.relion_fused_x_half_backproject_indexed(
                     jnp.zeros(volume_size, dtype=jnp.complex64),
                     jnp.zeros(volume_size, dtype=jnp.float32),
                     data_rows,
@@ -1227,7 +1231,7 @@ def test_relion_fused_x_half_signature_matches_relion_fraction_before_origin_ora
     )
 
     with cuda_backproject.jax.default_device(gpu_device):
-        outputs = cuda_backproject.relion_fused_x_half_backproject_signature_indexed(
+        outputs = em_cuda_kernels.relion_fused_x_half_backproject_signature_indexed(
             jnp.zeros(volume_size, dtype=jnp.complex64),
             jnp.zeros(volume_size, dtype=jnp.float32),
             jnp.asarray([[1.25 - 0.75j]], dtype=jnp.complex64),
@@ -1343,7 +1347,7 @@ def test_relion_fused_x_half_cuda_matches_separate_topology(
             max_r=2.0,
             relion_x_half=True,
         )
-        actual_data, actual_weight = cuda_backproject.relion_fused_x_half_backproject_indexed(
+        actual_data, actual_weight = em_cuda_kernels.relion_fused_x_half_backproject_indexed(
             actual_data_volume,
             actual_weight_volume,
             data_rows,
@@ -1398,7 +1402,7 @@ def test_relion_fused_x_half_native_particle_grid_is_bitwise_sequential(
         expected_data = jnp.zeros(volume_size, dtype=jnp.complex64)
         expected_weight = jnp.zeros(volume_size, dtype=jnp.float32)
         for particle in range(3):
-            expected_data, expected_weight = cuda_backproject.relion_fused_x_half_backproject_indexed(
+            expected_data, expected_weight = em_cuda_kernels.relion_fused_x_half_backproject_indexed(
                 expected_data,
                 expected_weight,
                 data_rows[particle],
@@ -1410,7 +1414,7 @@ def test_relion_fused_x_half_native_particle_grid_is_bitwise_sequential(
                 2.0,
             )
         actual_data, actual_weight = (
-            cuda_backproject.relion_fused_x_half_backproject_particle_grid_indexed(
+            em_cuda_kernels.relion_fused_x_half_backproject_particle_grid_indexed(
                 jnp.zeros(volume_size, dtype=jnp.complex64),
                 jnp.zeros(volume_size, dtype=jnp.float32),
                 data_rows,
@@ -1442,6 +1446,7 @@ def test_relion_fused_x_half_particle_grid_preserves_particle_axis_in_native_att
         return call
 
     monkeypatch.setattr(cuda_backproject, "_ensure_ffi", lambda: None)
+    monkeypatch.setattr(em_cuda_kernels, "_ensure_ffi", lambda: None)
     monkeypatch.setattr(cuda_backproject.jax.ffi, "ffi_call", fake_ffi_call)
     data_volume = jnp.zeros(7 * 7 * 4, dtype=jnp.complex64)
     weight_volume = jnp.zeros(7 * 7 * 4, dtype=jnp.float32)
@@ -1450,7 +1455,7 @@ def test_relion_fused_x_half_particle_grid_preserves_particle_axis_in_native_att
     pixel_indices = jnp.asarray([1, 7 * 5 + 1], dtype=jnp.int32)
     rotations = jnp.broadcast_to(jnp.eye(3, dtype=jnp.float32), (2, 3, 3, 3))
 
-    result = cuda_backproject.relion_fused_x_half_backproject_particle_grid_indexed.__wrapped__(
+    result = em_cuda_kernels.relion_fused_x_half_backproject_particle_grid_indexed.__wrapped__(
         data_volume,
         weight_volume,
         data_rows,

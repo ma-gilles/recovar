@@ -73,7 +73,7 @@ _DENSE_EM_STATIC_KWARGS: dict = {
 
 # Off by default: reproduces RELION's GPU-accelerated projector/backprojector
 # narrowing coordinates to float32 before flooring, unconditionally, even under
-# ``ACC_DOUBLE_PRECISION`` (see ``recovar.core.relion_project`` module
+# ``ACC_DOUBLE_PRECISION`` (see ``recovar.em.relion.relion_project`` module
 # docstring). Set ``RECOVAR_RELION_ACC_DOUBLE_FLOORF_QUIRK=1`` to bit-match
 # that GPU-double quirk in the local-search fine-pass projector fallback (it
 # only has an effect when the texture path is unavailable, e.g. under

@@ -89,7 +89,7 @@ def pack_deferred_vdam_host_plan(
     outside this boundary. The denominator retains its CUDA arithmetic and
     traversal; this wrapper only composes the existing device operations.
     """
-    from recovar import cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     packed = _gather_deferred_vdam_host_plan(
         reconstruction_probs,
@@ -103,7 +103,7 @@ def pack_deferred_vdam_host_plan(
         flat_take_indices,
     )
     posterior, _, _, ctf, minvsigma2, _ = packed
-    ctf_probs = cuda_backproject.relion_vdam_mstep_denominator_f32(ctf, minvsigma2, posterior)
+    ctf_probs = em_cuda_kernels.relion_vdam_mstep_denominator_f32(ctf, minvsigma2, posterior)
     ctf_probs = jnp.where(row_mask[:, :, None], ctf_probs, 0.0)
     return DeferredVdamHostPackedOperands(*packed, ctf_probs)
 
@@ -121,9 +121,9 @@ def pack_deferred_vdam_host_plan_cuda(
     flat_take_indices,
 ):
     """Same host-selected seven-output contract through one CUDA transaction."""
-    from recovar import cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
-    return DeferredVdamHostPackedOperands(*cuda_backproject.pack_deferred_vdam_host_plan_cuda(
+    return DeferredVdamHostPackedOperands(*em_cuda_kernels.pack_deferred_vdam_host_plan_cuda(
         reconstruction_probs, reconstruction_probs_sum_t, source_images, source_ctf,
         source_minvsigma2, flat_noise_projection, take_indices, row_mask, flat_take_indices,
     ))

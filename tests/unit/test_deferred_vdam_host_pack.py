@@ -75,10 +75,10 @@ def test_host_plan_preserves_rows_masks_and_fringe_bits(batch):
 @pytest.mark.gpu
 @pytest.mark.parametrize("batch", [3, 7])
 def test_composed_denominator_matches_existing_eager_sequence_bitwise(batch):
-    from recovar import cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     args = _case(batch)
     eager = _gather_deferred_vdam_host_plan(*args)
-    denominator = cuda_backproject.relion_vdam_mstep_denominator_f32(eager[3], eager[4], eager[0])
+    denominator = em_cuda_kernels.relion_vdam_mstep_denominator_f32(eager[3], eager[4], eager[0])
     denominator = jnp.where(args[7][..., None], denominator, 0.0)
     _assert_bits(pack_deferred_vdam_host_plan(*args), (*eager, denominator))

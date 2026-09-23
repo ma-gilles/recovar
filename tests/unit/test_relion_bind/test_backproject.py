@@ -28,6 +28,7 @@ from recovar.relion_bind._relion_bind_core import (
 )
 
 from recovar.reconstruction import regularization
+from recovar.em.reconstruction import regularization_relion
 
 
 def _make_test_volume(N, rng):
@@ -200,7 +201,7 @@ def test_compute_fsc_from_bpref_matches_scheduler_emulation():
         )
     )
     emulated_fsc = np.asarray(
-        regularization.compute_relion_fsc_from_backprojector(
+        regularization_relion.compute_relion_fsc_from_backprojector(
             data_h1_full.reshape(-1),
             data_h2_full.reshape(-1),
             weight_h1_full.reshape(-1),
@@ -486,12 +487,12 @@ def test_streamed_packed_half_fsc_matches_relion_binding(monkeypatch):
         )
     )
     monkeypatch.setattr(
-        regularization,
+        regularization_relion,
         "_RELION_FSC_PACKED_STREAM_MIN_ELEMENTS",
         0,
     )
     actual = np.asarray(
-        regularization.compute_relion_fsc_from_backprojector(
+        regularization_relion.compute_relion_fsc_from_backprojector(
             data_h1_half.reshape(-1),
             data_h2_half.reshape(-1),
             weight_h1_half.reshape(-1),

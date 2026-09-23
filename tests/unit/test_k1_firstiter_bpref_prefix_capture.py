@@ -429,6 +429,7 @@ def test_firstiter_fused_bpref_prefix_capture_uses_immutable_identity_and_global
     monkeypatch,
 ):
     import recovar.cuda_backproject as cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     def prepare(values, _pixel_indices, _image_shape, _max_r):
         return jnp.asarray(values), jnp.arange(4, dtype=jnp.int32), 4, 3
@@ -461,7 +462,12 @@ def test_firstiter_fused_bpref_prefix_capture_uses_immutable_identity_and_global
         prepare,
     )
     monkeypatch.setattr(
-        cuda_backproject,
+        em_cuda_kernels,
+        "_prepare_relion_x_half_block_topology_operands",
+        prepare,
+    )
+    monkeypatch.setattr(
+        em_cuda_kernels,
         "relion_firstiter_bpref_fused_x_half",
         accumulate,
     )

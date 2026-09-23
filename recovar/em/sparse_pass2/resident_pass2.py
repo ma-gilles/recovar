@@ -1224,6 +1224,7 @@ def compute_pass2_stats_resident(
     """
 
     from recovar import cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
     from recovar.em.sampling import (
         get_oversampled_translation_grid,
         infer_translation_step,
@@ -2060,7 +2061,7 @@ def compute_pass2_stats_resident(
             image_tables=image_tables,
             Ft_y_total=Ft_y_total,
             Ft_ctf_total=Ft_ctf_total,
-            cuda_backproject=cuda_backproject,
+            cuda_backproject=em_cuda_kernels,
             submitted_keys=submitted_keys,
         )
     loop_s = time.time() - loop_t0
@@ -3892,7 +3893,7 @@ def _resident_mstep_block_program(
     place, as they are when the adjoint FFI is dispatched on its own.
     """
 
-    from recovar import cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     return _resident_mstep_block_at(
         block_start,
@@ -3901,7 +3902,7 @@ def _resident_mstep_block_program(
         tables,
         carry,
         spec=spec,
-        cuda_backproject=cuda_backproject,
+        cuda_backproject=em_cuda_kernels,
     )
 
 
@@ -3921,10 +3922,10 @@ def _resident_chunk_posterior_program(
     weight -- each of which was a dispatch and a single-primitive program.
     """
 
-    from recovar import cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     return _resident_chunk_posterior(
-        rows, operands, tables, spec=spec, cuda_backproject=cuda_backproject
+        rows, operands, tables, spec=spec, cuda_backproject=em_cuda_kernels
     )
 
 
@@ -4034,10 +4035,11 @@ def _run_resident_chunk_program(
     """
 
     from recovar import cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     Ft_y_total, Ft_ctf_total, stats = carry
     posterior = _resident_chunk_posterior(
-        rows, operands, tables, spec=spec, cuda_backproject=cuda_backproject
+        rows, operands, tables, spec=spec, cuda_backproject=em_cuda_kernels
     )
 
     block_rows = int(spec.mstep_block_rows)
@@ -4106,7 +4108,7 @@ def _run_resident_chunk_stages(
     diagnostic arm.
     """
 
-    from recovar import cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     glue_jit = _resident_glue_jit_enabled()
     Ft_y_total, Ft_ctf_total, stats = carry
@@ -4114,7 +4116,7 @@ def _run_resident_chunk_stages(
         posterior = _resident_chunk_posterior_program(rows, operands, tables, spec=spec)
     else:
         posterior = _resident_chunk_posterior(
-            rows, operands, tables, spec=spec, cuda_backproject=cuda_backproject
+            rows, operands, tables, spec=spec, cuda_backproject=em_cuda_kernels
         )
     if timing_hook is not None:
         timing_hook("posterior", posterior.row_posterior)
@@ -4144,7 +4146,7 @@ def _run_resident_chunk_stages(
             tables=tables,
             carry=mstep,
             spec=spec,
-            cuda_backproject=cuda_backproject,
+            cuda_backproject=em_cuda_kernels,
         )
     if timing_hook is not None:
         timing_hook("mstep", (mstep.Ft_y, mstep.Ft_ctf))

@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 from recovar.em.helpers import resolution as resolution_helpers
-from recovar.reconstruction import regularization as regularization_module
+from recovar.em.reconstruction import regularization_relion
 
 pytestmark = pytest.mark.unit
 
@@ -45,11 +45,11 @@ class TestResolutionScheduling:
             grid_size=256,
             tau2_fudge=1.0,
         )
-        shell = regularization_module.resolution_from_data_vs_prior(
+        shell = regularization_relion.resolution_from_data_vs_prior(
             dvp,
             allow_high_res_recovery=True,
         )
-        current_size = regularization_module.compute_current_size_relion(
+        current_size = regularization_relion.compute_current_size_relion(
             shell,
             256,
             ave_Pmax=1.0,
@@ -90,14 +90,14 @@ class TestResolutionScheduling:
         assert raw_dvp[boundary_shell + 1] < 1.0
         assert corrected[boundary_shell + 1] == 0.0
         assert (
-            regularization_module.resolution_from_data_vs_prior(
+            regularization_relion.resolution_from_data_vs_prior(
                 raw_dvp,
                 allow_high_res_recovery=True,
             )
             == boundary_shell
         )
         assert (
-            regularization_module.resolution_from_data_vs_prior(
+            regularization_relion.resolution_from_data_vs_prior(
                 corrected,
                 allow_high_res_recovery=True,
             )
@@ -124,7 +124,7 @@ class TestResolutionScheduling:
         )
         assert np.all(truncated[:, boundary_shell + 1 :] == 0.0)
         assert all(
-            regularization_module.resolution_from_data_vs_prior(
+            regularization_relion.resolution_from_data_vs_prior(
                 half_dvp,
                 allow_high_res_recovery=True,
             )
@@ -151,18 +151,18 @@ class TestResolutionScheduling:
         fsc = np.zeros(grid_size // 2 + 1, dtype=np.float32)
         fsc[: boundary_shell + 1] = boundary_fsc
         fsc[0] = 1.0
-        data_vs_prior = regularization_module.fsc_to_relion_ssnr(fsc, tau2_fudge=1.0)
+        data_vs_prior = regularization_relion.fsc_to_relion_ssnr(fsc, tau2_fudge=1.0)
 
         truncated = resolution_helpers._truncate_data_vs_prior_for_current_size(
             data_vs_prior,
             current_size=current_size,
             grid_size=grid_size,
         )
-        resolution_shell = regularization_module.resolution_from_data_vs_prior(
+        resolution_shell = regularization_relion.resolution_from_data_vs_prior(
             truncated,
             allow_high_res_recovery=True,
         )
-        next_size = regularization_module.compute_current_size_relion(
+        next_size = regularization_relion.compute_current_size_relion(
             resolution_shell,
             grid_size,
             ave_Pmax=1.0,
@@ -186,13 +186,13 @@ class TestResolutionScheduling:
             current_size=68,
             grid_size=128,
         )
-        incr_size, has_high_fsc = regularization_module.update_relion_growth_state_from_fsc(
+        incr_size, has_high_fsc = regularization_relion.update_relion_growth_state_from_fsc(
             growth_fsc,
             68,
             incr_size=10,
             has_high_fsc_at_limit=False,
         )
-        next_size = regularization_module.compute_current_size_relion(
+        next_size = regularization_relion.compute_current_size_relion(
             24,
             128,
             ave_Pmax=0.521225,
@@ -202,8 +202,8 @@ class TestResolutionScheduling:
 
         assert growth_fsc[34] == pytest.approx(0.159366)
         assert growth_fsc[35] == 0.0
-        assert regularization_module.first_shell_below_threshold(growth_fsc, 0.5) == 25
-        assert regularization_module.first_shell_below_threshold(growth_fsc, 0.143) == 35
+        assert regularization_relion.first_shell_below_threshold(growth_fsc, 0.5) == 25
+        assert regularization_relion.first_shell_below_threshold(growth_fsc, 0.143) == 35
         assert incr_size == 15
         assert has_high_fsc is False
         assert next_size == 78
@@ -211,7 +211,7 @@ class TestResolutionScheduling:
     def test_firstiter_cc_scheduling_uses_ini_high_shell(self):
         """RELION iter-1 firstiter_cc grows from ini_high, not DVP."""
         shell = resolution_helpers._firstiter_cc_ini_high_resolution_shell(256, 2.125, 30.0)
-        current_size = regularization_module.compute_current_size_relion(
+        current_size = regularization_relion.compute_current_size_relion(
             shell,
             256,
             ave_Pmax=1.0,
@@ -230,7 +230,7 @@ class TestResolutionScheduling:
             grid_size=256,
             tau2_fudge=1.0,
         )
-        assert regularization_module.resolution_from_data_vs_prior(dvp, allow_high_res_recovery=True) == 27
+        assert regularization_relion.resolution_from_data_vs_prior(dvp, allow_high_res_recovery=True) == 27
         assert dvp[29] < 1.0
 
     def test_firstiter_cc_scheduling_override_is_class_count_independent(self):
@@ -243,7 +243,7 @@ class TestResolutionScheduling:
             grid_size=256,
             voxel_size=2.125,
         )
-        current_size = regularization_module.compute_current_size_relion(
+        current_size = regularization_relion.compute_current_size_relion(
             shell,
             256,
             ave_Pmax=1.0,

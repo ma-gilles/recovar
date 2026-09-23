@@ -68,7 +68,7 @@
 namespace ffi = xla::ffi;
 
 #include "device_scratch.cuh"
-#include "noise_residual.cuh"
+#include "../em/cuda/noise_residual.cuh"
 
 constexpr char kRelionVdamExactNativePtxEnv[] =
     "RECOVAR_VDAM_EXACT_NATIVE_PTX";
@@ -191,7 +191,7 @@ cudaError_t report_relion_vdam_driver_error(
     return cudaErrorUnknown;
 }
 
-#include "vdam_trace.cuh"
+#include "../em/cuda/vdam_trace.cuh"
 
 
 /* ================================================================== */
@@ -5127,13 +5127,13 @@ __device__ __forceinline__ float2 relion_vdam_project_texture_f32(
 
 }  // namespace
 
-#include "relion_vdam_mstep.cuh"
+#include "../em/cuda/relion_vdam_mstep.cuh"
 
 namespace {
 
-#include "relion_scoring.cuh"
+#include "../em/cuda/relion_scoring.cuh"
 
-#include "relion_preprocess.cuh"
+#include "../em/cuda/relion_preprocess.cuh"
 
 }  // namespace
 
@@ -5673,7 +5673,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Ret<ffi::AnyBuffer>()
 );
 
-#include "relion_posterior.cuh"
+#include "../em/cuda/relion_posterior.cuh"
 
 ffi::Error RelionTranslateBprefF32Impl(
     cudaStream_t stream,
@@ -13169,8 +13169,8 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(PerImageBackproject,
                                   .Ret<ffi::AnyBuffer>());
 
 // Fused sparse pass-2 posterior handlers (needs relion_ampere_inclusive_sum_f32).
-#include "sparse_pass2_posterior.cuh"
+#include "../em/cuda/sparse_pass2_posterior.cuh"
 
 // Flat-row translate-and-sum for the device-resident pass-2 M-step
 // (needs relion_score_translate_f32's phase and rotation).
-#include "relion_translate_sum.cuh"
+#include "../em/cuda/relion_translate_sum.cuh"

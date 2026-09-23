@@ -248,6 +248,7 @@ def test_relion_coarse_native_texture_rescore_exposes_reduced_components():
     import jax.numpy as jnp
 
     from recovar import cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     if jax.default_backend() != "gpu" or not cuda_backproject.custom_cuda_requested():
         pytest.skip("native RELION texture rescore requires the custom CUDA GPU path")
@@ -260,7 +261,7 @@ def test_relion_coarse_native_texture_rescore_exposes_reduced_components():
     packed_to_compact = jnp.arange(4, dtype=jnp.int32)
 
     components = np.asarray(
-        cuda_backproject.relion_coarse_normalized_cc_native_texture_pairs_f32(
+        em_cuda_kernels.relion_coarse_normalized_cc_native_texture_pairs_f32(
             projector,
             rotations,
             shifted,
@@ -280,7 +281,7 @@ def test_relion_coarse_native_texture_rescore_exposes_reduced_components():
     assert np.all(components[:, 1:] > 0.0)
 
     translated = np.asarray(
-        cuda_backproject.relion_coarse_normalized_cc_native_texture_pairs_f32(
+        em_cuda_kernels.relion_coarse_normalized_cc_native_texture_pairs_f32(
             projector,
             rotations,
             shifted,
@@ -571,13 +572,14 @@ def test_native_cc_rescore_limits_support_to_current_image(model_radius, padding
     import jax
     import jax.numpy as jnp
     from recovar import cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
 
     if jax.default_backend() != "gpu" or not cuda_backproject.custom_cuda_requested():
         pytest.skip("requires the custom CUDA GPU path")
     size = 8
     pixels = size * (size // 2 + 1)
     side = 2 * model_radius * padding_factor + 3
-    result = np.asarray(cuda_backproject.relion_coarse_normalized_cc_native_texture_pairs_f32(
+    result = np.asarray(em_cuda_kernels.relion_coarse_normalized_cc_native_texture_pairs_f32(
         jnp.ones((side, side, side), dtype=jnp.complex64),
         jnp.eye(3, dtype=jnp.float32)[None],
         jnp.ones((1, pixels), dtype=jnp.complex64),

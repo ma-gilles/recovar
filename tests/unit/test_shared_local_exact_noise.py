@@ -519,7 +519,7 @@ def test_native_noise_composition_preserves_all_carries(
     monkeypatch, return_split, compute_scale, mask_missing,
 ):
     """Isolate JAX composition from the separately qualified native reduction."""
-    from recovar import cuda_noise_residual as native
+    from recovar.em.cuda import noise_residual as native
 
     inputs = _make_noise_inputs(32)
     inputs["noise_variance_for_noise"] = inputs["noise_variance_for_noise"].astype(jnp.float64)

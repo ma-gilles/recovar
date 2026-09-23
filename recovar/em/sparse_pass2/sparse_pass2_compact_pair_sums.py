@@ -514,7 +514,7 @@ def _compact_pair_weighted_rotation_and_image_sums_native(
 ):
     """Use one native launch boundary for two independent weighted sums."""
 
-    from recovar.cuda_backproject import dual_weighted_sums_pairs_f32
+    from recovar.em.cuda.kernels import dual_weighted_sums_pairs_f32
 
     dense_probs = _compact_pair_dense_probs(
         pair_probs,
@@ -1224,7 +1224,7 @@ def _compact_pair_weighted_sums_and_noise_native_flat_rows(
     padding) are exactly zero. The per-image group-scale terms are ``None`` unless
     ``scale_old_scale`` is given.
     """
-    from recovar.cuda_backproject import dual_weighted_sums_pairs_rows_f32
+    from recovar.em.cuda.kernels import dual_weighted_sums_pairs_rows_f32
 
     row_batch, row_rotation, active_mask = flat_rows
     n_trans = int(shifted_recon_split.shape[1])

@@ -2,7 +2,7 @@
 
 The projection route in
 [`_project_relion_projector_texture`](../../recovar/em/helpers/projection.py)
-reuses [`project_relion_half_capacity`](../../recovar/cuda_backproject.py) without
+reuses [`project_relion_half_capacity`](../../recovar/em/cuda/kernels.py) without
 changing its native kernel. The kernel reads the supplied half-volume directly
 instead of constructing a
 full cubic JAX buffer and then extracting its positive-frequency half again.

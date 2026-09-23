@@ -10,7 +10,7 @@ from typing import Any
 
 import numpy as np
 
-from recovar.reconstruction import regularization
+from recovar.em.reconstruction import regularization_relion
 from recovar.utils.file_hash import sha256_file
 from scripts.analyze_em_k1_bpref_substitution import (
     load_relion_raw,
@@ -410,7 +410,7 @@ def main() -> None:
             shell_count=shell_count,
         )
         recovar_fsc = np.asarray(
-            regularization.compute_relion_fsc_from_backprojector(
+            regularization_relion.compute_relion_fsc_from_backprojector(
                 recovar["numerator"],
                 recovar_half2["numerator"],
                 recovar["weight"],
@@ -423,7 +423,7 @@ def main() -> None:
             dtype=np.float64,
         )
         native_fsc = np.asarray(
-            regularization.compute_relion_fsc_from_backprojector(
+            regularization_relion.compute_relion_fsc_from_backprojector(
                 native_numerator,
                 native_numerator2,
                 native_denominator,

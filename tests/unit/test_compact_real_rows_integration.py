@@ -155,13 +155,14 @@ def test_flat_real_rows_sums_and_noise_are_bit_identical(monkeypatch, custom_cud
     bit for bit and padded rows carry exactly zero mass, so every output must be
     bit-identical to the padded path with the real-rows adjoint."""
     import recovar.cuda_backproject as cuda_backproject
+    from recovar.em.cuda import kernels as em_cuda_kernels
     from recovar.em.sparse_pass2 import sparse_pass2_bucketed as bucketed_mod
 
     monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
     monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
     monkeypatch.setattr(cuda_backproject, "_cuda_ok", None)
     calls = []
-    original = cuda_backproject.dual_weighted_sums_pairs_rows_f32
+    original = em_cuda_kernels.dual_weighted_sums_pairs_rows_f32
 
     def spy(*a, **kw):
         calls.append(1)
@@ -178,7 +179,7 @@ def test_flat_real_rows_sums_and_noise_are_bit_identical(monkeypatch, custom_cud
         monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_ADJOINT_REAL_ROWS", "1")
         monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_NATIVE_PAIR_SPARSE_SUMS", "1")
         monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIR_FLAT_ROWS", flat)
-        monkeypatch.setattr(cuda_backproject, "dual_weighted_sums_pairs_rows_f32", spy)
+        monkeypatch.setattr(em_cuda_kernels, "dual_weighted_sums_pairs_rows_f32", spy)
         # the fused stage is jitted: retrace so the (Python-level) spy sees the kernel call
         bucketed_mod._compact_pair_weighted_sums_and_noise_native.clear_cache()
         kwargs = _fused_kclass_multibucket_fixture(n_images=13)

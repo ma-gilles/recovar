@@ -20,12 +20,12 @@ import jax.numpy as jnp
 import numpy as np
 
 from recovar.core import fourier_transform_utils as ftu
-from recovar.core.relion_project import gridding_correct_volume_real
 from recovar.em.helpers.deterministic_reduce import (
     deterministic_reductions_enabled,
     fixed_order_shell_sums,
     static_shell_voxel_lists,
 )
+from recovar.em.relion.relion_project import gridding_correct_volume_real
 
 
 @partial(jax.jit, static_argnames=("ori_size", "padding_factor"))

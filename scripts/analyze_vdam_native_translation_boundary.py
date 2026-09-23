@@ -14,6 +14,7 @@ import numpy as np
 import starfile
 
 from recovar import cuda_backproject
+from recovar.em.cuda import kernels as em_cuda_kernels
 from recovar.em.diagnostics.bpref_contribution_replay import native_current_fft_rows  # noqa: E402
 from recovar.em.helpers.fourier_window import make_fourier_window_indices_np
 from recovar.em.helpers.half_spectrum import make_relion_noise_shell_indices_half, make_scoring_half_image_weights
@@ -820,13 +821,13 @@ def analyze(
         _relion_translation_angles_f32(live["translations"], (full_size, full_size)),
         dtype=jnp.float32,
     )
-    translated_unweighted = cuda_backproject.relion_translate_score_f32(
+    translated_unweighted = em_cuda_kernels.relion_translate_score_f32(
         jnp.asarray(base_corrected[None], dtype=jnp.complex64),
         translation_angles,
         jnp.asarray(score_indices, dtype=jnp.int32),
         (full_size, full_size),
     )
-    translated_preweighted = cuda_backproject.relion_translate_score_f32(
+    translated_preweighted = em_cuda_kernels.relion_translate_score_f32(
         jnp.asarray((base_corrected * native_weight)[None], dtype=jnp.complex64),
         translation_angles,
         jnp.asarray(score_indices, dtype=jnp.int32),
@@ -867,13 +868,13 @@ def analyze(
         current_size,
         score_indices,
     )
-    native_shifted_pair_diff2 = cuda_backproject.relion_fine_diff2_pairs_f32(
+    native_shifted_pair_diff2 = em_cuda_kernels.relion_fine_diff2_pairs_f32(
         jnp.asarray(direct_reference[None], dtype=jnp.complex64),
         jnp.asarray(native_shifted[None], dtype=jnp.complex64),
         jnp.asarray(direct_weight[None], dtype=jnp.float32),
         jnp.asarray(full_to_compact, dtype=jnp.int32),
     )[0]
-    fused_translate_diff2 = cuda_backproject.relion_fine_diff2_fused_translate_rectangular_f32(
+    fused_translate_diff2 = em_cuda_kernels.relion_fine_diff2_fused_translate_rectangular_f32(
         jnp.asarray(direct_reference[None], dtype=jnp.complex64),
         jnp.asarray(base_corrected[None], dtype=jnp.complex64),
         translation_angles,
@@ -911,7 +912,7 @@ def analyze(
     )
 
     def _pair_diff2(reference, shifted_image, weight):
-        value = cuda_backproject.relion_fine_diff2_pairs_f32(
+        value = em_cuda_kernels.relion_fine_diff2_pairs_f32(
             jnp.asarray(reference[None], dtype=jnp.complex64),
             jnp.asarray(shifted_image[None], dtype=jnp.complex64),
             jnp.asarray(weight[None], dtype=jnp.float32),
@@ -1077,7 +1078,7 @@ def analyze(
         native_production_weighted = (
             native_processed * (native_ctf * native_inverse_noise_engine).astype(np.float32)
         ).astype(np.complex64)
-        translated_native_production = cuda_backproject.relion_translate_score_f32(
+        translated_native_production = em_cuda_kernels.relion_translate_score_f32(
             jnp.asarray(native_production_weighted[None], dtype=jnp.complex64),
             translation_angles,
             jnp.asarray(score_indices, dtype=jnp.int32),
@@ -1207,7 +1208,7 @@ def analyze(
                 jnp.asarray(replay_half[score_indices][None], dtype=jnp.complex64)
                 * pixel_correction
             )
-            translated_corrected = cuda_backproject.relion_translate_score_f32(
+            translated_corrected = em_cuda_kernels.relion_translate_score_f32(
                 corrected,
                 translation_angles,
                 jnp.asarray(score_indices, dtype=jnp.int32),
@@ -1234,7 +1235,7 @@ def analyze(
                 "radial_compact": np.arange(score_indices.size, dtype=np.int32),
             }
             for lookup_name, lookup_variant in lookup_variants.items():
-                direct_diff2 = cuda_backproject.relion_fine_diff2_rectangular_f32(
+                direct_diff2 = em_cuda_kernels.relion_fine_diff2_rectangular_f32(
                     jnp.asarray(live["debug_proj_weighted"][None], dtype=jnp.complex64),
                     translated_corrected[None],
                     jnp.asarray(live_weight[None], dtype=jnp.float32),
