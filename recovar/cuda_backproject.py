@@ -535,6 +535,19 @@ def _ensure_lib_path() -> pathlib.Path | None:
 
 def _get_lib():
     global _lib_handle, _loaded_lib_path
+    if _ffi_registered and _lib_handle is not None and _loaded_lib_path is not None:
+        # XLA FFI registrations last for the process, and every loaded copy of
+        # the library keeps its own CUDA state (the persistent-texture registry
+        # among it). Stay on the library whose symbols XLA holds: a second copy
+        # would hand out handles the registered kernels cannot see.
+        configured = _configured_lib_path()
+        if configured is not None and configured.resolve() != _loaded_lib_path:
+            raise RuntimeError(
+                f"RECOVAR_CUDA_LIB={configured} asks for a different CUDA library than the one "
+                f"this process's XLA FFI handlers are bound to ({_loaded_lib_path}); "
+                "restart the process to switch libraries"
+            )
+        return _lib_handle
     lib_path = _existing_lib_path()
     if lib_path is None:
         lib_path = _ensure_lib_path()

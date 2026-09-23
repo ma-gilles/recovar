@@ -370,6 +370,54 @@ def test_persistent_texture_preserves_nyquist_and_current_radius(
             np.testing.assert_array_equal(np.asarray(actual).view(np.uint32), np.asarray(expected).view(np.uint32))
 
 
+@pytest.mark.gpu
+def test_bound_cuda_library_keeps_persistent_texture_handles_live(
+    monkeypatch, tmp_path, custom_cuda_lib, gpu_device
+):
+    """Native calls stay on the library whose symbols XLA registered.
+
+    XLA FFI registrations last for the process, and a second copy of the
+    library has its own persistent-texture registry. Before the loader was
+    bound, pointing RECOVAR_CUDA_LIB at another copy after registration
+    created textures that the registered kernel rejected with "owner handle is
+    not live"; test_refine_relion_mode hit this whenever an earlier test had
+    loaded a different path than its custom_cuda_lib fixture.
+    """
+    import shutil
+
+    import recovar.cuda_backproject as cb
+
+    monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
+    monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
+    monkeypatch.setattr(cb, "_cuda_ok", None)
+    projector = _projector(r_max=7, padding_factor=2)
+
+    def project():
+        with cb.RelionPersistentHalfTextureF32(
+            projector, padding_factor=2, projector_max_r=7, device=gpu_device
+        ) as texture:
+            return np.asarray(
+                cb.relion_projector_persistent_half_texture_f32(
+                    texture, jnp.asarray(_rotations()), current_size=16, padding_factor=2, projector_max_r=7
+                )
+            )
+
+    with jax.default_device(gpu_device):
+        cb._ensure_ffi()
+        bound = cb._loaded_lib_path
+        reference = project()
+        copy = tmp_path / "second_copy" / "libcuda_backproject.so"
+        copy.parent.mkdir()
+        shutil.copy(bound, copy)
+        monkeypatch.setenv("RECOVAR_CUDA_LIB", str(copy))
+        with pytest.raises(RuntimeError, match="bound to"):
+            project()
+        # Without an explicit request, native calls keep using the bound library.
+        monkeypatch.delenv("RECOVAR_CUDA_LIB")
+        np.testing.assert_array_equal(project().view(np.uint32), reference.view(np.uint32))
+    assert cb._loaded_lib_path == bound
+
+
 def test_sparse_pass2_opens_eligible_texture_from_original_host_slab(monkeypatch):
     import recovar.cuda_backproject as cuda_backproject
     from recovar.em.sparse_pass2 import dispatch as oversampling

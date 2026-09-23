@@ -334,9 +334,15 @@ def _custom_cuda_test_error_detail():
 def _resolve_custom_cuda_test_lib(*, require=False):
     global _custom_cuda_test_error, _custom_cuda_test_lib
 
-    if _custom_cuda_test_lib is _CUSTOM_CUDA_LIB_UNSET:
-        import recovar.cuda_backproject as cuda_backproject
+    import recovar.cuda_backproject as cuda_backproject
 
+    if cuda_backproject._ffi_registered and cuda_backproject._loaded_lib_path is not None:
+        # This process's XLA FFI handlers are bound to the library it loaded
+        # first, and the loader refuses any other; tests that pin
+        # RECOVAR_CUDA_LIB and their subprocesses must use that same one.
+        return Path(cuda_backproject._loaded_lib_path)
+
+    if _custom_cuda_test_lib is _CUSTOM_CUDA_LIB_UNSET:
         configured = os.environ.get("RECOVAR_CUDA_LIB")
         if configured and Path(configured).exists():
             _custom_cuda_test_lib = Path(configured).resolve()
