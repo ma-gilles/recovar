@@ -85,6 +85,10 @@ def _on_gpu():
     return any(getattr(device, "platform", "") in {"gpu", "cuda"} for device in jax.devices())
 
 
+# Public name for the EM package (relax split P2); the private name stays for existing callers.
+on_gpu = _on_gpu
+
+
 def _use_cuda(order):
     """Return True if RECOVAR's preferred custom CUDA projector should be used."""
     if order not in (0, 1, 3) or not _on_gpu():

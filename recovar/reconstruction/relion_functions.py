@@ -619,6 +619,10 @@ def _as_flat_single_volume(arr, volume_shape):
     raise ValueError(f"Expected array with shape {volume_shape} or ({flat_size},), got {arr.shape}")
 
 
+# Public name for the EM package (relax split P2); the private name stays for existing callers.
+as_flat_single_volume = _as_flat_single_volume
+
+
 def _average_over_shells_half(input_vec, volume_shape, frequency_shift=0):
     radial_distances = (
         fourier_transform_utils.get_grid_of_radial_distances_real(
@@ -1091,6 +1095,10 @@ def _relion_idft3_real_from_fftw_half(vol_half, volume_shape):
     return jnp.fft.ifftshift(vol, axes=axes)
 
 
+# Public name for the EM package (relax split P2); the private name stays for existing callers.
+relion_idft3_real_from_fftw_half = _relion_idft3_real_from_fftw_half
+
+
 def _relion_current_size_decenter_mask(volume_shape, radius, *, half_volume):
     """RELION ``Projector::decenter`` support: include ``r2 <= max_r2``.
 
@@ -1113,6 +1121,10 @@ def _relion_current_size_decenter_mask(volume_shape, radius, *, half_volume):
     )
     radius = float(radius)
     return radial * radial <= radius * radius
+
+
+# Public name for the EM package (relax split P2); the private name stays for existing callers.
+relion_current_size_decenter_mask = _relion_current_size_decenter_mask
 
 
 def post_process_from_filter(

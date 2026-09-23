@@ -364,7 +364,7 @@ def _accumulate_relion_firstiter_bpref_fused_impl(
         source_ctf.shape,
     )
     dense_images, dense_indices, current_height, current_half_width = (
-        cuda_backproject._prepare_relion_x_half_block_topology_operands(
+        cuda_backproject.prepare_relion_x_half_block_topology_operands(
             source_images,
             fftw_pixel_indices,
             physical_image_shape,
@@ -372,7 +372,7 @@ def _accumulate_relion_firstiter_bpref_fused_impl(
         )
     )
     dense_ctf, ctf_indices, ctf_height, ctf_half_width = (
-        cuda_backproject._prepare_relion_x_half_block_topology_operands(
+        cuda_backproject.prepare_relion_x_half_block_topology_operands(
             source_ctf,
             fftw_pixel_indices,
             physical_image_shape,
@@ -380,7 +380,7 @@ def _accumulate_relion_firstiter_bpref_fused_impl(
         )
     )
     dense_minvsigma2, noise_indices, noise_height, noise_half_width = (
-        cuda_backproject._prepare_relion_x_half_block_topology_operands(
+        cuda_backproject.prepare_relion_x_half_block_topology_operands(
             source_minvsigma2,
             fftw_pixel_indices,
             physical_image_shape,

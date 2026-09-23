@@ -27,7 +27,9 @@ from recovar.em.helpers.deterministic_reduce import (
     static_shell_voxel_lists,
 )
 from recovar.em.relion.relion_projector_setup import setup_relion_projector, setup_relion_projector_uncorrected
-from recovar.reconstruction.relion_functions import _relion_window_centered_half_fourier
+from recovar.reconstruction.relion_functions import (
+    relion_window_centered_half_fourier as _relion_window_centered_half_fourier,
+)
 
 
 def _compute_dtypes(compute_dtype):

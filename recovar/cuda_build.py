@@ -43,7 +43,8 @@ class NativeLibrary:
     make_dir:
         Directory holding the library's Makefile; builds run ``make -C make_dir LIB=<path>``.
     source_names:
-        Build inputs relative to ``make_dir``; a library older than any of them is stale.
+        Build inputs, relative to ``make_dir`` or absolute (e.g. under :func:`include_dir`); a library
+        older than any of them is stale, and a missing input is an error.
     lib_env:
         Environment variable that selects an explicit library path.
     registrations:
@@ -85,7 +86,7 @@ class NativeLibrary:
     def cached_path(self) -> pathlib.Path:
         from recovar import cuda_backproject
 
-        return cuda_backproject._cache_root() / self.filename
+        return cuda_backproject.cache_root() / self.filename
 
     def configured_path(self) -> pathlib.Path | None:
         override = os.environ.get(self.lib_env)
@@ -114,11 +115,8 @@ class NativeLibrary:
         except OSError:
             return False
         for src_name in self.source_names:
-            try:
-                if (self.make_dir / src_name).stat().st_mtime > lib_mtime:
-                    return True
-            except OSError:
-                continue
+            if (self.make_dir / src_name).stat().st_mtime > lib_mtime:
+                return True
         missing = self.missing_required_symbol(lib_path)
         if missing is not None:
             logger.info("%s CUDA library %s is missing symbol '%s' — will rebuild.", self.name, lib_path, missing)

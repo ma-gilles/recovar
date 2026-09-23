@@ -1,12 +1,16 @@
 """Read CUDA source and local includes, retaining the include directives."""
 
+import importlib.util
 import re
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[2]
-CUDA_DIR = ROOT / "recovar" / "cuda"
-EM_CUDA_DIR = ROOT / "recovar" / "em" / "cuda"
-PUBLIC_INCLUDE_DIR = CUDA_DIR / "include"
+from recovar.cuda_build import include_dir
+
+# Located through the packages, not the checkout layout, so the helper works for recovar's tree and
+# for the EM package once it lives in its own repository (relax split).
+PUBLIC_INCLUDE_DIR = include_dir()
+CUDA_DIR = PUBLIC_INCLUDE_DIR.parent
+EM_CUDA_DIR = Path(importlib.util.find_spec("recovar.em.cuda.kernels").origin).resolve().parent
 
 
 def read_cuda_source(filename="cuda_backproject.cu", base_dir=CUDA_DIR, skip=()):

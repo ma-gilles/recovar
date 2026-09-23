@@ -51,7 +51,7 @@ def residual_statistics(proj, abs2, summed, ctf, variance, mask, *, compute_scal
     outputs = _output_shapes(proj, abs2, summed, ctf, variance, mask)
     if jax.default_backend() != "gpu" or not cb.custom_cuda_requested():
         raise RuntimeError("Native residual statistics require enabled CUDA")
-    cb._ensure_optional_ffi(em_cuda_kernels._TARGET_NOISE_RESIDUAL_STATISTICS)
+    cb.ensure_optional_ffi(em_cuda_kernels._TARGET_NOISE_RESIDUAL_STATISTICS)
     result = jax.ffi.ffi_call(em_cuda_kernels._TARGET_NOISE_RESIDUAL_STATISTICS, outputs, vmap_method="sequential")(
         proj, abs2, summed, ctf, variance, mask,
         compute_scale=np.int64(compute_scale))

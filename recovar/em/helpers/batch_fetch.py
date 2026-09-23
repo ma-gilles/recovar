@@ -66,7 +66,7 @@ def prefetched_batches(iterable, *, depth=None):
     Depth zero preserves synchronous iteration. Source values and exceptions
     retain their order; the consumer owns the lifetime explicitly.
     """
-    from recovar.data_io.image_backends import _PrefetchIterator
+    from recovar.data_io.image_backends import PrefetchIterator as _PrefetchIterator
 
     depth = prefetch_depth() if depth is None else int(depth)
     if depth < 0:

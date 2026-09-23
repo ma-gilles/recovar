@@ -655,14 +655,15 @@ def test_relion_coarse_prehalf_shared_body_is_built_packaged_and_stale_checked()
     for source_name in local_inputs:
         assert f"include recovar/em/cuda/{source_name}" in manifest
 
+    from recovar.cuda_build import include_dir
     from recovar.em.cuda import kernels as em_cuda_kernels
 
     assert em_cuda_kernels._RELAX_CUDA_BUILD_SOURCE_NAMES == (
         *local_inputs[:1],
         *local_inputs[2:],
         include_name,
-        "../../cuda/include/recovar_cuda_common.cuh",
-        "../../cuda/include/device_scratch.cuh",
+        str(include_dir() / "recovar_cuda_common.cuh"),
+        str(include_dir() / "device_scratch.cuh"),
         "Makefile",
     )
     assert em_cuda_kernels._LIBRARY.source_names == em_cuda_kernels._RELAX_CUDA_BUILD_SOURCE_NAMES

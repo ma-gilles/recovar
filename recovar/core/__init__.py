@@ -51,6 +51,7 @@ from recovar.core.forward import (
 from recovar.core.slicing import (
     _AUTO,
     _default_max_r,
+    default_max_r,
     adjoint_slice_volume_indexed,
     adjoint_slice_volume,
     batch_adjoint_slice_volume_indexed,

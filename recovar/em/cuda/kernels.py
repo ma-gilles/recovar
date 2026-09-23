@@ -24,22 +24,42 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+from recovar import cuda_backproject
 from recovar.cuda_backproject import (  # noqa: F401  (staying helpers and shared loader state)
-    _TARGET_PROJECT_INDEXED,
-    _bitwise_array_equal,
-    _bpref_device_signature_scope,
-    _env_flag,
-    _ffi_kwargs,
-    _prepare_relion_x_half_block_topology_operands,
-    _relion_x_half_backproject_rotation_to_kernel,
-    _rot_to_compact,
-    _validate_inputs,
-    _volume_real_dtype,
+    TARGET_PROJECT_INDEXED as _TARGET_PROJECT_INDEXED,
+)
+from recovar.cuda_backproject import (
+    bitwise_array_equal as _bitwise_array_equal,
+)
+from recovar.cuda_backproject import (
+    bpref_device_signature_scope_var as _bpref_device_signature_scope,
+)
+from recovar.cuda_backproject import (
     custom_cuda_requested,
     logger,
 )
-from recovar import cuda_backproject
-from recovar.cuda_build import NativeLibrary
+from recovar.cuda_backproject import (
+    env_flag as _env_flag,
+)
+from recovar.cuda_backproject import (
+    ffi_kwargs as _ffi_kwargs,
+)
+from recovar.cuda_backproject import (
+    prepare_relion_x_half_block_topology_operands as _prepare_relion_x_half_block_topology_operands,
+)
+from recovar.cuda_backproject import (
+    relion_x_half_backproject_rotation_to_kernel as _relion_x_half_backproject_rotation_to_kernel,
+)
+from recovar.cuda_backproject import (
+    rot_to_compact as _rot_to_compact,
+)
+from recovar.cuda_backproject import (
+    validate_inputs as _validate_inputs,
+)
+from recovar.cuda_backproject import (
+    volume_real_dtype as _volume_real_dtype,
+)
+from recovar.cuda_build import NativeLibrary, include_dir
 from recovar.data_io import image_backends as _image_backends
 
 _RELION_BATCHED_POSTERIOR_PRIMITIVES_ENV = (
@@ -7653,8 +7673,8 @@ _RELAX_CUDA_BUILD_SOURCE_NAMES = (
     "sparse_pass2_posterior.cuh",
     "relion_translate_sum.cuh",
     "relion_coarse_diff2_projector_body.inc",
-    "../../cuda/include/recovar_cuda_common.cuh",
-    "../../cuda/include/device_scratch.cuh",
+    str(include_dir() / "recovar_cuda_common.cuh"),
+    str(include_dir() / "device_scratch.cuh"),
     "Makefile",
 )
 
@@ -7928,7 +7948,7 @@ def _get_lib():
 def _ensure_ffi():
     """Register recovar's pipeline FFI targets, which EM wrappers also call, then the EM library's."""
 
-    cuda_backproject._ensure_ffi()
+    cuda_backproject.ensure_ffi()
     _LIBRARY.ensure_ffi()
 
 
@@ -7939,7 +7959,7 @@ def _ensure_optional_ffi(target):
         _ensure_ffi()
         _LIBRARY.ensure_optional_ffi(target)
     else:
-        cuda_backproject._ensure_optional_ffi(target)
+        cuda_backproject.ensure_optional_ffi(target)
 
 
 # Seam S2 (relax split): the relion_cuda image backend in recovar.data_io.image_backends calls

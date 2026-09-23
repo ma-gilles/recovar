@@ -1653,7 +1653,6 @@ def _compute_k_class_significance_batched(
                 f"translations, got {n_trans}"
             )
         from recovar import cuda_backproject
-        from recovar.em.cuda import kernels as em_cuda_kernels
         from recovar.em.helpers.projection import relion_projector_half_to_texture_full
         from recovar.em.relion.relion_ctf import _relion_exact_ctf_half_from_source_star
         from recovar.em.sparse_pass2.sparse_pass2_bucket_io import _relion_translation_angles_f32
@@ -1990,7 +1989,6 @@ def _compute_k_class_significance_batched(
                 "half-spectrum scoring",
             )
         from recovar import cuda_backproject
-        from recovar.em.cuda import kernels as em_cuda_kernels
         from recovar.em.helpers.projection import relion_projector_half_to_texture_full
         from recovar.em.relion.relion_ctf import _relion_exact_ctf_half_from_source_star
         from recovar.em.sparse_pass2.sparse_pass2_bucket_io import _relion_translation_angles_f32
@@ -2300,8 +2298,6 @@ def _compute_k_class_significance_batched(
     ):
         """Invoke the mature fused scorer and record observed execution."""
 
-        from recovar import cuda_backproject
-        from recovar.em.cuda import kernels as em_cuda_kernels
         from recovar.em.cuda import kernels as em_cuda_kernels
 
         if not coarse_fused_projector_enabled:

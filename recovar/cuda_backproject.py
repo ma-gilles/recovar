@@ -73,9 +73,17 @@ _bpref_device_signature_scope = contextvars.ContextVar(
 )
 
 
+# Public name for the EM package (relax split P2); the private name stays for existing callers.
+bpref_device_signature_scope_var = _bpref_device_signature_scope
+
+
 def _env_flag(name: str) -> bool:
     value = os.environ.get(name, "")
     return value.lower() not in {"", "0", "false", "no", "off"}
+
+
+# Public name for the EM package (relax split P2); the private name stays for existing callers.
+env_flag = _env_flag
 
 
 def relion_x_half_bp_block_topology_enabled() -> bool:
@@ -202,6 +210,10 @@ def _cache_root() -> pathlib.Path:
         _warn_cache_root_fallback(rejected, fallback)
         _CACHE_ROOT_FALLBACK_WARNED = True
     return fallback
+
+
+# Public name for the EM package (relax split P2); the private name stays for existing callers.
+cache_root = _cache_root
 
 
 def _cached_lib_path() -> pathlib.Path:
@@ -530,6 +542,10 @@ _BACKPROJECT_SKIP_ZERO_ENV = "RECOVAR_BACKPROJECT_SKIP_ZERO"
 _TARGET_BACKPROJECT_INDEXED_SIGNATURE = "cuda_backproject_indexed_signature"
 _TARGET_PROJECT = "cuda_project"
 _TARGET_PROJECT_INDEXED = "cuda_project_indexed"
+
+
+# Public name for the EM package (relax split P2); the private name stays for existing callers.
+TARGET_PROJECT_INDEXED = _TARGET_PROJECT_INDEXED
 _TARGET_BATCH_BACKPROJECT = "cuda_batch_backproject"
 _TARGET_BATCH_BACKPROJECT_INDEXED = "cuda_batch_backproject_indexed"
 _TARGET_PER_IMAGE_BP = "cuda_per_image_bp"
@@ -777,6 +793,10 @@ def _ensure_ffi():
         logger.debug("Registered CUDA FFI targets")
 
 
+# Public name for the EM package (relax split P2); the private name stays for existing callers.
+ensure_ffi = _ensure_ffi
+
+
 _optional_ffi_registered: set[str] = set()
 _OPTIONAL_FFI_REGISTRATIONS = {
     _TARGET_BACKPROJECT_INDEXED_SKIP_ZERO: (
@@ -800,6 +820,10 @@ def _ensure_optional_ffi(target):
             raise RuntimeError(error)
         jax.ffi.register_ffi_target(target, jax.ffi.pycapsule(symbol), platform="CUDA")
         _optional_ffi_registered.add(target)
+
+
+# Public name for the EM package (relax split P2); the private name stays for existing callers.
+ensure_optional_ffi = _ensure_optional_ffi
 
 
 _cuda_ok = None  # cached result: None = not checked, True/False = result
@@ -867,6 +891,10 @@ def _rot_to_compact(rotation_matrices: jax.Array, real_dtype=None) -> jax.Array:
     return compact
 
 
+# Public name for the EM package (relax split P2); the private name stays for existing callers.
+rot_to_compact = _rot_to_compact
+
+
 def _relion_x_half_backproject_rotation_to_kernel(
     rotation_matrices: jax.Array,
     target_dtype=None,
@@ -888,6 +916,10 @@ def _relion_x_half_backproject_rotation_to_kernel(
         return rotation_matrices.astype(jnp.float32)[..., [2, 1, 0]]
     inverse = jnp.linalg.inv(rotation_matrices.astype(jnp.float64))
     return jnp.swapaxes(inverse, -1, -2)[..., [2, 1, 0]]
+
+
+# Public name for the EM package (relax split P2); the private name stays for existing callers.
+relion_x_half_backproject_rotation_to_kernel = _relion_x_half_backproject_rotation_to_kernel
 
 
 def _prepare_relion_x_half_block_topology_operands(images, pixel_indices, image_shape, max_r):
@@ -931,9 +963,17 @@ def _prepare_relion_x_half_block_topology_operands(images, pixel_indices, image_
     return dense_images, dense_indices, current_height, current_half_width
 
 
+# Public name for the EM package (relax split P2); the private name stays for existing callers.
+prepare_relion_x_half_block_topology_operands = _prepare_relion_x_half_block_topology_operands
+
+
 def _volume_real_dtype(volume: jax.Array):
     """Return the real component dtype of a volume (float32 for complex64, etc.)."""
     return jnp.finfo(volume.dtype).dtype if jnp.issubdtype(volume.dtype, jnp.complexfloating) else volume.dtype
+
+
+# Public name for the EM package (relax split P2); the private name stays for existing callers.
+volume_real_dtype = _volume_real_dtype
 
 
 def _infer_backproject_upsampling(image_shape, volume_shape, max_r=None):
@@ -980,6 +1020,10 @@ def _validate_inputs(volume_shape, image_shape, order, half_volume, half_image, 
     _infer_backproject_upsampling(image_shape, volume_shape, max_r=max_r)
 
 
+# Public name for the EM package (relax split P2); the private name stays for existing callers.
+validate_inputs = _validate_inputs
+
+
 def _encode_max_r(max_r):
     """Encode max_r as int64 max_r2_x4 for FFI (quarter-pixel² precision).
 
@@ -1019,6 +1063,10 @@ def _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image, max_r
         ih,
         iw_eff,
     )
+
+
+# Public name for the EM package (relax split P2); the private name stays for existing callers.
+ffi_kwargs = _ffi_kwargs
 
 
 def _project_ffi_kwargs(
@@ -1307,6 +1355,10 @@ def _bitwise_array_equal(left, right) -> bool:
         and left_np.dtype == right_np.dtype
         and left_np.tobytes(order="C") == right_np.tobytes(order="C")
     )
+
+
+# Public name for the EM package (relax split P2); the private name stays for existing callers.
+bitwise_array_equal = _bitwise_array_equal
 
 
 @functools.partial(jax.jit, static_argnums=(4, 5, 6, 7, 8, 9, 10))

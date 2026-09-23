@@ -464,11 +464,11 @@ def _require_custom_cuda_runtime() -> dict[str, object]:
     import recovar.cuda_backproject as cuda_backproject
     from recovar.core import slicing
 
-    slicing._on_gpu.cache_clear()
+    slicing.on_gpu.cache_clear()
     report = {
         "default_backend": jax.default_backend(),
         "device_platforms": [getattr(device, "platform", "") for device in jax.devices()],
-        "slicing_on_gpu": bool(slicing._on_gpu()),
+        "slicing_on_gpu": bool(slicing.on_gpu()),
         "custom_cuda_requested": bool(cuda_backproject.custom_cuda_requested()),
         "cuda_available": bool(cuda_backproject.cuda_available()),
     }
