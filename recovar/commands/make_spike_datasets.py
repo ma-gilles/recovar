@@ -11,7 +11,7 @@ from recovar.heterogeneity import image_assignment
 from recovar.output import output
 from recovar.reconstruction import noise
 from recovar.simulation import simulate_scattering_potential as ssp
-from recovar.simulation import simulator
+from recovar.simulation import simulator, synthetic_dataset
 
 logger = logging.getLogger(__name__)
 
@@ -96,13 +96,7 @@ def main(
         )
 
         # Volumes are scaled so that images are normalized.
-        volumes = simulator.load_volumes_from_folder(
-            sim_info["volumes_path_root"],
-            sim_info["grid_size"],
-            sim_info["trailing_zero_format_in_vol_name"],
-            normalize=False,
-        )
-        gt_volumes = volumes * sim_info["scale_vol"]
+        gt_volumes = synthetic_dataset.load_ground_truth_volumes(sim_info)
 
         cryo = cryoem_dataset.load_dataset(
             particles_file=os.path.join(dataset_folder, f"particles.{grid_size}.mrcs"),
