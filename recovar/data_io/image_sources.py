@@ -282,6 +282,10 @@ class BackendImageSource(ImageSource):
         self.backend.data_multiplier = value
         self.info = replace(self.info, invert_data=bool(value < 0))
 
+    @property
+    def mult(self):
+        return self.data_multiplier
+
     def __getitem__(self, index):
         return self.backend[index]
 
@@ -394,6 +398,10 @@ class SubsetImageSource(ImageSource):
     @data_multiplier.setter
     def data_multiplier(self, value):
         self.parent.data_multiplier = value
+
+    @property
+    def mult(self):
+        return self.data_multiplier
 
     def __getitem__(self, index):
         if self.tilt_series:
