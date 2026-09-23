@@ -6202,6 +6202,96 @@ def test_prepare_bucket_io_exact_cc_keeps_relion_image_and_corr_operands_separat
     )
 
 
+def test_prepare_bucket_io_exact_bpref_translation_keeps_recovar_fft_units_and_native_operands(monkeypatch):
+    """Final-Q 5b4e1e7311 exact-BPref operands, in this tree's factoring.
+
+    Final Q scaled the image by 1/N^2 before the (linear) translate kernel and
+    by N^2 after it. This tree translates the image in RECOVAR's unnormalized
+    FFT units and applies RELION's native units (fftw.cpp forward 1/N^2,
+    minvsigma2 without the N^4 variance scale) only in the native operands the
+    fused BPref consumes. The translated reconstruction operand, the observable
+    both trees accumulate, must be identical to Q's; the native triple carries
+    Q's normalized-image assertion.
+    """
+    from recovar import cuda_backproject
+    from recovar.em.relion import relion_ctf
+
+    ds = MockDataset(n_images=1, seed=1701)
+
+    class _Backend:
+        image_mask_mode = "relion_background_fill"
+        relion_fourier_backend = "relion_cuda"
+
+    ds.image_source.backend = _Backend()
+
+    def process_half(batch, apply_image_mask=False, **kwargs):
+        del apply_image_mask
+        processed = _raw_real_process_half(batch)
+        factors = jnp.asarray(kwargs["relion_normalization_factors"], dtype=processed.real.dtype)
+        return processed * factors[:, None]
+
+    ds.process_images_half = process_half
+    batch_indices = np.asarray([0], dtype=np.int64)
+    batch = jnp.asarray(ds._images[batch_indices])
+    config = ForwardModelConfig.from_dataset(ds, disc_type="linear_interp", process_fn=ds.process_images)
+    n_half = IMAGE_SHAPE[0] * (IMAGE_SHAPE[1] // 2 + 1)
+    ctf_half = np.linspace(0.5, 1.5, n_half, dtype=np.float64)[None, :]
+    monkeypatch.setattr(
+        relion_ctf,
+        "_relion_exact_ctf_half_from_source_star",
+        lambda *args, **kwargs: ctf_half,
+    )
+    calls = []
+
+    def fake_translate(images, weights, angles, pixel_indices, image_shape):
+        calls.append((np.asarray(images), np.asarray(weights)))
+        del pixel_indices, image_shape
+        return jnp.repeat(images * weights, int(angles.shape[0]), axis=0)
+
+    monkeypatch.setattr(cuda_backproject, "relion_translate_bpref_f32", fake_translate)
+
+    def fake_translate_score(images, angles, _pixel_indices, _image_shape):
+        return jnp.repeat(jnp.asarray(images), int(angles.shape[0]), axis=0)
+
+    monkeypatch.setattr(cuda_backproject, "relion_translate_score_f32", fake_translate_score)
+    noise = np.linspace(0.75, 1.25, n_half, dtype=np.float64)
+    result = _prepare_bucket_io(
+        experiment_dataset=ds,
+        batch=batch,
+        ctf_params=jnp.asarray(ds.CTF_params[batch_indices]),
+        image_indices=batch_indices,
+        noise_variance_half=jnp.asarray(noise, dtype=jnp.float64),
+        fine_translations=jnp.zeros((1, 2), dtype=jnp.float32),
+        config=config,
+        n_trans=1,
+        score_with_masked_images=False,
+        half_spectrum_scoring=False,
+        image_corrections=np.ones(1, dtype=np.float32),
+        scale_corrections=np.ones(1, dtype=np.float32),
+        image_pre_shifts=None,
+        use_float64_scoring=False,
+        relion_score_translation_angles=jnp.zeros((1, 2), dtype=jnp.float32),
+        relion_exact_bpref_operands=True,
+        return_native_bpref_operands=True,
+    )
+
+    raw = np.asarray(_raw_real_process_half(batch))
+    fft_size = float(np.prod(IMAGE_SHAPE))
+    inverse_noise = np.reciprocal(noise).astype(np.float32)
+    expected_weight = ctf_half.astype(np.float32) * inverse_noise[None, :]
+    assert len(calls) == 1
+    np.testing.assert_array_equal(calls[0][0], raw)
+    np.testing.assert_array_equal(calls[0][1], expected_weight)
+    np.testing.assert_array_equal(np.asarray(result[1]), raw * expected_weight)
+    native_image, native_ctf, native_minvsigma2 = result[-3:]
+    np.testing.assert_array_equal(np.asarray(native_image), raw * np.float32(1.0 / fft_size))
+    np.testing.assert_array_equal(np.asarray(native_ctf), ctf_half.astype(np.float32))
+    np.testing.assert_array_equal(
+        np.asarray(native_minvsigma2),
+        np.reciprocal(noise / (fft_size * fft_size)).astype(np.float32),
+    )
+
+
 def test_prepare_bucket_io_routes_relion_cuda_operands_to_score_and_reconstruction():
     ds = MockDataset(n_images=2, seed=714)
 
