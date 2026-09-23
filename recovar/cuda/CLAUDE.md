@@ -70,7 +70,7 @@ aligned when changing these boundaries.
 
 `recovar/cuda_backproject.py` loads `libcuda_backproject.so` and registers its kernels through JAX XLA FFI;
 relax's `relax/cuda/kernels.py` loads `librelax_cuda.so` through `recovar.cuda_build.NativeLibrary`
-(explicit path: `RECOVAR_RELAX_CUDA_LIB`) and registers the EM targets.
+(explicit path: `RELAX_CUDA_LIB`) and registers the EM targets.
 `core/slicing.py` dispatches projection/backprojection operations to custom
 CUDA by default on GPU. The loader can build a missing or stale library;
 staleness includes source/Makefile modification times and missing FFI symbols.
