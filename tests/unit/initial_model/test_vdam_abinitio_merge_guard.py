@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import shutil
 import sys
 from pathlib import Path
 
@@ -1128,3 +1129,19 @@ def test_merge_guard_dry_run_writes_reproducibility_ledger(tmp_path):
     stored = json.loads(summary_path.read_text())
     assert stored["git"]["commit"]
     assert stored["commands"][0]["skipped"] is True
+
+
+def test_merge_guard_dry_run_records_a_node_without_nvidia_smi(tmp_path, monkeypatch):
+    """CPU-only Slurm nodes have no nvidia-smi; the ledger records that instead of crashing."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "git").symlink_to(shutil.which("git"))
+    monkeypatch.setenv("PATH", str(bin_dir))
+    assert shutil.which("nvidia-smi") is None
+
+    ledger = run_guard(tier="cpu", quick=True, output_dir=tmp_path / "guard", dry_run=True)
+
+    assert ledger["ok"] is True
+    assert ledger["provenance"]["ok"] is True
+    assert not ledger["git"]["commit"].startswith("<failed")
+    assert ledger["gpu_snapshot_start"].startswith("<nvidia-smi unavailable>")

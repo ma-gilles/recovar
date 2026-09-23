@@ -227,13 +227,17 @@ def _provenance(env: dict[str, str]) -> dict[str, Any]:
 
 
 def _gpu_snapshot() -> str:
-    code, text = _run_text(
-        (
-            "nvidia-smi",
-            "--query-gpu=index,name,memory.used,memory.total,utilization.gpu",
-            "--format=csv,noheader,nounits",
+    try:
+        code, text = _run_text(
+            (
+                "nvidia-smi",
+                "--query-gpu=index,name,memory.used,memory.total,utilization.gpu",
+                "--format=csv,noheader,nounits",
+            )
         )
-    )
+    except FileNotFoundError as error:
+        # A CPU-only node has no nvidia-smi at all; record that like a failing query.
+        return f"<nvidia-smi unavailable> {error}"
     return text.strip() if code == 0 else f"<nvidia-smi unavailable rc={code}> {text.strip()}"
 
 
