@@ -493,7 +493,9 @@ def _relion_wavg_chunk_budget_bytes(max_block_bytes: int, allocator_free_bytes: 
     each extra chunk costs the bucket tail host round trips (a whole-bucket
     stage at current_size 100 ran 13% slower split about three ways, job 14288806).
     So a bucket is split only when its Wavg stage would take more than a
-    quarter of the memory the allocator has left.
+    quarter of the memory the allocator has left. The caller reads the free
+    bytes once per pass-2 call, which keeps the chunk shapes fixed per bucket
+    shape within the call.
     """
 
     if allocator_free_bytes is None:

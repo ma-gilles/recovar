@@ -1019,6 +1019,12 @@ def compute_pass2_stats_sparse_bucketed(
         has_external_normalization=has_external_normalization,
     )
     max_noise_block_bytes = _max_noise_block_bytes_for_pass(device_memory_bytes)
+    # Read once per call: a per-bucket reading would move the chunk shapes
+    # with the other thread's allocations and recompile the chunk programs.
+    max_wavg_chunk_bytes = _relion_wavg_chunk_budget_bytes(
+        max_noise_block_bytes,
+        _jax_allocator_free_memory_bytes(),
+    )
     max_adjoint_block_bytes = _max_adjoint_block_bytes_for_pass(device_memory_bytes)
     translation_tile_half_pixels = _translation_tile_half_pixels_for_budget(
         use_window=budget_window_spec.use_window,
@@ -1749,10 +1755,7 @@ def compute_pass2_stats_sparse_bucketed(
                             scale=bucket_scale_for_stats,
                             raw_ctf=direct_ctf_rfloat_recon,
                             posterior=noise_probs,
-                            max_block_bytes=_relion_wavg_chunk_budget_bytes(
-                                max_noise_block_bytes,
-                                _jax_allocator_free_memory_bytes(),
-                            ),
+                            max_block_bytes=max_wavg_chunk_bytes,
                         )
                     ),
                     dtype=np.float32,
@@ -3244,10 +3247,7 @@ def compute_pass2_stats_sparse_bucketed(
                                 scale=bucket_scale_for_stats,
                                 raw_ctf=direct_ctf_rfloat_recon,
                                 posterior=noise_probs,
-                                max_block_bytes=_relion_wavg_chunk_budget_bytes(
-                                    max_noise_block_bytes,
-                                    _jax_allocator_free_memory_bytes(),
-                                ),
+                                max_block_bytes=max_wavg_chunk_bytes,
                             )
                         if chunked_scale_aa_target_rows.size:
                             selected = jnp.asarray(
