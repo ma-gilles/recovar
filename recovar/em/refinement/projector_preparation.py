@@ -20,13 +20,28 @@ from recovar.em.diagnostics.relion_replay import RelionProjectorReplayState
 logger = logging.getLogger(__name__)
 
 
-def prepare_initial_real_references(init_reference_real, *, volume_shape, n_classes, log):
+class InitialReferenceReplayError(ValueError):
+    """A direct initial-reference handoff was requested for a run that resumes after RELION iteration 0."""
+
+
+def prepare_initial_real_references(init_reference_real, *, volume_shape, n_classes, init_relion_iteration, log):
     """Normalize direct real references to half/class axes without Fourier conversion.
 
     Preserve float64 source values, shared-half identity and per-half views.
     A missing handoff stays [None, None] for the existing Fourier fallback.
+    The handoff replaces loop iteration 0's scoring projector, so it is only
+    valid for a fresh start: a run resuming after RELION iteration N scores
+    that iteration against the replayed references instead.
     """
     initial_real_references_by_half = [None, None]
+    if init_reference_real is not None and int(init_relion_iteration) != 0:
+        raise InitialReferenceReplayError(
+            "direct initial real-reference handoff (the K=1 --firstiter_cc default or "
+            "RECOVAR_INITIAL_PROJECTOR_USE_REAL_REFERENCE=1) would score the first loop "
+            "iteration against the start-up reference, but this run resumes after RELION "
+            f"iteration {int(init_relion_iteration)}; drop --firstiter_cc (and the "
+            "environment override) for --init_relion_iteration > 0"
+        )
     if init_reference_real is not None:
         expected_volume_shape = tuple(int(value) for value in volume_shape)
 

@@ -859,7 +859,11 @@ def refine_single_volume(
     means = _normalize_initial_means(init_volume, n_classes)
     del init_volume
     initial_real_references_by_half = prepare_initial_real_references(
-        replay.init_reference_real, volume_shape=volume_shape, n_classes=n_classes, log=logger
+        replay.init_reference_real,
+        volume_shape=volume_shape,
+        n_classes=n_classes,
+        init_relion_iteration=init_relion_iteration,
+        log=logger,
     )
     noise_variance_per_half = _normalize_noise_variance_per_half(
         init_noise_variance,

@@ -7,7 +7,10 @@ import numpy as np
 import pytest
 
 from recovar.em.refinement.mean_helpers import prepare_initial_mean_variance
-from recovar.em.refinement.projector_preparation import prepare_initial_real_references
+from recovar.em.refinement.projector_preparation import (
+    InitialReferenceReplayError,
+    prepare_initial_real_references,
+)
 
 pytestmark = pytest.mark.unit
 LOG = logging.getLogger(__name__)
@@ -28,7 +31,9 @@ def test_real_reference_half_class_layout_and_aliases(classes, dtype, layout):
     else:
         value = (source.copy(), -source)
         expected = list(value)
-    result = prepare_initial_real_references(value, volume_shape=SHAPE, n_classes=classes, log=LOG)
+    result = prepare_initial_real_references(
+        value, volume_shape=SHAPE, n_classes=classes, init_relion_iteration=0, log=LOG
+    )
     for actual, wanted in zip(result, expected):
         assert actual.dtype == np.float64
         np.testing.assert_array_equal(actual, wanted)
@@ -41,22 +46,37 @@ def test_real_reference_half_class_layout_and_aliases(classes, dtype, layout):
 
 
 def test_absent_real_reference_keeps_fourier_fallback(caplog):
-    assert prepare_initial_real_references(None, volume_shape=SHAPE, n_classes=4, log=LOG) == [None, None]
+    result = prepare_initial_real_references(None, volume_shape=SHAPE, n_classes=4, init_relion_iteration=0, log=LOG)
+    assert result == [None, None]
     assert not caplog.records
 
 
 def test_single_class_half_stack_without_class_axis():
     value = np.arange(54, dtype=np.float64).reshape((2,) + SHAPE)
-    result = prepare_initial_real_references(value, volume_shape=SHAPE, n_classes=1, log=LOG)
+    result = prepare_initial_real_references(value, volume_shape=SHAPE, n_classes=1, init_relion_iteration=0, log=LOG)
     assert all(v.shape == (1,) + SHAPE for v in result)
     np.testing.assert_array_equal(result[0][0], value[0])
     np.testing.assert_array_equal(result[1][0], value[1])
 
 
+def test_real_reference_handoff_rejects_resumed_run():
+    # A mid-trajectory replay (--init_relion_iteration 10 --firstiter_cc) used to take the
+    # handoff and score its first iteration against the low-passed start-up map.
+    value = np.ones(SHAPE, dtype=np.float64)
+    with pytest.raises(InitialReferenceReplayError, match="--firstiter_cc"):
+        prepare_initial_real_references(value, volume_shape=SHAPE, n_classes=1, init_relion_iteration=10, log=LOG)
+
+
+def test_resumed_run_without_handoff_keeps_fourier_fallback():
+    # Replays that never request the handoff (frozen boundaries, run_multi_iter_parity) stay valid.
+    result = prepare_initial_real_references(None, volume_shape=SHAPE, n_classes=1, init_relion_iteration=10, log=LOG)
+    assert result == [None, None]
+
+
 @pytest.mark.parametrize("value,classes", [(np.zeros(27), 1), (np.zeros(SHAPE), 4), ([np.zeros(SHAPE)] * 2, 2)])
 def test_incompatible_real_reference_fails_without_broadcast(value, classes):
     with pytest.raises(ValueError, match="init_reference_real must be"):
-        prepare_initial_real_references(value, volume_shape=SHAPE, n_classes=classes, log=LOG)
+        prepare_initial_real_references(value, volume_shape=SHAPE, n_classes=classes, init_relion_iteration=0, log=LOG)
 
 
 @pytest.mark.parametrize("classes", [False, True])
