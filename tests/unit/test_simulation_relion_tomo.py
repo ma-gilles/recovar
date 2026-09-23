@@ -36,15 +36,20 @@ def _axis_rotation(axis, deg):
     return m
 
 
-@pytest.fixture(scope="module")
-def dataset(tmp_path_factory):
-    root = tmp_path_factory.mktemp("relion_tomo")
+def _write_volume(root):
     x = (np.arange(GRID) - GRID / 2) * VOXEL
     zz, yy, xx = np.meshgrid(x, x, x, indexing="ij")
     vol = np.exp(-((xx - 12) ** 2 + yy**2 + zz**2) / 200) + 0.5 * np.exp(-(xx**2 + (yy + 16) ** 2 + zz**2) / 100)
     with mrcfile.new(root / "vol0000.mrc") as mrc:
         mrc.set_data(vol.astype(np.float32))
         mrc.voxel_size = VOXEL
+    return vol
+
+
+@pytest.fixture(scope="module")
+def dataset(tmp_path_factory):
+    root = tmp_path_factory.mktemp("relion_tomo")
+    _write_volume(root)
     out = root / "project"
     result = relion_tomo.generate_relion5_tomo_dataset(
         str(out),
@@ -138,7 +143,7 @@ def test_per_tilt_pose_and_defocus_follow_relion(dataset):
 
 
 def test_optics_group_noise_scale(dataset):
-    """Group 2 has noise_scale 1.5, so its low-SNR images carry about 2.25x the power."""
+    """Groups share one per-pixel noise variance times noise_scale (1.5 for group 2): about 2.25x the power."""
     out, result = dataset
     particles, _ = starfile.read_star(result["particles"])
     power = {1: [], 2: []}
@@ -179,3 +184,51 @@ def test_relion_tomo_ctf_is_spa_ctf_times_dose_weight():
     np.testing.assert_allclose(
         half, np.asarray(ftu.full_image_to_half_image(ctf, (16, 16))), rtol=1e-4, atol=1e-5
     )  # float32 grid vs float64 reference
+
+
+def test_group_volumes_resample_and_pad(tmp_path):
+    from recovar.core import fourier_transform_utils as ftu
+
+    _write_volume(tmp_path)
+    loaded = relion_tomo._group_volumes(str(tmp_path / "vol"), True, VOXEL, GRID, VOXEL, GRID)[0]
+    vol = np.real(np.asarray(ftu.get_idft3(loaded.reshape((GRID,) * 3))))
+    padded = relion_tomo._group_volumes(str(tmp_path / "vol"), True, VOXEL, GRID, VOXEL, GRID + 8)[0]
+    real = np.real(np.asarray(ftu.get_idft3(padded.reshape((GRID + 8,) * 3))))
+    np.testing.assert_allclose(real[4:-4, 4:-4, 4:-4], vol, atol=1e-4)
+    assert np.abs(real[:4]).max() < 1e-10
+    coarse = relion_tomo._group_volumes(str(tmp_path / "vol"), True, VOXEL, GRID, 2 * VOXEL, GRID // 2)[0]
+    assert coarse.shape == ((GRID // 2) ** 3,)
+    with pytest.raises(ValueError, match="even integer"):
+        relion_tomo._group_volumes(str(tmp_path / "vol"), True, VOXEL, GRID, 3 * VOXEL, GRID)
+
+
+def test_optics_groups_with_different_pixel_and_box_sizes(tmp_path):
+    _write_volume(tmp_path)
+    groups = (
+        {"voltage": 300.0, "cs": 2.7, "amp_contrast": 0.1, "noise_scale": 1.0},
+        {"voltage": 300.0, "cs": 2.7, "amp_contrast": 0.1, "noise_scale": 1.0, "pixel_size": 2 * VOXEL, "box_size": 24},
+    )
+    result = relion_tomo.generate_relion5_tomo_dataset(
+        str(tmp_path / "project"),
+        str(tmp_path / "vol"),
+        VOXEL,
+        n_particles=4,
+        grid_size=GRID,
+        n_tomograms=2,
+        optics_groups=groups,
+        max_tilt=20.0,
+        tilt_step=10.0,
+        tomogram_size=(512, 512, 128),
+        seed=1,
+    )
+    particles, optics = starfile.read_star(result["particles"])
+    assert optics["_rlnImagePixelSize"].astype(float).tolist() == [VOXEL, 2 * VOXEL]
+    assert optics["_rlnImageSize"].astype(int).tolist() == [GRID, 24]
+    tomograms, _ = starfile.read_star(result["tomograms"])
+    assert tomograms["_rlnTomoTiltSeriesPixelSize"].astype(float).tolist() == [VOXEL, 2 * VOXEL]
+    for _, p in particles.iterrows():
+        box, pixel = (GRID, VOXEL) if p["_rlnOpticsGroup"] == "1" else (24, 2 * VOXEL)
+        with mrcfile.open(tmp_path / "project" / p["_rlnImageName"]) as mrc:
+            assert mrc.data.shape == (5, box, box)
+            assert np.isclose(float(mrc.voxel_size.x), pixel)
+            assert np.all(np.isfinite(mrc.data)) and mrc.data.std() > 0

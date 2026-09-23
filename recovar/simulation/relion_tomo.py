@@ -73,6 +73,28 @@ def relion_tomo_ctf(ctf_params, image_shape, voxel_size, *, half_image=False):
     return ctf * relion_dose_weight(jnp.sum(freqs**2, axis=-1), ctf_params[:, core.CTFParamIndex.DOSE])
 
 
+def _group_volumes(volumes_path_root, trailing_zero_format_in_vol_name, voxel_size, grid_size, pixel_size, box_size):
+    """Fourier volumes resampled to ``pixel_size`` and cropped or padded in real space to ``box_size``."""
+    resampled_grid = grid_size * voxel_size / pixel_size
+    if not np.isclose(resampled_grid, round(resampled_grid)) or round(resampled_grid) % 2:
+        raise ValueError(f"grid_size * voxel_size / pixel_size = {resampled_grid} must be an even integer")
+    resampled_grid = int(round(resampled_grid))
+    volumes = simulator.load_volumes_from_folder(
+        volumes_path_root, resampled_grid, trailing_zero_format_in_vol_name, normalize=False
+    )
+    if resampled_grid == box_size:
+        return volumes
+    out = np.zeros((volumes.shape[0], box_size, box_size, box_size))
+    lo_in, lo_out = max(0, (resampled_grid - box_size) // 2), max(0, (box_size - resampled_grid) // 2)
+    n = min(resampled_grid, box_size)
+    for i, vol in enumerate(volumes):
+        real = np.real(np.asarray(fourier_transform_utils.get_idft3(vol.reshape((resampled_grid,) * 3))))
+        out[i, lo_out : lo_out + n, lo_out : lo_out + n, lo_out : lo_out + n] = real[
+            lo_in : lo_in + n, lo_in : lo_in + n, lo_in : lo_in + n
+        ]
+    return np.stack([np.asarray(fourier_transform_utils.get_dft3(v)).reshape(-1) for v in out])
+
+
 def dose_symmetric_tilt_scheme(max_tilt=60.0, tilt_step=3.0, group_size=2):
     """Tilt angles in ascending order and their acquisition order (Hagen scheme).
 
@@ -136,10 +158,15 @@ def generate_relion5_tomo_dataset(
         Particles in total, spread evenly over ``n_tomograms``.
     optics_groups : sequence of dict
         One dict per optics group with ``voltage`` (kV), ``cs`` (mm),
-        ``amp_contrast`` and ``noise_scale`` (noise standard-deviation factor).
+        ``amp_contrast`` and ``noise_scale`` (noise standard-deviation factor),
+        and optionally ``pixel_size`` (A) and ``box_size`` (px), which default to
+        ``voxel_size`` and ``grid_size``. A group's volume is Fourier-resampled to
+        its pixel size, so ``grid_size * voxel_size / pixel_size`` must be an even
+        integer. RELION puts the reference on group 1's grid.
         Tomogram ``t`` belongs to group ``t % len(optics_groups)``.
     snr : float
-        Mean per-pixel signal power over noise power for a noise scale of 1.
+        Mean per-pixel noise-free signal power of the first optics group's images
+        over the per-pixel noise power shared by all groups (before ``noise_scale``).
     hidden_tilt_fraction : float
         Probability that a tilt is marked invisible for a particle (the zero
         tilt is always visible). Hidden tilts get no slice in the stack.
@@ -153,6 +180,7 @@ def generate_relion5_tomo_dataset(
         saved as ``simulation_info.pkl``.
     """
     rng = np.random.default_rng(seed)
+    optics_groups = [{"pixel_size": voxel_size, "box_size": grid_size, **og} for og in optics_groups]
     if any(s % 2 for s in tomogram_size):
         raise ValueError(f"tomogram_size must be even (RELION centres at int(size/2)), got {tomogram_size}")
     os.makedirs(os.path.join(output_folder, "tilt_series"), exist_ok=True)
@@ -200,9 +228,9 @@ def generate_relion5_tomo_dataset(
                 "_rlnVoltage": og["voltage"],
                 "_rlnSphericalAberration": og["cs"],
                 "_rlnAmplitudeContrast": og["amp_contrast"],
-                "_rlnMicrographOriginalPixelSize": voxel_size,
+                "_rlnMicrographOriginalPixelSize": og["pixel_size"],
                 "_rlnTomoHand": hand,
-                "_rlnTomoTiltSeriesPixelSize": voxel_size,
+                "_rlnTomoTiltSeriesPixelSize": og["pixel_size"],
                 "_rlnTomoTiltSeriesStarFile": f"tilt_series/{name}.star",
                 "_rlnTomoSizeX": tomogram_size[0],
                 "_rlnTomoSizeY": tomogram_size[1],
@@ -250,12 +278,12 @@ def generate_relion5_tomo_dataset(
             "_rlnVoltage": [og["voltage"] for og in optics_groups],
             "_rlnSphericalAberration": [og["cs"] for og in optics_groups],
             "_rlnAmplitudeContrast": [og["amp_contrast"] for og in optics_groups],
-            "_rlnTomoTiltSeriesPixelSize": voxel_size,
+            "_rlnTomoTiltSeriesPixelSize": [og["pixel_size"] for og in optics_groups],
             "_rlnCtfDataAreCtfPremultiplied": int(premultiplied_ctf),
             "_rlnImageDimensionality": 2,
             "_rlnTomoSubtomogramBinning": 1.0,
-            "_rlnImagePixelSize": voxel_size,
-            "_rlnImageSize": grid_size,
+            "_rlnImagePixelSize": [og["pixel_size"] for og in optics_groups],
+            "_rlnImageSize": [og["box_size"] for og in optics_groups],
         }
     )
     particles_path = os.path.join(output_folder, "particles.star")
@@ -292,64 +320,79 @@ def generate_relion5_tomo_dataset(
     row_slice = np.array([int(name.split("@")[0]) - 1 for name in flat_df["_rlnImageName"].values])
     particle_volume = rng.choice(volumes.shape[0], size=n_particles, p=volume_distribution)
     particle_contrast = 1 + rng.normal(0, contrast_std, n_particles)
-    group_noise_scale = np.array([og["noise_scale"] for og in optics_groups])
-
-    def make_dataset(rows):
-        return cryoem_dataset.CryoEMDataset(
-            None,
-            voxel_size,
-            cryoem_dataset.ImageMetadata(rots[rows], np.zeros((rows.size, 2)), ctf_params[rows]),
-            ctf_evaluator=relion_tomo_ctf,
-            grid_size=grid_size,
-        )
-
-    batch_size = int(5 * utils.get_image_batch_size(grid_size, utils.get_gpu_memory_total()))
-
-    def simulate(rows, noise_variance, contrast, noise_scale, seed_offset):
-        return simulator.simulate_data(
-            make_dataset(rows),
-            volumes,
-            noise_variance,
-            batch_size,
-            particle_volume[row_particle[rows]],
-            contrast,
-            noise_scale,
-            seed=seed + seed_offset,
-            disc_type=disc_type,
-            premultiplied_ctf=premultiplied_ctf,
-        )
-
-    # Calibrate the noise level on a probe of the first rows: noise-free signal
-    # power against the power of unit-model noise alone.
-    noise_shape = simulator.get_noise_model(noise_model, grid_size)
-    probe = np.arange(min(len(flat_df), 8 * n_tilts))
-    ones, zeros = np.ones(probe.size), np.zeros(probe.size)
-    signal_power = np.mean(simulate(probe, 0 * noise_shape, ones, ones, 1) ** 2)
-    noise_power = np.mean(simulate(probe, noise_shape, zeros, ones, 2) ** 2)
-    noise_variance = noise_shape * signal_power / (noise_power * snr)
-
-    all_rows = np.arange(len(flat_df))
     row_optics = optics_df["_rlnOpticsGroup"].searchsorted(flat_df["_rlnOpticsGroup"].values.astype(int))
-    images = simulate(
-        all_rows,
-        noise_variance,
-        particle_contrast[row_particle],
-        group_noise_scale[row_optics],
-        0,
-    )
+    row_images = [None] * len(flat_df)
+    noise_variances = []
+    target_noise_power = None
+    for g, og in enumerate(optics_groups):
+        pixel_size, box_size = og["pixel_size"], og["box_size"]
+        if pixel_size == voxel_size and box_size == grid_size:
+            group_volumes = volumes
+        else:
+            group_volumes = scale_vol * _group_volumes(
+                volumes_path_root, trailing_zero_format_in_vol_name, voxel_size, grid_size, pixel_size, box_size
+            )
+        batch_size = int(5 * utils.get_image_batch_size(box_size, utils.get_gpu_memory_total()))
+
+        def simulate(rows, noise_variance, contrast, noise_scale, seed_offset):
+            dataset = cryoem_dataset.CryoEMDataset(
+                None,
+                pixel_size,
+                cryoem_dataset.ImageMetadata(rots[rows], np.zeros((rows.size, 2)), ctf_params[rows]),
+                ctf_evaluator=relion_tomo_ctf,
+                grid_size=box_size,
+            )
+            return simulator.simulate_data(
+                dataset,
+                group_volumes,
+                noise_variance,
+                batch_size,
+                particle_volume[row_particle[rows]],
+                contrast,
+                noise_scale,
+                seed=seed + seed_offset,
+                disc_type=disc_type,
+                premultiplied_ctf=premultiplied_ctf,
+            )
+
+        # Every group gets the same per-pixel noise variance, snr below the mean
+        # noise-free signal power of the first group's probe, times its noise_scale.
+        rows = np.nonzero(row_optics == g)[0]
+        if rows.size == 0:
+            noise_variances.append(None)
+            continue
+        noise_shape = simulator.get_noise_model(noise_model, box_size)
+        probe = rows[: 8 * n_tilts]
+        ones, zeros = np.ones(probe.size), np.zeros(probe.size)
+        if target_noise_power is None:
+            target_noise_power = np.mean(simulate(probe, 0 * noise_shape, ones, ones, 3 * g + 1) ** 2) / snr
+        unit_noise_power = np.mean(simulate(probe, noise_shape, zeros, ones, 3 * g + 2) ** 2)
+        noise_variance = noise_shape * target_noise_power / unit_noise_power
+        noise_variances.append(noise_variance.astype(np.float32))
+
+        n_rows = np.ones(rows.size)
+        images = simulate(
+            rows, noise_variance, particle_contrast[row_particle[rows]], og["noise_scale"] * n_rows, 3 * g
+        )
+        for row, image in zip(rows, images):
+            row_images[row] = image
 
     for p, stack_name in enumerate(stack_names):
         rows = np.nonzero(row_particle == p)[0]
         rows = rows[np.argsort(row_slice[rows])]
         os.makedirs(os.path.dirname(os.path.join(output_folder, stack_name)), exist_ok=True)
-        utils.write_mrc_stack(os.path.join(output_folder, stack_name), images[rows], voxel_size=voxel_size)
+        utils.write_mrc_stack(
+            os.path.join(output_folder, stack_name),
+            np.stack([row_images[r] for r in rows]),
+            voxel_size=optics_groups[row_optics[rows[0]]]["pixel_size"],
+        )
 
     simulation_info = {
         "scale_vol": scale_vol,
         "volumes_path_root": volumes_path_root,
         "voxel_size": voxel_size,
         "grid_size": grid_size,
-        "noise_variance": noise_variance.astype(np.float32),
+        "noise_variance_per_optics_group": noise_variances,
         "snr": snr,
         "optics_groups": [dict(og) for og in optics_groups],
         "premultiplied_ctf": premultiplied_ctf,
