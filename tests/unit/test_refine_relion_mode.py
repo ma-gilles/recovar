@@ -16686,3 +16686,21 @@ def test_local_controller_carries_allocation_budget_to_half_search(
         half_datasets, init_volume, translations, monkeypatch, local_observer=observe,
     )
     assert len(observed) == 2
+
+
+def test_non_c1_small_rotation_grid_keeps_adaptive_sparse_route():
+    """O symmetry has 12 coarse rotations and must not fall through to dense reconstruction.
+
+    Ported from final Q 22efd8065. Without the symmetry clause the D6 O/I1 K=4
+    trajectories (5k/128, HEALPix order 1) never built RELION's Projector::data
+    and diverged from RELION Class3D in iteration 1.
+    """
+
+    choose = iteration_loop_module._should_use_adaptive_search
+    assert choose(adaptive_oversampling=1, use_local=False, n_rotations=12, symmetry="O")
+    assert choose(adaptive_oversampling=1, use_local=False, n_rotations=5, symmetry="I1")
+    assert choose(adaptive_oversampling=1, use_local=False, n_rotations=144, symmetry="C4")
+    assert choose(adaptive_oversampling=1, use_local=False, n_rotations=17, symmetry="C1")
+    assert not choose(adaptive_oversampling=1, use_local=False, n_rotations=12, symmetry="C1")
+    assert not choose(adaptive_oversampling=0, use_local=False, n_rotations=12, symmetry="O")
+    assert not choose(adaptive_oversampling=1, use_local=True, n_rotations=12, symmetry="O")

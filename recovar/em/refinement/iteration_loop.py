@@ -515,6 +515,27 @@ def _dense_half_scoring_outputs(
     )
 
 
+def _should_use_adaptive_search(
+    *,
+    adaptive_oversampling: int,
+    use_local: bool,
+    n_rotations: int,
+    symmetry: str,
+) -> bool:
+    """Keep non-C1 refinement on its supported sparse/x-half route.
+
+    Small C1 grids may use the direct dense path. Point-group symmetry cannot:
+    symmetry reduction itself can make a valid grid smaller than that cutoff
+    (O has 12 coarse rotations at HEALPix order 1, I1 fewer), while its
+    scoring and reconstruction still require the adaptive RELION x-half path.
+    Ported from final Q 22efd8065.
+    """
+
+    if int(adaptive_oversampling) <= 0 or bool(use_local):
+        return False
+    return int(n_rotations) > 16 or str(symmetry).upper() != "C1"
+
+
 def _sigma_offset_for_half(current_sigma_offset_angstrom, current_sigma_offset_angstrom_per_half, half_index):
     if current_sigma_offset_angstrom_per_half is None:
         return float(current_sigma_offset_angstrom)
@@ -1956,7 +1977,12 @@ def refine_single_volume(
         iter_recorded_sig_counts = None
         iter_recorded_sig_count_parts: list[np.ndarray] = []
         iter_significant_counts_per_half = [None, None]
-        use_adaptive = state.adaptive_oversampling > 0 and not use_local and effective_rotations.shape[0] > 16
+        use_adaptive = _should_use_adaptive_search(
+            adaptive_oversampling=state.adaptive_oversampling,
+            use_local=use_local,
+            n_rotations=effective_rotations.shape[0],
+            symmetry=symmetry,
+        )
         # Track the rotation grids used for pose extraction.
         # When adaptive oversampling is active, ha_k indices refer to the
         # oversampled grid (from pass 2), not effective_rotations.
