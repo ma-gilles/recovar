@@ -6,6 +6,9 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 LAUNCHER = REPO_ROOT / "scripts" / "run_em_completion_bench_slurm.sh"
+DEFAULT_K1_RELION_DIR = Path(
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/pdb_k1_g256_n100000_noise1_bf80_20260516/relion_autorefine_k1_it015_os1"
+)
 
 
 def _launcher_env(tmp_path, scratch):
@@ -350,3 +353,72 @@ def test_completion_jobs_pin_production_jax_memory_fraction(tmp_path):
     k1_text = (scratch / "jobs" / "em_completion_k1_100k256.sh").read_text()
     assert "export XLA_PYTHON_CLIENT_MEM_FRACTION=.90\n" in k1_text
     assert "XLA_PYTHON_CLIENT_MEM_FRACTION=.50" not in k1_text
+
+
+def _fake_k1_fixture(tmp_path, version_line):
+    """A K=1 fixture tree the launcher accepts, with a chosen optimiser header."""
+    data = tmp_path / "k1_data"
+    relion = data / "relion"
+    relion.mkdir(parents=True)
+    for name in ("particles.star", "reference_gt.mrc"):
+        (data / name).write_text("x\n")
+    names = [
+        "run_it000_data.star", "run_it000_half1_model.star", "run_it000_half2_model.star",
+        "run_it015_half1_class001.mrc", "run_it015_half2_class001.mrc", "run_it016_data.star",
+        "run_it016_half1_model.star", "run_it016_half2_model.star", "run_it016_optimiser.star",
+        "run_sampling.star", "run_optimiser.star", "run_it016_half1_class001.mrc",
+        "run_it016_half2_class001.mrc",
+    ]
+    for name in names:
+        (relion / name).write_text("x\n")
+    (relion / "run_it000_half1_model.star").write_text("_rlnTau2FudgeFactor 1.000000\n")
+    (relion / "run_it000_data.star").write_text("loop_\n_rlnRandomSubset #1\n1\n2\n")
+    # The real optimiser header with only its version line replaced, so every other launcher check still sees it.
+    real = (DEFAULT_K1_RELION_DIR / "run_it000_optimiser.star").read_text().splitlines(keepends=True)
+    (relion / "run_it000_optimiser.star").write_text(f"# RELION optimiser; version {version_line}\n" + "".join(real[1:]))
+    return data, relion
+
+
+def test_completion_k1_particle_order_follows_the_oracle_build(tmp_path):
+    """Autonomous K=1 runs own RELION's fresh order, whose first 100 rows are the accuracy trials.
+
+    The default fixture's oracle was written by RELION 5.0.1 f2c1a3 (mt19937/std::shuffle);
+    running it with the legacy libc order picks different accuracy trial particles, biases the
+    expected-accuracy estimate low and flips knife-edge angular-sampling decisions.
+    """
+    scratch = tmp_path / "scratch"
+    env = _launcher_env(tmp_path, scratch)
+    _run_launcher(env, "--k1-only")
+    k1_text = (scratch / "jobs" / "em_completion_k1_100k256.sh").read_text()
+    assert "TRAJECTORY_ARGS+=(--relion-particle-shuffle mt19937)\n" in k1_text
+
+    for version, expected in (("5.0.1-commit-d476e6", "legacy"), ("5.0.1-commit-f2c1a3", "mt19937")):
+        case = tmp_path / expected
+        data, relion = _fake_k1_fixture(case, version)
+        env = _launcher_env(case, case / "scratch")
+        env.update({"K1_DATA_DIR": str(data), "K1_RELION_DIR": str(relion)})
+        _run_launcher(env, "--k1-only")
+        text = (case / "scratch" / "jobs" / "em_completion_k1_100k256.sh").read_text()
+        assert f"TRAJECTORY_ARGS+=(--relion-particle-shuffle {expected})\n" in text
+
+
+def test_completion_k1_particle_order_fails_closed_on_an_unknown_build(tmp_path):
+    data, relion = _fake_k1_fixture(tmp_path, "5.0.1-commit-000000")
+    env = _launcher_env(tmp_path, tmp_path / "scratch")
+    env.update({"K1_DATA_DIR": str(data), "K1_RELION_DIR": str(relion)})
+    proc = subprocess.run(
+        ["bash", str(LAUNCHER), "--dry-run", "--k1-only"],
+        cwd=REPO_ROOT, env=env, text=True,
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=False,
+    )
+    assert proc.returncode == 2, proc.stdout
+    assert "cannot infer the K=1 RELION particle order" in proc.stdout
+
+
+def test_completion_k1_replay_does_not_request_a_fresh_order(tmp_path):
+    scratch = tmp_path / "scratch"
+    env = _launcher_env(tmp_path, scratch)
+    env["K1_TRAJECTORY_MODE"] = "relion-replay"
+    _run_launcher(env, "--k1-only")
+    k1_text = (scratch / "jobs" / "em_completion_k1_100k256.sh").read_text()
+    assert "--relion-particle-shuffle" not in k1_text
