@@ -460,47 +460,56 @@ def test_deferred_exact_noise_wrapper_has_one_boundary_and_b42_b32_cache_keys():
     assert not hasattr(local_big_jit.compute_local_exact_noise, "lower")
     assert "compute_local_exact_noise(" in inspect.getsource(local_big_jit.run_local_bucket_big_jit)
 
-    dense_inputs = _make_noise_inputs(42)
-    tail_inputs = _make_noise_inputs(32)
-    function.clear_cache()
-    try:
-        dense_first = _call_deferred_wrapper(dense_inputs)
-        for actual, expected in zip(
-            dense_first,
-            _legacy_deferred_outputs(dense_inputs),
-            strict=True,
-        ):
-            np.testing.assert_array_equal(np.asarray(actual), np.asarray(expected))
-        dense_cache_size = function._cache_size()
-        assert dense_cache_size == 1
-        dense_second = _call_deferred_wrapper(dense_inputs)
-        assert function._cache_size() == dense_cache_size
-        for first, second in zip(dense_first, dense_second, strict=True):
-            np.testing.assert_array_equal(np.asarray(first), np.asarray(second))
-
-        tail_output = _call_deferred_wrapper(tail_inputs)
-        for actual, expected in zip(
-            tail_output,
-            _legacy_deferred_outputs(tail_inputs),
-            strict=True,
-        ):
-            np.testing.assert_array_equal(np.asarray(actual), np.asarray(expected))
-        assert function._cache_size() == dense_cache_size + 1
-
-        def trace_with_dynamic_current_size(runtime_current_size):
-            traced_inputs = dict(dense_inputs)
-            traced_inputs["runtime_logical_current_size"] = runtime_current_size
-            return _call_deferred_wrapper(traced_inputs)
-
-        wrapper_jaxpr = str(
-            jax.make_jaxpr(trace_with_dynamic_current_size)(
-                dense_inputs["runtime_logical_current_size"]
-            )
-        )
-        assert wrapper_jaxpr.count("name=run_deferred_local_exact_noise_jit") == 1
-        assert "name=compute_local_exact_noise" not in wrapper_jaxpr
-    finally:
+    # The legacy inline reference and the wrapper are separately compiled XLA
+    # programs. On the GPU backend their fusion boundaries differ and one of
+    # the four float32 carries moves by 1 ULP (9.9e-8 rel, observed on A100),
+    # which says nothing about the wrapper's boundary or cache keys. Keep the
+    # bitwise comparison and pin both programs to the deterministic CPU
+    # backend, as test_native_noise_composition_preserves_all_carries does
+    # for nested-XLA boundaries; compiled GPU arithmetic is qualified on
+    # saved operands separately.
+    with jax.default_device(jax.devices("cpu")[0]):
+        dense_inputs = _make_noise_inputs(42)
+        tail_inputs = _make_noise_inputs(32)
         function.clear_cache()
+        try:
+            dense_first = _call_deferred_wrapper(dense_inputs)
+            for actual, expected in zip(
+                dense_first,
+                _legacy_deferred_outputs(dense_inputs),
+                strict=True,
+            ):
+                np.testing.assert_array_equal(np.asarray(actual), np.asarray(expected))
+            dense_cache_size = function._cache_size()
+            assert dense_cache_size == 1
+            dense_second = _call_deferred_wrapper(dense_inputs)
+            assert function._cache_size() == dense_cache_size
+            for first, second in zip(dense_first, dense_second, strict=True):
+                np.testing.assert_array_equal(np.asarray(first), np.asarray(second))
+
+            tail_output = _call_deferred_wrapper(tail_inputs)
+            for actual, expected in zip(
+                tail_output,
+                _legacy_deferred_outputs(tail_inputs),
+                strict=True,
+            ):
+                np.testing.assert_array_equal(np.asarray(actual), np.asarray(expected))
+            assert function._cache_size() == dense_cache_size + 1
+
+            def trace_with_dynamic_current_size(runtime_current_size):
+                traced_inputs = dict(dense_inputs)
+                traced_inputs["runtime_logical_current_size"] = runtime_current_size
+                return _call_deferred_wrapper(traced_inputs)
+
+            wrapper_jaxpr = str(
+                jax.make_jaxpr(trace_with_dynamic_current_size)(
+                    dense_inputs["runtime_logical_current_size"]
+                )
+            )
+            assert wrapper_jaxpr.count("name=run_deferred_local_exact_noise_jit") == 1
+            assert "name=compute_local_exact_noise" not in wrapper_jaxpr
+        finally:
+            function.clear_cache()
 
 
 @pytest.mark.parametrize("return_split", (False, True))
