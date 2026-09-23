@@ -11,8 +11,8 @@ OWNERS = Path(__file__).resolve().parents[2] / "recovar/em"
 
 
 def tree(name):
-    owner = "refinement" if name == "iteration_loop.py" else "dense"
-    return ast.parse((OWNERS / owner / name).read_text())
+    # d2e7e27ed moved half_scoring.py from recovar/em/dense to recovar/em/refinement.
+    return ast.parse((OWNERS / "refinement" / name).read_text())
 
 
 def evaluate(node, **scope):
