@@ -17,9 +17,9 @@ def test_remapping_keeps_class_order_and_explicit_dtype(monkeypatch, n_classes, 
     calls = []
     outputs = []
 
-    def remap(row, src_order, dst_order, *, dtype):
+    def remap(row, src_order, dst_order, *, symmetry, dtype):
         assert np.shares_memory(row, original)
-        calls.append((row.copy(), src_order, dst_order, dtype))
+        calls.append((row.copy(), src_order, dst_order, symmetry, dtype))
         output = np.array([len(calls), -len(calls)], dtype=dtype)
         outputs.append(output)
         return output
@@ -29,13 +29,15 @@ def test_remapping_keeps_class_order_and_explicit_dtype(monkeypatch, n_classes, 
         original,
         2,
         3,
+        symmetry="D2",
         n_classes=n_classes,
         dtype=dtype,
     )
     assert len(calls) == (n_classes or 1)
-    for index, (row, src, dst, actual_dtype) in enumerate(calls):
+    for index, (row, src, dst, symmetry, actual_dtype) in enumerate(calls):
         np.testing.assert_array_equal(row, original if n_classes is None else original[index])
-        assert (src, dst, actual_dtype) == (2, 3, dtype)
+        # Every row, global or per class, is remapped under the caller's point group.
+        assert (src, dst, symmetry, actual_dtype) == (2, 3, "D2", dtype)
     if n_classes is None:
         assert result is outputs[0]
     else:
@@ -73,7 +75,7 @@ def test_omitted_dtype_preserves_float32_file_replay_default():
 def test_class_failure_stops_before_later_rows(monkeypatch):
     seen = []
 
-    def remap(row, src_order, dst_order, *, dtype):
+    def remap(row, src_order, dst_order, *, symmetry, dtype):
         seen.append(int(row[0]))
         if row[0] == 1:
             raise ValueError("bad class prior")
