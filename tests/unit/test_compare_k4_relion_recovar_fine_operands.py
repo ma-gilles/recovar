@@ -505,6 +505,8 @@ def test_fine_operand_reports_normalization_source(
     )
 
 
+# JAX/cuFFT preprocessing (_centered_rfft2_jax) needs a JAX GPU backend.
+@pytest.mark.gpu
 @pytest.mark.parametrize(
     ("mode", "expected_native_lane"),
     [("relion_cuda", False), ("relion_cuda_native_lane", True)],
@@ -560,6 +562,8 @@ def test_fine_operand_relion_cuda_counterfactual_routes_reduction_tree(
     assert _is_relion_cuda_replay_mode(mode)
 
 
+# JAX/cuFFT preprocessing (_centered_rfft2_jax) needs a JAX GPU backend.
+@pytest.mark.gpu
 def test_fine_operand_dataset_native_counterfactual_accepts_relion_capture():
     values = {
         "raw_real_images": np.arange(16, dtype=np.float32).reshape(1, 4, 4),
@@ -613,6 +617,8 @@ def test_fine_operand_dataset_native_capture_rejects_active_normalization():
         )
 
 
+# JAX/cuFFT preprocessing (_centered_rfft2_jax) needs a JAX GPU backend.
+@pytest.mark.gpu
 def test_fine_operand_replays_captured_native_lane_mode(monkeypatch):
     captured = {}
 
