@@ -1,9 +1,24 @@
 """Strict RELION MPI-follower group-scale emulation.
 
-RELION 5.0.1 reduces XA/AA statistics for every physical scale group in both
-single and segmented MPI messages. Optics groups index noise spectra and do
-not limit this reduction. The helpers retain follower dispatch and restart
-state without changing ordinary RECOVAR refinement.
+How far RELION 5.0.1 reduces the group-scale XA/AA statistics across
+followers depends on how the oracle combined its weighted sums
+(``MlOptimiserMpi::combineAllWeightedSums*``, ml_optimiser_mpi.cpp):
+
+* Without ``--dont_combine_weights_via_disc`` every follower writes one
+  ``MlWsumModel::pack(Mpack)`` message, which carries all ``nr_groups``
+  physical-group XA/AA entries, so every group is reduced.
+* With ``--dont_combine_weights_via_disc`` a CUDA build (``USE_MPI_COLLECTIVE``
+  is defined only for SYCL/ALTCPU builds) combines through the segmented
+  ``pack(Mpack, piece, nr_pieces)``. Its local ``nr_groups`` is
+  ``sigma2_noise.size()``, the optics-group count (ml_model.cpp), so in an
+  all-data Class3D run with more scale groups than optics groups only the
+  leading optics-group-sized prefix is MPI-reduced; the remaining scale
+  statistics and resulting scale vectors stay follower-local (per-rank dump
+  evidence in docs/math/em_parity_program.md).
+
+The mode is read from the oracle's recorded command line. These helpers
+reproduce both behaviors without leaking them into ordinary RECOVAR
+refinement.
 
 Expectation ownership is *not* a static equal partition.  RELION's leader
 hands each next ``--pool`` chunk to whichever follower requests work next.
@@ -1029,16 +1044,63 @@ def select_relion_follower_scales(
     return np.asarray(state.scales[owners, groups], dtype=np.float64)
 
 
+RELION_SCALE_REDUCTION_OPTICS_PREFIX = "optics_prefix"
+RELION_SCALE_REDUCTION_ALL_GROUPS = "all_groups"
+RELION_SCALE_REDUCTION_MODES = (RELION_SCALE_REDUCTION_OPTICS_PREFIX, RELION_SCALE_REDUCTION_ALL_GROUPS)
+
+
+def relion_scale_reduction_mode_from_command(command: str) -> str:
+    """Return how the RELION run behind ``command`` reduced group-scale XA/AA.
+
+    See the module docstring: the MPI (segmented) combine reduces only the
+    optics-group prefix, the file combine reduces every physical group. A CPU
+    command with ``--dont_combine_weights_via_disc`` is rejected because an
+    ALTCPU/SYCL build would use single collective messages instead.
+    """
+    tokens = str(command).split()
+    if "--dont_combine_weights_via_disc" not in tokens:
+        return RELION_SCALE_REDUCTION_ALL_GROUPS
+    if "--gpu" not in tokens:
+        raise ValueError(
+            "cannot infer RELION group-scale reduction for a CPU run with "
+            "--dont_combine_weights_via_disc: ALTCPU/SYCL builds use collective single messages"
+        )
+    return RELION_SCALE_REDUCTION_OPTICS_PREFIX
+
+
+def relion_scale_reduction_mode_from_optimiser_star(path: str | Path) -> tuple[str, str]:
+    """Read the command RELION recorded in an optimiser STAR header and its reduction mode."""
+    path = Path(path)
+    with path.open(encoding="utf-8") as handle:
+        for line in handle:
+            if line.startswith("# --"):
+                command = line[2:].strip()
+                return relion_scale_reduction_mode_from_command(command), command
+            if line.startswith("data_"):
+                break
+    raise ValueError(f"{path} does not record the RELION command line")
+
+
 def update_relion_follower_scales(
     state: RelionFollowerScaleState,
     *,
     wsum_signal_product,
     wsum_reference_power,
+    reduction_mode: str,
     relion_firstiter_cc_this_iter: bool = False,
     scale_relaxation_mu: float = 0.0,
 ) -> RelionFollowerScaleState:
-    """Reduce all physical-group statistics, then apply RELION scale updates."""
+    """Apply RELION's follower-local scale update after its MPI reduction.
 
+    ``reduction_mode`` selects which physical groups RELION reduced across
+    followers (see the module docstring and
+    :func:`relion_scale_reduction_mode_from_command`).
+    """
+
+    if reduction_mode not in RELION_SCALE_REDUCTION_MODES:
+        raise ValueError(
+            f"reduction_mode must be one of {RELION_SCALE_REDUCTION_MODES}, got {reduction_mode!r}"
+        )
     if relion_firstiter_cc_this_iter:
         return state
     mu = float(scale_relaxation_mu)
@@ -1050,11 +1112,15 @@ def update_relion_follower_scales(
     if np.any(~np.isfinite(xa)) or np.any(~np.isfinite(aa)) or np.any(aa < 0.0):
         raise ValueError("scale XA/AA must be finite and AA must be non-negative")
 
-    # RELION 5.0.1 MlWsumModel::pack/unpack includes nr_groups entries for
-    # both XA and AA, in both single and segmented messages. Optics groups
-    # index noise spectra; they do not bound physical-group scale reduction.
-    xa[:] = np.sum(xa, axis=0, keepdims=True)
-    aa[:] = np.sum(aa, axis=0, keepdims=True)
+    if reduction_mode == RELION_SCALE_REDUCTION_ALL_GROUPS:
+        combined_count = state.n_groups
+    else:
+        combined_count = min(int(state.n_optics_groups), state.n_groups)
+    if combined_count:
+        xa_combined = np.sum(xa[:, :combined_count], axis=0)
+        aa_combined = np.sum(aa[:, :combined_count], axis=0)
+        xa[:, :combined_count] = xa_combined[None, :]
+        aa[:, :combined_count] = aa_combined[None, :]
 
     target = np.ones_like(xa)
     np.divide(xa, aa, out=target, where=aa > 0.0)
@@ -1141,6 +1207,7 @@ class RelionFollowerScaleSetup:
     scale_stats_group_ids_per_half: list = field(default_factory=list)
     scale_stats_group_count_per_half: list = field(default_factory=list)
     physical_group_count: int = 0
+    scale_reduction_mode: str | None = None
 
     def to_result_dict(self, history: RefinementHistory) -> dict:
         """Return this run's follower-scale result-dict entries.
@@ -1202,6 +1269,7 @@ def setup_relion_follower_scale_state(
     scale_stats_group_ids_per_half = relion_half_inputs.group_ids
     scale_stats_group_count_per_half = relion_half_inputs.group_count
     physical_group_count = 0
+    scale_reduction_mode = None
 
     validate_relion_follower_scale_start(
         n_followers=follower_count,
@@ -1227,6 +1295,12 @@ def setup_relion_follower_scale_state(
         optics_group_count = int(replay.init_relion_optics_group_count or 0)
         if optics_group_count < 1:
             raise ValueError("RELION follower-local scale emulation requires a positive optics-group count")
+        scale_reduction_mode = replay.relion_scale_reduction_mode
+        if scale_reduction_mode not in RELION_SCALE_REDUCTION_MODES:
+            raise ValueError(
+                "RELION follower-local scale emulation requires the oracle's group-scale "
+                f"reduction mode {RELION_SCALE_REDUCTION_MODES}, got {scale_reduction_mode!r}"
+            )
 
         if isinstance(replay.relion_scale_follower_owners_by_iteration, Mapping):
             raw_owner_items = replay.relion_scale_follower_owners_by_iteration.items()
@@ -1379,10 +1453,11 @@ def setup_relion_follower_scale_state(
         ]
         logger.info(
             "Strict RELION follower-scale state initialized: followers=%d groups=%d optics_groups=%d "
-            "rank1_particles=%d rank2_particles=%d",
+            "scale_reduction=%s rank1_particles=%d rank2_particles=%d",
             follower_count,
             physical_group_count,
             optics_group_count,
+            scale_reduction_mode,
             int(np.count_nonzero(follower_owners_per_half[0] == 0)),
             int(np.count_nonzero(follower_owners_per_half[0] == 1)) if follower_count > 1 else 0,
         )
@@ -1396,6 +1471,7 @@ def setup_relion_follower_scale_state(
         scale_stats_group_ids_per_half=scale_stats_group_ids_per_half,
         scale_stats_group_count_per_half=scale_stats_group_count_per_half,
         physical_group_count=physical_group_count,
+        scale_reduction_mode=scale_reduction_mode,
     )
 
 
@@ -1608,6 +1684,7 @@ def _update_relion_follower_corrections(
         relion_follower_scale_state,
         wsum_signal_product=scale_xa,
         wsum_reference_power=scale_aa,
+        reduction_mode=follower_setup.scale_reduction_mode,
         relion_firstiter_cc_this_iter=relion_firstiter_cc_this_iter,
     )
     follower_setup.follower_scale_state = relion_follower_scale_state

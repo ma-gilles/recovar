@@ -223,6 +223,7 @@ class ReplayState:
     init_relion_optics_group_count: Any | None = None
     relion_scale_follower_count: int = 0
     relion_scale_follower_owners_by_iteration: Any | None = None
+    relion_scale_reduction_mode: str | None = None
     relion_follower_scale_replay: Any | None = None
 
 

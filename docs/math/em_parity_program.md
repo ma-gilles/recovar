@@ -337,6 +337,18 @@ n=3 parity therefore requires follower-local scale vectors and exact
 iteration-to-iteration particle ownership; a single global or rank-1
 serialized scale vector cannot reproduce RELION.
 
+The piecewise pack is RELION's MPI combine (`combineAllWeightedSums`, used with
+`--dont_combine_weights_via_disc` by builds without `USE_MPI_COLLECTIVE`,
+which CMake defines only for SYCL/ALTCPU). Without that flag RELION combines
+through files with one full `MlWsumModel::pack(Mpack)`, which does reduce every
+physical group. `relion_worker_scale.update_relion_follower_scales` therefore
+takes the reduction mode that `relion_scale_reduction_mode_from_command` reads
+from the oracle's recorded command line. The 2026-09-23 D6 symmetry audit found
+the reconciled source hard-coded the file-combine rule; every
+`--dont_combine_weights_via_disc` K=4 oracle then diverged from iteration 3,
+with rank-1 scales after the iteration-2 M-step up to 0.498 away from RELION's
+model STAR (final Q: 3.3e-6).
+
 K=4 scale A/B evidence:
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it3_orig6388_runtime_scale_ab_h100_20260715_024500/runtime_scale/analysis/score_support_no_correlation.json`.
 K=4 per-rank scale-state evidence:

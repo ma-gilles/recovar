@@ -6,6 +6,7 @@ import sys
 
 import jax.numpy as jnp
 import numpy as np
+import pytest
 
 from recovar.em.diagnostics.relion_replay import _apply_replay_correction_overrides
 from recovar.em.helpers.types import NoiseStats
@@ -34,6 +35,10 @@ from recovar.em.relion.relion_worker_scale import (
     relion_rank1_serialized_scales,
     relion_worker_group_ids,
     select_relion_follower_scales,
+    RELION_SCALE_REDUCTION_ALL_GROUPS,
+    RELION_SCALE_REDUCTION_OPTICS_PREFIX,
+    relion_scale_reduction_mode_from_command,
+    relion_scale_reduction_mode_from_optimiser_star,
     update_relion_follower_scales,
     validate_relion_follower_scale_replay,
     validate_relion_follower_scale_replay_application,
@@ -1111,7 +1116,7 @@ def test_follower_replay_completion_never_logs_success_for_invalid_accounting(ca
     assert caplog.messages == []
 
 
-def test_all_physical_group_scale_stats_are_combined_between_followers():
+def test_only_optics_prefix_scale_stats_are_combined_between_followers():
     state = make_relion_follower_scale_state(
         n_followers=2,
         group_counts=np.ones(4),
@@ -1124,26 +1129,28 @@ def test_all_physical_group_scale_stats_are_combined_between_followers():
         state,
         wsum_signal_product=xa,
         wsum_reference_power=aa,
+        reduction_mode=RELION_SCALE_REDUCTION_OPTICS_PREFIX,
     )
 
-    # RELION 5.0.1 MlWsumModel packs nr_groups XA/AA entries, including
-    # groups beyond nr_optics_groups. Group 1 has data only on follower 1,
-    # but both followers must receive its raw scale 5.
+    # --dont_combine_weights_via_disc (segmented MPI pack). Group 0 is reduced to raw scale 3 on both followers. Group 1 remains
+    # local: raw 5 on follower 1 and the zero-AA default 1 on follower 2.
+    # Follower-local normalization changes absolute values but preserves the
+    # expected within-follower ratios.
     np.testing.assert_allclose(updated.scales[:, 0] / updated.scales[:, 2], [3.0, 3.0])
     np.testing.assert_allclose(updated.scales[0, 1] / updated.scales[0, 2], 5.0)
-    np.testing.assert_allclose(updated.scales[1, 1] / updated.scales[1, 2], 5.0)
+    np.testing.assert_allclose(updated.scales[1, 1] / updated.scales[1, 2], 1.0)
 
 
-def test_historical_group5989_statistics_use_canonical_all_group_reduction():
+def test_captured_group5989_rank_states_reproduce_runtime_and_star_values():
     n_groups = 10_000
     target_group = 5989
     rank1_avg = 1.0265163330375102
     rank2_avg = 1.026738611317099
     target_raw_rank1 = 1.3489885472342609
 
-    # Retain the historical sparse statistics that exposed the old optics-
-    # prefix assumption. The historical independent rank normalizers are
-    # fixture construction inputs, not the canonical 5.0.1 update rule.
+    # Construct the smallest homogeneous background whose two independent
+    # follower normalizers equal the captured values while preserving the
+    # observed combined group-0 boundary.
     matrix = np.asarray([[n_groups - 1.5, 0.5], [0.5, n_groups - 1.5]])
     rhs = np.asarray(
         [n_groups * rank1_avg - target_raw_rank1, n_groups * rank2_avg - 1.0],
@@ -1169,20 +1176,18 @@ def test_historical_group5989_statistics_use_canonical_all_group_reduction():
         state,
         wsum_signal_product=xa,
         wsum_reference_power=aa,
+        reduction_mode=RELION_SCALE_REDUCTION_OPTICS_PREFIX,
     )
 
-    combined_background = (background_rank1 + background_rank2) / 2.0
-    combined_avg = ((n_groups - 1) * combined_background + target_raw_rank1) / n_groups
-    expected_target = target_raw_rank1 / combined_avg
     np.testing.assert_allclose(
         updated.scales[0, target_group],
-        expected_target,
+        1.3141423120297953,
         rtol=0.0,
         atol=2e-15,
     )
     np.testing.assert_allclose(
         updated.scales[1, target_group],
-        expected_target,
+        0.973957723005275,
         rtol=0.0,
         atol=2e-15,
     )
@@ -1208,10 +1213,80 @@ def test_firstiter_cc_preserves_follower_scale_state_exactly():
         # paths need not materialize expanded follower XA/AA statistics.
         wsum_signal_product=None,
         wsum_reference_power=None,
+        reduction_mode=RELION_SCALE_REDUCTION_OPTICS_PREFIX,
         relion_firstiter_cc_this_iter=True,
     )
 
     assert updated is state
+
+
+def test_file_combined_oracle_reduces_every_physical_group():
+    """Without --dont_combine_weights_via_disc RELION writes one full MlWsumModel pack.
+
+    That message carries all nr_groups XA/AA entries, so group 1, which has
+    statistics only on follower 1, reaches follower 2 as well.
+    """
+    state = make_relion_follower_scale_state(
+        n_followers=2,
+        group_counts=np.ones(4),
+        n_optics_groups=1,
+    )
+    xa = np.asarray([[2.0, 5.0, 1.0, 1.0], [4.0, 0.0, 1.0, 1.0]])
+    aa = np.asarray([[1.0, 1.0, 1.0, 1.0], [1.0, 0.0, 1.0, 1.0]])
+
+    updated = update_relion_follower_scales(
+        state,
+        wsum_signal_product=xa,
+        wsum_reference_power=aa,
+        reduction_mode=RELION_SCALE_REDUCTION_ALL_GROUPS,
+    )
+
+    np.testing.assert_allclose(updated.scales[:, 0] / updated.scales[:, 2], [3.0, 3.0])
+    np.testing.assert_allclose(updated.scales[:, 1] / updated.scales[:, 2], [5.0, 5.0])
+    np.testing.assert_array_equal(updated.scales[0], updated.scales[1])
+
+
+def test_scale_reduction_mode_follows_the_oracle_weight_combination():
+    # Commands recorded by the D6 C4 Class3D oracle (MPI combine) and the
+    # data_pdb_k4_5k_128 capture 14248154 (file combine).
+    mpi = (
+        "--i particles.star --ref reference_init_classes_relion.star --o run --iter 5 --K 4 "
+        "--firstiter_cc --sym C4 --pool 3 --dont_combine_weights_via_disc --random_seed 41001 --gpu 0 --j 4"
+    )
+    via_disc = (
+        "--o run --i particles.star --K 4 --iter 3 --sym C1 --firstiter_cc --gpu 0:0 --j 4 --pool 1"
+    )
+    assert relion_scale_reduction_mode_from_command(mpi) == RELION_SCALE_REDUCTION_OPTICS_PREFIX
+    assert relion_scale_reduction_mode_from_command(via_disc) == RELION_SCALE_REDUCTION_ALL_GROUPS
+    with pytest.raises(ValueError, match="ALTCPU"):
+        relion_scale_reduction_mode_from_command("--o run --dont_combine_weights_via_disc --j 4")
+
+
+def test_scale_reduction_mode_is_read_from_the_optimiser_header(tmp_path):
+    star = tmp_path / "run_it000_optimiser.star"
+    star.write_text(
+        "\n# RELION optimiser; version 5.0.1\n"
+        "# --o run --K 4 --dont_combine_weights_via_disc --gpu 0 \n\n"
+        "# version 50001\n\ndata_optimiser_general\n\n_rlnCurrentIteration 0\n"
+    )
+    mode, command = relion_scale_reduction_mode_from_optimiser_star(star)
+    assert mode == RELION_SCALE_REDUCTION_OPTICS_PREFIX
+    assert command == "--o run --K 4 --dont_combine_weights_via_disc --gpu 0"
+    bare = tmp_path / "bare_optimiser.star"
+    bare.write_text("data_optimiser_general\n\n_rlnCurrentIteration 0\n")
+    with pytest.raises(ValueError, match="does not record"):
+        relion_scale_reduction_mode_from_optimiser_star(bare)
+
+
+def test_follower_scale_update_rejects_an_unknown_reduction_mode():
+    state = make_relion_follower_scale_state(n_followers=2, group_counts=[1, 1], n_optics_groups=1)
+    with pytest.raises(ValueError, match="reduction_mode"):
+        update_relion_follower_scales(
+            state,
+            wsum_signal_product=np.ones((2, 2)),
+            wsum_reference_power=np.ones((2, 2)),
+            reduction_mode=None,
+        )
 
 
 def test_no_strict_topology_is_array_identical_to_legacy_global_updater():

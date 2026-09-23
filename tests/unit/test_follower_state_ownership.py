@@ -18,6 +18,7 @@ def correction_inputs():
     setup = SimpleNamespace(
         follower_scale_state=state,
         follower_owners_per_half=[np.array([0, 1]), np.array([1, 0])],
+        scale_reduction_mode=scale.RELION_SCALE_REDUCTION_OPTICS_PREFIX,
     )
     halves = SimpleNamespace(
         group_ids=[np.array([0, 1]), np.array([1, 0])],

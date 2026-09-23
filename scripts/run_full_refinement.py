@@ -75,6 +75,7 @@ from recovar.em.relion.relion_worker_scale import (
     load_relion_follower_scale_replay,
     relion_class3d_follower_owners_from_schedule,
     relion_ordered_particle_sha256,
+    relion_scale_reduction_mode_from_optimiser_star,
     validate_relion_follower_scale_replay,
     verify_relion_dispatch_schedule_oracle,
 )
@@ -3006,6 +3007,23 @@ def main():
             len(relion_dispatch_schedule.oracle_artifact_paths),
             relion_dispatch_schedule.particle_star_relative_path,
         )
+    relion_scale_reduction_mode = None
+    if relion_scale_followers > 0:
+        # Which physical groups RELION reduced across followers is a property of
+        # the oracle run's weight-combination path (relion_worker_scale docstring).
+        reduction_source = oracle_dirs[0] / "run_it000_optimiser.star"
+        try:
+            relion_scale_reduction_mode, relion_command = (
+                relion_scale_reduction_mode_from_optimiser_star(reduction_source)
+            )
+        except (OSError, ValueError) as exc:
+            raise SystemExit(f"Cannot determine the RELION group-scale reduction: {exc}") from exc
+        logger.info(
+            "Strict RELION follower-scale reduction: mode=%s dont_combine_weights_via_disc=%s source=%s",
+            relion_scale_reduction_mode,
+            "--dont_combine_weights_via_disc" in relion_command.split(),
+            reduction_source,
+        )
     relion_scale_follower_owners_by_iteration = None
     if relion_scale_followers > 0:
         relion_scale_follower_owners_by_iteration = {}
@@ -4304,6 +4322,7 @@ def main():
                 init_group_count=native_group_count,
                 relion_scale_follower_count=relion_scale_followers,
                 relion_scale_follower_owners_by_iteration=relion_scale_follower_owners_by_iteration,
+                relion_scale_reduction_mode=relion_scale_reduction_mode,
                 relion_follower_scale_replay=relion_follower_scale_replay,
                 init_relion_optics_group_count=(
                     None if native_group_layout is None else native_group_layout.n_optics_groups
