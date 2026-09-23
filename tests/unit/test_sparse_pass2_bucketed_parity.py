@@ -637,26 +637,31 @@ def test_sparse_pass2_distinct_mstep_rotations_do_not_change_score_path(monkeypa
 
 
 def test_sparse_pass2_per_particle_xhalf_uses_mstep_rotation_tensor():
+    def squash(text):
+        # The call sites move between nesting levels; pin the argument order,
+        # not the indentation.
+        return " ".join(text.split())
+
     source = inspect.getsource(sparse_pass2_module.compute_pass2_stats_sparse_bucketed)
     assert "flat_backproject_rotations" in source
     # host-side flatten (no jit, no device round trip) of the M-step rotation slice
     assert "flatten_bucket_rotations(mstep_rotations[:, start:stop])" in source
-    assert (
+    assert squash(
         "_accumulate_relion_x_half_per_particle_launches(\n"
         "                    summed,\n"
         "                    ctf_probs,\n"
         "                    jnp.asarray(mstep_rotations),"
-    ) in source
+    ) in squash(source)
 
     fused_source = inspect.getsource(sparse_pass2_module.compute_k_class_pass2_stats_sparse_fused)
     assert "flat_backproject_rotations_by_class" in fused_source
     assert "active_flat_rotations = flat_backproject_rotations_by_class[class_index]" in fused_source
-    assert (
+    assert squash(
         "_accumulate_relion_x_half_per_particle_launches(\n"
         "                        jnp.asarray(summed, dtype=jnp.complex64),\n"
         "                        jnp.asarray(ctf_probs, dtype=jnp.float32),\n"
         '                        jnp.asarray(arrays["mstep_rotations"]),'
-    ) in fused_source
+    ) in squash(fused_source)
 
 
 class TestSparsePass2Bucketed:
