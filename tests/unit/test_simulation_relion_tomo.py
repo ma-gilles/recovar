@@ -8,7 +8,7 @@ import pytest
 
 from recovar import utils
 from recovar.data_io import starfile
-from recovar.simulation import relion_tomo
+from recovar.simulation import optics_groups, relion_tomo
 
 GRID = 32
 VOXEL = 4.0
@@ -192,16 +192,16 @@ def test_group_volumes_resample_and_pad(tmp_path):
     from recovar.core import fourier_transform_utils as ftu
 
     _write_volume(tmp_path)
-    loaded = relion_tomo._group_volumes(str(tmp_path / "vol"), True, VOXEL, GRID, VOXEL, GRID)[0]
+    loaded = optics_groups.group_volumes(str(tmp_path / "vol"), True, VOXEL, GRID, VOXEL, GRID)[0]
     vol = np.real(np.asarray(ftu.get_idft3(loaded.reshape((GRID,) * 3))))
-    padded = relion_tomo._group_volumes(str(tmp_path / "vol"), True, VOXEL, GRID, VOXEL, GRID + 8)[0]
+    padded = optics_groups.group_volumes(str(tmp_path / "vol"), True, VOXEL, GRID, VOXEL, GRID + 8)[0]
     real = np.real(np.asarray(ftu.get_idft3(padded.reshape((GRID + 8,) * 3))))
     np.testing.assert_allclose(real[4:-4, 4:-4, 4:-4], vol, atol=1e-4)
     assert np.abs(real[:4]).max() < 1e-10
-    coarse = relion_tomo._group_volumes(str(tmp_path / "vol"), True, VOXEL, GRID, 2 * VOXEL, GRID // 2)[0]
+    coarse = optics_groups.group_volumes(str(tmp_path / "vol"), True, VOXEL, GRID, 2 * VOXEL, GRID // 2)[0]
     assert coarse.shape == ((GRID // 2) ** 3,)
     with pytest.raises(ValueError, match="even integer"):
-        relion_tomo._group_volumes(str(tmp_path / "vol"), True, VOXEL, GRID, 3 * VOXEL, GRID)
+        optics_groups.group_volumes(str(tmp_path / "vol"), True, VOXEL, GRID, 3 * VOXEL, GRID)
 
 
 def test_optics_groups_with_different_pixel_and_box_sizes(tmp_path):

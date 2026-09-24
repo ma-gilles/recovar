@@ -43,15 +43,12 @@ import recovar.core.fourier_transform_utils as fourier_transform_utils
 import recovar.utils as utils
 from recovar import core
 from recovar.commands import parse_relion5_tomo
-from recovar.data_io import cryoem_dataset, metadata_readers, starfile
+from recovar.data_io import metadata_readers, starfile
+from recovar.simulation import optics_groups as optics_groups_sim
 from recovar.simulation import simulator, solvent_contrast
+from recovar.simulation.optics_groups import DEFAULT_OPTICS_GROUPS
 
 logger = logging.getLogger(__name__)
-
-DEFAULT_OPTICS_GROUPS = (
-    {"voltage": 300.0, "cs": 2.7, "amp_contrast": 0.1, "noise_scale": 1.0},
-    {"voltage": 200.0, "cs": 1.4, "amp_contrast": 0.07, "noise_scale": 1.5},
-)
 
 
 def relion_dose_weight(freq_sq, dose):
@@ -75,28 +72,6 @@ def relion_tomo_ctf(ctf_params, image_shape, voxel_size, *, half_image=False):
     freqs = grid_fn(image_shape, voxel_size, scaled=True, dtype=jnp.result_type(ctf_params, jnp.float32))
     ctf = core.evaluate_ctf(freqs, ctf_params[:, : int(core.CTFParamIndex.DOSE)])
     return ctf * relion_dose_weight(jnp.sum(freqs**2, axis=-1), ctf_params[:, core.CTFParamIndex.DOSE])
-
-
-def _group_volumes(volumes_path_root, trailing_zero_format_in_vol_name, voxel_size, grid_size, pixel_size, box_size):
-    """Fourier volumes resampled to ``pixel_size`` and cropped or padded in real space to ``box_size``."""
-    resampled_grid = grid_size * voxel_size / pixel_size
-    if not np.isclose(resampled_grid, round(resampled_grid)) or round(resampled_grid) % 2:
-        raise ValueError(f"grid_size * voxel_size / pixel_size = {resampled_grid} must be an even integer")
-    resampled_grid = int(round(resampled_grid))
-    volumes = simulator.load_volumes_from_folder(
-        volumes_path_root, resampled_grid, trailing_zero_format_in_vol_name, normalize=False
-    )
-    if resampled_grid == box_size:
-        return volumes
-    out = np.zeros((volumes.shape[0], box_size, box_size, box_size))
-    lo_in, lo_out = max(0, (resampled_grid - box_size) // 2), max(0, (box_size - resampled_grid) // 2)
-    n = min(resampled_grid, box_size)
-    for i, vol in enumerate(volumes):
-        real = np.real(np.asarray(fourier_transform_utils.get_idft3(vol.reshape((resampled_grid,) * 3))))
-        out[i, lo_out : lo_out + n, lo_out : lo_out + n, lo_out : lo_out + n] = real[
-            lo_in : lo_in + n, lo_in : lo_in + n, lo_in : lo_in + n
-        ]
-    return np.stack([np.asarray(fourier_transform_utils.get_dft3(v)).reshape(-1) for v in out])
 
 
 def dose_symmetric_tilt_scheme(max_tilt=60.0, tilt_step=3.0, group_size=2):
@@ -347,70 +322,28 @@ def generate_relion5_tomo_dataset(
     particle_volume = rng.choice(volumes.shape[0], size=n_particles, p=volume_distribution)
     particle_contrast = 1 + rng.normal(0, contrast_std, n_particles)
     row_optics = optics_df["_rlnOpticsGroup"].searchsorted(flat_df["_rlnOpticsGroup"].values.astype(int))
-    row_images = [None] * len(flat_df)
-    noise_variances = []
-    target_noise_power = None
-    for g, og in enumerate(optics_groups):
-        pixel_size, box_size = og["pixel_size"], og["box_size"]
-        if pixel_size == voxel_size and box_size == grid_size:
-            group_volumes = volumes
-        else:
-            group_volumes = scale_vol * _group_volumes(
-                volumes_path_root, trailing_zero_format_in_vol_name, voxel_size, grid_size, pixel_size, box_size
-            )
-            if solvent_record["enabled"]:
-                group_volumes = solvent_contrast.apply_solvent_contrast(
-                    group_volumes,
-                    (box_size,) * 3,
-                    pixel_size,
-                    solvent_record["a"],
-                    solvent_record["B"],
-                    solvent_record["B_atomic"],
-                )
-        batch_size = int(5 * utils.get_image_batch_size(box_size, utils.get_gpu_memory_total()))
-
-        def simulate(rows, noise_variance, contrast, noise_scale, seed_offset):
-            dataset = cryoem_dataset.CryoEMDataset(
-                None,
-                pixel_size,
-                cryoem_dataset.ImageMetadata(rots[rows], np.zeros((rows.size, 2)), ctf_params[rows]),
-                ctf_evaluator=relion_tomo_ctf,
-                grid_size=box_size,
-            )
-            return simulator.simulate_data(
-                dataset,
-                group_volumes,
-                noise_variance,
-                batch_size,
-                particle_volume[row_particle[rows]],
-                contrast,
-                noise_scale,
-                seed=seed + seed_offset,
-                disc_type=disc_type,
-                premultiplied_ctf=premultiplied_ctf,
-            )
-
-        # Every group gets the same per-pixel noise variance, snr below the mean
-        # noise-free signal power of the first group's probe, times its noise_scale.
-        rows = np.nonzero(row_optics == g)[0]
-        if rows.size == 0:
-            noise_variances.append(None)
-            continue
-        noise_shape = simulator.get_noise_model(noise_model, box_size)
-        probe = rows[: 8 * n_tilts]
-        ones, zeros = np.ones(probe.size), np.zeros(probe.size)
-        if target_noise_power is None:
-            target_noise_power = np.mean(simulate(probe, 0 * noise_shape, ones, ones, 3 * g + 1) ** 2) / snr
-        unit_noise_power = np.mean(simulate(probe, noise_shape, zeros, ones, 3 * g + 2) ** 2)
-        noise_variance = noise_shape * target_noise_power / unit_noise_power
-        noise_variances.append(noise_variance.astype(np.float32))
-
-        n_rows = np.ones(rows.size)
-        images = simulate(
-            rows, noise_variance, particle_contrast[row_particle[rows]], og["noise_scale"] * n_rows, 3 * g
-        )
-        for row, image in zip(rows, images):
-            row_images[row] = image
+    row_images, noise_variances = optics_groups_sim.simulate_optics_groups(
+        volumes,
+        optics_groups,
+        row_optics,
+        rots,
+        ctf_params,
+        particle_volume[row_particle],
+        particle_contrast[row_particle],
+        ctf_evaluator=relion_tomo_ctf,
+        volumes_path_root=volumes_path_root,
+        trailing_zero_format_in_vol_name=trailing_zero_format_in_vol_name,
+        voxel_size=voxel_size,
+        grid_size=grid_size,
+        scale_vol=scale_vol,
+        solvent_record=solvent_record,
+        snr=snr,
+        noise_model=noise_model,
+        n_probe=8 * n_tilts,
+        seed=seed,
+        disc_type=disc_type,
+        premultiplied_ctf=premultiplied_ctf,
+    )
 
     for p, stack_name in enumerate(stack_names):
         rows = np.nonzero(row_particle == p)[0]
