@@ -39,6 +39,15 @@ $B \ge 0$ and $B_\text{atomic} \ge 0$.
 Implementation: [`solvent_contrast_filter`](../../recovar/simulation/solvent_contrast.py)
 and [`apply_solvent_contrast`](../../recovar/simulation/solvent_contrast.py).
 
+Check the input maps before accepting the default $B_\text{atomic}$. recovar's
+bundled `recovar/assets/vol000{0,1,2}.mrc` are 5nrl maps (64³, 8.5 Å) that
+were already multiplied by $\exp(-100\,|\mathbf q|^2/4)$ when they were made
+(`make_trajectories.ipynb`); a shell-amplitude fit against freshly generated
+5nrl conformations gives $B \approx 113$ Å². Volumes from
+`generate_trajectory_volumes` also carry its `Bfactor`. For such inputs pass
+`atomic_bfactor=0` (`--atomic-bfactor 0`) to add only the solvent term; relax's
+fixture scripts do this automatically.
+
 ## Where it is applied
 
 [`generate_synthetic_dataset`](../../recovar/simulation/simulator.py)
