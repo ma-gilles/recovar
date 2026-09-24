@@ -16,6 +16,7 @@ Project mode is the standard workflow: pass `--project <dir>` (or run from insid
 | `project_status` | Show status of all jobs in a project |
 | `downsample` | Pre-downsample images to disk |
 | `parse_relion5_tomo` | Convert RELION5 tilt-series data to 2D tilt format |
+| `make_relion_tomo_dataset` | Simulate a RELION 5 subtomogram (2D-stack) dataset for EM/VDAM development |
 
 ## Volume generation
 
@@ -278,6 +279,30 @@ recovar parse_relion5_tomo \
 Tilt image dimensions and pixel size are read from the optics table in `particles.star` — there is no flag to set them.
 
 See [Cryo-ET](../guide/cryo-et.md#importing-from-relion5) for usage details.
+
+---
+
+## `make_relion_tomo_dataset`
+
+Simulate a RELION 5 subtomogram dataset in the 2D-stack format that
+`relion_refine --ios optimisation_set.star` reads: `tomograms.star`, per-tilt-series
+STARs, `particles.star` (`rlnTomoSubTomosAre2DStacks 1`, one optics row per group), one
+`_stack2d.mrcs` per particle and `particles_2d.star` (the `parse_relion5_tomo` output).
+Images use RELION's CTF and dose weighting. Implementation:
+`recovar.simulation.relion_tomo.generate_relion5_tomo_dataset`.
+
+```bash
+recovar make_relion_tomo_dataset vols/vol 4.25 1200 -o project --grid-size 128 --optics-groups 2
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `volumes_path_root`, `voxel_size`, `n_particles` | Required | Volume prefix (`<prefix>0000.mrc`, ...), its voxel size at `--grid-size`, particle count |
+| `-o`, `--output` | Required | Output RELION project directory |
+| `--optics-groups` | 2 | Optics groups (differing voltage, Cs, amplitude contrast and noise) |
+| `--n-tomograms`, `--max-tilt`, `--tilt-step`, `--dose-per-tilt` | 4, 60, 3, 3 | Tilt-series geometry (dose-symmetric scheme) |
+| `--snr`, `--hidden-tilt-fraction`, `--premultiplied-ctf`, `--seed` | 0.05, 0, False, 0 | Noise, invisible tilts, CTF-premultiplied stacks, seed |
+| `--no-atomic-solvent-correction` | preset on | Turn off the EM-development atomic-volume transform (solvent contrast and B-factor, [docs](../math/atomic_solvent_contrast.md)) for experimental maps |
 
 ---
 

@@ -158,6 +158,36 @@ def make_record(
     }
 
 
+def record_from_options(
+    atomic_solvent_correction,
+    voxel_size,
+    grid_size,
+    solvent_contrast_a=None,
+    solvent_contrast_B=None,
+    atomic_bfactor=None,
+    applied_to_outlier_volume=False,
+):
+    """Record for a simulator's keyword options; unset parameters take the preset defaults.
+
+    Parameters other than the switch are only valid with ``atomic_solvent_correction=True``.
+    """
+    if not atomic_solvent_correction:
+        if solvent_contrast_a is not None or solvent_contrast_B is not None or atomic_bfactor is not None:
+            raise ValueError(
+                "solvent_contrast_a/solvent_contrast_B/atomic_bfactor require atomic_solvent_correction=True"
+            )
+        return make_record(False)
+    return make_record(
+        True,
+        voxel_size=voxel_size,
+        grid_size=grid_size,
+        a=DEFAULT_A if solvent_contrast_a is None else solvent_contrast_a,
+        B=DEFAULT_B if solvent_contrast_B is None else solvent_contrast_B,
+        atomic_bfactor=DEFAULT_ATOMIC_BFACTOR if atomic_bfactor is None else atomic_bfactor,
+        applied_to_outlier_volume=applied_to_outlier_volume,
+    )
+
+
 def record_from_simulation_info(simulation_info):
     """Return the validated enabled record, or ``None`` when no correction applies.
 

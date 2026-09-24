@@ -40,7 +40,7 @@ import recovar.utils as utils
 from recovar import core
 from recovar.commands import parse_relion5_tomo
 from recovar.data_io import cryoem_dataset, metadata_readers, starfile
-from recovar.simulation import simulator
+from recovar.simulation import simulator, solvent_contrast
 
 logger = logging.getLogger(__name__)
 
@@ -146,6 +146,10 @@ def generate_relion5_tomo_dataset(
     trailing_zero_format_in_vol_name=True,
     disc_type="linear_interp",
     seed=0,
+    atomic_solvent_correction=True,
+    solvent_contrast_a=None,
+    solvent_contrast_B=None,
+    atomic_bfactor=None,
 ):
     """Write a simulated RELION 5 subtomogram (2D-stack) project to ``output_folder``.
 
@@ -172,6 +176,12 @@ def generate_relion5_tomo_dataset(
         tilt is always visible). Hidden tilts get no slice in the stack.
     tomogram_size : tuple of int
         ``rlnTomoSizeX/Y/Z`` in bin-1 pixels; must be even.
+    atomic_solvent_correction, solvent_contrast_a, solvent_contrast_B, atomic_bfactor
+        The shared atomic-volume transform (:mod:`recovar.simulation.solvent_contrast`).
+        This is an EM/VDAM development simulator, so the EM-development preset is
+        on by default; pass ``atomic_solvent_correction=False`` for experimental
+        or already-corrected maps. Each optics group gets the operator on its own
+        grid, and the record is stored in ``simulation_info`` for ground-truth loading.
 
     Returns
     -------
@@ -185,11 +195,16 @@ def generate_relion5_tomo_dataset(
         raise ValueError(f"tomogram_size must be even (RELION centres at int(size/2)), got {tomogram_size}")
     os.makedirs(os.path.join(output_folder, "tilt_series"), exist_ok=True)
 
+    solvent_record = solvent_contrast.record_from_options(
+        atomic_solvent_correction, voxel_size, grid_size, solvent_contrast_a, solvent_contrast_B, atomic_bfactor
+    )
     volumes = simulator.load_volumes_from_folder(
         volumes_path_root, grid_size, trailing_zero_format_in_vol_name, normalize=False
     )
     scale_vol = 1 / np.mean(np.linalg.norm(volumes, axis=-1))
     volumes = volumes * scale_vol
+    if solvent_record["enabled"]:
+        volumes = solvent_contrast.apply_record(volumes, solvent_record)
     volume_distribution = (
         np.ones(volumes.shape[0]) / volumes.shape[0] if volume_distribution is None else volume_distribution
     )
@@ -332,6 +347,15 @@ def generate_relion5_tomo_dataset(
             group_volumes = scale_vol * _group_volumes(
                 volumes_path_root, trailing_zero_format_in_vol_name, voxel_size, grid_size, pixel_size, box_size
             )
+            if solvent_record["enabled"]:
+                group_volumes = solvent_contrast.apply_solvent_contrast(
+                    group_volumes,
+                    (box_size,) * 3,
+                    pixel_size,
+                    solvent_record["a"],
+                    solvent_record["B"],
+                    solvent_record["B_atomic"],
+                )
         batch_size = int(5 * utils.get_image_batch_size(box_size, utils.get_gpu_memory_total()))
 
         def simulate(rows, noise_variance, contrast, noise_scale, seed_offset):
@@ -387,11 +411,17 @@ def generate_relion5_tomo_dataset(
             voxel_size=optics_groups[row_optics[rows[0]]]["pixel_size"],
         )
 
+    # The keys load_heterogeneous_reconstruction reads describe the images of
+    # particles_2d.star, row by row, on the (voxel_size, grid_size) reference grid.
     simulation_info = {
         "scale_vol": scale_vol,
         "volumes_path_root": volumes_path_root,
+        "trailing_zero_format_in_vol_name": trailing_zero_format_in_vol_name,
         "voxel_size": voxel_size,
         "grid_size": grid_size,
+        solvent_contrast.METADATA_KEY: solvent_record,
+        "image_assignment": particle_volume[row_particle],
+        "per_image_contrast": particle_contrast[row_particle],
         "noise_variance_per_optics_group": noise_variances,
         "snr": snr,
         "optics_groups": [dict(og) for og in optics_groups],

@@ -418,3 +418,16 @@ def test_cli_helper_enabled_by_default_has_an_opt_out():
         "solvent_contrast_B": None,
         "atomic_bfactor": None,
     }
+
+
+def test_record_from_options_defaults_and_validation():
+    record = solvent_contrast.record_from_options(True, 2.0, 32)
+    assert (record["a"], record["B"], record["B_atomic"]) == (
+        solvent_contrast.DEFAULT_A,
+        solvent_contrast.DEFAULT_B,
+        solvent_contrast.DEFAULT_ATOMIC_BFACTOR,
+    )
+    assert solvent_contrast.record_from_options(True, 2.0, 32, atomic_bfactor=0.0)["B_atomic"] == 0.0
+    assert solvent_contrast.record_from_options(False, 2.0, 32) == {"enabled": False}
+    with pytest.raises(ValueError, match="require atomic_solvent_correction=True"):
+        solvent_contrast.record_from_options(False, 2.0, 32, solvent_contrast_a=0.5)

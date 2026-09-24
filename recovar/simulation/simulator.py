@@ -735,22 +735,15 @@ def generate_synthetic_dataset(
                 "(the offset step needs the full mean over the stack).",
             )
 
-    if atomic_solvent_correction:
-        solvent_record = solvent_contrast.make_record(
-            True,
-            voxel_size=voxel_size,
-            grid_size=grid_size,
-            a=solvent_contrast.DEFAULT_A if solvent_contrast_a is None else solvent_contrast_a,
-            B=solvent_contrast.DEFAULT_B if solvent_contrast_B is None else solvent_contrast_B,
-            atomic_bfactor=solvent_contrast.DEFAULT_ATOMIC_BFACTOR if atomic_bfactor is None else atomic_bfactor,
-            applied_to_outlier_volume=outlier_file_input is not None,
-        )
-    elif solvent_contrast_a is not None or solvent_contrast_B is not None or atomic_bfactor is not None:
-        raise ValueError(
-            "solvent_contrast_a/solvent_contrast_B/atomic_bfactor require atomic_solvent_correction=True"
-        )
-    else:
-        solvent_record = solvent_contrast.make_record(False)
+    solvent_record = solvent_contrast.record_from_options(
+        atomic_solvent_correction,
+        voxel_size,
+        grid_size,
+        solvent_contrast_a,
+        solvent_contrast_B,
+        atomic_bfactor,
+        applied_to_outlier_volume=outlier_file_input is not None,
+    )
 
     output.mkdir_safe(output_folder)
     volumes = load_volumes_from_folder(volumes_path_root, grid_size, trailing_zero_format_in_vol_name, normalize=False)

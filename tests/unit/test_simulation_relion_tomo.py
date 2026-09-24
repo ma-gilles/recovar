@@ -220,7 +220,9 @@ def test_optics_groups_with_different_pixel_and_box_sizes(tmp_path):
         tilt_step=10.0,
         tomogram_size=(512, 512, 128),
         seed=1,
+        atomic_solvent_correction=False,
     )
+    assert result["simulation_info"]["atomic_solvent_correction"] == {"enabled": False}
     particles, optics = starfile.read_star(result["particles"])
     assert optics["_rlnImagePixelSize"].astype(float).tolist() == [VOXEL, 2 * VOXEL]
     assert optics["_rlnImageSize"].astype(int).tolist() == [GRID, 24]
@@ -232,3 +234,30 @@ def test_optics_groups_with_different_pixel_and_box_sizes(tmp_path):
             assert mrc.data.shape == (5, box, box)
             assert np.isclose(float(mrc.voxel_size.x), pixel)
             assert np.all(np.isfinite(mrc.data)) and mrc.data.std() > 0
+
+
+def test_em_development_preset_is_default_and_recorded_for_ground_truth(dataset):
+    from recovar.simulation import synthetic_dataset
+
+    out, result = dataset
+    info = utils.pickle_load(str(out / "simulation_info.pkl"))
+    record = info["atomic_solvent_correction"]
+    assert record["enabled"] and (record["a"], record["B"], record["B_atomic"]) == (0.8, 2000.0, 100.0)
+    flat, _ = starfile.read_star(result["particles_2d"])
+    assert info["image_assignment"].shape == info["per_image_contrast"].shape == (len(flat),)
+    gt = synthetic_dataset.load_heterogeneous_reconstruction(info)
+    assert gt.volumes.shape == (1, GRID**3)
+
+
+def test_cli_preset_on_by_default_with_opt_out():
+    import argparse
+
+    from recovar.commands import make_relion_tomo_dataset
+    from recovar.simulation import solvent_contrast
+
+    parser = argparse.ArgumentParser()
+    make_relion_tomo_dataset.add_args(parser)
+    base = ["vol", "4.25", "10", "-o", "out"]
+    assert solvent_contrast.kwargs_from_cli_args(parser.parse_args(base))["atomic_solvent_correction"] is True
+    off = parser.parse_args(base + ["--no-atomic-solvent-correction"])
+    assert solvent_contrast.kwargs_from_cli_args(off)["atomic_solvent_correction"] is False
