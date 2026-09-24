@@ -316,6 +316,16 @@ class ImageLoader:
     def __repr__(self) -> str:
         return f"{type(self).__name__}(n={self._num_images}, D={self._image_size})"
 
+    def stack_files(self) -> list:
+        """Paths of the image files this loader reads, one per distinct file.
+
+        These are the paths after metadata resolution (``datadir``,
+        ``strip_prefix``, extension fallbacks) and after local staging, so a
+        loader built with ``skip_staging=True`` reports the source files a caller
+        would have to stage.
+        """
+        raise NotImplementedError
+
     # -- Access --------------------------------------------------------------
 
     def __getitem__(self, key) -> np.ndarray:
@@ -488,6 +498,9 @@ class MRCLoader(ImageLoader):
 
     def __repr__(self) -> str:
         return f"MRCLoader(filepath={self._filepath!r}, n={self._num_images}, D={self._image_size})"
+
+    def stack_files(self) -> list:
+        return [self._filepath]
 
     def _preread_into_memory(self) -> None:
         """Read every selected image into host memory once (``RECOVAR_PREREAD_IMAGES=1``)."""
@@ -756,6 +769,9 @@ class MultiMRCLoader(ImageLoader):
         for loader in self._loaders.values():
             loader.close()
 
+    def stack_files(self) -> list:
+        return [path for loader in self._loaders.values() for path in loader.stack_files()]
+
     def _load(self, indices: np.ndarray) -> np.ndarray:
         n_out = int(len(indices))
         if n_out == 0:
@@ -983,6 +999,9 @@ class DownsamplingImageLoader(ImageLoader):
         self._target_D = target_D
         super().__init__(base_loader.num_images, target_D, base_loader._dtype)
         self._selection_indices = np.asarray(base_loader.selection_indices, dtype=np.int32)
+
+    def stack_files(self) -> list:
+        return self._base.stack_files()
 
     def _load(self, indices: np.ndarray) -> np.ndarray:
         images = self._base._load(indices)
