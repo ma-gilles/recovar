@@ -60,8 +60,14 @@ sha256sum "$RECOVAR_CUDA_LIB"
 
 Record source, lock, compiler, headers, loaded library path and library hash.
 Verify the library hash before loading, immediately after loading, and after
-each paired run. The loader can rebuild a missing or stale library, including
-an explicit `RECOVAR_CUDA_LIB` path. For qualification, place a freshly copied
+each paired run. The loader never builds or rewrites an explicit
+`RECOVAR_CUDA_LIB` path: it loads it if it exists and exports the required
+symbols, and otherwise stops with an error naming the file. Unpinned cache
+builds are rebuilt only when the sha256 of their sources differs from the one
+recorded beside the library (`<library>.sources.sha256`), not when source
+mtimes are newer, and every build renames a temporary file over its target.
+A library built directly with `make` records no digest; that is fine for a
+pinned path. For qualification, place a freshly copied
 binary in a dedicated directory and make both the file and directory read-only
 before loading. Record the actual loaded path; successful import alone does not
 prove that the intended extension ran. Never rebuild a shared library while

@@ -216,14 +216,19 @@ def test_build_custom_cuda_writes_requested_output(monkeypatch, tmp_path):
     def fake_check_call(cmd, *, env):
         captured["cmd"] = cmd
         captured["env"] = env
-        target.write_text("stub")
+        Path(cmd[-1].removeprefix("LIB=")).write_text("stub")
 
     monkeypatch.setattr(cb.subprocess, "check_call", fake_check_call)
     result = cb.build_custom_cuda(output_path=target)
 
     assert result == target
-    assert target.exists()
-    assert captured["cmd"][-1] == f"LIB={target}"
+    assert target.read_text() == "stub"
+    # make writes a temporary file beside the target, which is then renamed over it.
+    built = Path(captured["cmd"][-1].removeprefix("LIB="))
+    assert built.parent == target.parent and built != target and not built.exists()
+    from recovar import cuda_build
+
+    assert cuda_build.built_from(target, cb._source_digest())
     assert captured["env"]["PATH"] == os.environ["PATH"]
 
 
@@ -238,15 +243,17 @@ def test_build_custom_cuda_force_rebuilds_even_when_output_exists(monkeypatch, t
     def fake_check_call(cmd, *, env):
         captured["cmd"] = cmd
         captured["env"] = env
-        target.write_text("new")
+        Path(cmd[-1].removeprefix("LIB=")).write_text("new")
 
     monkeypatch.setattr(cb.subprocess, "check_call", fake_check_call)
-    result = cb.build_custom_cuda(output_path=target, force=True)
+    with open(target) as reader:  # a process still using the old library
+        result = cb.build_custom_cuda(output_path=target, force=True)
+        assert reader.read() == "old"
 
     assert result == target
     assert target.read_text() == "new"
     assert captured["cmd"][:3] == ["make", "-B", "-C"]
-    assert captured["cmd"][-1] == f"LIB={target}"
+    assert captured["cmd"][-1] != f"LIB={target}"
     assert captured["env"]["PATH"] == os.environ["PATH"]
 
 

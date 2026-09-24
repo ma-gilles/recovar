@@ -84,32 +84,29 @@ def _resolve_libc_path() -> pathlib.Path | None:
 
 
 def test_lib_is_stale_flags_so_missing_symbols(tmp_path, monkeypatch):
-    """End-to-end: a fresh-mtime .so that's missing a required symbol must
-    be flagged as stale. This is the regression case that bit dev2 today:
-    cached .so from an older branch, mtime newer than current .cu source,
-    but missing ``BackprojectIndexed``.
+    """End-to-end: a .so built from the current sources (recorded digest matches)
+    that is missing a required symbol must be flagged as stale. This is the
+    regression case that bit dev2: cached .so from an older branch, accepted by
+    the source check, but missing ``BackprojectIndexed``.
     """
+    import shutil
+
+    from recovar import cuda_build
+
     libc_path = _resolve_libc_path()
     if libc_path is None:
         pytest.skip("could not resolve absolute libc path")
 
-    # Bypass the mtime branch: make the cu/Makefile sources point at tmp_path
-    # files older than libc, so only the symbol check can trip staleness.
+    # Make the source check pass, so only the symbol check can trip staleness.
     fake_lib_dir = tmp_path / "cuda"
     fake_lib_dir.mkdir()
-    cu_file = fake_lib_dir / "cuda_backproject.cu"
-    mk_file = fake_lib_dir / "Makefile"
-    cu_file.write_text("// stub\n")
-    mk_file.write_text("# stub\n")
-    # Make the source files older than libc
-    import os
-
-    old_ts = libc_path.stat().st_mtime - 100_000
-    os.utime(cu_file, (old_ts, old_ts))
-    os.utime(mk_file, (old_ts, old_ts))
-
+    (fake_lib_dir / "cuda_backproject.cu").write_text("// stub\n")
+    (fake_lib_dir / "Makefile").write_text("# stub\n")
     monkeypatch.setattr(cb, "_LIB_DIR", fake_lib_dir)
-    assert cb._lib_is_stale(libc_path) is True
+    lib = tmp_path / "libc_copy.so"
+    shutil.copy2(libc_path, lib)
+    cuda_build.digest_path(lib).write_text(cb._source_digest())
+    assert cb._lib_is_stale(lib) is True
 
 
 def test_lib_is_stale_passes_when_no_lib_exists(tmp_path):

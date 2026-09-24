@@ -72,8 +72,12 @@ aligned when changing these boundaries.
 relax's `relax/cuda/kernels.py` loads `librelax_cuda.so` through `recovar.cuda_build.NativeLibrary`
 (explicit path: `RELAX_CUDA_LIB`) and registers the EM targets.
 `core/slicing.py` dispatches projection/backprojection operations to custom
-CUDA by default on GPU. The loader can build a missing or stale library;
-staleness includes source/Makefile modification times and missing FFI symbols.
+CUDA by default on GPU. The loader never builds over an explicit
+`RECOVAR_CUDA_LIB` or `RELAX_CUDA_LIB` path; it checks existence and the
+required FFI symbols and raises otherwise. It builds a missing or stale unpinned
+cache library, where staleness is a source content hash differing from the one
+recorded at build time (`recovar.cuda_build.digest_path`) or a missing FFI
+symbol, never modification times; builds rename a temporary file over the target.
 An explicit `RECOVAR_CUDA_LIB` path alone does not establish binary identity.
 
 `RECOVAR_DISABLE_CUDA=1` selects the JAX-native path. Treat this as a different

@@ -3,20 +3,31 @@
 recovar's pipeline library ``libcuda_backproject.so`` is managed by :mod:`recovar.cuda_backproject`.
 Other packages that ship their own translation unit (the EM library ``librelax_cuda.so``) use
 :class:`NativeLibrary`, which follows the same rules through the same helpers: cache directory
-resolution, the build lock, ``make -C <dir> LIB=<path>``, staleness from source mtimes and required
-FFI symbols, the GPU architecture preflight and once-per-process FFI registration.  Headers shared by
-both translation units live in :func:`include_dir`.
+resolution, the build lock, ``make -C <dir> LIB=<path>``, staleness from a source content hash and
+required FFI symbols, the GPU architecture preflight and once-per-process FFI registration.  Headers
+shared by both translation units live in :func:`include_dir`.
+
+A library selected explicitly through the library's environment variable (``RECOVAR_CUDA_LIB``,
+``RELAX_CUDA_LIB``) is pinned: it is used if it exists and exports the required symbols, otherwise
+loading fails with an error naming the file.  It is never rebuilt automatically, because another
+process may be running from it.  Unpinned libraries are rebuilt when the sha256 of their build inputs
+differs from the one recorded beside the library (``<library>.sources.sha256``) at build time; source
+mtimes are ignored, since a fresh checkout makes identical sources look newer.  Every build writes a
+temporary file in the target directory and renames it over the target, so a library is never
+rewritten in place.
 """
 
 from __future__ import annotations
 
 import ctypes
+import hashlib
 import logging
 import os
 import pathlib
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 from collections.abc import Mapping, Sequence
 
@@ -31,6 +42,88 @@ def include_dir() -> pathlib.Path:
     return pathlib.Path(__file__).resolve().parent / "cuda" / "include"
 
 
+SOURCE_DIGEST_SUFFIX = ".sources.sha256"
+
+
+def source_digest(sources: Sequence[tuple[str, pathlib.Path]]) -> str:
+    """sha256 over the ``(name, path)`` build inputs, in order; a missing input raises ``OSError``."""
+
+    digest = hashlib.sha256()
+    for name, path in sources:
+        data = pathlib.Path(path).read_bytes()
+        digest.update(name.encode() + b"\0" + len(data).to_bytes(8, "little"))
+        digest.update(data)
+    return digest.hexdigest()
+
+
+def digest_path(lib_path: pathlib.Path) -> pathlib.Path:
+    """File beside ``lib_path`` that records the source digest the library was built from."""
+
+    lib_path = pathlib.Path(lib_path)
+    return lib_path.with_name(lib_path.name + SOURCE_DIGEST_SUFFIX)
+
+
+def built_from(lib_path: pathlib.Path, digest: str) -> bool:
+    """True when ``lib_path`` records ``digest`` as its build inputs' hash."""
+
+    try:
+        return digest_path(lib_path).read_text().strip() == digest
+    except OSError:
+        return False
+
+
+class PinnedLibraryError(RuntimeError):
+    """A library pinned through its environment variable is missing or lacks a required symbol."""
+
+
+def check_pinned(lib_path: pathlib.Path, lib_env: str, missing_symbol) -> pathlib.Path:
+    """Return a pinned library's resolved path, or raise naming the file; never builds it.
+
+    ``missing_symbol(path)`` returns the first required symbol the library lacks, or ``None``.
+    """
+
+    lib_path = pathlib.Path(lib_path).expanduser()
+    if not lib_path.is_file():
+        raise PinnedLibraryError(
+            f"{lib_env}={lib_path} does not exist. A library selected through {lib_env} is never built "
+            f"automatically; build it explicitly (make -C <cuda dir> LIB={lib_path}) or unset {lib_env}."
+        )
+    missing = missing_symbol(lib_path)
+    if missing is not None:
+        raise PinnedLibraryError(
+            f"{lib_env}={lib_path} lacks the required symbol {missing!r} (built from older sources?). "
+            f"A library selected through {lib_env} is never rebuilt automatically; rebuild it explicitly "
+            f"or point {lib_env} at a current build."
+        )
+    return lib_path.resolve()
+
+
+def make_atomically(make_cmd: Sequence[str], lib_path: pathlib.Path, env: Mapping[str, str], digest: str) -> None:
+    """Run ``make_cmd + [LIB=<temporary>]`` in ``lib_path``'s directory and rename the result over it.
+
+    The source digest is recorded beside the library the same way, so a reader sees either the old pair
+    or the new library; the target file itself is never opened for writing.
+    """
+
+    lib_path = pathlib.Path(lib_path)
+    lib_path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{lib_path.name}.", suffix=".tmp", dir=lib_path.parent)
+    os.close(fd)
+    tmp = pathlib.Path(tmp_name)
+    tmp.unlink()  # make must create it; an existing empty target would look up to date
+    tmp_digest = digest_path(tmp)
+    try:
+        subprocess.check_call([*make_cmd, f"LIB={tmp}"], env=dict(env))
+        if not tmp.is_file():
+            raise RuntimeError(f"Build failed — {tmp} not found (target {lib_path})")
+        tmp_digest.write_text(digest + "\n")
+        os.replace(tmp, lib_path)
+        os.replace(tmp_digest, digest_path(lib_path))
+    finally:
+        for leftover in (tmp, tmp_digest):
+            leftover.unlink(missing_ok=True)
+
+
 class NativeLibrary:
     """One custom CUDA shared library and its XLA FFI targets.
 
@@ -43,10 +136,10 @@ class NativeLibrary:
     make_dir:
         Directory holding the library's Makefile; builds run ``make -C make_dir LIB=<path>``.
     source_names:
-        Build inputs, relative to ``make_dir`` or absolute (e.g. under :func:`include_dir`); a library
-        older than any of them is stale, and a missing input is an error.
+        Build inputs, relative to ``make_dir`` or absolute (e.g. under :func:`include_dir`); an unpinned
+        library whose recorded digest of them differs is stale, and a missing input is an error.
     lib_env:
-        Environment variable that selects an explicit library path.
+        Environment variable that selects an explicit, pinned library path (never rebuilt).
     registrations:
         ``(ffi_target, exported_symbol)`` pairs registered eagerly by :meth:`ensure_ffi`; a library
         lacking any of these symbols is stale.
@@ -109,14 +202,17 @@ class NativeLibrary:
                 return symbol
         return None
 
+    def source_digest(self) -> str:
+        return source_digest([(name, self.make_dir / name) for name in self.source_names])
+
     def is_stale(self, lib_path: pathlib.Path) -> bool:
-        try:
-            lib_mtime = lib_path.stat().st_mtime
-        except OSError:
+        if not lib_path.exists():
             return False
-        for src_name in self.source_names:
-            if (self.make_dir / src_name).stat().st_mtime > lib_mtime:
-                return True
+        if not built_from(lib_path, self.source_digest()):
+            logger.info(
+                "%s CUDA library %s was not built from the current sources — will rebuild.", self.name, lib_path
+            )
+            return True
         missing = self.missing_required_symbol(lib_path)
         if missing is not None:
             logger.info("%s CUDA library %s is missing symbol '%s' — will rebuild.", self.name, lib_path, missing)
@@ -124,11 +220,13 @@ class NativeLibrary:
         return False
 
     def existing_path(self) -> pathlib.Path | None:
+        """The pinned library (checked, never rebuilt), else the first current unpinned candidate."""
+
+        configured = self.configured_path()
+        if configured is not None:
+            return check_pinned(configured, self.lib_env, self.missing_required_symbol)
         for candidate in self.candidate_paths():
-            if candidate.exists():
-                if self.is_stale(candidate):
-                    logger.info("%s CUDA library %s is older than its source — will rebuild.", self.name, candidate)
-                    continue
+            if candidate.exists() and not self.is_stale(candidate):
                 return candidate.resolve()
         return None
 
@@ -148,7 +246,6 @@ class NativeLibrary:
             self.auto_build_attempted = True
             self.auto_build_error = None
             return lib_path
-        lib_path.parent.mkdir(parents=True, exist_ok=True)
         logger.info("Building %s", lib_path)
         make_env = os.environ.copy()
         nvcc_visible = (
@@ -165,19 +262,15 @@ class NativeLibrary:
             discovered = cuda_backproject._discover_system_nvcc()
             if discovered is not None:
                 make_env["NVCC"] = discovered
-        make_cmd = ["make"]
-        if force or stale:
-            make_cmd.append("-B")
-        make_cmd += [
+        make_cmd = [
+            "make",
+            "-B",
             "-C",
             str(self.make_dir),
             f"PYTHON={sys.executable}",
-            f"LIB={lib_path}",
             f"RECOVAR_CUDA_INCLUDE={include_dir()}",
         ]
-        subprocess.check_call(make_cmd, env=make_env)
-        if not lib_path.exists():
-            raise RuntimeError(f"Build failed — {lib_path} not found")
+        make_atomically(make_cmd, lib_path, make_env, self.source_digest())
         self.auto_build_attempted = True
         self.auto_build_error = None
         self.ffi_registered = False

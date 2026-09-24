@@ -42,6 +42,8 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+from recovar import cuda_build
+
 logger = logging.getLogger(__name__)
 
 # ──────────────────────────────────────────────────────────────────────
@@ -260,29 +262,33 @@ def _lib_missing_required_symbols(lib_path: pathlib.Path) -> str | None:
     return None
 
 
+def _source_digest() -> str | None:
+    """Digest of the build inputs present; None when none are (e.g. a package shipped without sources)."""
+    present = [(name, _LIB_DIR / name) for name in _CUDA_BUILD_SOURCE_NAMES if (_LIB_DIR / name).is_file()]
+    return cuda_build.source_digest(present) if present else None
+
+
 def _lib_is_stale(lib_path: pathlib.Path) -> bool:
-    """Return True if the lib's mtime is older than the source files OR if
+    """Return True if an unpinned lib was not built from the current sources OR if
     it's missing a symbol that the current ``cuda_backproject.py`` expects.
 
     Catches:
-      - mtime skew: user installed before a kernel/Makefile fix landed (e.g.
-        issue #131's Blackwell widening).
+      - source skew: the sha256 of the build inputs differs from the one recorded
+        beside the library at build time (``cuda_build.digest_path``), e.g. a user
+        installed before a kernel/Makefile fix landed (issue #131's Blackwell
+        widening). Content, not mtime, decides: a fresh checkout makes identical
+        sources look newer.
       - binary skew: cached ``.so`` from an older branch doesn't export a
         symbol the current source requires (e.g. ``BackprojectIndexed``).
         Without this check ``_ensure_ffi`` would crash inside ``ctypes`` and
         ``cuda_available()`` would silently fall back to JAX.
     """
-    try:
-        lib_mtime = lib_path.stat().st_mtime
-    except OSError:
+    if not lib_path.exists():
         return False
-    for src_name in _CUDA_BUILD_SOURCE_NAMES:
-        src = _LIB_DIR / src_name
-        try:
-            if src.stat().st_mtime > lib_mtime:
-                return True
-        except OSError:
-            continue
+    digest = _source_digest()
+    if digest is not None and not cuda_build.built_from(lib_path, digest):
+        logger.info("RECOVAR CUDA library %s was not built from the current sources — will rebuild.", lib_path)
+        return True
     missing = _lib_missing_required_symbols(lib_path)
     if missing is not None:
         logger.info(
@@ -295,15 +301,12 @@ def _lib_is_stale(lib_path: pathlib.Path) -> bool:
 
 
 def _existing_lib_path() -> pathlib.Path | None:
+    """The pinned ``RECOVAR_CUDA_LIB`` (checked, never rebuilt), else the first current cached/package lib."""
+    configured = _configured_lib_path()
+    if configured is not None:
+        return cuda_build.check_pinned(configured, _CUDA_LIB_ENV, _lib_missing_required_symbols)
     for candidate in _candidate_lib_paths():
-        if candidate.exists():
-            if _lib_is_stale(candidate):
-                logger.info(
-                    "RECOVAR CUDA library %s is older than its source — "
-                    "will rebuild (this happens once after a kernel/Makefile update).",
-                    candidate,
-                )
-                continue
+        if candidate.exists() and not _lib_is_stale(candidate):
             return candidate.resolve()
     return None
 
@@ -387,11 +390,10 @@ def build_custom_cuda(output_path: str | os.PathLike[str] | None = None, force: 
         return lib_path
     if stale:
         logger.info(
-            "RECOVAR CUDA extension at %s is older than its source — rebuilding.",
+            "RECOVAR CUDA extension at %s was not built from the current sources — rebuilding.",
             lib_path,
         )
 
-    lib_path.parent.mkdir(parents=True, exist_ok=True)
     logger.info("Building %s", lib_path)
     make_env = os.environ.copy()
     # If the user hasn't surfaced nvcc through any of the Makefile's normal
@@ -415,13 +417,12 @@ def build_custom_cuda(output_path: str | os.PathLike[str] | None = None, force: 
             logger.info("Discovered nvcc at %s (system fallback)", discovered)
             make_env["NVCC"] = discovered
 
-    make_cmd = ["make"]
-    if force or stale:
-        make_cmd.append("-B")
-    make_cmd.extend(["-C", str(_LIB_DIR), f"PYTHON={sys.executable}", f"LIB={lib_path}"])
-    subprocess.check_call(make_cmd, env=make_env)
-    if not lib_path.exists():
-        raise RuntimeError(f"Build failed — {lib_path} not found")
+    # Build beside the target and rename over it: another process may be running from lib_path.
+    make_cmd = ["make", "-B", "-C", str(_LIB_DIR), f"PYTHON={sys.executable}"]
+    digest = _source_digest()
+    if digest is None:
+        raise RuntimeError(f"Cannot build {lib_path}: no CUDA build sources under {_LIB_DIR}")
+    cuda_build.make_atomically(make_cmd, lib_path, make_env, digest)
     _auto_build_attempted = True
     _auto_build_error = None
     _cuda_ok = None
@@ -835,7 +836,9 @@ def cuda_available() -> bool:
 
     RECOVAR prefers these kernels by default on GPU and will try to build the
     shared library automatically into the cache directory when needed. Set
-    ``RECOVAR_DISABLE_CUDA=1`` to force the slower JAX GPU path instead.
+    ``RECOVAR_DISABLE_CUDA=1`` to force the slower JAX GPU path instead. A
+    ``RECOVAR_CUDA_LIB`` that is missing or lacks a required symbol raises
+    :class:`recovar.cuda_build.PinnedLibraryError` on GPU instead of returning False.
     """
     global _auto_build_error, _cuda_ok
     if not custom_cuda_requested():
@@ -851,6 +854,8 @@ def cuda_available() -> bool:
             _cuda_ok = True
             _auto_build_error = None
             logger.info("CUDA backproject/project kernels enabled")
+    except cuda_build.PinnedLibraryError:
+        raise  # an explicit RECOVAR_CUDA_LIB that cannot be used is an error, not a JAX fallback
     except (ImportError, OSError, RuntimeError, AttributeError, subprocess.SubprocessError) as e:
         _cuda_ok = False
         if _auto_build_error is None:
