@@ -11,6 +11,9 @@ optimisation_set.star`` reads directly:
   coordinates, Euler angles and ``rlnTomoVisibleFrames``;
 - ``Subtomograms/<tomo>/<n>_stack2d.mrcs``: one slice per visible tilt, in
   tilt-table order (what ``relion_tomo_subtomo --stack2d`` writes);
+- ``tilt_series/<tomo>_001.mrc``: an empty image of the tilt-image size. No
+  tilt-series micrographs are simulated, so programs that read them
+  (``relion_tomo_subtomo``, ``relion_tomo_reconstruct_particle``) do not apply;
 - ``particles_2d.star``: the same data flattened to one row per particle-tilt
   (``recovar pipeline --tilt-series`` input).
 
@@ -31,6 +34,7 @@ import logging
 import os
 
 import jax.numpy as jnp
+import mrcfile
 import numpy as np
 import pandas as pd
 from scipy.spatial.transform import Rotation
@@ -218,9 +222,16 @@ def generate_relion5_tomo_dataset(
     for t, name in enumerate(tomo_names):
         og = optics_groups[tomo_optics[t]]
         defocus = rng.uniform(*defocus_range) + rng.normal(0, 200.0, n_tilts)
+        # No tilt-series micrographs are simulated. relion_refine only reads the
+        # header of the first tilt image, for its size (TomogramSet::loadTomogram,
+        # tomogram_set.cpp:264-270), so only that file exists, as an empty image.
+        micrographs = [f"tilt_series/{name}_{k + 1:03d}.mrc" for k in range(n_tilts)]
+        with mrcfile.new(os.path.join(output_folder, micrographs[0]), overwrite=True) as mrc:
+            mrc.set_data(np.zeros(tomogram_size[1::-1], dtype=np.int8))
+            mrc.voxel_size = og["pixel_size"]
         tilt_df = pd.DataFrame(
             {
-                "_rlnMicrographName": [f"tilt_series/{name}_{k + 1:03d}.mrc" for k in range(n_tilts)],
+                "_rlnMicrographName": micrographs,
                 "_rlnTomoNominalStageTiltAngle": tilt_angles,
                 "_rlnMicrographPreExposure": acquisition_index * dose_per_tilt,
                 "_rlnDefocusU": defocus + astigmatism / 2,

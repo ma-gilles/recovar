@@ -80,6 +80,8 @@ def test_relion_files_and_optics_groups(dataset):
     text = open(out / "tomograms.star").read()
     assert "data_global" in text
     assert "data_TS_01" in open(out / "tilt_series" / "TS_01.star").read()
+    with mrcfile.open(out / "tilt_series" / "TS_01_001.mrc") as mrc:  # header read by relion_refine
+        assert mrc.data.shape == (512, 512)
     assert "rlnTomoParticlesFile" in open(result["optimisation_set"]).read()
 
     particles_text = open(result["particles"]).read()
