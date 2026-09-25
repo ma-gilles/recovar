@@ -66,6 +66,7 @@ def simulate_optics_groups(
     seed,
     disc_type,
     premultiplied_ctf,
+    row_translations=None,
 ):
     """Simulate every row's image on its optics group's grid.
 
@@ -79,6 +80,9 @@ def simulate_optics_groups(
 
     Returns the per-row images (a list, each on its group's box) and the per-pixel
     noise variance of each group (``None`` for a group without rows).
+    ``row_translations`` are per-row image shifts in pixels of the row's group,
+    in the convention of translations read from a RELION STAR (``+rlnOrigin``);
+    None means zero.
     """
 
     row_images = [None] * len(row_optics)
@@ -107,7 +111,11 @@ def simulate_optics_groups(
             dataset = cryoem_dataset.CryoEMDataset(
                 None,
                 pixel_size,
-                cryoem_dataset.ImageMetadata(rots[rows], np.zeros((rows.size, 2)), ctf_params[rows]),
+                cryoem_dataset.ImageMetadata(
+                    rots[rows],
+                    np.zeros((rows.size, 2)) if row_translations is None else row_translations[rows],
+                    ctf_params[rows],
+                ),
                 ctf_evaluator=ctf_evaluator,
                 grid_size=box_size,
             )

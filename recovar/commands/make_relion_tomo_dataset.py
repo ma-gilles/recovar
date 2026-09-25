@@ -36,6 +36,9 @@ def add_args(parser):
     parser.add_argument("--dose-per-tilt", type=float, default=3.0, help="e/A^2 per tilt")
     parser.add_argument("--snr", type=float, default=0.05)
     parser.add_argument("--hidden-tilt-fraction", type=float, default=0.0)
+    parser.add_argument(
+        "--origin-std-angstrom", type=float, default=0.0, help="Standard deviation of the ground-truth 3D offsets (A)"
+    )
     parser.add_argument("--premultiplied-ctf", action="store_true")
     parser.add_argument("--seed", type=int, default=0)
     solvent_contrast.add_cli_arguments(parser, enabled_by_default=True)
@@ -59,6 +62,7 @@ def main():
         dose_per_tilt=args.dose_per_tilt,
         snr=args.snr,
         hidden_tilt_fraction=args.hidden_tilt_fraction,
+        origin_std_angstrom=args.origin_std_angstrom,
         premultiplied_ctf=args.premultiplied_ctf,
         seed=args.seed,
         **solvent_contrast.kwargs_from_cli_args(args),

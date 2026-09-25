@@ -144,17 +144,59 @@ def test_per_tilt_pose_and_defocus_follow_relion(dataset):
             )
 
 
-def test_optics_group_noise_scale(dataset):
-    """Groups share one per-pixel noise variance times noise_scale (1.5 for group 2): about 2.25x the power."""
+def test_optics_group_noise_scale_and_normalised_stacks(dataset):
+    """Groups share one per-pixel noise variance times noise_scale**2 (1.5 for group 2).
+
+    The stacks are then normalised as relion_preprocess --norm does: background mean 0
+    and standard deviation 1 per tilt image, so the group difference is one of SNR.
+    """
     out, result = dataset
+    info = result["simulation_info"]
+    nv = info["noise_variance_per_optics_group"]
+    np.testing.assert_allclose(np.mean(nv[1]) / np.mean(nv[0]), 1.0, rtol=0.15)  # one shared level; noise_scale on top
+    assert info["relion_normalize"] is True
     particles, _ = starfile.read_star(result["particles"])
-    power = {1: [], 2: []}
+    c = np.arange(GRID) - (GRID / 2 - 0.5)
+    background = np.hypot(*np.meshgrid(c, c, indexing="ij")) > round(0.375 * GRID)
     for _, p in particles.iterrows():
         with mrcfile.open(out / p["_rlnImageName"]) as mrc:
-            power[int(p["_rlnOpticsGroup"])].append(np.mean(mrc.data.astype(np.float64) ** 2))
-    ratio = np.mean(power[2]) / np.mean(power[1])
-    assert 1.7 < ratio < 2.8, ratio
+            stack = np.asarray(mrc.data, dtype=np.float64)
+        np.testing.assert_allclose(stack[:, background].mean(axis=1), 0.0, atol=1e-4)
+        np.testing.assert_allclose(stack[:, background].std(axis=1), 1.0, rtol=1e-3)
     assert os.path.isfile(out / "simulation_info.pkl")
+
+
+def test_ground_truth_offsets_project_into_every_tilt(tmp_path):
+    """rlnOrigin{X,Y,Z}Angst are written and each tilt is shifted by Aproj_i[:2] o / pixel."""
+    _write_volume(tmp_path)
+    result = relion_tomo.generate_relion5_tomo_dataset(
+        str(tmp_path / "project"),
+        str(tmp_path / "vol"),
+        VOXEL,
+        n_particles=4,
+        grid_size=GRID,
+        n_tomograms=2,
+        max_tilt=30.0,
+        tilt_step=10.0,
+        tomogram_size=(512, 512, 128),
+        origin_std_angstrom=3.0,
+        seed=5,
+    )
+    info = result["simulation_info"]
+    particles, _ = starfile.read_star(result["particles"])
+    origins = particles[["_rlnOriginXAngst", "_rlnOriginYAngst", "_rlnOriginZAngst"]].values.astype(float)
+    np.testing.assert_allclose(origins, info["particle_origins_angstrom"])
+    assert np.all(np.abs(origins) > 0)
+    flat, _ = starfile.read_star(str(tmp_path / "project" / "particles_2d.star"))
+    names = list(particles["_rlnTomoParticleName"].values)
+    pose = {n: _relion_euler_matrix(*r) for n, r in zip(names, particles[["_rlnAngleRot", "_rlnAngleTilt", "_rlnAnglePsi"]].values.astype(float))}
+    origin = dict(zip(names, origins))
+    for k, (_, row) in enumerate(flat.iterrows()):
+        a_i = _relion_euler_matrix(*row[["_rlnAngleRot", "_rlnAngleTilt", "_rlnAnglePsi"]].values.astype(float))
+        a_proj = a_i @ pose[row["_rlnGroupName"]].T
+        np.testing.assert_allclose(
+            info["flat_rows_translations_px"][k], a_proj[:2] @ origin[row["_rlnGroupName"]] / VOXEL, atol=1e-9
+        )
 
 
 def test_relion_dose_weight_matches_ctf_h():

@@ -95,6 +95,22 @@ def dose_symmetric_tilt_scheme(max_tilt=60.0, tilt_step=3.0, group_size=2):
     return angles, acquisition_index
 
 
+def _relion_euler_matrix(eulers):
+    """RELION's Euler_angles2matrix (src/euler.cpp) for ``[..., (rot, tilt, psi)]`` in degrees."""
+
+    a, b, g = np.deg2rad(np.asarray(eulers, dtype=np.float64)).T
+    ca, sa, cb, sb, cg, sg = np.cos(a), np.sin(a), np.cos(b), np.sin(b), np.cos(g), np.sin(g)
+    cc, cs, sc, ss = cb * ca, cb * sa, sb * ca, sb * sa
+    return np.stack(
+        [
+            np.stack([cg * cc - sg * sa, cg * cs + sg * ca, -cg * sb], -1),
+            np.stack([-sg * cc - cg * sa, -sg * cs + cg * ca, sg * sb], -1),
+            np.stack([sc, ss, cb], -1),
+        ],
+        -2,
+    )
+
+
 def _visible_frames_string(mask):
     return "[" + ",".join(str(int(v)) for v in mask) + "]"
 
@@ -120,6 +136,7 @@ def generate_relion5_tomo_dataset(
     noise_model="white",
     contrast_std=0.1,
     hidden_tilt_fraction=0.0,
+    origin_std_angstrom=0.0,
     volume_distribution=None,
     premultiplied_ctf=False,
     trailing_zero_format_in_vol_name=True,
@@ -153,6 +170,11 @@ def generate_relion5_tomo_dataset(
     hidden_tilt_fraction : float
         Probability that a tilt is marked invisible for a particle (the zero
         tilt is always visible). Hidden tilts get no slice in the stack.
+    origin_std_angstrom : float
+        Standard deviation of each particle's ground-truth 3D offset
+        (``rlnOriginX/Y/ZAngst``, tomogram frame). Every tilt image of the particle is
+        shifted by its projection, ``Aproj_i[:2] o`` (RELION's
+        ``Experiment::getTranslationInTiltSeries``); 0 writes centred particles.
     tomogram_size : tuple of int
         ``rlnTomoSizeX/Y/Z`` in bin-1 pixels; must be even.
     atomic_solvent_correction, solvent_contrast_a, solvent_contrast_B, atomic_bfactor
@@ -253,6 +275,11 @@ def generate_relion5_tomo_dataset(
     visible[:, np.argmin(np.abs(tilt_angles))] = True
     particle_names = [f"{tomo_names[t]}/{i}" for t, i in zip(particle_tomo, particle_index)]
     stack_names = [f"Subtomograms/{tomo_names[t]}/{i}_stack2d.mrcs" for t, i in zip(particle_tomo, particle_index)]
+    origins = (
+        rng.normal(0.0, origin_std_angstrom, size=(n_particles, 3))
+        if origin_std_angstrom > 0
+        else np.zeros((n_particles, 3))
+    )
     particles_df = pd.DataFrame(
         {
             "_rlnTomoName": [tomo_names[t] for t in particle_tomo],
@@ -262,9 +289,9 @@ def generate_relion5_tomo_dataset(
             "_rlnOpticsGroup": tomo_optics[particle_tomo] + 1,
             "_rlnTomoParticleName": particle_names,
             "_rlnImageName": stack_names,
-            "_rlnOriginXAngst": 0.0,
-            "_rlnOriginYAngst": 0.0,
-            "_rlnOriginZAngst": 0.0,
+            "_rlnOriginXAngst": origins[:, 0],
+            "_rlnOriginYAngst": origins[:, 1],
+            "_rlnOriginZAngst": origins[:, 2],
             "_rlnAngleRot": eulers[:, 0],
             "_rlnAngleTilt": eulers[:, 1],
             "_rlnAnglePsi": eulers[:, 2],
@@ -322,6 +349,14 @@ def generate_relion5_tomo_dataset(
     particle_volume = rng.choice(volumes.shape[0], size=n_particles, p=volume_distribution)
     particle_contrast = 1 + rng.normal(0, contrast_std, n_particles)
     row_optics = optics_df["_rlnOpticsGroup"].searchsorted(flat_df["_rlnOpticsGroup"].values.astype(int))
+    # The tilt's projection matrix: the flattened per-tilt matrix is Aproj_i times the pose.
+    row_projection = np.einsum(
+        "iab,icb->iac",
+        _relion_euler_matrix(euler_flat),
+        _relion_euler_matrix(eulers)[row_particle],
+    )
+    row_pixel = np.array([optics_groups[g]["pixel_size"] for g in row_optics])
+    row_translations = np.einsum("iab,ib->ia", row_projection[:, :2, :], origins[row_particle]) / row_pixel[:, None]
     row_images, noise_variances = optics_groups_sim.simulate_optics_groups(
         volumes,
         optics_groups,
@@ -343,15 +378,26 @@ def generate_relion5_tomo_dataset(
         seed=seed,
         disc_type=disc_type,
         premultiplied_ctf=premultiplied_ctf,
+        row_translations=row_translations,
     )
 
+    # Tilt images are normalised as relion_preprocess --norm does (background mean 0 and
+    # standard deviation 1 per image), as the SPA writer does; RELION's refinement has
+    # absolute thresholds (e.g. the sigma2_noise < 1e-14 fill in maximizationOtherParameters)
+    # that images on a tiny greyscale trip.
+    row_bg_mean = np.zeros(len(flat_df))
+    row_bg_std = np.ones(len(flat_df))
     for p, stack_name in enumerate(stack_names):
         rows = np.nonzero(row_particle == p)[0]
         rows = rows[np.argsort(row_slice[rows])]
+        box = optics_groups[row_optics[rows[0]]]["box_size"]
+        stack, row_bg_mean[rows], row_bg_std[rows] = simulator.normalize_particles_relion_style(
+            np.stack([row_images[r] for r in rows]), int(round(0.375 * box))
+        )
         os.makedirs(os.path.dirname(os.path.join(output_folder, stack_name)), exist_ok=True)
         utils.write_mrc_stack(
             os.path.join(output_folder, stack_name),
-            np.stack([row_images[r] for r in rows]),
+            np.asarray(stack, dtype=np.float32),
             voxel_size=optics_groups[row_optics[rows[0]]]["pixel_size"],
         )
 
@@ -376,6 +422,11 @@ def generate_relion5_tomo_dataset(
         "flat_rows_particle": row_particle,
         "flat_rows_ctf_params": ctf_params,
         "flat_rows_rots": rots,
+        "particle_origins_angstrom": origins,
+        "flat_rows_translations_px": row_translations,
+        "relion_normalize": True,
+        "flat_rows_bg_mean": row_bg_mean,
+        "flat_rows_bg_std": row_bg_std,
     }
     utils.pickle_dump(simulation_info, os.path.join(output_folder, "simulation_info.pkl"))
     logger.info("Wrote %d particles x %d tilts (%d images) to %s", n_particles, n_tilts, len(flat_df), output_folder)
