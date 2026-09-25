@@ -981,9 +981,19 @@ def _volume_real_dtype(volume: jax.Array):
 volume_real_dtype = _volume_real_dtype
 
 
-def _infer_backproject_upsampling(image_shape, volume_shape, max_r=None):
-    """Infer Fourier oversampling for standard and RELION BackProjector grids."""
+def _infer_backproject_upsampling(image_shape, volume_shape, max_r=None, upsampling=None):
+    """Infer Fourier oversampling for standard and RELION BackProjector grids.
 
+    ``upsampling`` (padded-volume voxels per image Fourier pixel) is taken as given
+    when set: for images on another grid than the volume (RELION optics groups
+    with another pixel size or box, rotations scaled by the grid ratio) the image
+    shape and the image-side ``max_r`` no longer determine the volume's padding.
+    """
+
+    if upsampling is not None:
+        if int(upsampling) <= 0 or int(upsampling) != upsampling:
+            raise ValueError(f"upsampling must be a positive integer, got {upsampling}")
+        return int(upsampling)
     ih, _ = image_shape
     N0, N1, N2 = volume_shape
     if N0 % ih == 0:
@@ -1012,7 +1022,7 @@ def _infer_backproject_upsampling(image_shape, volume_shape, max_r=None):
     )
 
 
-def _validate_inputs(volume_shape, image_shape, order, half_volume, half_image, max_r=None):
+def _validate_inputs(volume_shape, image_shape, order, half_volume, half_image, max_r=None, upsampling=None):
     """Validate parameters at trace time (not inside JIT)."""
     ih, iw = image_shape
     N0, N1, N2 = volume_shape
@@ -1022,7 +1032,7 @@ def _validate_inputs(volume_shape, image_shape, order, half_volume, half_image, 
         raise ValueError(f"volume_shape must be positive, got {volume_shape}")
     if order not in (0, 1, 3):
         raise ValueError(f"order must be 0, 1, or 3, got {order}")
-    _infer_backproject_upsampling(image_shape, volume_shape, max_r=max_r)
+    _infer_backproject_upsampling(image_shape, volume_shape, max_r=max_r, upsampling=upsampling)
 
 
 # Public name for the EM package (relax split P2); the private name stays for existing callers.
@@ -1039,7 +1049,7 @@ def _encode_max_r(max_r):
     return np.int64(int(round(float(max_r) * float(max_r) * 4)))
 
 
-def _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image, max_r=None):
+def _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image, max_r=None, upsampling=None):
     """Compute shared FFI scalar keyword arguments.
 
     ``max_r`` is in image Fourier-pixel coordinates, matching
@@ -1049,7 +1059,7 @@ def _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image, max_r
     """
     ih, iw_full = image_shape
     N0, N1, N2 = volume_shape
-    ups = _infer_backproject_upsampling(image_shape, volume_shape, max_r=max_r)
+    ups = _infer_backproject_upsampling(image_shape, volume_shape, max_r=max_r, upsampling=upsampling)
     iw_eff = iw_full // 2 + 1 if half_image else iw_full
     return (
         dict(
@@ -1163,7 +1173,7 @@ def _backproject_indexed_target(use_relion_block_topology: bool) -> str:
     return _TARGET_BACKPROJECT_INDEXED
 
 
-@functools.partial(jax.jit, static_argnums=(4, 5, 6, 7, 8, 9, 10))
+@functools.partial(jax.jit, static_argnums=(4, 5, 6, 7, 8, 9, 10, 11))
 def backproject_indexed(
     volume: jax.Array,
     images: jax.Array,
@@ -1176,18 +1186,22 @@ def backproject_indexed(
     half_image: bool = False,
     max_r: float | None = None,
     relion_x_half: bool = False,
+    upsampling: int | None = None,
 ) -> jax.Array:
     """Back-project images whose pixels are stored in a compact indexed layout.
 
     ``pixel_indices`` contains the flattened pixel positions in the original
     image grid (or packed half-image grid when ``half_image=True``). The kernel
     interprets ``images[:, j]`` as the value at ``pixel_indices[j]``.
+
+    ``max_r`` clips the image radius; ``upsampling`` gives the volume padding when
+    the images are on another grid (see ``_infer_backproject_upsampling``).
     """
     _ensure_ffi()
-    _validate_inputs(volume_shape, image_shape, order, half_volume, half_image, max_r=max_r)
+    _validate_inputs(volume_shape, image_shape, order, half_volume, half_image, max_r=max_r, upsampling=upsampling)
     if relion_x_half and not (half_volume and half_image):
         raise ValueError("relion_x_half requires half_volume=True and half_image=True")
-    kw, _, _ = _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image, max_r)
+    kw, _, _ = _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image, max_r, upsampling)
     kw["relion_fold_x"] = np.int64(int(relion_x_half))
     use_relion_block_topology = bool(relion_x_half and relion_x_half_bp_block_topology_enabled())
     kw["relion_block_topology"] = np.int64(int(use_relion_block_topology))
@@ -1366,7 +1380,7 @@ def _bitwise_array_equal(left, right) -> bool:
 bitwise_array_equal = _bitwise_array_equal
 
 
-@functools.partial(jax.jit, static_argnums=(4, 5, 6, 7, 8, 9, 10))
+@functools.partial(jax.jit, static_argnums=(4, 5, 6, 7, 8, 9, 10, 11))
 def batch_backproject_indexed(
     volumes: jax.Array,
     images: jax.Array,
@@ -1379,13 +1393,14 @@ def batch_backproject_indexed(
     half_image: bool = False,
     max_r: float | None = None,
     relion_x_half: bool = False,
+    upsampling: int | None = None,
 ) -> jax.Array:
     """Back-project compact indexed images into a batch of volumes."""
     _ensure_ffi()
-    _validate_inputs(volume_shape, image_shape, order, half_volume, half_image, max_r=max_r)
+    _validate_inputs(volume_shape, image_shape, order, half_volume, half_image, max_r=max_r, upsampling=upsampling)
     if relion_x_half and not (half_volume and half_image):
         raise ValueError("relion_x_half requires half_volume=True and half_image=True")
-    kw, _, _ = _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image, max_r)
+    kw, _, _ = _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image, max_r, upsampling)
     kw["relion_fold_x"] = np.int64(int(relion_x_half))
     use_relion_block_topology = bool(relion_x_half and relion_x_half_bp_block_topology_enabled())
     kw["relion_block_topology"] = np.int64(int(use_relion_block_topology))

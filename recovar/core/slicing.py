@@ -447,6 +447,7 @@ def adjoint_slice_volume_indexed(
     half_volume=False,
     max_r=_AUTO,
     relion_x_half=False,
+    upsampling=None,
 ):
     """Adjoint slice extraction from a compact indexed pixel layout.
 
@@ -488,8 +489,11 @@ def adjoint_slice_volume_indexed(
             half_image=half_image,
             max_r=_cuda_max_r(max_r, image_shape, volume_shape),
             relion_x_half=relion_x_half,
+            upsampling=upsampling,
         )
 
+    if upsampling is not None:
+        raise NotImplementedError("an explicit upsampling requires the CUDA backproject kernel")
     if relion_x_half:
         raise NotImplementedError("relion_x_half indexed adjoint requires the CUDA backproject kernel")
 
@@ -523,6 +527,7 @@ def batch_adjoint_slice_volume_indexed(
     half_volume=False,
     max_r=_AUTO,
     relion_x_half=False,
+    upsampling=None,
 ):
     """Batched indexed adjoint slice extraction for shared rotations."""
     slices = jnp.asarray(slices)
@@ -561,8 +566,11 @@ def batch_adjoint_slice_volume_indexed(
             half_image=half_image,
             max_r=_cuda_max_r(max_r, image_shape, volume_shape),
             relion_x_half=relion_x_half,
+            upsampling=upsampling,
         )
 
+    if upsampling is not None:
+        raise NotImplementedError("an explicit upsampling requires the CUDA backproject kernel")
     if relion_x_half:
         raise NotImplementedError("relion_x_half indexed adjoint requires the CUDA backproject kernel")
 
