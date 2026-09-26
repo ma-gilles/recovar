@@ -2,6 +2,8 @@
 
 import functools
 import logging
+import os
+from pathlib import Path
 
 import equinox as eqx
 import jax
@@ -16,14 +18,203 @@ from recovar.reconstruction import noise, regularization
 
 logger = logging.getLogger(__name__)
 
+_RELION_POSTPROCESS_SINGLE_PRECISION_MIN_VOXELS = 200_000_000
+_RELION_WIENER_BOUNDARY_DUMP_CALL = 0
+
+
+def _write_relion_wiener_boundary(
+    Ft_ctf_input,
+    F_ty_input,
+    regularized_filter,
+    valid_indices,
+    divided_volume,
+    tau,
+    tau2_fudge_value,
+    *,
+    dump_dir,
+    input_half_volume,
+    accumulator_volume_shape,
+    reconstruction_volume_shape,
+    current_size,
+    padding_factor,
+    minres_map,
+    tau_is_1d,
+):
+    """Host callback for the opt-in Wiener-boundary diagnostic."""
+
+    global _RELION_WIENER_BOUNDARY_DUMP_CALL
+    call_index = _RELION_WIENER_BOUNDARY_DUMP_CALL
+    _RELION_WIENER_BOUNDARY_DUMP_CALL += 1
+    output_dir = Path(dump_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    np.savez(
+        output_dir / f"recovar_wiener_boundary_{call_index:04d}.npz",
+        schema=np.asarray("recovar-relion-wiener-boundary-v1"),
+        call_index=np.int32(call_index),
+        input_half_volume=np.bool_(input_half_volume),
+        accumulator_volume_shape=np.asarray(accumulator_volume_shape, dtype=np.int32),
+        reconstruction_volume_shape=np.asarray(reconstruction_volume_shape, dtype=np.int32),
+        current_size=np.int32(-1 if current_size is None else current_size),
+        padding_factor=np.int32(padding_factor),
+        tau2_fudge=np.float64(tau2_fudge_value),
+        minres_map=np.int32(minres_map),
+        tau_is_1d=np.bool_(tau_is_1d),
+        Ft_ctf_input=np.asarray(Ft_ctf_input),
+        F_ty_input=np.asarray(F_ty_input),
+        regularized_filter=np.asarray(regularized_filter),
+        valid_indices=np.asarray(valid_indices),
+        divided_volume=np.asarray(divided_volume),
+        tau=np.asarray(tau),
+    )
+
+
+def _maybe_dump_relion_wiener_boundary(
+    *,
+    Ft_ctf_input,
+    F_ty_input,
+    regularized_filter,
+    valid_indices,
+    divided_volume,
+    tau,
+    input_half_volume,
+    accumulator_volume_shape,
+    reconstruction_volume_shape,
+    current_size,
+    padding_factor,
+    tau2_fudge,
+    minres_map,
+    tau_is_1d,
+):
+    """Write an opt-in, pre-IFFT reconstruction boundary capture.
+
+    This diagnostic is deliberately after Wiener regularization/division and
+    before Fourier windowing.  It is inert unless
+    ``RECOVAR_RELION_WIENER_BOUNDARY_DUMP_DIR`` is set.
+    """
+
+    dump_dir = os.environ.get("RECOVAR_RELION_WIENER_BOUNDARY_DUMP_DIR")
+    if not dump_dir:
+        return
+
+    host_callback = functools.partial(
+        _write_relion_wiener_boundary,
+        dump_dir=dump_dir,
+        input_half_volume=input_half_volume,
+        accumulator_volume_shape=accumulator_volume_shape,
+        reconstruction_volume_shape=reconstruction_volume_shape,
+        current_size=current_size,
+        padding_factor=padding_factor,
+        minres_map=minres_map,
+        tau_is_1d=tau_is_1d,
+    )
+    jax.debug.callback(
+        host_callback,
+        jnp.asarray(Ft_ctf_input),
+        jnp.asarray(F_ty_input),
+        jnp.asarray(regularized_filter),
+        jnp.asarray(valid_indices),
+        jnp.asarray(divided_volume),
+        jnp.asarray(tau) if tau is not None else jnp.asarray([], dtype=jnp.float32),
+        jnp.asarray(tau2_fudge),
+        ordered=True,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Fourier volume zero-padding for reconstruction with padding_factor > 1
+# ---------------------------------------------------------------------------
+
+
+def _large_grid_postprocess_is_physically_large(grid_voxels):
+    """Return whether a RELION grid crosses the configured memory threshold."""
+
+    threshold = int(
+        os.environ.get(
+            "RECOVAR_RELION_POSTPROCESS_SINGLE_PRECISION_MIN_VOXELS",
+            _RELION_POSTPROCESS_SINGLE_PRECISION_MIN_VOXELS,
+        )
+    )
+    return int(grid_voxels) >= threshold
+
+
+# Public name for the EM package (relax split P2); the private name stays for existing callers.
+large_grid_postprocess_is_physically_large = _large_grid_postprocess_is_physically_large
+
+
+def _large_grid_postprocess_single_precision_enabled(grid_voxels):
+    """Return whether a RELION postprocess grid should avoid complex128.
+
+    RELION's GPU reconstruction path is single precision.  RECOVAR globally
+    enables JAX x64, which can otherwise promote a large padded reconstruction
+    grid such as 768^3 to complex128 and require a single 13.5 GiB allocation.
+    Keep small/default grids unchanged for parity tests; use single precision
+    only once the padded grid crosses the high-memory threshold.
+    """
+
+    mode = os.environ.get("RECOVAR_RELION_POSTPROCESS_LARGE_GRID_SINGLE_PRECISION", "auto").strip().lower()
+    if mode in {"0", "false", "no", "off", "never"}:
+        return False
+    if mode in {"1", "true", "yes", "on", "always"}:
+        return True
+    if mode != "auto":
+        logger.warning(
+            "Unrecognised RECOVAR_RELION_POSTPROCESS_LARGE_GRID_SINGLE_PRECISION=%r; using auto",
+            mode,
+        )
+    return _large_grid_postprocess_is_physically_large(grid_voxels)
+
+
+# Public name for the EM package (relax split P2); the private name stays for existing callers.
+large_grid_postprocess_single_precision_enabled = _large_grid_postprocess_single_precision_enabled
+
+
+def zero_pad_fourier_volume(vol_flat, native_shape, padding_factor):
+    """Zero-pad a flat centered Fourier volume to a larger grid.
+
+    RELION's padded reconstruction grid uses the same physical frequencies on a
+    finer lattice. In centered / fftshift layout, native frequency bin ``k``
+    therefore lands at ``padding_factor * k`` on the padded grid, not at the
+    same array index inside a larger centered cube.
+
+    Parameters
+    ----------
+    vol_flat : jnp.ndarray, shape (N^3,)
+        Flat centered Fourier volume at native resolution.
+    native_shape : tuple of int, (N, N, N)
+        Native volume shape.
+    padding_factor : int
+        Padding factor (typically 2).  Output size is (N*pf)^3.
+
+    Returns
+    -------
+    padded_flat : jnp.ndarray, shape ((N*pf)^3,)
+        Zero-padded Fourier volume in centered layout.
+    """
+    if padding_factor == 1:
+        return vol_flat
+
+    native_shape = tuple(int(s) for s in native_shape)
+    padded_shape = tuple(s * padding_factor for s in native_shape)
+    vol_3d = jnp.asarray(vol_flat).reshape(native_shape)
+    padded = jnp.zeros(padded_shape, dtype=vol_3d.dtype)
+
+    padded_indices = []
+    for native_dim, padded_dim in zip(native_shape, padded_shape):
+        start = padded_dim // 2 - padding_factor * (native_dim // 2)
+        padded_indices.append(np.arange(native_dim, dtype=np.int32) * padding_factor + start)
+
+    padded = padded.at[np.ix_(*padded_indices)].set(vol_3d)
+
+    return padded.reshape(-1)
+
 
 def griddingCorrect(vol_in, ori_size, padding_factor, order=0):
     """Radial sinc gridding correction."""
     og_shape = vol_in.shape
-    pixels = fourier_transform_utils.get_k_coordinate_of_each_pixel(og_shape, 1, scaled=False) + 0.0
-    r = np.linalg.norm(pixels, axis=-1)
-    safe_rval = np.where(r > 0, r / (ori_size * padding_factor), 1.0)
-    sinc = np.where(r > 0, np.sin(np.pi * safe_rval) / (np.pi * safe_rval), 1.0)
+    pixels = fourier_transform_utils.get_k_coordinate_of_each_pixel(og_shape, 1, scaled=False).astype(jnp.float64)
+    r = jnp.sqrt(jnp.sum(pixels**2, axis=-1))
+    safe_rval = jnp.where(r > 0, r / (ori_size * padding_factor), 1.0)
+    sinc = jnp.where(r > 0, jnp.sin(jnp.pi * safe_rval) / (jnp.pi * safe_rval), 1.0)
     if order == 0:
         kernel = sinc
     elif order == 1:
@@ -36,7 +227,7 @@ def griddingCorrect(vol_in, ori_size, padding_factor, order=0):
 def griddingCorrect_square(vol_in, ori_size, padding_factor, order=0):
     """Per-axis sinc product gridding correction (Fourier transform of trilinear interpolator)."""
     og_shape = vol_in.shape
-    pixels = fourier_transform_utils.get_k_coordinate_of_each_pixel(og_shape, 1, scaled=False)
+    pixels = fourier_transform_utils.get_k_coordinate_of_each_pixel(og_shape, 1, scaled=False).astype(np.float64)
     pixels_rescaled = pixels / (ori_size * padding_factor)
 
     def sinc(ar):
@@ -328,13 +519,92 @@ def residual_relion_style_triangular_kernel(
     return Ft_ctf, Ft_y
 
 
+def _relion_round_nonnegative(values):
+    return jnp.floor(values + jnp.asarray(0.5, dtype=values.dtype)).astype(jnp.int32)
+
+
+def _relion_tau_shells_from_volume(tau, volume_shape):
+    tau = jnp.asarray(tau)
+    n_shells = int(volume_shape[0]) // 2 + 1
+    if tau.ndim == 1 and int(tau.shape[0]) == n_shells:
+        return tau
+
+    radial_distances = fourier_transform_utils.get_grid_of_radial_distances(
+        volume_shape,
+        scaled=False,
+        frequency_shift=0,
+        rounded=False,
+    )
+    shell_index = _relion_round_nonnegative(radial_distances).reshape(-1)
+    shell_index = jnp.minimum(shell_index, n_shells - 1)
+    flat_tau = tau.reshape(-1)
+    shell_sum = jnp.bincount(shell_index, weights=flat_tau, length=n_shells)
+    shell_count = jnp.bincount(shell_index, length=n_shells).astype(shell_sum.dtype)
+    return jnp.where(shell_count > 0, shell_sum / shell_count, 0)
+
+
 def upscale_tau(tau, padding_factor, volume_shape, tau_is_1d=False):
+    tau = jnp.asarray(tau)
     if not tau_is_1d:
-        tau = regularization.average_over_shells(tau, volume_shape)
+        tau = _relion_tau_shells_from_volume(tau, volume_shape)
     pixels = fourier_transform_utils.get_k_coordinate_of_each_pixel(
         np.array(volume_shape) * padding_factor, 1, scaled=False
     )
-    radius = jnp.round(jnp.linalg.norm(pixels, axis=-1) / padding_factor).astype(jnp.int32)
+    radius = _relion_round_nonnegative(jnp.linalg.norm(pixels, axis=-1) / padding_factor)
+    radius = jnp.minimum(radius, tau.shape[0] - 1)
+    return tau[radius]
+
+
+def _upscale_tau_half(tau, padding_factor, volume_shape, tau_is_1d=False):
+    tau = jnp.asarray(tau)
+    if not tau_is_1d:
+        tau = _relion_tau_shells_from_volume(tau, volume_shape)
+    radius = (
+        fourier_transform_utils.get_grid_of_radial_distances_real(
+            np.array(volume_shape) * padding_factor,
+            scaled=False,
+            frequency_shift=0,
+            rounded=False,
+        )
+        / padding_factor
+    )
+    radius = _relion_round_nonnegative(radius).reshape(-1)
+    radius = jnp.minimum(radius, tau.shape[0] - 1)
+    return tau[radius]
+
+
+def _upscale_tau_to_accumulator_layout(
+    tau,
+    padding_factor,
+    native_volume_shape,
+    accumulator_volume_shape,
+    *,
+    half_volume,
+    tau_is_1d=False,
+):
+    """Upscale native tau shells onto an arbitrary RELION accumulator grid."""
+
+    tau = jnp.asarray(tau)
+    native_volume_shape = tuple(int(s) for s in native_volume_shape)
+    accumulator_volume_shape = tuple(int(s) for s in accumulator_volume_shape)
+    if not tau_is_1d:
+        tau = _relion_tau_shells_from_volume(tau, native_volume_shape)
+    if half_volume:
+        radius = fourier_transform_utils.get_grid_of_radial_distances_real(
+            accumulator_volume_shape,
+            scaled=False,
+            frequency_shift=0,
+            rounded=False,
+        )
+    else:
+        pixels = fourier_transform_utils.get_k_coordinate_of_each_pixel(
+            np.array(accumulator_volume_shape),
+            1,
+            scaled=False,
+        )
+        radius = jnp.linalg.norm(pixels, axis=-1)
+    radius = _relion_round_nonnegative(radius / float(padding_factor)).reshape(-1)
+    radius = jnp.minimum(radius, tau.shape[0] - 1)
     return tau[radius]
 
 
@@ -349,55 +619,288 @@ def _as_flat_single_volume(arr, volume_shape):
     raise ValueError(f"Expected array with shape {volume_shape} or ({flat_size},), got {arr.shape}")
 
 
+# Public name for the EM package (relax split P2); the private name stays for existing callers.
+as_flat_single_volume = _as_flat_single_volume
+
+
+def _average_over_shells_half(input_vec, volume_shape, frequency_shift=0):
+    radial_distances = (
+        fourier_transform_utils.get_grid_of_radial_distances_real(
+            volume_shape,
+            scaled=False,
+            frequency_shift=frequency_shift,
+        )
+        .astype(int)
+        .reshape(-1)
+    )
+    labels = radial_distances.reshape(-1)
+    indices = jnp.arange(0, volume_shape[0] // 2 - 1)
+    return regularization.jax_scipy_nd_image_mean(input_vec.reshape(-1), labels=labels, index=indices)
+
+
+def _relion_reconstruct_floor_shell_indices(volume_shape, padding_factor, *, half_volume):
+    """Native-shell indices for RELION's reconstruct() denominator floor."""
+
+    volume_shape = tuple(int(s) for s in volume_shape)
+    padding_factor = int(padding_factor)
+    if half_volume:
+        shell = (
+            fourier_transform_utils.get_grid_of_radial_distances_real(
+                volume_shape,
+                scaled=False,
+                frequency_shift=0,
+                rounded=False,
+            )
+            / float(padding_factor)
+        )
+    else:
+        pixels = fourier_transform_utils.get_k_coordinate_of_each_pixel(
+            np.array(volume_shape),
+            1,
+            scaled=False,
+        )
+        shell = jnp.linalg.norm(pixels, axis=-1) / float(padding_factor)
+    return jnp.floor(shell).astype(jnp.int32).reshape(-1)
+
+
+def _relion_reconstruct_floor_volume(
+    regularized_filter,
+    volume_shape,
+    padding_factor,
+    *,
+    half_volume,
+    max_res_shell,
+    max_res_shell_bound=None,
+):
+    """Return RELION's 1/1000 shell-average floor in padded Fourier layout.
+
+    ``max_res_shell`` is a Python int, or, with a static ``max_res_shell_bound``
+    at least as large, a traced int32 scalar: the shell sums then span the bound
+    and the shells at or above ``max_res_shell`` take no weight, which gives the
+    same per-shell averages while one program serves every ``max_res_shell`` up
+    to the bound.
+    """
+
+    regularized_filter = jnp.asarray(regularized_filter)
+    if max_res_shell is None:
+        max_res_shell = int(volume_shape[0]) // (2 * int(padding_factor))
+    if max_res_shell_bound is None:
+        max_res_shell = max(1, int(max_res_shell))
+        shell_length = max_res_shell
+    else:
+        shell_length = max(1, int(max_res_shell_bound))
+        max_res_shell = jnp.maximum(jnp.asarray(max_res_shell, dtype=jnp.int32), 1)
+    shell = _relion_reconstruct_floor_shell_indices(volume_shape, padding_factor, half_volume=half_volume)
+    shell_clipped = jnp.minimum(shell, max_res_shell - 1)
+    average_filter = regularized_filter.reshape(-1)
+    average_shell = shell
+    if not half_volume:
+        # RELION averages its stored FFTW x-half, not a Hermitian-expanded
+        # full cube.  The public full accumulator layout is (x, y, z), so
+        # select the non-redundant x bins before the shell reduction.  Using
+        # the full cube would count x>0/x<0 pairs twice but the x=0 plane only
+        # once, which measurably changes the high-shell denominator floor.
+        packed_x = fourier_transform_utils.get_real_fft_packed_last_axis_indices(volume_shape[0])
+        average_filter = jnp.take(regularized_filter.reshape(volume_shape), packed_x, axis=0).reshape(-1)
+        average_shell = jnp.take(shell.reshape(volume_shape), packed_x, axis=0).reshape(-1)
+    average_valid = average_shell < max_res_shell
+    average_shell_clipped = jnp.minimum(average_shell, max_res_shell - 1)
+    dtype = regularized_filter.real.dtype
+    valid_weights = average_valid.astype(dtype)
+    shell_sum = jnp.bincount(
+        average_shell_clipped,
+        weights=jnp.where(average_valid, average_filter, 0.0),
+        length=shell_length,
+    )
+    shell_count = jnp.bincount(average_shell_clipped, weights=valid_weights, length=shell_length)
+    shell_avg = jnp.where(shell_count > 0, shell_sum / shell_count, 0.0) / 1000.0
+    return shell_avg[shell_clipped].reshape(regularized_filter.shape)
+
+
+def _relion_prior_radius(padding_factor, max_res_shell):
+    """``padding_factor * max_res_shell`` as RELION's MAP-prior radius; a traced shell stays traced."""
+
+    if isinstance(max_res_shell, (int, np.integer)):
+        return float(padding_factor) * float(max_res_shell)
+    return float(padding_factor) * jnp.asarray(max_res_shell, dtype=jnp.float64)
+
+
 def adjust_regularization_relion_style(
-    filter, volume_shape, tau=None, padding_factor=1, max_res_shell=None, half_volume=False
+    filter,
+    volume_shape,
+    tau=None,
+    padding_factor=1,
+    max_res_shell=None,
+    half_volume=False,
+    tau2_fudge=1.0,
+    minres_map=0,
+    relion_native_shell_floor=False,
+    native_volume_shape=None,
+    tau_is_1d=False,
+    relion_filter_scale=None,
+    large_grid_single_precision=False,
+    max_res_shell_bound=None,
 ):
     """Adjust the RELION-style regularization filter.
 
     Adds 1/tau to the filter (Wiener denominator) and floors small values at
     1/1000 of the spherically-averaged filter to avoid division by zero.
     See RELION backprojector.cpp for the original algorithm.
+
+    The ``tau2_fudge`` parameter mirrors RELION's ``--tau2_fudge`` flag
+    (default 1.0).  It enters the Wiener denominator as::
+
+        inv_tau = 1 / (padding_factor**3 * tau2_fudge * tau)
+
+    ``minres_map`` mirrors RELION's ``--minres_map``: the Wiener prior term is
+    only added for shells ``ires >= minres_map``.
+
+    With ``relion_native_shell_floor``, ``max_res_shell`` may be a traced int32
+    scalar when ``max_res_shell_bound`` gives a static upper bound
+    (:func:`_relion_reconstruct_floor_volume`).
     """
     volume_shape = tuple(int(s) for s in volume_shape)
+    native_volume_shape = (
+        tuple(s // int(padding_factor) for s in volume_shape)
+        if native_volume_shape is None
+        else tuple(int(s) for s in native_volume_shape)
+    )
     packed_shape = (
         fourier_transform_utils.volume_shape_to_half_volume_shape(volume_shape) if half_volume else volume_shape
     )
     filter_flat, input_is_grid = _as_flat_single_volume(filter, packed_shape)
 
+    def zero_tau_inverse(current_filter):
+        if relion_filter_scale is None:
+            has_weight = current_filter > 1e-20
+            safe_weight = jnp.where(has_weight, current_filter, 1.0)
+            return jnp.where(has_weight, 1.0 / (0.001 * safe_weight), 0.0)
+        # RELION evaluates this nonlinear fallback after converting the BPref
+        # denominator to its native N^4 normalization. Convert the reciprocal
+        # back as well; applying the formula directly in RECOVAR units is off
+        # by scale^2.
+        scale = jnp.asarray(relion_filter_scale, dtype=jnp.float64)
+        native_weight = current_filter.astype(jnp.float64) * scale
+        has_weight = native_weight > 1e-20
+        safe_native_weight = jnp.where(has_weight, native_weight, 1.0)
+        native_inverse = 1.0 / (0.001 * safe_native_weight)
+        # Evaluate RELION's native-unit fallback in double precision, but do
+        # not let that scalar normalization promote a large float32 BPref
+        # denominator (and its subsequent complex division) box-wide.  The
+        # caller still promotes this result when its tau operand is float64.
+        fallback = jnp.where(has_weight, native_inverse / scale, 0.0)
+        return fallback.astype(current_filter.dtype) if large_grid_single_precision else fallback
+
     # Exact half-volume behavior: reuse full-volume implementation and repack.
     if half_volume:
-        filter_full = fourier_transform_utils.half_volume_to_full_volume(filter_flat, volume_shape).reshape(-1).real
-        reg_full = adjust_regularization_relion_style(
-            filter_full,
-            volume_shape,
-            tau=tau,
-            padding_factor=padding_factor,
-            max_res_shell=max_res_shell,
-            half_volume=False,
-        )
-        reg_half = fourier_transform_utils.full_volume_to_half_volume(reg_full, volume_shape).reshape(-1)
+        if tau is not None:
+            oversampling_factor = padding_factor**3
+            tau = _upscale_tau_to_accumulator_layout(
+                tau,
+                padding_factor,
+                native_volume_shape,
+                volume_shape,
+                half_volume=True,
+                tau_is_1d=tau_is_1d,
+            )
+            safe_tau = jnp.where(tau > 1e-20, tau, jnp.float32(1.0))
+            inv_tau = 1 / (oversampling_factor * tau2_fudge * safe_tau)
+            inv_tau = jnp.where(tau < 1e-20, zero_tau_inverse(filter_flat), inv_tau)
+            if relion_native_shell_floor and max_res_shell is not None:
+                radial = fourier_transform_utils.get_grid_of_radial_distances_real(
+                    volume_shape,
+                    scaled=False,
+                    frequency_shift=0,
+                    rounded=False,
+                ).reshape(-1)
+                prior_radius = _relion_prior_radius(padding_factor, max_res_shell)
+                inv_tau = jnp.where(radial * radial < prior_radius * prior_radius, inv_tau, 0)
+            if int(minres_map) > 0:
+                shell = fourier_transform_utils.get_grid_of_radial_distances_real(
+                    volume_shape,
+                    scaled=False,
+                    frequency_shift=0,
+                    rounded=False,
+                ) / float(padding_factor)
+                shell = _relion_round_nonnegative(shell).reshape(-1)
+                inv_tau = jnp.where(shell >= int(minres_map), inv_tau, 0)
+            regularized_filter = filter_flat + inv_tau
+        else:
+            regularized_filter = filter_flat
+
+        if relion_native_shell_floor:
+            avged_reg_volume = _relion_reconstruct_floor_volume(
+                regularized_filter,
+                volume_shape,
+                padding_factor,
+                half_volume=True,
+                max_res_shell=max_res_shell,
+                max_res_shell_bound=max_res_shell_bound,
+            )
+        else:
+            if max_res_shell is None:
+                max_res_shell = volume_shape[0] // 2 - 1
+            avged_reg = _average_over_shells_half(regularized_filter, volume_shape, frequency_shift=0) / 1000
+            avged_reg = avged_reg.at[max_res_shell:].set(avged_reg[max_res_shell - 1])
+            avged_reg_volume = utils.make_radial_image_half(avged_reg, volume_shape).reshape(regularized_filter.shape)
+
+        regularized_filter = jnp.maximum(regularized_filter, avged_reg_volume)
+        regularized_filter = jnp.maximum(regularized_filter, jax_config.EPSILON)
         if input_is_grid:
-            return reg_half.reshape(packed_shape)
-        return reg_half
+            return regularized_filter.reshape(packed_shape)
+        return regularized_filter
 
     if tau is not None:
+        # RELION: invtau2 = 1 / (padding_factor^3 * tau2_fudge * tau2[ires])
         oversampling_factor = padding_factor**3
-        og_volume_shape = tuple(s // padding_factor for s in volume_shape)
-        tau = upscale_tau(tau, padding_factor, og_volume_shape, tau_is_1d=False)
+        tau = _upscale_tau_to_accumulator_layout(
+            tau,
+            padding_factor,
+            native_volume_shape,
+            volume_shape,
+            half_volume=False,
+            tau_is_1d=tau_is_1d,
+        )
         safe_tau = jnp.where(tau > 1e-20, tau, jnp.float32(1.0))
-        inv_tau = 1 / (oversampling_factor * safe_tau)
-        inv_tau = jnp.where((tau < 1e-20) & (filter_flat > 1e-20), 1.0 / (0.001 * filter_flat), inv_tau)
-        inv_tau = jnp.where((tau < 1e-20) & (filter_flat <= 1e-20), 0, inv_tau)
+        inv_tau = 1 / (oversampling_factor * tau2_fudge * safe_tau)
+        inv_tau = jnp.where(tau < 1e-20, zero_tau_inverse(filter_flat), inv_tau)
+        if relion_native_shell_floor and max_res_shell is not None:
+            pixels = fourier_transform_utils.get_k_coordinate_of_each_pixel(
+                np.array(volume_shape),
+                1,
+                scaled=False,
+            )
+            radial_sq = jnp.sum(pixels * pixels, axis=-1)
+            prior_radius = _relion_prior_radius(padding_factor, max_res_shell)
+            inv_tau = jnp.where(radial_sq < prior_radius * prior_radius, inv_tau, 0)
+        if int(minres_map) > 0:
+            pixels = fourier_transform_utils.get_k_coordinate_of_each_pixel(
+                np.array(volume_shape),
+                1,
+                scaled=False,
+            )
+            shell = _relion_round_nonnegative(jnp.linalg.norm(pixels, axis=-1) / float(padding_factor))
+            shell = shell.reshape(-1)
+            inv_tau = jnp.where(shell >= int(minres_map), inv_tau, 0)
         regularized_filter = filter_flat + inv_tau
     else:
         regularized_filter = filter_flat
 
-    if max_res_shell is None:
-        max_res_shell = volume_shape[0] // 2 - 1
-
-    avged_reg = regularization.average_over_shells(regularized_filter, volume_shape, frequency_shift=0) / 1000
-    avged_reg = avged_reg.at[max_res_shell:].set(avged_reg[max_res_shell - 1])
-    avged_reg_volume = utils.make_radial_image(avged_reg, volume_shape).reshape(regularized_filter.shape)
+    if relion_native_shell_floor:
+        avged_reg_volume = _relion_reconstruct_floor_volume(
+            regularized_filter,
+            volume_shape,
+            padding_factor,
+            half_volume=False,
+            max_res_shell=max_res_shell,
+            max_res_shell_bound=max_res_shell_bound,
+        )
+    else:
+        if max_res_shell is None:
+            max_res_shell = volume_shape[0] // 2 - 1
+        avged_reg = regularization.average_over_shells(regularized_filter, volume_shape, frequency_shift=0) / 1000
+        avged_reg = avged_reg.at[max_res_shell:].set(avged_reg[max_res_shell - 1])
+        avged_reg_volume = utils.make_radial_image(avged_reg, volume_shape).reshape(regularized_filter.shape)
 
     regularized_filter = jnp.maximum(regularized_filter, avged_reg_volume)
     regularized_filter = jnp.maximum(regularized_filter, jax_config.EPSILON)
@@ -424,6 +927,243 @@ def _infer_half_volume_layout(arr, volume_shape):
     raise ValueError(f"Could not infer half/full Fourier layout for shape {arr.shape} and volume_shape={volume_shape}")
 
 
+def _relion_reconstruction_padded_shape(volume_shape, padding_factor):
+    """Even real-space padded grid used by RELION for the inverse FFT."""
+
+    volume_shape = tuple(int(s) for s in volume_shape)
+    if len(volume_shape) != 3 or len(set(volume_shape)) != 1:
+        raise ValueError(f"RELION postprocess requires a cubic 3-D volume_shape, got {volume_shape}")
+    padoridim = int(np.floor(float(padding_factor) * float(volume_shape[0]) + 0.5))
+    padoridim += padoridim % 2
+    return (padoridim, padoridim, padoridim)
+
+
+# Public name for the EM package (relax split P2); the private name stays for existing callers.
+relion_reconstruction_padded_shape = _relion_reconstruction_padded_shape
+
+
+def _relion_centered_axis_take_indices(old_dim, new_dim):
+    """Indices for RELION FFTW crop, expressed in recovar centered layout."""
+
+    old_dim = int(old_dim)
+    new_dim = int(new_dim)
+    if new_dim > old_dim:
+        raise ValueError(f"take indices require new_dim <= old_dim, got {new_dim} > {old_dim}")
+    old_shift = (old_dim + 1) // 2
+    freq = _relion_centered_axis_fftw_frequencies(new_dim)
+    raw_old = np.where(freq >= 0, freq, old_dim + freq)
+    return ((raw_old - old_shift) % old_dim).astype(np.int32)
+
+
+# Public name for the EM package (relax split P2); the private name stays for existing callers.
+relion_centered_axis_take_indices = _relion_centered_axis_take_indices
+
+
+def _relion_centered_axis_fftw_frequencies(dim):
+    """FFTW logical frequencies in recovar centered-axis order."""
+
+    dim = int(dim)
+    shift = (dim + 1) // 2
+    hdim = dim // 2 + 1
+    centered = np.arange(dim, dtype=np.int64)
+    raw = (centered + shift) % dim
+    return np.where(raw < hdim, raw, raw - dim)
+
+
+def _relion_centered_axis_scatter_indices(old_dim, new_dim):
+    """Output indices for RELION FFTW padding, expressed in centered layout."""
+
+    old_dim = int(old_dim)
+    new_dim = int(new_dim)
+    if new_dim < old_dim:
+        raise ValueError(f"scatter indices require new_dim >= old_dim, got {new_dim} < {old_dim}")
+    new_shift = (new_dim + 1) // 2
+    freq = _relion_centered_axis_fftw_frequencies(old_dim)
+    raw_new = np.where(freq >= 0, freq, new_dim + freq)
+    return ((raw_new - new_shift) % new_dim).astype(np.int32)
+
+
+def _relion_window_centered_half_fourier(vol_half, old_volume_shape, new_volume_shape):
+    """RELION ``windowFourierTransform`` for centered packed half-volumes."""
+
+    old_volume_shape = tuple(int(s) for s in old_volume_shape)
+    new_volume_shape = tuple(int(s) for s in new_volume_shape)
+    if old_volume_shape == new_volume_shape:
+        return vol_half
+    if len(set(old_volume_shape)) != 1 or len(set(new_volume_shape)) != 1:
+        raise ValueError(
+            "RELION Fourier window currently requires cubic shapes, got "
+            f"old={old_volume_shape}, new={new_volume_shape}"
+        )
+    old_dim = old_volume_shape[0]
+    new_dim = new_volume_shape[0]
+    old_half_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(old_volume_shape)
+    new_half_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(new_volume_shape)
+    vol_half = vol_half.reshape(old_half_shape)
+
+    if new_dim < old_dim:
+        axis_idx = jnp.asarray(_relion_centered_axis_take_indices(old_dim, new_dim), dtype=jnp.int32)
+        col_idx = jnp.arange(new_half_shape[-1], dtype=jnp.int32)
+        out = jnp.take(vol_half, axis_idx, axis=0)
+        out = jnp.take(out, axis_idx, axis=1)
+        return jnp.take(out, col_idx, axis=2)
+
+    scatter_idx = _relion_centered_axis_scatter_indices(old_dim, new_dim)
+    n_cols = old_half_shape[-1]
+    freq = _relion_centered_axis_fftw_frequencies(old_dim).astype(np.int32)
+    col_freq = np.arange(n_cols, dtype=np.int32)
+    max_r2 = int(n_cols - 1) ** 2
+    support = (
+        freq[:, None, None] * freq[:, None, None]
+        + freq[None, :, None] * freq[None, :, None]
+        + col_freq[None, None, :] * col_freq[None, None, :]
+    ) <= max_r2
+    vol_half = jnp.where(jnp.asarray(support), vol_half, jnp.zeros((), dtype=vol_half.dtype))
+
+    # The destination rows are the contiguous block [start, start + old_dim): the
+    # centered frequencies are old_dim consecutive integers whose shifts lie in
+    # (-new_dim, 0), so the modulo in _relion_centered_axis_scatter_indices is
+    # order-preserving and cannot collide. Writing the sorted source into that
+    # block is the same write set as a three-axis scatter, which XLA expanded
+    # into a per-element while loop (32,806,618 sequential trips for 403 -> 760).
+    order = np.argsort(scatter_idx, kind="stable")
+    start = int(scatter_idx[order[0]])
+    if not np.array_equal(order, np.arange(old_dim)):  # even old_dim: one-step roll
+        gather = jnp.asarray(order, dtype=jnp.int32)
+        vol_half = jnp.take(jnp.take(vol_half, gather, axis=0), gather, axis=1)
+    tail = new_dim - start - old_dim
+    return jnp.pad(vol_half, ((start, tail), (start, tail), (0, new_half_shape[-1] - n_cols)))
+
+
+# Public name for the EM package (relax split P2); the private name stays for existing callers.
+relion_window_centered_half_fourier = _relion_window_centered_half_fourier
+
+
+def _relion_pad_centered_half_fourier_to_fftw(vol_half, old_volume_shape, new_volume_shape):
+    """Pad centered packed Fourier data directly into raw FFTW ordering.
+
+    This is the padding branch of :func:`_relion_window_centered_half_fourier`
+    with the two non-packed axes emitted in the layout consumed by
+    ``irfftn``.  Building that layout directly avoids a box-scale
+    ``ifftshift`` copy immediately before a large inverse FFT.
+    """
+
+    old_volume_shape = tuple(int(s) for s in old_volume_shape)
+    new_volume_shape = tuple(int(s) for s in new_volume_shape)
+    if len(set(old_volume_shape)) != 1 or len(set(new_volume_shape)) != 1:
+        raise ValueError(
+            "RELION Fourier padding currently requires cubic shapes, got "
+            f"old={old_volume_shape}, new={new_volume_shape}"
+        )
+    old_dim = old_volume_shape[0]
+    new_dim = new_volume_shape[0]
+    if new_dim <= old_dim:
+        raise ValueError(f"direct FFTW padding requires new_dim > old_dim, got {new_dim} <= {old_dim}")
+
+    old_half_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(old_volume_shape)
+    new_half_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(new_volume_shape)
+    vol_half = vol_half.reshape(old_half_shape)
+    freq = _relion_centered_axis_fftw_frequencies(old_dim).astype(np.int32)
+    raw_axis_idx = jnp.asarray(np.where(freq >= 0, freq, new_dim + freq), dtype=jnp.int32)
+    col_idx = jnp.arange(old_half_shape[-1], dtype=jnp.int32)
+    col_freq = np.arange(old_half_shape[-1], dtype=np.int32)
+    max_r2 = int(old_half_shape[-1] - 1) ** 2
+    support = (
+        freq[:, None, None] * freq[:, None, None]
+        + freq[None, :, None] * freq[None, :, None]
+        + col_freq[None, None, :] * col_freq[None, None, :]
+    ) <= max_r2
+    vol_half = jnp.where(jnp.asarray(support), vol_half, jnp.zeros((), dtype=vol_half.dtype))
+    out = jnp.zeros(new_half_shape, dtype=vol_half.dtype)
+    return out.at[
+        raw_axis_idx[:, None, None],
+        raw_axis_idx[None, :, None],
+        col_idx[None, None, :],
+    ].set(vol_half)
+
+
+def _relion_crop_centered_half_fourier_to_fftw(vol_half, old_volume_shape, new_volume_shape):
+    """Crop centered packed Fourier data directly into raw FFTW ordering.
+
+    This is the cropping branch of :func:`_relion_window_centered_half_fourier`
+    with the two non-packed axes emitted in the layout consumed by
+    ``irfftn``.  Selecting the final order directly avoids retaining a
+    box-scale centered crop while ``ifftshift`` materializes an equally large
+    raw-FFTW copy.
+    """
+
+    old_volume_shape = tuple(int(s) for s in old_volume_shape)
+    new_volume_shape = tuple(int(s) for s in new_volume_shape)
+    if len(set(old_volume_shape)) != 1 or len(set(new_volume_shape)) != 1:
+        raise ValueError(
+            "RELION Fourier cropping currently requires cubic shapes, got "
+            f"old={old_volume_shape}, new={new_volume_shape}"
+        )
+    old_dim = old_volume_shape[0]
+    new_dim = new_volume_shape[0]
+    if new_dim >= old_dim:
+        raise ValueError(f"direct FFTW cropping requires new_dim < old_dim, got {new_dim} >= {old_dim}")
+
+    old_half_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(old_volume_shape)
+    new_half_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(new_volume_shape)
+    vol_half = vol_half.reshape(old_half_shape)
+    centered_axis_idx = _relion_centered_axis_take_indices(old_dim, new_dim)
+    raw_axis_idx = jnp.asarray(np.fft.ifftshift(centered_axis_idx), dtype=jnp.int32)
+    col_idx = jnp.arange(new_half_shape[-1], dtype=jnp.int32)
+    return vol_half[
+        raw_axis_idx[:, None, None],
+        raw_axis_idx[None, :, None],
+        col_idx[None, None, :],
+    ]
+
+
+def _relion_idft3_real_from_fftw_half(vol_half, volume_shape):
+    """Inverse-transform a packed half-volume already in raw FFTW order."""
+
+    axes = (-3, -2, -1)
+    vol = jnp.fft.irfftn(
+        vol_half,
+        s=tuple(int(s) for s in volume_shape),
+        axes=axes,
+        norm=fourier_transform_utils.DEFAULT_FFT_NORM,
+    )
+    return jnp.fft.ifftshift(vol, axes=axes)
+
+
+# Public name for the EM package (relax split P2); the private name stays for existing callers.
+relion_idft3_real_from_fftw_half = _relion_idft3_real_from_fftw_half
+
+
+def _relion_current_size_decenter_mask(volume_shape, radius, *, half_volume):
+    """RELION ``Projector::decenter`` support: include ``r2 <= max_r2``.
+
+    This mask applies to the reconstruction numerator.  RELION copies the
+    exact-radius sphere from ``BackProjector::data`` into ``Fconv`` with an
+    inclusive comparison.  The MAP-prior and radial-floor loops separately
+    use strict ``r2 < max_r2`` support.
+    """
+
+    radial_fn = (
+        fourier_transform_utils.get_grid_of_radial_distances_real
+        if half_volume
+        else fourier_transform_utils.get_grid_of_radial_distances
+    )
+    radial = radial_fn(
+        volume_shape,
+        scaled=False,
+        frequency_shift=0,
+        rounded=False,
+    )
+    # A Python number or a traced scalar (post_process_from_filter_v2's
+    # logical_current_size); integer radii square exactly either way.
+    radius = jnp.asarray(radius, dtype=radial.dtype)
+    return radial * radial <= radius * radius
+
+
+# Public name for the EM package (relax split P2); the private name stays for existing callers.
+relion_current_size_decenter_mask = _relion_current_size_decenter_mask
+
+
 def post_process_from_filter(
     cryo,
     Ft_ctf,
@@ -434,6 +1174,10 @@ def post_process_from_filter(
     grid_correct=True,
     gridding_correct="square",
     kernel_width=1,
+    tau2_fudge=1.0,
+    padding_factor=1,
+    minres_map=0,
+    tau_is_1d=False,
 ):
     """Post-process RELION-style reconstruction from filter weights.
 
@@ -445,17 +1189,23 @@ def post_process_from_filter(
         Ft_ctf,
         F_ty,
         cryo.volume_shape,
-        1,
+        padding_factor,
         tau=tau,
         kernel=kernel,
         use_spherical_mask=use_spherical_mask,
         grid_correct=grid_correct,
         gridding_correct=gridding_correct,
         kernel_width=kernel_width,
+        tau2_fudge=tau2_fudge,
+        minres_map=minres_map,
+        tau_is_1d=tau_is_1d,
     )
 
 
-@functools.partial(jax.jit, static_argnums=[2, 3, 5, 6, 7, 8, 9, 11, 12, 13])
+_POSTPROCESS_STATIC_ARGNUMS = (2, 3, 5, 6, 7, 8, 9, 11, 12, 13, 17, 18, 19, 20, 21, 22, 23, 24, 25)
+
+
+@functools.partial(jax.jit, static_argnums=_POSTPROCESS_STATIC_ARGNUMS)
 def post_process_from_filter_v2(
     Ft_ctf,
     F_ty,
@@ -471,50 +1221,270 @@ def post_process_from_filter_v2(
     return_real_space=False,
     return_half_volume=False,
     input_half_volume=None,
+    tau2_fudge=1.0,
+    gridding_padding_factor=None,
+    gridding_order=None,
+    minres_map=0,
+    current_size=None,
+    accumulator_volume_shape=None,
+    tau_is_1d=False,
+    preserve_output_precision=False,
+    relion_filter_scale=None,
+    return_fftw_half_before_ifft=False,
+    return_wiener_half_before_window=False,
+    fft_compute_dtype=None,
+    logical_current_size=None,
 ):
     """Post-process RELION-style reconstruction from filter weights.
 
     Steps: regularize -> iDFT -> crop -> spherical mask -> grid correct -> DFT.
 
+    ``fft_compute_dtype`` explicitly selects complex64 or complex128 transform
+    arithmetic, independently of denominator and gridding precision. None
+    preserves the historical size-dependent behavior for existing callers.
+
     Supports both full Fourier inputs ``(N0*N1*N2,)`` and packed half-volume
     inputs ``(N0*N1*(N2//2+1),)``.
+
+    The ``tau2_fudge`` parameter (default 1.0) is forwarded to
+    :func:`adjust_regularization_relion_style` and mirrors RELION's
+    ``--tau2_fudge`` flag.
+
+    ``logical_current_size`` (a traced int32 scalar, not a program key) takes
+    the place of ``current_size`` in those support rules while the static
+    ``current_size`` bounds it: a caller that zero-pads the accumulator to a
+    larger stable class and passes the class size as ``current_size`` reuses
+    one program for every current size in the class. The padded voxels lie
+    outside the logical support, so the result is the logical one.
+
+    ``current_size`` (when given) matches the two distinct support rules in
+    RELION's ``BackProjector::reconstruct``. ``Projector::decenter`` copies the
+    numerator on the inclusive sphere ``r2 <= max_r2``, while the MAP prior is
+    added only on the strict sphere ``r2 < max_r2``.  The radial denominator
+    floor is computed from the same strict sphere and clamped to its final
+    native shell outside that support.
+
+    ``return_fftw_half_before_ifft`` is an internal large-grid memory
+    boundary.  It returns the single-precision packed half-volume in raw FFTW
+    order immediately before the padded inverse FFT.  The eager EM
+    reconstruction path host-stages this array and completes post-processing
+    with :func:`_finish_large_relion_postprocess_from_fftw_half`. This both
+    prevents large accumulators and the padded inverse-FFT workspace from
+    overlapping and keeps giant inverse-FFT normalization in the separate
+    executable even when the current-size accumulator itself is compact.
+
+    ``return_wiener_half_before_window`` is the earlier boundary used by the
+    donating large-grid executable. It returns the centered, Wiener-divided
+    accumulator before the crop to the reconstruction grid. The output has
+    the same shape and dtype as the complex numerator so XLA can reuse that
+    input buffer; the eager caller performs the byte-only crop on the host.
     """
-    upsampled_volume_shape = tuple(3 * [og_volume_shape[0] * volume_upsampling_factor])
+    upsampled_volume_shape = (
+        tuple(3 * [og_volume_shape[0] * volume_upsampling_factor])
+        if accumulator_volume_shape is None
+        else tuple(int(s) for s in accumulator_volume_shape)
+    )
+    reconstruction_volume_shape = _relion_reconstruction_padded_shape(
+        og_volume_shape,
+        volume_upsampling_factor,
+    )
+    use_large_accumulator_single_precision = _large_grid_postprocess_single_precision_enabled(
+        int(np.prod(upsampled_volume_shape))
+    )
+    use_large_reconstruction_single_precision = _large_grid_postprocess_single_precision_enabled(
+        int(np.prod(reconstruction_volume_shape))
+    )
+    use_large_postprocess_single_precision = (
+        use_large_accumulator_single_precision or use_large_reconstruction_single_precision
+    )
     if input_half_volume is None:
         input_half_volume = _infer_half_volume_layout(Ft_ctf, upsampled_volume_shape)
+    if return_fftw_half_before_ifft and not (
+        input_half_volume
+        and reconstruction_volume_shape != upsampled_volume_shape
+        and use_large_reconstruction_single_precision
+    ):
+        raise ValueError(
+            "The pre-IFFT host boundary requires a distinct large single-precision "
+            "reconstruction grid in packed half-volume layout"
+        )
+    if return_wiener_half_before_window and not (
+        input_half_volume
+        and reconstruction_volume_shape != upsampled_volume_shape
+        and use_large_accumulator_single_precision
+        and use_large_reconstruction_single_precision
+    ):
+        raise ValueError(
+            "The pre-window Wiener host boundary requires distinct large "
+            "single-precision accumulator/reconstruction grids in packed "
+            "half-volume layout"
+        )
+    if return_fftw_half_before_ifft and return_wiener_half_before_window:
+        raise ValueError("Only one large-grid host boundary may be requested")
+
+    # Wiener spatial mask: match RELION's max_r2 skip when current_size given.
+    current_size_limited = current_size is not None and current_size > 0
+    max_res_shell_bound = None
+    if current_size_limited and logical_current_size is not None:
+        native_r_max = jnp.asarray(logical_current_size, dtype=jnp.int32) // 2
+        wiener_radius = volume_upsampling_factor * native_r_max
+        max_res_shell_bound = int(current_size) // 2
+    elif current_size_limited:
+        wiener_radius = volume_upsampling_factor * (int(current_size) // 2)
+        native_r_max = int(current_size) // 2
+    else:
+        if logical_current_size is not None:
+            raise ValueError("logical_current_size needs a positive static current_size as its bound")
+        wiener_radius = upsampled_volume_shape[0] // 2 - 1
+        native_r_max = None
 
     if input_half_volume:
         packed_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(upsampled_volume_shape)
         Ft_ctf_flat, _ = _as_flat_single_volume(Ft_ctf, packed_shape)
         F_ty_flat, _ = _as_flat_single_volume(F_ty, packed_shape)
-        # Expand canonical half-volume to full before regularization/iDFT.
-        Ft_ctf_flat = (
-            fourier_transform_utils.half_volume_to_full_volume(Ft_ctf_flat, upsampled_volume_shape).reshape(-1).real
-        )
-        F_ty_flat = fourier_transform_utils.half_volume_to_full_volume(F_ty_flat, upsampled_volume_shape).reshape(-1)
+        if use_large_accumulator_single_precision:
+            Ft_ctf_flat = Ft_ctf_flat.real.astype(jnp.float32)
+            F_ty_flat = F_ty_flat.astype(jnp.complex64)
+        if current_size_limited:
+            valid_mask = _relion_current_size_decenter_mask(
+                upsampled_volume_shape,
+                wiener_radius,
+                half_volume=True,
+            )
+        else:
+            valid_mask = fourier_transform_utils.full_volume_to_half_volume(
+                mask.get_radial_mask(upsampled_volume_shape, radius=wiener_radius),
+                upsampled_volume_shape,
+            )
+        valid_indices = valid_mask.reshape(-1).astype(Ft_ctf_flat.real.dtype)
     else:
         Ft_ctf_flat, _ = _as_flat_single_volume(Ft_ctf, upsampled_volume_shape)
         F_ty_flat, _ = _as_flat_single_volume(F_ty, upsampled_volume_shape)
+        if use_large_accumulator_single_precision:
+            Ft_ctf_flat = Ft_ctf_flat.real.astype(jnp.float32)
+            F_ty_flat = F_ty_flat.astype(jnp.complex64)
+        if current_size_limited:
+            valid_mask = _relion_current_size_decenter_mask(
+                upsampled_volume_shape,
+                wiener_radius,
+                half_volume=False,
+            )
+        else:
+            valid_mask = mask.get_radial_mask(upsampled_volume_shape, radius=wiener_radius)
+        valid_indices = valid_mask.reshape(-1).astype(Ft_ctf_flat.real.dtype)
 
-    valid_indices = (
-        mask.get_radial_mask(upsampled_volume_shape, radius=upsampled_volume_shape[0] // 2 - 1)
-        .reshape(-1)
-        .astype(Ft_ctf_flat.real.dtype)
-    )
+    tau_for_filter = tau
+    if use_large_accumulator_single_precision and tau is not None:
+        tau_for_filter = jnp.asarray(tau, dtype=jnp.float32)
 
     Ft_ctf2 = adjust_regularization_relion_style(
         Ft_ctf_flat.real,
         upsampled_volume_shape,
-        tau=tau,
+        tau=tau_for_filter,
         padding_factor=volume_upsampling_factor,
-        max_res_shell=None,
-        half_volume=False,
+        half_volume=input_half_volume,
+        tau2_fudge=tau2_fudge,
+        minres_map=minres_map,
+        max_res_shell=native_r_max,
+        relion_native_shell_floor=current_size_limited,
+        native_volume_shape=og_volume_shape,
+        tau_is_1d=tau_is_1d,
+        relion_filter_scale=relion_filter_scale,
+        large_grid_single_precision=use_large_accumulator_single_precision,
+        max_res_shell_bound=max_res_shell_bound,
     )
     vol = (F_ty_flat * valid_indices) / Ft_ctf2
 
+    # RELION's BackProjector accumulator is often an odd BPref grid
+    # (e.g. 259^3 for a 128^3 box with padding 2), but reconstruct()
+    # first windows that Fourier grid to the even padoridim grid before
+    # inverse FFT.  Preserve that convention here; directly inverse-FFTing
+    # the odd accumulator introduces a common map-origin shift.
+    _maybe_dump_relion_wiener_boundary(
+        Ft_ctf_input=Ft_ctf_flat,
+        F_ty_input=F_ty_flat,
+        regularized_filter=Ft_ctf2,
+        valid_indices=valid_indices,
+        divided_volume=vol,
+        tau=tau_for_filter,
+        input_half_volume=input_half_volume,
+        accumulator_volume_shape=upsampled_volume_shape,
+        reconstruction_volume_shape=reconstruction_volume_shape,
+        current_size=current_size,
+        padding_factor=volume_upsampling_factor,
+        tau2_fudge=tau2_fudge,
+        minres_map=minres_map,
+        tau_is_1d=tau_is_1d,
+    )
+    if use_large_postprocess_single_precision:
+        # Preserve the compact accumulator's Wiener arithmetic, then cast at
+        # the boundary where it is scattered onto the much larger inverse-FFT
+        # grid.  A float64 tau must not promote a box-scale padded FFT to a
+        # complex128 allocation merely because the current-size accumulator
+        # itself is small.
+        vol = vol.astype(jnp.complex64)
+    if return_wiener_half_before_window:
+        return vol.reshape(F_ty.shape)
+
+    if fft_compute_dtype is not None:
+        fft_compute_dtype = jnp.dtype(fft_compute_dtype)
+        if fft_compute_dtype not in (jnp.dtype(jnp.complex64), jnp.dtype(jnp.complex128)):
+            raise ValueError("fft_compute_dtype must be complex64 or complex128")
+        vol = vol.astype(fft_compute_dtype)
+
     # iDFT → crop to original size
-    vol = fourier_transform_utils.get_idft3(vol.reshape(upsampled_volume_shape))
-    vol = padding.unpad_volume_spatial_domain(vol, upsampled_volume_shape[0] - og_volume_shape[0])
+    if input_half_volume:
+        vol_half = vol.reshape(packed_shape)
+        if reconstruction_volume_shape != upsampled_volume_shape:
+            if use_large_reconstruction_single_precision:
+                if reconstruction_volume_shape[0] > upsampled_volume_shape[0]:
+                    vol_half = _relion_pad_centered_half_fourier_to_fftw(
+                        vol_half,
+                        upsampled_volume_shape,
+                        reconstruction_volume_shape,
+                    )
+                else:
+                    vol_half = _relion_crop_centered_half_fourier_to_fftw(
+                        vol_half,
+                        upsampled_volume_shape,
+                        reconstruction_volume_shape,
+                    )
+                if return_fftw_half_before_ifft:
+                    return vol_half
+                vol = _relion_idft3_real_from_fftw_half(vol_half, reconstruction_volume_shape)
+            else:
+                vol_half = _relion_window_centered_half_fourier(
+                    vol_half,
+                    upsampled_volume_shape,
+                    reconstruction_volume_shape,
+                )
+                vol = fourier_transform_utils.get_idft3_real(
+                    vol_half,
+                    volume_shape=reconstruction_volume_shape,
+                )
+        else:
+            vol = fourier_transform_utils.get_idft3_real(
+                vol_half,
+                volume_shape=reconstruction_volume_shape,
+            )
+    else:
+        if reconstruction_volume_shape != upsampled_volume_shape:
+            vol_half = fourier_transform_utils.full_volume_to_half_volume(
+                vol.reshape(upsampled_volume_shape),
+                upsampled_volume_shape,
+            )
+            vol_half = _relion_window_centered_half_fourier(
+                vol_half,
+                upsampled_volume_shape,
+                reconstruction_volume_shape,
+            )
+            vol = fourier_transform_utils.get_idft3_real(
+                vol_half,
+                volume_shape=reconstruction_volume_shape,
+            )
+        else:
+            vol = fourier_transform_utils.get_idft3(vol.reshape(upsampled_volume_shape))
+    vol = padding.unpad_volume_spatial_domain(vol, reconstruction_volume_shape[0] - og_volume_shape[0])
 
     if use_spherical_mask:
         vol, _ = mask.soft_mask_outside_map(vol, cosine_width=3)
@@ -522,21 +1492,43 @@ def post_process_from_filter_v2(
     if volume_mask is not None:
         vol = vol * volume_mask
 
+    if use_large_postprocess_single_precision:
+        vol = vol.astype(jnp.complex64 if np.issubdtype(vol.dtype, np.complexfloating) else jnp.float32)
+
     if grid_correct:
-        order = 1 if kernel == "triangular" else 0
+        order = gridding_order if gridding_order is not None else (1 if kernel == "triangular" else 0)
         grid_fn = griddingCorrect_square if gridding_correct == "square" else griddingCorrect
-        vol, _ = grid_fn(
-            vol.reshape(og_volume_shape), og_volume_shape[0], volume_upsampling_factor / kernel_width, order=order
-        )
+        gc_pf = gridding_padding_factor if gridding_padding_factor is not None else volume_upsampling_factor
+        vol, _ = grid_fn(vol.reshape(og_volume_shape), og_volume_shape[0], gc_pf / kernel_width, order=order)
+        if use_large_postprocess_single_precision:
+            vol = vol.astype(jnp.complex64 if np.issubdtype(vol.dtype, np.complexfloating) else jnp.float32)
+
+    if fft_compute_dtype is not None:
+        fft_real_dtype = jnp.float32 if fft_compute_dtype == jnp.dtype(jnp.complex64) else jnp.float64
+        vol = vol.astype(fft_compute_dtype if np.issubdtype(vol.dtype, np.complexfloating) else fft_real_dtype)
 
     if return_real_space:
-        return vol.real.astype(Ft_ctf2.real.dtype)
+        return vol.real.astype(Ft_ctf2.real.dtype if fft_compute_dtype is None else fft_real_dtype)
 
-    vol = fourier_transform_utils.get_dft3(vol.reshape(og_volume_shape))
+    if input_half_volume:
+        vol = fourier_transform_utils.get_dft3_real(vol.reshape(og_volume_shape))
+    else:
+        vol = fourier_transform_utils.get_dft3(vol.reshape(og_volume_shape))
     if return_half_volume:
-        vol = fourier_transform_utils.full_volume_to_half_volume(vol, og_volume_shape)
-        return vol.reshape(-1).astype(F_ty_flat.dtype)
-    return vol.astype(F_ty_flat.dtype)
+        if not input_half_volume:
+            vol = fourier_transform_utils.full_volume_to_half_volume(vol, og_volume_shape)
+        vol = vol.reshape(-1)
+        return vol if preserve_output_precision else vol.astype(F_ty_flat.dtype)
+    if input_half_volume:
+        vol = fourier_transform_utils.half_volume_to_full_volume(vol, og_volume_shape)
+    return vol if preserve_output_precision else vol.astype(F_ty_flat.dtype)
+
+
+_post_process_from_filter_v2_donate_numerator = jax.jit(
+    post_process_from_filter_v2.__wrapped__,
+    static_argnums=_POSTPROCESS_STATIC_ARGNUMS,
+    donate_argnums=(1,),
+)
 
 
 def relion_reconstruct(
@@ -549,6 +1541,7 @@ def relion_reconstruct(
     grid_correct=True,
     gridding_correct="square",
     tau=None,
+    tau2_fudge=1.0,
 ):
     """Full mean reconstruction pipeline: accumulate → post-process."""
     Ft_ctf, F_ty = relion_style_triangular_kernel(
@@ -570,5 +1563,6 @@ def relion_reconstruct(
         grid_correct=grid_correct,
         gridding_correct=gridding_correct,
         kernel_width=1,
+        tau2_fudge=tau2_fudge,
     )
     return estimate, Ft_ctf

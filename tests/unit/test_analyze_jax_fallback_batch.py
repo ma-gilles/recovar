@@ -5,15 +5,14 @@ Three behaviors:
    and propagates to ``set_gpu_memory_limit()``.
 2. Heterogeneity-kernel memory budget is scaled down through the shared
    fallback-path helper when custom CUDA is disabled.
-3. ``_lib_is_stale`` detects when the cached ``.so`` is older than its source,
-   triggering a rebuild on next import.
+3. ``_lib_is_stale`` detects when the cached ``.so`` was not built from the current
+   sources (recorded content hash), triggering a rebuild on next import.
 """
 
 from __future__ import annotations
 
 import argparse
 import logging
-import time
 
 import pytest
 
@@ -92,14 +91,20 @@ def test_gpu_memory_arg_in_command(cmd_name):
     these need a project dir or other args to run end-to-end.
     """
     import subprocess
-    import sys
+
+    from conftest import repo_python_command, repo_subprocess_env
 
     result = subprocess.run(
-        [sys.executable, "-m", f"recovar.commands.{cmd_name}", "--help"],
+        repo_python_command("-m", f"recovar.commands.{cmd_name}", "--help"),
+        env=repo_subprocess_env(),
         capture_output=True,
         text=True,
-        timeout=30,
+        # Wall-clock guard only: a cold `--help` import takes 15-20 s alone and
+        # exceeded 30 s in a 32-way parallel CPU sweep.
+        timeout=120,
     )
+    # A failed child (including its import-root check) must not pass on text alone.
+    assert result.returncode == 0, result.stderr[-2000:]
     # Some commands print help to stdout, some to stderr depending on argparse
     # version + sys.exit code. Check both.
     combined = result.stdout + result.stderr
@@ -144,43 +149,54 @@ def test_effective_heterogeneity_memory_budget_scales_for_fallback(monkeypatch, 
 # ---------------------------------------------------------------------------
 
 
-def test_lib_is_stale_when_source_newer(tmp_path, monkeypatch):
-    """If cuda_backproject.cu is newer than the .so, _lib_is_stale must
-    return True so the auto-build path rebuilds."""
+def _fake_sources(tmp_path, monkeypatch):
     from recovar import cuda_backproject
 
     fake_lib_dir = tmp_path / "cuda"
     fake_lib_dir.mkdir()
-    src = fake_lib_dir / "cuda_backproject.cu"
-    mk = fake_lib_dir / "Makefile"
-    so = tmp_path / "libcuda_backproject.so"
-
-    # Write so first (older), then write source (newer).
-    so.write_bytes(b"old")
-    time.sleep(0.05)
-    src.write_text("// source\n")
-    mk.write_text("# makefile\n")
-
+    (fake_lib_dir / "cuda_backproject.cu").write_text("// source\n")
+    (fake_lib_dir / "Makefile").write_text("# makefile\n")
     monkeypatch.setattr(cuda_backproject, "_LIB_DIR", fake_lib_dir)
+    monkeypatch.setattr(cuda_backproject, "_lib_missing_required_symbols", lambda _path: None)
+    return fake_lib_dir
+
+
+def test_lib_is_stale_when_sources_changed_since_build(tmp_path, monkeypatch):
+    """A library whose recorded source digest no longer matches must be rebuilt."""
+    from recovar import cuda_backproject, cuda_build
+
+    fake_lib_dir = _fake_sources(tmp_path, monkeypatch)
+    so = tmp_path / "libcuda_backproject.so"
+    so.write_bytes(b"build")
+    cuda_build.digest_path(so).write_text(cuda_backproject._source_digest())
+    assert cuda_backproject._lib_is_stale(so) is False
+
+    (fake_lib_dir / "cuda_backproject.cu").write_text("// changed source\n")
     assert cuda_backproject._lib_is_stale(so) is True
 
 
-def test_lib_is_not_stale_when_source_older(tmp_path, monkeypatch):
+def test_lib_without_recorded_digest_is_stale(tmp_path, monkeypatch):
     from recovar import cuda_backproject
 
-    fake_lib_dir = tmp_path / "cuda"
-    fake_lib_dir.mkdir()
-    src = fake_lib_dir / "cuda_backproject.cu"
-    mk = fake_lib_dir / "Makefile"
+    _fake_sources(tmp_path, monkeypatch)
     so = tmp_path / "libcuda_backproject.so"
+    so.write_bytes(b"build of unknown provenance")
+    assert cuda_backproject._lib_is_stale(so) is True
 
-    # Source first (older), then .so (newer).
-    src.write_text("// source\n")
-    mk.write_text("# makefile\n")
-    time.sleep(0.05)
-    so.write_bytes(b"new build")
 
-    monkeypatch.setattr(cuda_backproject, "_LIB_DIR", fake_lib_dir)
+def test_lib_is_not_stale_when_identical_sources_are_newer(tmp_path, monkeypatch):
+    """A fresh checkout gives identical sources a newer mtime; that alone must not rebuild."""
+    import os
+
+    from recovar import cuda_backproject, cuda_build
+
+    fake_lib_dir = _fake_sources(tmp_path, monkeypatch)
+    so = tmp_path / "libcuda_backproject.so"
+    so.write_bytes(b"build")
+    cuda_build.digest_path(so).write_text(cuda_backproject._source_digest())
+    old = so.stat().st_mtime - 10_000
+    os.utime(so, (old, old))
+    (fake_lib_dir / "cuda_backproject.cu").write_text("// source\n")  # same bytes, newer mtime
     assert cuda_backproject._lib_is_stale(so) is False
 
 
@@ -196,6 +212,7 @@ def test_lib_is_stale_handles_missing_source(tmp_path, monkeypatch):
     so.write_bytes(b"build")
 
     monkeypatch.setattr(cuda_backproject, "_LIB_DIR", fake_lib_dir)
+    monkeypatch.setattr(cuda_backproject, "_lib_missing_required_symbols", lambda _path: None)
     # Without sources, can't determine staleness — must default to "not stale"
     # so we don't infinite-rebuild.
     assert cuda_backproject._lib_is_stale(so) is False

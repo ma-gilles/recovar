@@ -416,7 +416,15 @@ def _hint_xla_autotuner_failed(ctx: DiagnosticContext, raw_text: str) -> ErrorHi
         ),
         suggestions=[
             'export XLA_FLAGS="$XLA_FLAGS --xla_gpu_autotune_level=0" && recovar pipeline ... '
-            "(disables ALL XLA autotuning; ~5-15% slower but eliminates this class of failure)",
+            "(disables ALL XLA autotuning and eliminates this class of failure). "
+            "What it costs depends on the path. On the EM path it is free or "
+            "better: measured on the 10k/256 matched harnesses it removes 6-11 s "
+            "of compile per two-iteration pair and costs 0 +- 0.5 s per steady "
+            "iteration, which is why the EM entry points now set it by default. "
+            "The heterogeneity and PPCA paths this hint fires on have not been "
+            "measured, and their hot path is one large float32 einsum rather "
+            "than many small fused programs, which is where autotuning a GEMM "
+            "can pay for itself, so expect some steady-state cost there.",
         ],
         diagnostic_context=_format_memory_context(ctx),
     )

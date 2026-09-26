@@ -48,6 +48,8 @@ class TestResultPaths:
         assert rp.params.endswith("model/params.pkl")
         assert rp.embeddings.endswith("model/embeddings.pkl")
         assert rp.covariance_cols.endswith("model/covariance_cols.pkl")
+        assert rp.ppca_loadings.endswith("model/ppca_loadings.npy")
+        assert rp.ppca_iteration_data.endswith("model/ppca_iteration_data.pkl")
         assert rp.halfsets.endswith("model/halfsets.pkl")
         assert rp.metadata.endswith("model/metadata.json")
 

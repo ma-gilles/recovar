@@ -29,6 +29,7 @@ def _make_args(tmp_path, *, tilt_series=False):
         delete_rounds=False,
         use_contrast_detection=False,
         use_junk_detection=False,
+        junk_detection_every_round=False,
         no_plots=True,
         low_contrast_threshold=0.1,
         high_contrast_threshold=3.5,
@@ -84,6 +85,37 @@ def _make_args(tmp_path, *, tilt_series=False):
         keep_intermediate=False,
         test_covar_options=False,
     )
+
+
+@pytest.mark.parametrize(
+    ("round_number", "every_round", "expected"),
+    [
+        (1, False, True),
+        (2, False, False),
+        (3, False, False),
+        (1, True, True),
+        (2, True, True),
+        (3, True, True),
+    ],
+)
+def test_pipeline_with_outliers_junk_detection_round_schedule(
+    tmp_path, round_number, every_round, expected
+):
+    args = _make_args(tmp_path)
+    args.use_junk_detection = True
+    args.junk_detection_every_round = every_round
+    assert (
+        pipeline_with_outliers._use_junk_detection_for_round(args, round_number)
+        is expected
+    )
+
+
+def test_pipeline_with_outliers_junk_detection_disabled_for_all_rounds(tmp_path):
+    args = _make_args(tmp_path)
+    args.use_junk_detection = False
+    args.junk_detection_every_round = True
+    assert not pipeline_with_outliers._use_junk_detection_for_round(args, 1)
+    assert not pipeline_with_outliers._use_junk_detection_for_round(args, 2)
 
 
 def _write_round_artifacts(round_outdir):

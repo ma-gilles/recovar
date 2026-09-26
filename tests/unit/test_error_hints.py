@@ -9,16 +9,6 @@ import pytest
 pytestmark = [pytest.mark.unit]
 
 
-def _ctx_with(monkeypatch, **overrides):
-    """Return a DiagnosticContext patched with whatever the test cares about."""
-    from recovar.utils import error_hints
-
-    base = error_hints.DiagnosticContext()
-    for k, v in overrides.items():
-        setattr(base, k, v)
-    return base
-
-
 def test_oom_hint_diagnoses_and_recommends_one_fix():
     """With an empty context (no physical info, no plan), we fall through
     to the generic branch and recommend --gpu-budget-gb + --adaptive-n-pcs.

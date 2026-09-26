@@ -2,6 +2,7 @@ import numpy as np
 import pytest
 
 pytest.importorskip("jax")
+import jax.numpy as jnp
 
 from recovar.reconstruction import regularization
 
@@ -32,13 +33,22 @@ def test_jax_scipy_nd_image_mean_complex_path_returns_complex64():
 
 
 def test_get_fsc_gpu_returns_finite_values():
-    shape = (4, 4, 4)
+    shape = (8, 8, 8)
     rng = np.random.default_rng(0)
     v1 = (rng.normal(size=np.prod(shape)) + 1j * rng.normal(size=np.prod(shape))).astype(np.complex64)
     v2 = (rng.normal(size=np.prod(shape)) + 1j * rng.normal(size=np.prod(shape))).astype(np.complex64)
     fsc = regularization.get_fsc_gpu(v1, v2, shape, substract_shell_mean=False, frequency_shift=0)
     fsc = np.asarray(fsc)
     assert fsc.ndim == 1
+    assert np.all(np.isfinite(fsc))
+    assert fsc[0] == fsc[1]
+
+
+def test_get_fsc_gpu_single_shell_is_finite():
+    shape = (4, 4, 4)
+    volume = np.ones(np.prod(shape), dtype=np.complex64)
+    fsc = np.asarray(regularization.get_fsc_gpu(volume, volume, shape))
+    assert fsc.shape == (1,)
     assert np.all(np.isfinite(fsc))
 
 
@@ -88,6 +98,25 @@ def test_compute_fsc_prior_gpu_v2_and_prior_iteration_are_finite():
     assert f.ndim == 1
     assert np.all(np.isfinite(p))
     assert np.all(np.isfinite(f))
+
+
+def test_prior_iteration_batch_maps_prior_iteration_over_leading_axis():
+    shape = (4, 4, 4)
+    n = int(np.prod(shape))
+    rng = np.random.default_rng(3)
+    h = np.abs(rng.normal(size=(2, 2, n))).astype(np.float32) + 1.0
+    b = (rng.normal(size=(2, 2, n)) + 1j * rng.normal(size=(2, 2, n))).astype(np.complex64)
+    shifts = np.zeros((2, 3), dtype=np.int32)
+    priors = np.ones((2, n), dtype=np.float32)
+
+    p, f = regularization.prior_iteration_batch(h[0], h[1], b[0], b[1], shifts, priors, False, shape, 3)
+
+    for k in range(2):
+        p_k, f_k = regularization.prior_iteration(
+            h[0, k], h[1, k], b[0, k], b[1, k], shifts[k], priors[k], False, shape, 3
+        )
+        np.testing.assert_allclose(np.asarray(p)[k], np.asarray(p_k), rtol=1e-6)
+        np.testing.assert_allclose(np.asarray(f)[k], np.asarray(f_k), rtol=1e-6)
 
 
 def test_prior_iteration_relion_style_and_downsample_from_fsc():
@@ -339,3 +368,5 @@ def test_compute_fsc_prior_gpu_v2_on_gpu(gpu_device):
     np.testing.assert_allclose(cpu_prior, gpu_prior, atol=1e-4, rtol=1e-4)
     np.testing.assert_allclose(cpu_fsc, gpu_fsc, atol=1e-4, rtol=1e-4)
     np.testing.assert_allclose(cpu_avg, gpu_avg, atol=1e-4, rtol=1e-4)
+
+

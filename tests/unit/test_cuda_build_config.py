@@ -1,4 +1,5 @@
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -70,6 +71,32 @@ def _run_make(wrapper: Path, *targets: str, env: dict[str, str]):
         text=True,
         capture_output=True,
         check=False,
+    )
+
+
+def test_local_cuda_includes_are_build_and_package_inputs():
+    import recovar.cuda_backproject as cb
+
+    # Includes resolve relative to the including file; names are kept relative to recovar/cuda, as the
+    # build lists them.
+    pending = ["cuda_backproject.cu"]
+    sources = set()
+    while pending:
+        name = pending.pop()
+        if name in sources:
+            continue
+        sources.add(name)
+        including_dir = os.path.dirname(name)
+        for include in re.findall(r'^#include "([^"\n]+)"', (_CUDA_DIR / name).read_text(), re.M):
+            candidate = os.path.normpath(os.path.join(including_dir, include))
+            if (_CUDA_DIR / candidate).is_file():
+                pending.append(candidate)
+    dependencies = _MAKEFILE.read_text().split("$(LIB):", 1)[1].split("|", 1)[0].split()
+    manifest = (_REPO_ROOT / "MANIFEST.in").read_text().splitlines()
+    assert sources <= set(cb._CUDA_BUILD_SOURCE_NAMES)
+    assert sources <= set(dependencies)
+    assert all(
+        f"include {os.path.normpath(os.path.join('recovar/cuda', name))}" in manifest for name in sources
     )
 
 
@@ -162,7 +189,7 @@ def test_build_recipe_compiles_cuda_source_not_check_target(tmp_path):
     result = _run_make(wrapper, "-n", "all", env=env)
 
     assert result.returncode == 0, result.stderr
-    assert " -o libcuda_backproject.so cuda_backproject.cu" in result.stdout
+    assert " -o libcuda_backproject.so cuda_backproject.cu -lcuda" in result.stdout
     assert "check-nvcc" not in result.stdout.splitlines()[-1]
 
 
@@ -186,16 +213,23 @@ def test_build_custom_cuda_writes_requested_output(monkeypatch, tmp_path):
     target = (tmp_path / "cache" / "libcuda_backproject.so").resolve()
     captured = {}
 
-    def fake_check_call(cmd):
+    def fake_check_call(cmd, *, env):
         captured["cmd"] = cmd
-        target.write_text("stub")
+        captured["env"] = env
+        Path(cmd[-1].removeprefix("LIB=")).write_text("stub")
 
     monkeypatch.setattr(cb.subprocess, "check_call", fake_check_call)
     result = cb.build_custom_cuda(output_path=target)
 
     assert result == target
-    assert target.exists()
-    assert captured["cmd"][-1] == f"LIB={target}"
+    assert target.read_text() == "stub"
+    # make writes a temporary file beside the target, which is then renamed over it.
+    built = Path(captured["cmd"][-1].removeprefix("LIB="))
+    assert built.parent == target.parent and built != target and not built.exists()
+    from recovar import cuda_build
+
+    assert cuda_build.built_from(target, cb._source_digest())
+    assert captured["env"]["PATH"] == os.environ["PATH"]
 
 
 def test_build_custom_cuda_force_rebuilds_even_when_output_exists(monkeypatch, tmp_path):
@@ -206,17 +240,21 @@ def test_build_custom_cuda_force_rebuilds_even_when_output_exists(monkeypatch, t
     target.write_text("old")
     captured = {}
 
-    def fake_check_call(cmd):
+    def fake_check_call(cmd, *, env):
         captured["cmd"] = cmd
-        target.write_text("new")
+        captured["env"] = env
+        Path(cmd[-1].removeprefix("LIB=")).write_text("new")
 
     monkeypatch.setattr(cb.subprocess, "check_call", fake_check_call)
-    result = cb.build_custom_cuda(output_path=target, force=True)
+    with open(target) as reader:  # a process still using the old library
+        result = cb.build_custom_cuda(output_path=target, force=True)
+        assert reader.read() == "old"
 
     assert result == target
     assert target.read_text() == "new"
     assert captured["cmd"][:3] == ["make", "-B", "-C"]
-    assert captured["cmd"][-1] == f"LIB={target}"
+    assert captured["cmd"][-1] != f"LIB={target}"
+    assert captured["env"]["PATH"] == os.environ["PATH"]
 
 
 def test_ensure_lib_path_autobuilds_when_missing(monkeypatch, tmp_path):
@@ -259,6 +297,42 @@ def test_cuda_available_records_load_error_for_followup_failure_message(monkeypa
     assert cb.cuda_available() is False
     assert cb._auto_build_error is error
     assert "dlopen failed" in str(cb.cuda_unavailable_error())
+
+
+def test_cuda_available_accepts_cuda_platform_name(monkeypatch):
+    import recovar.cuda_backproject as cb
+
+    monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
+    monkeypatch.setattr(cb, "_cuda_ok", None)
+    monkeypatch.setattr(cb, "_auto_build_error", None)
+    monkeypatch.setattr(cb.jax, "devices", lambda: [types.SimpleNamespace(platform="cuda")])
+    monkeypatch.setattr(cb, "_ensure_ffi", lambda: None)
+
+    assert cb.cuda_available() is True
+
+
+@pytest.mark.parametrize(("platform", "expected"), [("gpu", True), ("cuda", True), ("cpu", False)])
+def test_slicing_gpu_detection_uses_visible_device_platform(monkeypatch, platform, expected):
+    import recovar.core.slicing as core_slicing
+
+    core_slicing._on_gpu.cache_clear()
+    monkeypatch.setattr(core_slicing.jax, "devices", lambda: [types.SimpleNamespace(platform=platform)])
+    try:
+        assert core_slicing._on_gpu() is expected
+    finally:
+        core_slicing._on_gpu.cache_clear()
+
+
+def test_cuda_available_respects_runtime_disable_without_poisoning_cached_success(monkeypatch):
+    import recovar.cuda_backproject as cb
+
+    monkeypatch.setattr(cb, "_cuda_ok", True)
+    monkeypatch.setenv("RECOVAR_DISABLE_CUDA", "1")
+    assert cb.cuda_available() is False
+    assert cb._cuda_ok is True
+
+    monkeypatch.delenv("RECOVAR_DISABLE_CUDA")
+    assert cb.cuda_available() is True
 
 
 def test_slicing_uses_custom_cuda_by_default_on_gpu(monkeypatch):

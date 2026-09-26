@@ -6,15 +6,16 @@ import logging
 import jax
 import jax.numpy as jnp
 import numpy as np
-from recovar.utils.nvtx_shim import nvtx
 
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar import core, jax_config
+from recovar.utils.nvtx_shim import nvtx
 
 logger = logging.getLogger(__name__)
 
 # NVTX domain for regularization operations
 NVTX_DOMAIN_REG = "regularization"
+
 
 ## Mean prior computation
 
@@ -73,22 +74,35 @@ def compute_prior_quantites(halfset_datasets, cov_noise, batch_size, for_whiteni
 
 
 def compute_relion_prior(
-    halfset_datasets, cov_noise, image0, image1, batch_size, estimate_merged_SNR=False, noise_level=None
+    halfset_datasets,
+    cov_noise,
+    image0,
+    image1,
+    batch_size,
+    estimate_merged_SNR=False,
+    noise_level=None,
+    tau2_fudge=1.0,
 ):
     """Compute a RELION-style spectral prior from two half-set reconstructions.
 
     Args:
-        halfset_datasets: Pair of half-set datasets.
-        cov_noise: Scalar noise variance.
-        image0: First half-map (Fourier coefficients).
-        image1: Second half-map (Fourier coefficients).
-        batch_size: GPU batch size for noise estimation.
-        estimate_merged_SNR: Estimate SNR from merged map.
-        noise_level: Pre-computed noise level (skips estimation if given).
+        halfset_datasets (Sequence[CryoEMDataset]): Pair of half-set datasets.
+        cov_noise (numpy.ndarray | jax.Array): Noise variance broadcastable to the flattened image
+            grid.
+        image0 (numpy.ndarray | jax.Array): First half-map (Fourier coefficients).
+        image1 (numpy.ndarray | jax.Array): Second half-map (Fourier coefficients).
+        batch_size (int): GPU batch size for noise estimation.
+        estimate_merged_SNR (bool): Estimate SNR from merged map.
+        noise_level (numpy.ndarray | jax.Array | None): Precomputed noise variance per radial shell;
+            selects the legacy
+            direct-noise prior calculation and skips noise estimation.
+        tau2_fudge (float): RELION's ``--tau2_fudge`` parameter (default 1.0).
+            Multiplies the SSNR before computing tau2.
 
     Returns:
-        Tuple ``(prior, fsc, prior_avg)`` — the spectral prior, FSC
-        curve, and averaged prior.
+        prior (jax.Array): Spectral variance prior on the flattened volume grid.
+        fsc (jax.Array): Clipped shell FSC, adjusted for merged SNR if requested.
+        prior_avg (jax.Array): Spectral variance prior per radial shell.
     """
 
     if noise_level is not None:
@@ -105,6 +119,7 @@ def compute_relion_prior(
         bottom_of_fraction,
         estimate_merged_SNR=estimate_merged_SNR,
         from_noise_level=from_noise_level,
+        tau2_fudge=tau2_fudge,
     )
 
 
@@ -112,14 +127,15 @@ def get_fsc(vol1, vol2, volume_shape, substract_shell_mean=False, frequency_shif
     """Compute the Fourier Shell Correlation between two volumes.
 
     Args:
-        vol1: First volume (flattened Fourier coefficients).
-        vol2: Second volume (flattened Fourier coefficients).
-        volume_shape: Tuple ``(N, N, N)`` giving the 3-D grid dimensions.
-        substract_shell_mean: Subtract per-shell mean before correlating.
-        frequency_shift: Shift applied to frequency indices.
+        vol1 (numpy.ndarray | jax.Array): First volume (flattened Fourier coefficients).
+        vol2 (numpy.ndarray | jax.Array): Second volume (flattened Fourier coefficients).
+        volume_shape (tuple[int, int, int]): Tuple ``(N, N, N)`` giving the 3-D grid dimensions.
+        substract_shell_mean (bool): Subtract per-shell mean before correlating.
+        frequency_shift (float): Shift applied to frequency indices.
 
     Returns:
-        1-D array of FSC values, one per radial shell.
+        fsc (jax.Array): FSC for ``volume_shape[0] // 2 - 1`` radial shells.
+            Nonfinite values become zero; DC is copied from the next shell.
     """
     return get_fsc_gpu(vol1, vol2, volume_shape, substract_shell_mean, frequency_shift)
 
@@ -148,7 +164,11 @@ def get_fsc_gpu(vol1, vol2, volume_shape, substract_shell_mean=False, frequency_
     bot = jnp.sqrt(bot1 * bot2)
     fsc = top_avg / bot
     fsc = jnp.where(~jnp.isfinite(fsc), 0, fsc)
-    fsc = fsc.at[0].set(fsc[1])  # Always set this 1st shell?
+    # The generic RECOVAR estimator extends the first measured shell through
+    # DC. RELION-specific estimators set FSC[0] = 1 explicitly in their own
+    # helpers.
+    if fsc.shape[0] > 1:
+        fsc = fsc.at[0].set(fsc[1])
     return fsc
 
 
@@ -244,6 +264,7 @@ def compute_fsc_prior_gpu(
     substract_shell_mean=False,
     frequency_shift=0,
     from_noise_level=False,
+    tau2_fudge=1.0,
 ):
     epsilon = jax_config.FSC_ZERO_THRESHOLD
     # FSC top:
@@ -258,8 +279,8 @@ def compute_fsc_prior_gpu(
     if estimate_merged_SNR:
         fsc = 2 * fsc / (1 + fsc)
 
-    # SNR = jnp.where(fsc < 1 - epsilon, fsc / ( 1 - fsc), jnp.inf)
-    SNR = fsc / (1 - fsc)
+    # RELION: SSNR = myfsc / (1 - myfsc) * tau2_fudge
+    SNR = fsc / (1 - fsc) * tau2_fudge
 
     # Bottom of fraction
     if from_noise_level:
@@ -298,8 +319,21 @@ def downsample_lhs(lhs, volume_shape, upsampling_factor=1):
 @functools.partial(jax.jit, static_argnums=[0, 6, 7])
 @nvtx.annotate("compute_fsc_prior_gpu_v2", color="cyan", domain=NVTX_DOMAIN_REG)
 def compute_fsc_prior_gpu_v2(
-    volume_shape, image0, image1, lhs, prior, frequency_shift, substract_shell_mean=False, upsampling_factor=1
+    volume_shape,
+    image0,
+    image1,
+    lhs,
+    prior,
+    frequency_shift,
+    substract_shell_mean=False,
+    upsampling_factor=1,
+    tau2_fudge=1.0,
 ):
+    """Compute a RELION-style shell regularization tau from half-set FSC.
+
+    This returns a reconstruction regularizer, not the raw shell signal
+    variance. See docs/math/ppca_variance_prior_notes.md.
+    """
     epsilon = jax_config.FSC_ZERO_THRESHOLD
     # FSC top:
     fsc_raw = get_fsc_gpu(image0, image1, volume_shape, substract_shell_mean, frequency_shift)
@@ -307,7 +341,8 @@ def compute_fsc_prior_gpu_v2(
     fsc = jnp.where(fsc_raw > epsilon, fsc_raw, epsilon)
     fsc = jnp.where(fsc < 1 - epsilon, fsc, 1 - epsilon)
 
-    SNR = fsc / (1 - fsc)
+    # RELION: SSNR = myfsc / (1 - myfsc) * tau2_fudge
+    SNR = fsc / (1 - fsc) * tau2_fudge
 
     # Gotta somehow downsample lhs by a factor of 2
     upsampled_volume_shape = tuple([upsampling_factor * i for i in volume_shape])
@@ -393,7 +428,7 @@ def prior_iteration(
 from recovar.reconstruction import relion_functions
 
 
-@functools.partial(jax.jit, static_argnums=[6, 7, 8, 9, 10, 12, 13])
+@functools.partial(jax.jit, static_argnums=[6, 7, 8, 9, 10, 12, 13, 15])
 @nvtx.annotate("prior_iteration_relion_style", color="red", domain=NVTX_DOMAIN_REG)
 def prior_iteration_relion_style(
     H0,
@@ -410,6 +445,8 @@ def prior_iteration_relion_style(
     volume_mask=None,
     prior_iterations=3,
     downsample_from_fsc_flag=False,
+    tau2_fudge=1.0,
+    volume_upsampling_factor=1,
 ):
     # assert substract_shell_mean == False
     # assert jnp.linalg.norm(frequency_shift) < 1e-8
@@ -422,7 +459,7 @@ def prior_iteration_relion_style(
             H0,
             B0,
             volume_shape,
-            volume_upsampling_factor=1,
+            volume_upsampling_factor=volume_upsampling_factor,
             tau=prior,
             kernel=kernel,
             use_spherical_mask=use_spherical_mask,
@@ -430,12 +467,13 @@ def prior_iteration_relion_style(
             gridding_correct="square",
             kernel_width=1,
             volume_mask=volume_mask,
+            tau2_fudge=tau2_fudge,
         )
         cov_col1 = relion_functions.post_process_from_filter_v2(
             H1,
             B1,
             volume_shape,
-            volume_upsampling_factor=1,
+            volume_upsampling_factor=volume_upsampling_factor,
             tau=prior,
             kernel=kernel,
             use_spherical_mask=use_spherical_mask,
@@ -443,6 +481,7 @@ def prior_iteration_relion_style(
             gridding_correct="square",
             kernel_width=1,
             volume_mask=volume_mask,
+            tau2_fudge=tau2_fudge,
         )
         prior, fsc, _ = compute_fsc_prior_gpu_v2(
             volume_shape,
@@ -452,6 +491,8 @@ def prior_iteration_relion_style(
             prior,
             frequency_shift=frequency_shift,
             substract_shell_mean=substract_shell_mean,
+            tau2_fudge=tau2_fudge,
+            upsampling_factor=volume_upsampling_factor,
         )
         return prior, fsc
 
@@ -480,7 +521,7 @@ def prior_iteration_relion_style(
         H0 + H1,
         B,
         volume_shape,
-        volume_upsampling_factor=1,
+        volume_upsampling_factor=volume_upsampling_factor,
         tau=prior,
         kernel=kernel,
         use_spherical_mask=use_spherical_mask,
@@ -488,6 +529,7 @@ def prior_iteration_relion_style(
         gridding_correct="square",
         kernel_width=1,
         volume_mask=volume_mask,
+        tau2_fudge=tau2_fudge,
     )
 
     return cov_col0.reshape(-1), prior, fsc
@@ -510,9 +552,35 @@ def downsample_from_fsc(array, fsc, volume_shape):
     return array * fsc_mask.reshape(-1)
 
 
+# ---------------------------------------------------------------------------
+# RELION-style data_vs_prior resolution criterion (C4)
+# ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# RELION auto-refine resolution / current-size helpers
+# ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# RELION-style current_size growth logic (C5)
+# ---------------------------------------------------------------------------
+
+
 prior_iteration_batch = jax.vmap(prior_iteration, in_axes=(0, 0, 0, 0, 0, 0, None, None, None))
 prior_iteration_relion_style_batch = jax.vmap(
-    prior_iteration_relion_style, in_axes=(0, 0, 0, 0, 0, 0, None, None, None, None, None, None, None, None)
+    prior_iteration_relion_style,
+    # 14 positional args from
+    # ``compute_covariance_regularization_relion_style``: H0, H1, B0, B1,
+    # frequency_shift, init_regularization (all batched: 0), then
+    # substract_shell_mean, volume_shape, kernel, use_spherical_mask,
+    # grid_correct, volume_mask, prior_iterations, downsample_from_fsc_flag
+    # (all broadcast: None). The trailing ``tau2_fudge`` and
+    # ``volume_upsampling_factor`` are taken from their defaults and are
+    # NOT passed positionally.
+    in_axes=(0, 0, 0, 0, 0, 0, None, None, None, None, None, None, None, None),
 )
 
 batch_average_over_shells = jax.vmap(average_over_shells, in_axes=(0, None, None))
+
+

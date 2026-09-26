@@ -13,7 +13,6 @@ from typing import Callable
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-import numpy as np
 
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 
@@ -182,7 +181,7 @@ def evaluate_ctf(freqs, ctf_params):
     bfactor = ctf_params[:, CTFParamIndex.BFACTOR, None]
     contrast = ctf_params[:, CTFParamIndex.CONTRAST, None]
 
-    lam = 12.2642598 / jnp.sqrt(volt * (1.0 + volt * 9.78475598e-7))
+    lam = 12.2643247 / jnp.sqrt(volt * (1.0 + volt * 0.978466e-6))
 
     # Shared frequency grid — (n_pixels,)
     x = freqs[:, 0]
@@ -225,10 +224,21 @@ def _dose_filter_from_freqs(freqs, cumulative_dose, tilt_angles, voltage):
 
 
 def get_dose_filters(Apix, image_shape, cumulative_dose, tilt_angles, voltage, *, half_image=False):
+    real_dtype = jnp.result_type(cumulative_dose, tilt_angles, voltage, jnp.float32)
     if half_image:
-        freqs = fourier_transform_utils.get_k_coordinate_of_each_pixel_half(image_shape, Apix, scaled=True)
+        freqs = fourier_transform_utils.get_k_coordinate_of_each_pixel_half(
+            image_shape,
+            Apix,
+            scaled=True,
+            dtype=real_dtype,
+        )
     else:
-        freqs = fourier_transform_utils.get_k_coordinate_of_each_pixel(image_shape, Apix, scaled=True)
+        freqs = fourier_transform_utils.get_k_coordinate_of_each_pixel(
+            image_shape,
+            Apix,
+            scaled=True,
+            dtype=real_dtype,
+        )
     return _dose_filter_from_freqs(freqs, cumulative_dose, tilt_angles, voltage)
 
 
@@ -247,10 +257,22 @@ def get_dose_filters_from_tilt_number(
 
 def _compute_spa_ctf(CTF_params, image_shape, voxel_size, *, half_image=False):
     """Standard single-particle CTF evaluation on a frequency grid."""
+    CTF_params = jnp.asarray(CTF_params)
+    real_dtype = jnp.result_type(CTF_params, jnp.float32)
     if half_image:
-        psi = fourier_transform_utils.get_k_coordinate_of_each_pixel_half(image_shape, voxel_size, scaled=True)
+        psi = fourier_transform_utils.get_k_coordinate_of_each_pixel_half(
+            image_shape,
+            voxel_size,
+            scaled=True,
+            dtype=real_dtype,
+        )
     else:
-        psi = fourier_transform_utils.get_k_coordinate_of_each_pixel(image_shape, voxel_size, scaled=True)
+        psi = fourier_transform_utils.get_k_coordinate_of_each_pixel(
+            image_shape,
+            voxel_size,
+            scaled=True,
+            dtype=real_dtype,
+        )
     return evaluate_ctf(psi, CTF_params)
 
 

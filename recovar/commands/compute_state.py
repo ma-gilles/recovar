@@ -92,28 +92,6 @@ def _load_latent_points(latent_points_path):
     return target_zs
 
 
-def _get_embedding_keys(pipeline_output, coords_entry):
-    """Return available z dimensions for the requested embedding entry."""
-    if hasattr(pipeline_output, "get_embedding_keys"):
-        return pipeline_output.get_embedding_keys(coords_entry)
-    return list(pipeline_output.get(coords_entry).keys())
-
-
-def _get_embedding_components(pipeline_output, zdim, coords_entry, precision_entry, contrast_entry):
-    """Fetch embedding arrays for a specific zdim with API fallback support."""
-    if hasattr(pipeline_output, "get_embedding_component"):
-        return (
-            pipeline_output.get_embedding_component(contrast_entry, zdim),
-            pipeline_output.get_embedding_component(coords_entry, zdim),
-            pipeline_output.get_embedding_component(precision_entry, zdim),
-        )
-    return (
-        pipeline_output.get(contrast_entry)[zdim],
-        pipeline_output.get(coords_entry)[zdim],
-        pipeline_output.get(precision_entry)[zdim],
-    )
-
-
 def add_args(parser: argparse.ArgumentParser):
     parser = parser_args.standard_downstream_args(parser)
 

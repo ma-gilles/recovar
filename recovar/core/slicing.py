@@ -52,6 +52,10 @@ def _default_max_r(image_shape):
     return image_shape[0] // 2 - 1
 
 
+# Public name for the EM package (relax split P2); the private name stays for existing callers.
+default_max_r = _default_max_r
+
+
 def _resolve_max_r(max_r, image_shape):
     """Resolve max_r: _AUTO → default, None → None (no clip), number → number."""
     if max_r is _AUTO:
@@ -60,17 +64,14 @@ def _resolve_max_r(max_r, image_shape):
 
 
 def _cuda_max_r(max_r, image_shape, volume_shape):
-    """Scale max_r from image coordinates to volume coordinates for CUDA.
+    """Return the image-space max_r expected by the CUDA wrapper.
 
-    The CUDA kernel computes pixel frequencies in volume-space coordinates
-    (scaled by ``upsampling = volume_shape[0] // image_shape[0]``), so
-    ``max_r`` must be scaled to match.  The JAX ``relion_interp`` path
-    uses image-space coordinates and needs no scaling.
+    ``recovar.cuda_backproject`` owns the conversion from image coordinates
+    to CUDA's padded-volume coordinates because it already has the FFI
+    ``upsampling`` attribute. Scaling here as well would widen the Fourier
+    support by another factor of ``upsampling``.
     """
-    if max_r is None:
-        return None
-    upsampling = volume_shape[0] // image_shape[0]
-    return max_r * upsampling
+    return max_r
 
 
 # ── Dispatch ─────────────────────────────────────────────────────────
@@ -78,7 +79,14 @@ def _cuda_max_r(max_r, image_shape, volume_shape):
 
 @functools.lru_cache(maxsize=None)
 def _on_gpu():
-    return jax.default_backend() == "gpu"
+    # JAX has used both ``gpu`` and backend-specific ``cuda`` platform names
+    # across releases. Device inspection is the stable signal and also
+    # respects JAX_PLATFORMS=cpu, which exposes CPU devices only.
+    return any(getattr(device, "platform", "") in {"gpu", "cuda"} for device in jax.devices())
+
+
+# Public name for the EM package (relax split P2); the private name stays for existing callers.
+on_gpu = _on_gpu
 
 
 def _use_cuda(order):
@@ -92,6 +100,10 @@ def _use_cuda(order):
     if not cuda_available():
         raise cuda_unavailable_error()
     return True
+
+
+# Public name for the EM package (relax split P2); the private name stays for existing callers.
+use_cuda = _use_cuda
 
 
 def _use_cuda_backproject(order):
@@ -215,7 +227,15 @@ def _jax_slice_half_image(volume, rotation_matrices, image_shape, volume_shape, 
 
 
 def slice_volume(
-    volume, rotation_matrices, image_shape, volume_shape, disc_type, half_volume=False, half_image=False, max_r=_AUTO
+    volume,
+    rotation_matrices,
+    image_shape,
+    volume_shape,
+    disc_type,
+    half_volume=False,
+    half_image=False,
+    max_r=_AUTO,
+    relion_texture_interp=False,
 ):
     """Project volume to images via interpolation.
 
@@ -248,6 +268,7 @@ def slice_volume(
                 half_volume,
                 half_image,
                 _cuda_max_r(max_r, image_shape, volume_shape),
+                relion_texture_interp,
             )
         except TypeError:
             pass  # JVP through custom_vjp not supported — fall through to JAX
@@ -278,7 +299,15 @@ def slice_volume(
 
 
 def batch_slice_volume(
-    volumes, rotation_matrices, image_shape, volume_shape, disc_type, half_volume=False, half_image=False, max_r=_AUTO
+    volumes,
+    rotation_matrices,
+    image_shape,
+    volume_shape,
+    disc_type,
+    half_volume=False,
+    half_image=False,
+    max_r=_AUTO,
+    relion_texture_interp=False,
 ):
     """Project a batch of volumes to images.
 
@@ -309,6 +338,7 @@ def batch_slice_volume(
             half_volume=half_volume,
             half_image=half_image,
             max_r=_cuda_max_r(max_r, image_shape, volume_shape),
+            relion_texture_interp=relion_texture_interp,
         )
     return jax.vmap(
         lambda v: slice_volume(
@@ -320,6 +350,7 @@ def batch_slice_volume(
             half_volume=half_volume,
             half_image=half_image,
             max_r=max_r,
+            relion_texture_interp=relion_texture_interp,
         )
     )(volumes)
 
@@ -351,6 +382,12 @@ def adjoint_slice_volume(
     slices = _normalize_slices(slices, image_shape, half_image)
     max_r = _resolve_max_r(max_r, image_shape)
     order = decide_order(disc_type)
+    # Cubic (order >= 2) is supported via _vjp_adjoint_cubic below.
+    # The defensive "assert order <= 1" that lived here briefly was added on a
+    # branch that pre-dated the cubic VJP path and is now stale; both
+    # ``test_adjoint_slice_volume_cubic_adjointness`` and
+    # ``test_adjoint_cubic_half_volume_includes_spline_coefficients`` exercise
+    # the cubic adjoint path.
 
     # CUDA backproject (order 0/1 only)
     if _use_cuda_backproject(order):
@@ -396,6 +433,169 @@ def adjoint_slice_volume(
         slices, rotation_matrices, image_shape, volume_shape, half_image=half_image, half_volume=half_volume
     )
     return result if volume is None else result + volume
+
+
+def adjoint_slice_volume_indexed(
+    slices,
+    pixel_indices,
+    rotation_matrices,
+    image_shape,
+    volume_shape,
+    disc_type,
+    volume=None,
+    half_image=False,
+    half_volume=False,
+    max_r=_AUTO,
+    relion_x_half=False,
+    upsampling=None,
+    runtime_max_r=None,
+):
+    """Adjoint slice extraction from a compact indexed pixel layout.
+
+    ``pixel_indices`` contains flattened pixel locations in the original image
+    grid (or packed half-image grid when ``half_image=True``). This is useful
+    for Fourier-windowed paths that gather a compact subset of frequencies.
+    ``runtime_max_r`` (CUDA only) clips at a traced radius up to the static
+    ``max_r`` (``recovar.cuda_backproject.backproject_indexed``).
+    """
+    slices = jnp.asarray(slices)
+    pixel_indices = jnp.asarray(pixel_indices, dtype=jnp.int32).reshape(-1)
+    if slices.ndim != 2:
+        raise ValueError(f"Expected indexed slices with shape (n_images, n_pixels), got {tuple(slices.shape)}")
+    if slices.shape[1] != pixel_indices.shape[0]:
+        raise ValueError(
+            f"Indexed slices have {slices.shape[1]} pixels per image but pixel_indices has "
+            f"{pixel_indices.shape[0]} entries"
+        )
+
+    max_r = _resolve_max_r(max_r, image_shape)
+    order = decide_order(disc_type)
+
+    if _use_cuda_backproject(order):
+        from recovar.cuda_backproject import backproject_indexed
+
+        vol_shape = ftu.volume_shape_to_half_volume_shape(volume_shape) if half_volume else volume_shape
+        if volume is None:
+            volume = jnp.zeros(int(np.prod(vol_shape)), dtype=slices.dtype)
+        out_dtype = volume.dtype if relion_x_half else jnp.result_type(slices, volume)
+        slices = slices.astype(out_dtype)
+        volume = volume.astype(out_dtype)
+        return backproject_indexed(
+            volume,
+            slices,
+            pixel_indices,
+            rotation_matrices,
+            image_shape,
+            volume_shape,
+            order=order,
+            half_volume=half_volume,
+            half_image=half_image,
+            max_r=_cuda_max_r(max_r, image_shape, volume_shape),
+            relion_x_half=relion_x_half,
+            upsampling=upsampling,
+            runtime_max_r=runtime_max_r,
+        )
+
+    if runtime_max_r is not None:
+        raise NotImplementedError("a runtime backprojection radius requires the CUDA backproject kernel")
+
+    if upsampling is not None:
+        raise NotImplementedError("an explicit upsampling requires the CUDA backproject kernel")
+    if relion_x_half:
+        raise NotImplementedError("relion_x_half indexed adjoint requires the CUDA backproject kernel")
+
+    H, W = image_shape
+    grid_shape = (H, W // 2 + 1) if half_image else (H, W)
+    n_pixels_full = int(np.prod(grid_shape))
+    full_slices = jnp.zeros((slices.shape[0], n_pixels_full), dtype=slices.dtype)
+    full_slices = full_slices.at[:, pixel_indices].set(slices)
+    return adjoint_slice_volume(
+        full_slices,
+        rotation_matrices,
+        image_shape,
+        volume_shape,
+        disc_type,
+        volume=volume,
+        half_image=half_image,
+        half_volume=half_volume,
+        max_r=max_r,
+    )
+
+
+def batch_adjoint_slice_volume_indexed(
+    slices,
+    pixel_indices,
+    rotation_matrices,
+    image_shape,
+    volume_shape,
+    disc_type,
+    volumes=None,
+    half_image=False,
+    half_volume=False,
+    max_r=_AUTO,
+    relion_x_half=False,
+    upsampling=None,
+):
+    """Batched indexed adjoint slice extraction for shared rotations."""
+    slices = jnp.asarray(slices)
+    pixel_indices = jnp.asarray(pixel_indices, dtype=jnp.int32).reshape(-1)
+    if slices.ndim != 3:
+        raise ValueError(
+            "Expected batched indexed slices with shape "
+            f"(batch, n_images, n_pixels), got {tuple(slices.shape)}",
+        )
+    if slices.shape[-1] != pixel_indices.shape[0]:
+        raise ValueError(
+            f"Indexed slices have {slices.shape[-1]} pixels per image but pixel_indices has "
+            f"{pixel_indices.shape[0]} entries",
+        )
+
+    max_r = _resolve_max_r(max_r, image_shape)
+    order = decide_order(disc_type)
+    vol_shape = ftu.volume_shape_to_half_volume_shape(volume_shape) if half_volume else volume_shape
+    vol_flat = int(np.prod(vol_shape))
+    if volumes is None:
+        volumes = jnp.zeros((slices.shape[0], vol_flat), dtype=slices.dtype)
+
+    if _use_cuda_backproject(order):
+        from recovar.cuda_backproject import batch_backproject_indexed
+
+        out_dtype = volumes.dtype if relion_x_half else jnp.result_type(slices, volumes)
+        return batch_backproject_indexed(
+            volumes.astype(out_dtype),
+            slices.astype(out_dtype),
+            pixel_indices,
+            rotation_matrices,
+            image_shape,
+            volume_shape,
+            order=order,
+            half_volume=half_volume,
+            half_image=half_image,
+            max_r=_cuda_max_r(max_r, image_shape, volume_shape),
+            relion_x_half=relion_x_half,
+            upsampling=upsampling,
+        )
+
+    if upsampling is not None:
+        raise NotImplementedError("an explicit upsampling requires the CUDA backproject kernel")
+    if relion_x_half:
+        raise NotImplementedError("relion_x_half indexed adjoint requires the CUDA backproject kernel")
+
+    return jax.vmap(
+        lambda sl, vol: adjoint_slice_volume_indexed(
+            sl,
+            pixel_indices,
+            rotation_matrices,
+            image_shape,
+            volume_shape,
+            disc_type,
+            volume=vol,
+            half_image=half_image,
+            half_volume=half_volume,
+            max_r=max_r,
+            relion_x_half=relion_x_half,
+        )
+    )(slices, volumes)
 
 
 def _vjp_adjoint_cubic(slices, rotation_matrices, image_shape, volume_shape, half_image=False, half_volume=False):
@@ -492,6 +692,7 @@ def batch_adjoint_slice_volume(
     slices = jnp.asarray(slices)
     max_r = _resolve_max_r(max_r, image_shape)
     order = decide_order(disc_type)
+    assert order <= 1, "Cubic backprojection is NOT supported for batch_adjoint_slice_volume" ## DO NOT CHANGE THIS ASSERTION
     vol_shape = ftu.volume_shape_to_half_volume_shape(volume_shape) if half_volume else volume_shape
     vol_flat = int(np.prod(vol_shape))
     batch = slices.shape[0]
@@ -600,7 +801,9 @@ __all__ = [
     "slice_volume",
     "batch_slice_volume",
     "adjoint_slice_volume",
+    "adjoint_slice_volume_indexed",
     "batch_adjoint_slice_volume",
+    "batch_adjoint_slice_volume_indexed",
     "precompute_cubic_coefficients",
     "precompute_cubic_coefficients_half",
     "slice_from_cubic_coefficients",

@@ -164,7 +164,72 @@ def get_size_in_gb(x):
     return x.size * x.itemsize / 1e9
 
 
+def _mrc_file_dtype(dtype):
+    mode = mrcfile.utils.mode_from_dtype(np.dtype(dtype))
+    return np.dtype(mrcfile.utils.dtype_from_mode(mode))
+
+
+def write_mrc_stack_header(file, shape, voxel_size=None, dtype=np.float32):
+    """Write an MRC image-stack header without memory-mapping the data."""
+    if len(shape) != 3:
+        raise ValueError(f"MRC stack shape must be 3D, got {shape}")
+    n_images, height, width = (int(dim) for dim in shape)
+    if n_images < 0 or height <= 0 or width <= 0:
+        raise ValueError(f"Invalid MRC stack shape: {shape}")
+
+    file_dtype = _mrc_file_dtype(dtype)
+    with mrcfile.new(file, overwrite=True) as mrc:
+        header = mrc.header
+        header.mode = mrcfile.utils.mode_from_dtype(file_dtype)
+        header.ispg = 0
+        header.nx = header.mx = width
+        header.ny = header.my = height
+        header.nz = n_images
+        header.mz = 1
+        mrc.reset_header_stats()
+        if voxel_size is not None:
+            mrc.voxel_size = voxel_size
+
+
+def write_mrc_stack_chunk(file_obj, start_index, images, dtype=np.float32):
+    """Write a contiguous chunk into an MRC stack created by write_mrc_stack_header."""
+    images = np.asarray(images)
+    if images.ndim != 3:
+        raise ValueError(f"MRC stack chunks must be 3D, got shape {images.shape}")
+    if start_index < 0:
+        raise ValueError(f"start_index must be non-negative, got {start_index}")
+
+    file_dtype = _mrc_file_dtype(dtype)
+    image_stride = int(images.shape[-2] * images.shape[-1] * file_dtype.itemsize)
+    offset = 1024 + int(start_index) * image_stride
+    chunk = np.asarray(images, dtype=file_dtype, order="C")
+    file_obj.seek(offset)
+    file_obj.write(chunk.tobytes(order="C"))
+
+
+def write_mrc_stack(file, stack, voxel_size=None, dtype=None, chunk_size=1024):
+    """Write an MRC image stack sequentially, avoiding a giant mmap flush."""
+    stack = np.asarray(stack)
+    if stack.ndim != 3:
+        raise ValueError(f"MRC stack must be 3D, got shape {stack.shape}")
+    if chunk_size <= 0:
+        raise ValueError(f"chunk_size must be positive, got {chunk_size}")
+
+    dtype = stack.dtype if dtype is None else np.dtype(dtype)
+    write_mrc_stack_header(file, stack.shape, voxel_size=voxel_size, dtype=dtype)
+    with open(file, "r+b", buffering=0) as stack_file:
+        for start in range(0, stack.shape[0], int(chunk_size)):
+            end = min(stack.shape[0], start + int(chunk_size))
+            write_mrc_stack_chunk(stack_file, start, stack[start:end], dtype=dtype)
+
+
 def write_mrc(file, ar, voxel_size=None):
+    """Write a real-space volume to MRC in the cryosparc/cryoDRGN axis convention.
+
+    Use this paired with :func:`load_mrc` for round-trip safe MRC I/O.
+    Do NOT use raw ``mrcfile.new(...).set_data(vol)`` — it omits the
+    ``(2, 1, 0)`` transpose and produces files in the wrong axis order.
+    """
     # This is to agree with the cryosparc/cryoDRGN convention
     if ar.ndim == 3 and np.isclose(ar.shape, ar.shape[0]).all():
         ar = np.transpose(ar, (2, 1, 0))
@@ -176,6 +241,13 @@ def write_mrc(file, ar, voxel_size=None):
 
 
 def load_mrc(filepath, return_voxel_size=False):
+    """Load a real-space volume from MRC in the cryosparc/cryoDRGN axis convention.
+
+    Use this paired with :func:`write_mrc` for round-trip safe MRC I/O.
+    Do NOT use raw ``mrcfile.open(...)`` — it skips the ``(2, 1, 0)``
+    transpose, leaving the data in the wrong axis order, which silently
+    corrupts downstream FFT / projection / FSC calculations.
+    """
     with mrcfile.open(filepath) as mrc:
         data = mrc.data
         if return_voxel_size:
@@ -189,6 +261,134 @@ def load_mrc(filepath, return_voxel_size=False):
         return data, voxel_size
 
     return data
+
+
+def relion_volume_to_recovar(vol_relion):
+    """Convert a RELION-convention volume into recovar's convention.
+
+    RELION and recovar use different 3D coordinate frames for real-space
+    volumes::
+
+        vol_recovar = -np.transpose(vol_relion, (2, 1, 0))
+
+    i.e. negate AND swap X<->Z. The negation is paired with RELION's
+    Euler convention (see :func:`R_to_relion` / :func:`R_from_relion`),
+    which is why ``R_to_relion`` is correct as written despite the
+    volume axis flip — they cancel out at the projection step.
+
+    This helper exists so that comparison code that loads RELION's MRC
+    outputs (e.g. via ``mrcfile.open``) can convert into recovar's
+    internal frame for FSC / direct comparison. Verified CC=0.998 vs the
+    recovar reconstruction on EMPIAR challenge1.
+
+    Parameters
+    ----------
+    vol_relion : numpy.ndarray, shape (N, N, N), real
+        RELION-convention real-space volume, as returned by raw
+        ``mrcfile.open(relion_output.mrc).data``.
+
+    Returns
+    -------
+    vol_recovar : numpy.ndarray, shape (N, N, N), real
+        Same volume in recovar's convention. Suitable for comparison
+        against ``utils.load_mrc(...)`` outputs.
+
+    Notes
+    -----
+    See relax's ``relax/CLAUDE.md`` and ``~/CLAUDE.md`` for the full
+    convention discussion. This helper was previously removed from
+    helpers.py in commit 4703c634, leaving the docs stale and forcing
+    every subsequent maintainer to rediscover the convention by hand.
+    The unit test ``tests/unit/test_relion_volume_convention.py``
+    pins the helper to make sure it can't be silently removed again.
+    """
+    return -np.transpose(vol_relion, (2, 1, 0))
+
+
+def recovar_volume_to_relion(vol_recovar):
+    """Convert a recovar-convention volume into RELION's convention.
+
+    Inverse of :func:`relion_volume_to_recovar`. The function is its own
+    inverse because the operation ``-T(2,1,0)`` is an involution.
+
+    Use this when writing a recovar reconstruction into a file that
+    will be loaded by RELION (or compared against a RELION reference
+    that you only have in RELION-frame).
+    """
+    return -np.transpose(vol_recovar, (2, 1, 0))
+
+
+def load_relion_volume(filepath, return_voxel_size=False):
+    """Load a RELION-output MRC and return it in recovar's convention.
+
+    This is the canonical way to load any volume produced by RELION
+    (e.g. ``run_class001.mrc``, ``run_it010_half1_class001.mrc``,
+    ``postprocess_masked.mrc``) for direct comparison against recovar
+    outputs.
+
+    Equivalent to::
+
+        with mrcfile.open(filepath) as m:
+            return relion_volume_to_recovar(m.data.copy())
+
+    Do NOT use ``utils.load_mrc(...)`` for RELION files — that helper
+    is designed for cryosparc/cryoDRGN axis order and will leave RELION
+    volumes in the wrong frame.
+
+    Parameters
+    ----------
+    filepath : str or Path
+        Path to a RELION-produced .mrc file.
+    return_voxel_size : bool
+        If True, also return the voxel size from the MRC header.
+
+    Returns
+    -------
+    vol : numpy.ndarray, shape (N, N, N), real
+        Volume in recovar's convention.
+    voxel_size : float, optional
+    """
+    with mrcfile.open(filepath) as mrc:
+        data = np.array(mrc.data, dtype=np.float32, copy=True)
+        if return_voxel_size:
+            voxel_size = mrc.voxel_size
+    vol = relion_volume_to_recovar(data)
+    if return_voxel_size:
+        return vol, voxel_size
+    return vol
+
+
+def write_relion_mrc(filepath, vol_recovar, voxel_size=None):
+    """Write a recovar-frame volume into an MRC file readable by RELION.
+
+    Inverse of :func:`load_relion_volume`. Use this when you need to feed
+    a recovar volume into RELION (e.g. as the ``--ref`` argument of
+    ``relion_refine``). Round-trips with ``load_relion_volume``::
+
+        write_relion_mrc(path, vol_recovar)
+        assert np.allclose(load_relion_volume(path), vol_recovar)
+
+    Do NOT use :func:`write_mrc` for RELION input — that helper writes in
+    the cryosparc/cryoDRGN axis order, and the resulting file is read by
+    RELION as the **antipode** of what you intended (which corrupts pose
+    search and silently sends auto-refine into the wrong basin: median
+    pose error ~133° instead of grid quantization).
+
+    Parameters
+    ----------
+    filepath : str or Path
+        Output path. Should end in ``.mrc``.
+    vol_recovar : numpy.ndarray, shape (N, N, N), real
+        Real-space volume in recovar's internal convention. Typically the
+        output of ``np.real(ftu.get_idft3(flat_ft_vol.reshape(volume_shape)))``.
+    voxel_size : float, optional
+        Voxel size in Å written to the MRC header.
+    """
+    vol_relion = recovar_volume_to_relion(np.asarray(vol_recovar))
+    with mrcfile.new(filepath, overwrite=True) as mrc:
+        mrc.set_data(vol_relion.real.astype(np.float32))
+        if voxel_size is not None:
+            mrc.voxel_size = voxel_size
 
 
 def symmetrize_ft_volume(vol, volume_shape):
@@ -224,11 +424,11 @@ def get_image_batch_size(grid_size, gpu_memory):
     """Calculate batch size for image processing.
 
     Args:
-        grid_size: Size of the grid
-        gpu_memory: Available GPU memory in GB
+        grid_size (int): Image side length in pixels.
+        gpu_memory (float): Available GPU memory in GB.
 
     Returns:
-        Integer batch size with reasonable bounds
+        batch_size (int): Heuristic batch size, clamped to ``[1, 2**20]``.
     """
     if grid_size < 1:
         raise ValueError("grid_size must be positive")
@@ -241,7 +441,7 @@ def get_image_batch_size(grid_size, gpu_memory):
     gpu_memory_f = float(gpu_memory)
 
     # Each image is grid_size^2 complex64 values (8 bytes each).
-    # 2^18 / grid_size^2 targets ~2 GB per batch at gpu_memory=1.
+    # 2^18 / grid_size^2 gives 2 MiB of image data per GB of supplied budget.
     batch_size = (2.0**18.0) / (grid_size_f * grid_size_f) * gpu_memory_f
 
     # Add reasonable bounds
@@ -618,9 +818,18 @@ def write_starfile_from_cryodrgn_format(
     ctf = pickle_load(ctf_path)
     poses = pickle_load(pose_path)
     rots = poses[0]
-    trans = poses[1]
+    # cryoDRGN pose pickles store translations as fractions of the box width,
+    # while RELION 3.1 STAR origin columns are in Angstroms.
+    trans = np.asarray(poses[1]) * float(ctf[0, 0]) * float(ctf[0, 1])
     write_starfile(
-        ctf[:, 2:], rots, trans, ctf[0, 1], ctf[0, 0], particles_file_path, output_filename, halfset_indices=None
+        ctf[:, 2:],
+        rots,
+        trans,
+        ctf[0, 1],
+        ctf[0, 0],
+        particles_file_path,
+        output_filename,
+        halfset_indices=halfset_indices,
     )
 
 

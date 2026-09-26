@@ -267,6 +267,49 @@ def test_write_starfile_minimal(tmp_path):
     assert out.exists()
 
 
+def test_write_starfile_from_cryodrgn_format_roundtrips_translations_and_halfsets(tmp_path):
+    import starfile
+
+    n_images = 3
+    grid_size = 64
+    voxel_size = 1.5
+    rotations = np.tile(np.eye(3, dtype=np.float32), (n_images, 1, 1))
+    translations_fractional = np.array(
+        [[0.0, 0.0], [0.125, -0.25], [-0.0625, 0.03125]], dtype=np.float32
+    )
+    ctf = np.zeros((n_images, 9), dtype=np.float32)
+    ctf[:, 0] = grid_size
+    ctf[:, 1] = voxel_size
+    ctf[:, 2:5] = np.array([10_000.0, 11_000.0, 15.0], dtype=np.float32)
+    ctf[:, 5:8] = np.array([300.0, 2.7, 0.1], dtype=np.float32)
+    halfsets = np.array([1, 2, 1], dtype=np.int64)
+
+    ctf_path = tmp_path / "ctf.pkl"
+    poses_path = tmp_path / "poses.pkl"
+    output_path = tmp_path / "particles.star"
+    utils.pickle_dump(ctf, ctf_path)
+    utils.pickle_dump((rotations, translations_fractional), poses_path)
+
+    utils.write_starfile_from_cryodrgn_format(
+        ctf_path,
+        poses_path,
+        "particles.mrcs",
+        output_path,
+        halfset_indices=halfsets,
+    )
+
+    particles = starfile.read(output_path)["particles"]
+    expected_angstrom = translations_fractional * grid_size * voxel_size
+    np.testing.assert_allclose(particles["rlnOriginXAngst"], expected_angstrom[:, 0])
+    np.testing.assert_allclose(particles["rlnOriginYAngst"], expected_angstrom[:, 1])
+    np.testing.assert_array_equal(particles["rlnRandomSubset"], halfsets)
+
+    from recovar.data_io.metadata_readers import parse_poses_from_star
+
+    _, parsed_translations = parse_poses_from_star(str(output_path), grid_size)
+    np.testing.assert_allclose(parsed_translations, translations_fractional, atol=1e-7)
+
+
 def test_downsample_vol_by_fourier_truncation():
     vol = np.ones((8, 8, 8), dtype=np.float32)
     out = utils.downsample_vol_by_fourier_truncation(vol, target_grid_size=4)

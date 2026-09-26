@@ -2,8 +2,7 @@
 CUDA backprojector / projector — JAX JIT-compatible via XLA FFI.
 
 Provides ``backproject`` and ``project`` that drop into ``@jax.jit``
-compiled functions.  Also exposes a low-level ctypes path for
-standalone benchmarks.
+compiled functions.
 
 Quick start::
 
@@ -18,11 +17,13 @@ Quick start::
 
 from __future__ import annotations
 
+import contextvars
 import ctypes
 import functools
 import logging
 import os
 import pathlib
+import shutil
 import subprocess
 import tempfile
 import threading
@@ -41,6 +42,8 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+from recovar import cuda_build
+
 logger = logging.getLogger(__name__)
 
 # ──────────────────────────────────────────────────────────────────────
@@ -49,6 +52,14 @@ logger = logging.getLogger(__name__)
 
 _LIB_DIR = pathlib.Path(__file__).resolve().parent / "cuda"
 _PACKAGE_LIB_PATH = _LIB_DIR / "libcuda_backproject.so"
+_CUDA_BUILD_SOURCE_NAMES = (
+    "include/device_scratch.cuh",
+    "include/recovar_cuda_common.cuh",
+    "cuda_backproject.cu",
+    "Makefile",
+)
+# An EM handler that only the pre-split combined library exports (relax split S4).
+_EM_SENTINEL_SYMBOL = "RelionPreprocessRealF32"
 _lib_handle = None  # ctypes CDLL
 _loaded_lib_path = None
 
@@ -56,11 +67,56 @@ _DISABLE_CUSTOM_CUDA_ENV = "RECOVAR_DISABLE_CUDA"
 _CUDA_LIB_ENV = "RECOVAR_CUDA_LIB"
 _CUDA_CACHE_DIR_ENV = "RECOVAR_CUDA_CACHE_DIR"
 _BUILD_LOCKFILE = ".build.lock"
+_RELION_X_HALF_BP_BLOCK_TOPOLOGY_ENV = "RECOVAR_RELION_X_HALF_BP_BLOCK_TOPOLOGY"
+_BPREF_DEVICE_SIGNATURE_DUMP_DIR_ENV = "RECOVAR_BPREF_DEVICE_SIGNATURE_DUMP_DIR"
+_bpref_device_signature_scope = contextvars.ContextVar(
+    "recovar_bpref_device_signature_scope",
+    default=None,
+)
+
+
+# Public name for the EM package (relax split P2); the private name stays for existing callers.
+bpref_device_signature_scope_var = _bpref_device_signature_scope
 
 
 def _env_flag(name: str) -> bool:
     value = os.environ.get(name, "")
     return value.lower() not in {"", "0", "false", "no", "off"}
+
+
+# Public name for the EM package (relax split P2); the private name stays for existing callers.
+env_flag = _env_flag
+
+
+def relion_x_half_bp_block_topology_enabled() -> bool:
+    """Return whether the diagnostic RELION GPU pixel-pass topology is enabled.
+
+    The value is consumed while JAX traces the caller. Change it only between
+    fresh processes; changing the environment after compilation does not
+    invalidate an already cached executable.
+    """
+
+    if os.environ.get(_BPREF_DEVICE_SIGNATURE_DUMP_DIR_ENV, "").strip():
+        if _bpref_device_signature_scope.get() is not True:
+            return False
+    return relion_x_half_bp_block_topology_requested()
+
+
+def relion_x_half_bp_block_topology_requested() -> bool:
+    """Return the raw diagnostic request without changing live-path scope."""
+
+    return _env_flag(_RELION_X_HALF_BP_BLOCK_TOPOLOGY_ENV)
+
+
+def backproject_skip_zero_requested() -> bool:
+    """Return whether indexed backprojection skips exactly-zero pixels.
+
+    Opt-in (``RECOVAR_BACKPROJECT_SKIP_ZERO=1``). Sparse pass-2 M-step rows are
+    padded to bucket size and pruned rows are entirely zero; scattering them
+    only adds ``+0.0`` to every touched voxel. Skipping removes those atomics.
+    """
+
+    return _env_flag(_BACKPROJECT_SKIP_ZERO_ENV)
 
 
 def custom_cuda_requested() -> bool:
@@ -158,6 +214,10 @@ def _cache_root() -> pathlib.Path:
     return fallback
 
 
+# Public name for the EM package (relax split P2); the private name stays for existing callers.
+cache_root = _cache_root
+
+
 def _cached_lib_path() -> pathlib.Path:
     return _cache_root() / "libcuda_backproject.so"
 
@@ -180,38 +240,73 @@ def _candidate_lib_paths() -> list[pathlib.Path]:
     return candidates
 
 
-def _lib_is_stale(lib_path: pathlib.Path) -> bool:
-    """Return True if the lib's mtime is older than the source files.
+def _lib_missing_required_symbols(lib_path: pathlib.Path) -> str | None:
+    """Return the name of the first missing required symbol, or None if all present.
 
-    Catches the case where a user installed before a kernel/Makefile fix
-    landed (e.g. issue #131's Blackwell widening): without this check,
-    `_existing_lib_path()` would happily return the stale cached `.so`
-    forever, and the user would never pick up the new arch coverage.
+    Catches binary/source skew that mtime alone misses: e.g. ``~/.cache`` holds an
+    ``.so`` built last week from an older ``.cu`` that didn't export
+    ``BackprojectIndexed``, and today's ``cuda_backproject.py`` registers FFI
+    targets that need it. The mtime check sees ``cached .so newer than source``
+    and reuses it; ``_ensure_ffi`` then crashes deep inside ``ctypes.__getattr__``,
+    ``cuda_available()`` silently returns False, and the user runs on the slow
+    JAX fallback without warning. Dlopen + symbol lookup catches this cheaply.
     """
     try:
-        lib_mtime = lib_path.stat().st_mtime
+        lib = ctypes.CDLL(str(lib_path), mode=ctypes.RTLD_LOCAL)
     except OSError:
+        # Can't even dlopen — treat as binary-incompatible.
+        return "<dlopen failed>"
+    for _target, symbol in _FFI_REGISTRATIONS:
+        if not hasattr(lib, symbol):
+            return symbol
+    return None
+
+
+def _source_digest() -> str | None:
+    """Digest of the build inputs present; None when none are (e.g. a package shipped without sources)."""
+    present = [(name, _LIB_DIR / name) for name in _CUDA_BUILD_SOURCE_NAMES if (_LIB_DIR / name).is_file()]
+    return cuda_build.source_digest(present) if present else None
+
+
+def _lib_is_stale(lib_path: pathlib.Path) -> bool:
+    """Return True if an unpinned lib was not built from the current sources OR if
+    it's missing a symbol that the current ``cuda_backproject.py`` expects.
+
+    Catches:
+      - source skew: the sha256 of the build inputs differs from the one recorded
+        beside the library at build time (``cuda_build.digest_path``), e.g. a user
+        installed before a kernel/Makefile fix landed (issue #131's Blackwell
+        widening). Content, not mtime, decides: a fresh checkout makes identical
+        sources look newer.
+      - binary skew: cached ``.so`` from an older branch doesn't export a
+        symbol the current source requires (e.g. ``BackprojectIndexed``).
+        Without this check ``_ensure_ffi`` would crash inside ``ctypes`` and
+        ``cuda_available()`` would silently fall back to JAX.
+    """
+    if not lib_path.exists():
         return False
-    for src_name in ("cuda_backproject.cu", "Makefile"):
-        src = _LIB_DIR / src_name
-        try:
-            if src.stat().st_mtime > lib_mtime:
-                return True
-        except OSError:
-            continue
+    digest = _source_digest()
+    if digest is not None and not cuda_build.built_from(lib_path, digest):
+        logger.info("RECOVAR CUDA library %s was not built from the current sources — will rebuild.", lib_path)
+        return True
+    missing = _lib_missing_required_symbols(lib_path)
+    if missing is not None:
+        logger.info(
+            "RECOVAR CUDA library %s is missing symbol '%s' required by the current source — will rebuild.",
+            lib_path,
+            missing,
+        )
+        return True
     return False
 
 
 def _existing_lib_path() -> pathlib.Path | None:
+    """The pinned ``RECOVAR_CUDA_LIB`` (checked, never rebuilt), else the first current cached/package lib."""
+    configured = _configured_lib_path()
+    if configured is not None:
+        return cuda_build.check_pinned(configured, _CUDA_LIB_ENV, _lib_missing_required_symbols)
     for candidate in _candidate_lib_paths():
-        if candidate.exists():
-            if _lib_is_stale(candidate):
-                logger.info(
-                    "RECOVAR CUDA library %s is older than its source — "
-                    "will rebuild (this happens once after a kernel/Makefile update).",
-                    candidate,
-                )
-                continue
+        if candidate.exists() and not _lib_is_stale(candidate):
             return candidate.resolve()
     return None
 
@@ -240,6 +335,46 @@ def _build_lock_path(lib_path: pathlib.Path) -> pathlib.Path:
     return lib_path.parent / _BUILD_LOCKFILE
 
 
+def _discover_system_nvcc() -> str | None:
+    """Find nvcc in common system install locations across Linux distros.
+
+    Last-resort cluster-agnostic fallback for users who didn't ``module load``
+    or set ``CUDA_HOME``. Returns the highest-version nvcc found, or None.
+    Covers:
+      - ``/usr/local/cuda*`` (RHEL/CentOS/Della-style symlinks + versioned dirs)
+      - ``/opt/cuda*`` (Arch, some HPC)
+      - ``/opt/nvidia/cuda*`` (some HPC)
+      - ``/usr/lib/nvidia-cuda-toolkit/bin/nvcc`` (Debian/Ubuntu apt)
+    """
+    candidates: list[pathlib.Path] = []
+    for pattern in (
+        "/usr/local/cuda*/bin/nvcc",
+        "/opt/cuda*/bin/nvcc",
+        "/opt/nvidia/cuda*/bin/nvcc",
+    ):
+        candidates.extend(pathlib.Path("/").glob(pattern.lstrip("/")))
+    candidates.append(pathlib.Path("/usr/lib/nvidia-cuda-toolkit/bin/nvcc"))
+    candidates = [p for p in candidates if p.is_file() and os.access(p, os.X_OK)]
+    if not candidates:
+        return None
+
+    def _version_key(p: pathlib.Path) -> tuple[int, int, str]:
+        # Sort by versioned dir name (e.g. cuda-13.2, cuda-12.8), highest first.
+        # Falls back to lexicographic for unversioned (cuda symlink).
+        parent = p.parent.parent.name  # ".../cuda-13.2/bin/nvcc" → "cuda-13.2"
+        suffix = parent.split("-", 1)[-1] if "-" in parent else ""
+        parts = suffix.split(".") if suffix else []
+        try:
+            major = int(parts[0]) if len(parts) >= 1 else -1
+            minor = int(parts[1]) if len(parts) >= 2 else -1
+        except ValueError:
+            major, minor = -1, -1
+        return (major, minor, str(p))
+
+    candidates.sort(key=_version_key, reverse=True)
+    return str(candidates[0])
+
+
 def build_custom_cuda(output_path: str | os.PathLike[str] | None = None, force: bool = False) -> pathlib.Path:
     """Build RECOVAR's preferred custom CUDA extension and return its path."""
     import sys
@@ -255,19 +390,39 @@ def build_custom_cuda(output_path: str | os.PathLike[str] | None = None, force: 
         return lib_path
     if stale:
         logger.info(
-            "RECOVAR CUDA extension at %s is older than its source — rebuilding.",
+            "RECOVAR CUDA extension at %s was not built from the current sources — rebuilding.",
             lib_path,
         )
 
-    lib_path.parent.mkdir(parents=True, exist_ok=True)
     logger.info("Building %s", lib_path)
-    make_cmd = ["make"]
-    if force or stale:
-        make_cmd.append("-B")
-    make_cmd.extend(["-C", str(_LIB_DIR), f"PYTHON={sys.executable}", f"LIB={lib_path}"])
-    subprocess.check_call(make_cmd)
-    if not lib_path.exists():
-        raise RuntimeError(f"Build failed — {lib_path} not found")
+    make_env = os.environ.copy()
+    # If the user hasn't surfaced nvcc through any of the Makefile's normal
+    # discovery channels (NVCC/CUDACXX/PATH/LOCAL_CUDA_PATH/CUDA_HOME/CUDA_PATH),
+    # do a last-resort sweep of common system install paths. This makes
+    # ``import recovar; cuda_available()`` Just Work on most clusters without
+    # requiring ``module load cudatoolkit`` first.
+    nvcc_already_visible = (
+        make_env.get("NVCC")
+        or make_env.get("CUDACXX")
+        or shutil.which("nvcc")
+        or any(
+            os.access(os.path.join(make_env.get(var, ""), "bin", "nvcc"), os.X_OK)
+            for var in ("LOCAL_CUDA_PATH", "CUDA_HOME", "CUDA_PATH")
+            if make_env.get(var)
+        )
+    )
+    if not nvcc_already_visible:
+        discovered = _discover_system_nvcc()
+        if discovered is not None:
+            logger.info("Discovered nvcc at %s (system fallback)", discovered)
+            make_env["NVCC"] = discovered
+
+    # Build beside the target and rename over it: another process may be running from lib_path.
+    make_cmd = ["make", "-B", "-C", str(_LIB_DIR), f"PYTHON={sys.executable}"]
+    digest = _source_digest()
+    if digest is None:
+        raise RuntimeError(f"Cannot build {lib_path}: no CUDA build sources under {_LIB_DIR}")
+    cuda_build.make_atomically(make_cmd, lib_path, make_env, digest)
     _auto_build_attempted = True
     _auto_build_error = None
     _cuda_ok = None
@@ -339,6 +494,19 @@ def _ensure_lib_path() -> pathlib.Path | None:
 
 def _get_lib():
     global _lib_handle, _loaded_lib_path
+    if _ffi_registered and _lib_handle is not None and _loaded_lib_path is not None:
+        # XLA FFI registrations last for the process, and every loaded copy of
+        # the library keeps its own CUDA state (the persistent-texture registry
+        # among it). Stay on the library whose symbols XLA holds: a second copy
+        # would hand out handles the registered kernels cannot see.
+        configured = _configured_lib_path()
+        if configured is not None and configured.resolve() != _loaded_lib_path:
+            raise RuntimeError(
+                f"RECOVAR_CUDA_LIB={configured} asks for a different CUDA library than the one "
+                f"this process's XLA FFI handlers are bound to ({_loaded_lib_path}); "
+                "restart the process to switch libraries"
+            )
+        return _lib_handle
     lib_path = _existing_lib_path()
     if lib_path is None:
         lib_path = _ensure_lib_path()
@@ -347,7 +515,15 @@ def _get_lib():
     lib_path = pathlib.Path(lib_path).resolve()
 
     if _lib_handle is None or _loaded_lib_path != lib_path:
-        _lib_handle = ctypes.CDLL(str(lib_path))
+        handle = ctypes.CDLL(str(lib_path))
+        if hasattr(handle, _EM_SENTINEL_SYMBOL):
+            # A library built before the relax split holds the EM handlers too; the EM package now
+            # loads its own librelax_cuda.so, so a combined library would double-register them.
+            raise RuntimeError(
+                f"{lib_path} is a combined pre-split RECOVAR CUDA library (it exports {_EM_SENTINEL_SYMBOL}); "
+                "rebuild libcuda_backproject.so from this checkout (`recovar build_custom_cuda`)"
+            )
+        _lib_handle = handle
         _loaded_lib_path = lib_path
     return _lib_handle
 
@@ -361,9 +537,36 @@ _ffi_lock = threading.Lock()
 
 # FFI target name constants
 _TARGET_BACKPROJECT = "cuda_backproject"
+_TARGET_BACKPROJECT_INDEXED = "cuda_backproject_indexed"
+_TARGET_BACKPROJECT_INDEXED_SKIP_ZERO = "cuda_backproject_indexed_skip_zero"
+_TARGET_BACKPROJECT_INDEXED_RUNTIME_RADIUS = "cuda_backproject_indexed_runtime_radius"
+_BACKPROJECT_SKIP_ZERO_ENV = "RECOVAR_BACKPROJECT_SKIP_ZERO"
+_TARGET_BACKPROJECT_INDEXED_SIGNATURE = "cuda_backproject_indexed_signature"
 _TARGET_PROJECT = "cuda_project"
+_TARGET_PROJECT_INDEXED = "cuda_project_indexed"
+
+
+# Public name for the EM package (relax split P2); the private name stays for existing callers.
+TARGET_PROJECT_INDEXED = _TARGET_PROJECT_INDEXED
 _TARGET_BATCH_BACKPROJECT = "cuda_batch_backproject"
-_TARGET_BATCH_PROJECT = "cuda_batch_project"
+_TARGET_BATCH_BACKPROJECT_INDEXED = "cuda_batch_backproject_indexed"
+_TARGET_PER_IMAGE_BP = "cuda_per_image_bp"
+
+
+# Single source of truth: (FFI target name, C symbol exported by libcuda_backproject.so).
+# Used by ``_ensure_ffi`` to register kernels AND by ``_lib_missing_required_symbols``
+# to verify a cached .so is binary-compatible with the current source. When the kernel
+# adds/removes a symbol, update this tuple — that automatically invalidates stale caches.
+_FFI_REGISTRATIONS: tuple[tuple[str, str], ...] = (
+    (_TARGET_BACKPROJECT, "Backproject"),
+    (_TARGET_BACKPROJECT_INDEXED, "BackprojectIndexed"),
+    (_TARGET_BACKPROJECT_INDEXED_SIGNATURE, "BackprojectIndexedSignature"),
+    (_TARGET_PROJECT, "Project"),
+    (_TARGET_PROJECT_INDEXED, "ProjectIndexed"),
+    (_TARGET_BATCH_BACKPROJECT, "BatchBackproject"),
+    (_TARGET_BATCH_BACKPROJECT_INDEXED, "BatchBackprojectIndexed"),
+    (_TARGET_PER_IMAGE_BP, "PerImageBackproject"),
+)
 
 
 _preflight_ok: bool | None = None  # None = not checked yet
@@ -586,15 +789,51 @@ def _ensure_ffi():
         # Preflight: check that the .so covers this GPU before FFI registration
         if _loaded_lib_path:
             _preflight_check(pathlib.Path(_loaded_lib_path))
-        jax.ffi.register_ffi_target(_TARGET_BACKPROJECT, jax.ffi.pycapsule(lib.Backproject), platform="CUDA")
-        jax.ffi.register_ffi_target(_TARGET_PROJECT, jax.ffi.pycapsule(lib.Project), platform="CUDA")
-        jax.ffi.register_ffi_target(_TARGET_BATCH_BACKPROJECT, jax.ffi.pycapsule(lib.BatchBackproject), platform="CUDA")
-        jax.ffi.register_ffi_target(_TARGET_BATCH_PROJECT, jax.ffi.pycapsule(lib.BatchProject), platform="CUDA")
+        for target, symbol in _FFI_REGISTRATIONS:
+            jax.ffi.register_ffi_target(target, jax.ffi.pycapsule(getattr(lib, symbol)), platform="CUDA")
         _ffi_registered = True
         logger.debug("Registered CUDA FFI targets")
 
 
+# Public name for the EM package (relax split P2); the private name stays for existing callers.
+ensure_ffi = _ensure_ffi
+
+
+_optional_ffi_registered: set[str] = set()
+_OPTIONAL_FFI_REGISTRATIONS = {
+    _TARGET_BACKPROJECT_INDEXED_SKIP_ZERO: (
+        "BackprojectIndexedSkipZero",
+        "RECOVAR_BACKPROJECT_SKIP_ZERO requires an explicit CUDA build with BackprojectIndexedSkipZero",
+    ),
+    _TARGET_BACKPROJECT_INDEXED_RUNTIME_RADIUS: (
+        "BackprojectIndexedRuntimeRadius",
+        "a runtime backprojection radius requires a CUDA build with BackprojectIndexedRuntimeRadius",
+    ),
+}
+
+
+def _ensure_optional_ffi(target):
+    """Register a requested optional ABI without invalidating older libraries."""
+    _ensure_ffi()
+    if target in _optional_ffi_registered:
+        return
+    with _ffi_lock:
+        if target in _optional_ffi_registered:
+            return
+        symbol_name, error = _OPTIONAL_FFI_REGISTRATIONS[target]
+        symbol = getattr(_get_lib(), symbol_name, None)
+        if symbol is None:
+            raise RuntimeError(error)
+        jax.ffi.register_ffi_target(target, jax.ffi.pycapsule(symbol), platform="CUDA")
+        _optional_ffi_registered.add(target)
+
+
+# Public name for the EM package (relax split P2); the private name stays for existing callers.
+ensure_optional_ffi = _ensure_optional_ffi
+
+
 _cuda_ok = None  # cached result: None = not checked, True/False = result
+_texture_debug_keys = set()
 
 
 def cuda_available() -> bool:
@@ -602,24 +841,26 @@ def cuda_available() -> bool:
 
     RECOVAR prefers these kernels by default on GPU and will try to build the
     shared library automatically into the cache directory when needed. Set
-    ``RECOVAR_DISABLE_CUDA=1`` to force the slower JAX GPU path instead.
+    ``RECOVAR_DISABLE_CUDA=1`` to force the slower JAX GPU path instead. A
+    ``RECOVAR_CUDA_LIB`` that is missing or lacks a required symbol raises
+    :class:`recovar.cuda_build.PinnedLibraryError` on GPU instead of returning False.
     """
     global _auto_build_error, _cuda_ok
+    if not custom_cuda_requested():
+        logger.info("CUDA kernels disabled via %s", _DISABLE_CUSTOM_CUDA_ENV)
+        return False
     if _cuda_ok is not None:
         return _cuda_ok
-
-    if not custom_cuda_requested():
-        _cuda_ok = False
-        logger.info("CUDA kernels disabled via %s", _DISABLE_CUSTOM_CUDA_ENV)
-        return _cuda_ok
     try:
-        if not any(d.platform == "gpu" for d in jax.devices()):
+        if not any(getattr(d, "platform", "") in {"gpu", "cuda"} for d in jax.devices()):
             _cuda_ok = False
         else:
             _ensure_ffi()
             _cuda_ok = True
             _auto_build_error = None
             logger.info("CUDA backproject/project kernels enabled")
+    except cuda_build.PinnedLibraryError:
+        raise  # an explicit RECOVAR_CUDA_LIB that cannot be used is an error, not a JAX fallback
     except (ImportError, OSError, RuntimeError, AttributeError, subprocess.SubprocessError) as e:
         _cuda_ok = False
         if _auto_build_error is None:
@@ -660,12 +901,133 @@ def _rot_to_compact(rotation_matrices: jax.Array, real_dtype=None) -> jax.Array:
     return compact
 
 
+# Public name for the EM package (relax split P2); the private name stays for existing callers.
+rot_to_compact = _rot_to_compact
+
+
+def _relion_x_half_backproject_rotation_to_kernel(
+    rotation_matrices: jax.Array,
+    target_dtype=None,
+) -> jax.Array:
+    """Map RELION/RECOVAR scorer rotations to the CUDA ``(z, y, xhalf)`` scatter frame.
+
+    RELION's BackProjector stores the Fourier x-axis as the packed half axis but
+    RECOVAR's generic CUDA half-volume kernel packs its last coordinate. RELION
+    computes a numerical ``A.inv()`` rather than using a transpose; boundary
+    pixels at Nyquist can differ by one ulp, so mirror that inverse before
+    reversing to the kernel's ``(z, y, x)`` scatter coordinates.
+    """
+
+    if target_dtype is not None and jnp.dtype(target_dtype) == jnp.dtype(jnp.float32):
+        # RELION builds an orthonormal Euler matrix in CPU RFLOAT, inverts it
+        # there, and only then stores the result as accelerated XFLOAT.  For a
+        # single-precision ACC build this is the float-cast transpose, not the
+        # inverse of an already rounded float32 matrix.
+        return rotation_matrices.astype(jnp.float32)[..., [2, 1, 0]]
+    inverse = jnp.linalg.inv(rotation_matrices.astype(jnp.float64))
+    return jnp.swapaxes(inverse, -1, -2)[..., [2, 1, 0]]
+
+
+# Public name for the EM package (relax split P2); the private name stays for existing callers.
+relion_x_half_backproject_rotation_to_kernel = _relion_x_half_backproject_rotation_to_kernel
+
+
+def _prepare_relion_x_half_block_topology_operands(images, pixel_indices, image_shape, max_r):
+    """Expand compact x-half rows into RELION's native current-size square.
+
+    RELION launches one block per orientation over a cropped FFTW array with
+    ``2*max_r`` rows and ``max_r+1`` packed-x columns. RECOVAR normally keeps
+    only the nonzero circular support. The diagnostic restores the omitted
+    square positions as explicit zeros so the CUDA kernel can enumerate native
+    FFTW pixel positions in the same 128-thread serial-pass topology. This is
+    deliberately a pixel-pass diagnostic, not full launch-order equivalence:
+    RELION also uses per-particle launches and couples translation reduction
+    with data/weight scattering, while RECOVAR performs those stages separately.
+    Values
+    absent from RECOVAR's compact support cannot be recovered: in particular,
+    redundant negative-y ``x=0`` lanes remain zero. RELION's normal 2-D input
+    also gives those lanes zero inverse-noise weight, but unusual callers with
+    nonzero values there are not exactly emulated by this diagnostic.
+    """
+
+    full_height, full_width = (int(image_shape[0]), int(image_shape[1]))
+    full_half_width = full_width // 2 + 1
+    if max_r is None:
+        current_height = full_height
+    else:
+        current_height = 2 * int(round(float(max_r)))
+    current_half_width = current_height // 2 + 1
+    if current_height <= 0 or current_height > full_height:
+        raise ValueError(f"invalid RELION block-topology current height {current_height} for image shape {image_shape}")
+
+    pixel_indices = jnp.asarray(pixel_indices, dtype=jnp.int32).reshape(-1)
+    full_rows = pixel_indices // full_half_width
+    columns = pixel_indices % full_half_width
+    signed_rows = jnp.where(full_rows <= full_height // 2, full_rows, full_rows - full_height)
+    current_rows = jnp.mod(signed_rows, current_height)
+    current_indices = current_rows * current_half_width + columns
+    dense_pixels = current_height * current_half_width
+    dense_images = jnp.zeros((*images.shape[:-1], dense_pixels), dtype=images.dtype)
+    dense_images = dense_images.at[..., current_indices].set(images)
+    dense_indices = jnp.arange(dense_pixels, dtype=jnp.int32)
+    return dense_images, dense_indices, current_height, current_half_width
+
+
+# Public name for the EM package (relax split P2); the private name stays for existing callers.
+prepare_relion_x_half_block_topology_operands = _prepare_relion_x_half_block_topology_operands
+
+
 def _volume_real_dtype(volume: jax.Array):
     """Return the real component dtype of a volume (float32 for complex64, etc.)."""
     return jnp.finfo(volume.dtype).dtype if jnp.issubdtype(volume.dtype, jnp.complexfloating) else volume.dtype
 
 
-def _validate_inputs(volume_shape, image_shape, order, half_volume, half_image):
+# Public name for the EM package (relax split P2); the private name stays for existing callers.
+volume_real_dtype = _volume_real_dtype
+
+
+def _infer_backproject_upsampling(image_shape, volume_shape, max_r=None, upsampling=None):
+    """Infer Fourier oversampling for standard and RELION BackProjector grids.
+
+    ``upsampling`` (padded-volume voxels per image Fourier pixel) is taken as given
+    when set: for images on another grid than the volume (RELION optics groups
+    with another pixel size or box, rotations scaled by the grid ratio) the image
+    shape and the image-side ``max_r`` no longer determine the volume's padding.
+    """
+
+    if upsampling is not None:
+        if int(upsampling) <= 0 or int(upsampling) != upsampling:
+            raise ValueError(f"upsampling must be a positive integer, got {upsampling}")
+        return int(upsampling)
+    ih, _ = image_shape
+    N0, N1, N2 = volume_shape
+    if N0 % ih == 0:
+        ups = N0 // ih
+        if ups <= 0:
+            raise ValueError(f"volume_shape[0] ({N0}) must be at least image_shape[0] ({ih})")
+        return int(ups)
+    if N0 != N1 or N0 != N2:
+        raise ValueError(
+            "non-cubic volume_shape requires standard integer upsampling along axis 0, "
+            f"got image_shape={image_shape}, volume_shape={volume_shape}"
+        )
+    if max_r is not None and float(max_r) > 0:
+        ups = int((float(N0) - 3.0) / (2.0 * float(max_r)) + 0.5)
+        expected = 2 * (int(float(ups) * float(max_r) + 0.5) + 1) + 1
+        if ups > 0 and expected == int(N0):
+            return ups
+    full_support = float(ih) / 2.0
+    ups = int((float(N0) - 3.0) / (2.0 * full_support) + 0.5)
+    expected = 2 * (int(float(ups) * full_support + 0.5) + 1) + 1
+    if ups > 0 and expected == int(N0):
+        return ups
+    raise ValueError(
+        f"volume_shape[0] ({N0}) must be divisible by image_shape[0] ({ih}) "
+        "or match RELION pad_size=2*(int(padding_factor*support_radius+0.5)+1)+1"
+    )
+
+
+def _validate_inputs(volume_shape, image_shape, order, half_volume, half_image, max_r=None, upsampling=None):
     """Validate parameters at trace time (not inside JIT)."""
     ih, iw = image_shape
     N0, N1, N2 = volume_shape
@@ -675,8 +1037,11 @@ def _validate_inputs(volume_shape, image_shape, order, half_volume, half_image):
         raise ValueError(f"volume_shape must be positive, got {volume_shape}")
     if order not in (0, 1, 3):
         raise ValueError(f"order must be 0, 1, or 3, got {order}")
-    if N0 % ih != 0:
-        raise ValueError(f"volume_shape[0] ({N0}) must be divisible by image_shape[0] ({ih})")
+    _infer_backproject_upsampling(image_shape, volume_shape, max_r=max_r, upsampling=upsampling)
+
+
+# Public name for the EM package (relax split P2); the private name stays for existing callers.
+validate_inputs = _validate_inputs
 
 
 def _encode_max_r(max_r):
@@ -689,11 +1054,17 @@ def _encode_max_r(max_r):
     return np.int64(int(round(float(max_r) * float(max_r) * 4)))
 
 
-def _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image, max_r=None):
-    """Compute the shared FFI scalar keyword arguments (used by all 4 targets)."""
+def _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image, max_r=None, upsampling=None):
+    """Compute shared FFI scalar keyword arguments.
+
+    ``max_r`` is in image Fourier-pixel coordinates, matching
+    ``recovar.core.slicing`` and ``relion_interp``. The CUDA kernels compare
+    against coordinates already multiplied by ``upsampling``, so encode the
+    radius in padded-volume coordinates here and nowhere else.
+    """
     ih, iw_full = image_shape
     N0, N1, N2 = volume_shape
-    ups = N0 // ih
+    ups = _infer_backproject_upsampling(image_shape, volume_shape, max_r=max_r, upsampling=upsampling)
     iw_eff = iw_full // 2 + 1 if half_image else iw_full
     return (
         dict(
@@ -707,11 +1078,36 @@ def _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image, max_r
             half_volume=np.int64(int(half_volume)),
             half_image=np.int64(int(half_image)),
             full_image_w=np.int64(iw_full),
-            max_r2_x4=_encode_max_r(max_r),
+            max_r2_x4=_encode_max_r(None if max_r is None else float(max_r) * float(ups)),
         ),
         ih,
         iw_eff,
     )
+
+
+# Public name for the EM package (relax split P2); the private name stays for existing callers.
+ffi_kwargs = _ffi_kwargs
+
+
+def _project_ffi_kwargs(
+    image_shape,
+    volume_shape,
+    order,
+    half_volume,
+    half_image,
+    max_r=None,
+    relion_texture_interp: bool = False,
+):
+    """FFI kwargs for forward projection.
+
+    ``relion_texture_interp=True`` enables CUDA texture interpolation for
+    full-volume order-1 projections, including RELION's positive even-box
+    Nyquist convention. Generic projections retain RECOVAR's centered-grid
+    convention.
+    """
+    kw, ih, iw_eff = _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image, max_r)
+    kw["relion_texture_interp"] = np.int64(int(relion_texture_interp))
+    return kw, ih, iw_eff
 
 
 @functools.partial(jax.jit, static_argnums=(3, 4, 5, 6, 7, 8))
@@ -751,7 +1147,7 @@ def backproject(
     Updated volume (same shape and dtype as *volume*).
     """
     _ensure_ffi()
-    _validate_inputs(volume_shape, image_shape, order, half_volume, half_image)
+    _validate_inputs(volume_shape, image_shape, order, half_volume, half_image, max_r=max_r)
     kw, ih, iw_eff = _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image, max_r)
     rot6 = _rot_to_compact(rotation_matrices, _volume_real_dtype(volume))
     out_type = jax.ShapeDtypeStruct(volume.shape, volume.dtype)
@@ -764,8 +1160,305 @@ def backproject(
     )(images, rot6, volume, **kw)
 
 
-@functools.partial(jax.jit, static_argnums=(2, 3, 4, 5, 6, 7))
-def project(
+def _backproject_indexed_target(use_relion_block_topology: bool) -> str:
+    """Pick the indexed-backprojection FFI target for the current gate.
+
+    The zero-skipping variant is opt-in and is unavailable under the RELION
+    block topology, which re-expands operands onto the dense FFTW rectangle.
+
+    ``backproject_indexed`` is jitted, so this runs at trace time and the
+    chosen target is baked into the cached executable. Changing
+    ``RECOVAR_BACKPROJECT_SKIP_ZERO`` part-way through a process therefore has
+    no effect on already-traced shapes; set it before the first call.
+    """
+
+    if backproject_skip_zero_requested() and not use_relion_block_topology:
+        _ensure_optional_ffi(_TARGET_BACKPROJECT_INDEXED_SKIP_ZERO)
+        return _TARGET_BACKPROJECT_INDEXED_SKIP_ZERO
+    return _TARGET_BACKPROJECT_INDEXED
+
+
+@functools.partial(jax.jit, static_argnums=(4, 5, 6, 7, 8, 9, 10, 11))
+def backproject_indexed(
+    volume: jax.Array,
+    images: jax.Array,
+    pixel_indices: jax.Array,
+    rotation_matrices: jax.Array,
+    image_shape: Tuple[int, int] = (0, 0),
+    volume_shape: Tuple[int, int, int] = (0, 0, 0),
+    order: int = 1,
+    half_volume: bool = False,
+    half_image: bool = False,
+    max_r: float | None = None,
+    relion_x_half: bool = False,
+    upsampling: int | None = None,
+    runtime_max_r=None,
+) -> jax.Array:
+    """Back-project images whose pixels are stored in a compact indexed layout.
+
+    ``pixel_indices`` contains the flattened pixel positions in the original
+    image grid (or packed half-image grid when ``half_image=True``). The kernel
+    interprets ``images[:, j]`` as the value at ``pixel_indices[j]``.
+
+    ``max_r`` clips the image radius; ``upsampling`` gives the volume padding when
+    the images are on another grid (see ``_infer_backproject_upsampling``).
+
+    ``runtime_max_r`` (a traced scalar in image Fourier pixels, not a program
+    key) replaces ``max_r`` as the clip while the static ``max_r`` still sizes
+    the volume: every cutoff of the kernel -- the image radius, RELION's 3-D
+    radius check and its compact trilinear bound -- reads the runtime value, so
+    one program serves every radius up to ``max_r``. It is encoded exactly as the
+    static radius is (``_encode_max_r``).
+    """
+    _ensure_ffi()
+    _validate_inputs(volume_shape, image_shape, order, half_volume, half_image, max_r=max_r, upsampling=upsampling)
+    if relion_x_half and not (half_volume and half_image):
+        raise ValueError("relion_x_half requires half_volume=True and half_image=True")
+    kw, _, _ = _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image, max_r, upsampling)
+    kw["relion_fold_x"] = np.int64(int(relion_x_half))
+    use_relion_block_topology = bool(relion_x_half and relion_x_half_bp_block_topology_enabled())
+    kw["relion_block_topology"] = np.int64(int(use_relion_block_topology))
+    pixel_indices = jnp.asarray(pixel_indices, dtype=jnp.int32).reshape(-1)
+    if use_relion_block_topology:
+        logger.info("RELION x-half diagnostic: 128-thread one-block backprojection topology enabled")
+        images, pixel_indices, current_height, current_half_width = _prepare_relion_x_half_block_topology_operands(
+            images, pixel_indices, image_shape, max_r
+        )
+        kw["image_h"] = np.int64(current_height)
+        kw["image_w"] = np.int64(current_half_width)
+        kw["full_image_w"] = np.int64(current_height)
+    if relion_x_half:
+        rotation_matrices = _relion_x_half_backproject_rotation_to_kernel(
+            rotation_matrices,
+            _volume_real_dtype(volume),
+        )
+    rot6 = _rot_to_compact(rotation_matrices, _volume_real_dtype(volume))
+    out_type = jax.ShapeDtypeStruct(volume.shape, volume.dtype)
+
+    if runtime_max_r is not None:
+        if use_relion_block_topology or backproject_skip_zero_requested():
+            raise NotImplementedError(
+                "a runtime backprojection radius is implemented for the ordinary indexed kernel only"
+            )
+        _ensure_optional_ffi(_TARGET_BACKPROJECT_INDEXED_RUNTIME_RADIUS)
+        ups = int(kw["upsampling"])
+        padded = jnp.asarray(runtime_max_r, dtype=jnp.float64) * float(ups)
+        runtime_max_r2_x4 = jnp.round(padded * padded * 4.0).astype(jnp.int64)
+        return jax.ffi.ffi_call(
+            _TARGET_BACKPROJECT_INDEXED_RUNTIME_RADIUS,
+            out_type,
+            input_output_aliases={3: 0},
+            vmap_method="sequential",
+        )(images, pixel_indices, rot6, volume, runtime_max_r2_x4, **kw)
+    target = _backproject_indexed_target(use_relion_block_topology)
+    return jax.ffi.ffi_call(
+        target,
+        out_type,
+        input_output_aliases={3: 0},
+        vmap_method="sequential",
+    )(images, pixel_indices, rot6, volume, **kw)
+
+
+@functools.partial(jax.jit, static_argnums=(6, 7, 8))
+def _backproject_indexed_signature_impl(
+    volume: jax.Array,
+    images: jax.Array,
+    pixel_indices: jax.Array,
+    rotation_matrices: jax.Array,
+    canonical_rotation_keys: jax.Array,
+    signature_row_indices: jax.Array,
+    image_shape: Tuple[int, int],
+    volume_shape: Tuple[int, int, int],
+    max_r: float,
+) -> tuple[jax.Array, ...]:
+    """Run the ordinary indexed production kernel plus its inert signature companion."""
+
+    _ensure_ffi()
+    _validate_inputs(volume_shape, image_shape, 1, True, True, max_r=max_r)
+    if int(volume_shape[2]) % 2 == 0:
+        raise ValueError(f"ordinary indexed signature requires an odd BPref grid, got {volume_shape}")
+    if volume.dtype != jnp.complex64 or images.dtype != jnp.complex64:
+        raise TypeError("ordinary indexed signature volume/images must be complex64")
+    if pixel_indices.dtype != jnp.int32:
+        raise TypeError("ordinary indexed signature pixel indices must be int32")
+    if canonical_rotation_keys.dtype != jnp.int32 or signature_row_indices.dtype != jnp.int32:
+        raise TypeError("ordinary indexed signature keys/selected rows must be int32")
+    if images.ndim != 2 or pixel_indices.shape != (images.shape[1],):
+        raise ValueError("ordinary indexed signature requires rank-2 rows and matching pixel indices")
+    if rotation_matrices.shape != (images.shape[0], 3, 3):
+        raise ValueError("ordinary indexed signature rotations must have shape (n_rows,3,3)")
+    if canonical_rotation_keys.shape != (images.shape[0],):
+        raise ValueError("ordinary indexed signature rotation key length mismatch")
+    expected_volume_size = int(volume_shape[0] * volume_shape[1] * (volume_shape[2] // 2 + 1))
+    if volume.shape != (expected_volume_size,):
+        raise ValueError("ordinary indexed signature accumulator shape mismatch")
+
+    kw, _, _ = _ffi_kwargs(image_shape, volume_shape, 1, True, True, max_r)
+    kw["relion_fold_x"] = np.int64(1)
+    kw["relion_block_topology"] = np.int64(0)
+    kernel_rotations = _relion_x_half_backproject_rotation_to_kernel(rotation_matrices, jnp.float32)
+    rot6 = _rot_to_compact(kernel_rotations, jnp.float32)
+    signature_shape = (int(signature_row_indices.shape[0]), int(images.shape[1]))
+    out_types = (
+        jax.ShapeDtypeStruct(volume.shape, volume.dtype),
+        jax.ShapeDtypeStruct(signature_shape, jnp.int32),
+        jax.ShapeDtypeStruct(signature_shape, jnp.int32),
+        jax.ShapeDtypeStruct(signature_shape, jnp.int32),
+        jax.ShapeDtypeStruct((*signature_shape, 5), jnp.float32),
+        jax.ShapeDtypeStruct((*signature_shape, 8), jnp.int32),
+        jax.ShapeDtypeStruct((*signature_shape, 8), jnp.float32),
+        jax.ShapeDtypeStruct((*signature_shape, 8), jnp.int32),
+        jax.ShapeDtypeStruct(volume.shape, volume.dtype),
+        jax.ShapeDtypeStruct(images.shape, images.dtype),
+        jax.ShapeDtypeStruct(pixel_indices.shape, pixel_indices.dtype),
+        jax.ShapeDtypeStruct(rot6.shape, rot6.dtype),
+        jax.ShapeDtypeStruct(canonical_rotation_keys.shape, canonical_rotation_keys.dtype),
+        jax.ShapeDtypeStruct(signature_row_indices.shape, signature_row_indices.dtype),
+    )
+    return jax.ffi.ffi_call(
+        _TARGET_BACKPROJECT_INDEXED_SIGNATURE,
+        out_types,
+        input_output_aliases={5: 0},
+        vmap_method="sequential",
+    )(
+        images,
+        pixel_indices,
+        rot6,
+        canonical_rotation_keys,
+        signature_row_indices,
+        volume,
+        **kw,
+    )
+
+
+def backproject_indexed_signature(
+    volume: jax.Array,
+    images: jax.Array,
+    pixel_indices: jax.Array,
+    rotation_matrices: jax.Array,
+    canonical_rotation_keys: jax.Array,
+    signature_row_indices: jax.Array,
+    image_shape: Tuple[int, int],
+    volume_shape: Tuple[int, int, int],
+    max_r: float,
+) -> tuple[jax.Array, ...]:
+    """Capture ordinary indexed CUDA geometry without changing its atomic launch."""
+
+    row_indices = np.asarray(signature_row_indices)
+    n_rows = int(images.shape[0])
+    if (
+        row_indices.ndim != 1
+        or row_indices.dtype != np.dtype(np.int32)
+        or row_indices.size == 0
+        or np.any(row_indices < 0)
+        or np.any(row_indices >= n_rows)
+        or (row_indices.size > 1 and np.any(np.diff(row_indices) <= 0))
+    ):
+        raise ValueError("ordinary indexed signature rows must be nonempty, unique, strictly increasing, and in range")
+    selected = jnp.asarray(row_indices, dtype=jnp.int32)
+    pixels = jnp.asarray(pixel_indices, dtype=jnp.int32).reshape(-1)
+    keys = jnp.asarray(canonical_rotation_keys, dtype=jnp.int32).reshape(-1)
+    outputs = _backproject_indexed_signature_impl(
+        volume,
+        images,
+        pixels,
+        rotation_matrices,
+        keys,
+        selected,
+        image_shape,
+        volume_shape,
+        max_r,
+    )
+    kernel_rotations = _relion_x_half_backproject_rotation_to_kernel(rotation_matrices, jnp.float32)
+    rot6 = _rot_to_compact(kernel_rotations, jnp.float32)
+    expected = (images, pixels, rot6, keys, selected)
+    observed = outputs[9:14]
+    mismatches = [
+        name
+        for name, lhs, rhs in zip(
+            ("images", "pixel_indices", "rot6", "rotation_keys", "signature_rows"),
+            expected,
+            observed,
+            strict=True,
+        )
+        if not _bitwise_array_equal(lhs, rhs)
+    ]
+    if not _bitwise_array_equal(outputs[0], outputs[8]):
+        mismatches.insert(0, "accumulator")
+    if mismatches:
+        raise RuntimeError(
+            "ordinary indexed signature deterministic inertness gate failed for " + ", ".join(mismatches)
+        )
+    return outputs[:8]
+
+
+def _bitwise_array_equal(left, right) -> bool:
+    """Compare diagnostic device snapshots without numeric tolerance."""
+
+    left_np = np.asarray(left)
+    right_np = np.asarray(right)
+    return (
+        left_np.shape == right_np.shape
+        and left_np.dtype == right_np.dtype
+        and left_np.tobytes(order="C") == right_np.tobytes(order="C")
+    )
+
+
+# Public name for the EM package (relax split P2); the private name stays for existing callers.
+bitwise_array_equal = _bitwise_array_equal
+
+
+@functools.partial(jax.jit, static_argnums=(4, 5, 6, 7, 8, 9, 10, 11))
+def batch_backproject_indexed(
+    volumes: jax.Array,
+    images: jax.Array,
+    pixel_indices: jax.Array,
+    rotation_matrices: jax.Array,
+    image_shape: Tuple[int, int] = (0, 0),
+    volume_shape: Tuple[int, int, int] = (0, 0, 0),
+    order: int = 1,
+    half_volume: bool = False,
+    half_image: bool = False,
+    max_r: float | None = None,
+    relion_x_half: bool = False,
+    upsampling: int | None = None,
+) -> jax.Array:
+    """Back-project compact indexed images into a batch of volumes."""
+    _ensure_ffi()
+    _validate_inputs(volume_shape, image_shape, order, half_volume, half_image, max_r=max_r, upsampling=upsampling)
+    if relion_x_half and not (half_volume and half_image):
+        raise ValueError("relion_x_half requires half_volume=True and half_image=True")
+    kw, _, _ = _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image, max_r, upsampling)
+    kw["relion_fold_x"] = np.int64(int(relion_x_half))
+    use_relion_block_topology = bool(relion_x_half and relion_x_half_bp_block_topology_enabled())
+    kw["relion_block_topology"] = np.int64(int(use_relion_block_topology))
+    pixel_indices = jnp.asarray(pixel_indices, dtype=jnp.int32).reshape(-1)
+    if use_relion_block_topology:
+        logger.info("RELION x-half diagnostic: batched 128-thread one-block backprojection topology enabled")
+        images, pixel_indices, current_height, current_half_width = _prepare_relion_x_half_block_topology_operands(
+            images, pixel_indices, image_shape, max_r
+        )
+        kw["image_h"] = np.int64(current_height)
+        kw["image_w"] = np.int64(current_half_width)
+        kw["full_image_w"] = np.int64(current_height)
+    if relion_x_half:
+        rotation_matrices = _relion_x_half_backproject_rotation_to_kernel(
+            rotation_matrices,
+            _volume_real_dtype(volumes),
+        )
+    rot6 = _rot_to_compact(rotation_matrices, _volume_real_dtype(volumes))
+    out_type = jax.ShapeDtypeStruct(volumes.shape, volumes.dtype)
+
+    return jax.ffi.ffi_call(
+        _TARGET_BATCH_BACKPROJECT_INDEXED,
+        out_type,
+        input_output_aliases={3: 0},
+        vmap_method="sequential",
+    )(images, pixel_indices, rot6, volumes, **kw)
+
+
+@functools.partial(jax.jit, static_argnums=(2, 3, 4, 5, 6, 7, 8))
+def _project_impl(
     volume: jax.Array,
     rotation_matrices: jax.Array,
     image_shape: Tuple[int, int] = (0, 0),
@@ -774,6 +1467,7 @@ def project(
     half_volume: bool = False,
     half_image: bool = False,
     max_r: float | None = None,
+    relion_texture_interp: bool = False,
 ) -> jax.Array:
     """Project *volume* to 2D images.
 
@@ -788,8 +1482,16 @@ def project(
     complex array, shape ``(n_images, n_pixels)``  (n_pixels = H*W or H*(W//2+1)).
     """
     _ensure_ffi()
-    _validate_inputs(volume_shape, image_shape, order, half_volume, half_image)
-    kw, ih, iw_eff = _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image, max_r)
+    _validate_inputs(volume_shape, image_shape, order, half_volume, half_image, max_r=max_r)
+    kw, ih, iw_eff = _project_ffi_kwargs(
+        image_shape,
+        volume_shape,
+        order,
+        half_volume,
+        half_image,
+        max_r,
+        relion_texture_interp=relion_texture_interp,
+    )
     n_images = rotation_matrices.shape[0]
     n_pixels = ih * iw_eff
     rot6 = _rot_to_compact(rotation_matrices, _volume_real_dtype(volume))
@@ -800,6 +1502,62 @@ def project(
         out_type,
         vmap_method="sequential",
     )(volume, rot6, **kw)
+
+
+def project(
+    volume: jax.Array,
+    rotation_matrices: jax.Array,
+    image_shape: Tuple[int, int] = (0, 0),
+    volume_shape: Tuple[int, int, int] = (0, 0, 0),
+    order: int = 1,
+    half_volume: bool = False,
+    half_image: bool = False,
+    max_r: float | None = None,
+    relion_texture_interp: bool = False,
+) -> jax.Array:
+    """Project *volume* to 2D images.
+
+    ``relion_texture_interp=True`` uses RELION-style CUDA texture
+    interpolation, including RELION's positive even-box Nyquist convention,
+    where the FFI backend supports it. The flag is forwarded as a static
+    argument so manual and texture traces cannot alias in JAX caches.
+    """
+    global _texture_debug_keys
+    debug_key = (
+        relion_texture_interp,
+        getattr(volume, "dtype", None),
+        order,
+        half_volume,
+        half_image,
+        image_shape,
+        volume_shape,
+        max_r,
+    )
+    if os.environ.get("RECOVAR_DEBUG_TEXTURE_PROJECT", "0") == "1" and debug_key not in _texture_debug_keys:
+        print(
+            "[RECOVAR_TEXTURE_PROJECT]",
+            f"enabled={relion_texture_interp}",
+            f"dtype={getattr(volume, 'dtype', None)}",
+            f"order={order}",
+            f"half_volume={half_volume}",
+            f"half_image={half_image}",
+            f"image_shape={image_shape}",
+            f"volume_shape={volume_shape}",
+            f"max_r={max_r}",
+            flush=True,
+        )
+        _texture_debug_keys.add(debug_key)
+    return _project_impl(
+        volume,
+        rotation_matrices,
+        image_shape,
+        volume_shape,
+        order,
+        half_volume,
+        half_image,
+        max_r,
+        relion_texture_interp,
+    )
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -840,7 +1598,7 @@ def batch_backproject(
     Updated volumes, shape ``(batch, vol_flat_size)``.
     """
     _ensure_ffi()
-    _validate_inputs(volume_shape, image_shape, order, half_volume, half_image)
+    _validate_inputs(volume_shape, image_shape, order, half_volume, half_image, max_r=max_r)
     kw, ih, iw_eff = _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image, max_r)
     rot6 = _rot_to_compact(rotation_matrices, _volume_real_dtype(volumes))
     out_type = jax.ShapeDtypeStruct(volumes.shape, volumes.dtype)
@@ -853,7 +1611,49 @@ def batch_backproject(
     )(images, rot6, volumes, **kw)
 
 
-@functools.partial(jax.jit, static_argnums=(2, 3, 4, 5, 6, 7))
+@functools.partial(jax.jit, static_argnums=(3, 4, 5))
+def per_image_backproject(
+    volumes: jax.Array,
+    base_images: jax.Array,
+    rotation_matrices: jax.Array,
+    image_shape: Tuple[int, int] = (0, 0),
+    volume_shape: Tuple[int, int, int] = (0, 0, 0),
+    max_r: float | None = None,
+) -> jax.Array:
+    """Per-image backproject: output ``(half_vol, n_images)``.
+
+    Each image scatters to its own column — near-zero atomicAdd contention.
+    Follow with GEMM to reduce: ``result @ smz_tri → (half_vol, n_ch)``.
+    """
+    _ensure_ffi()
+    N0, N1, N2 = volume_shape
+    H, W = image_shape
+    ups = N0 // H
+    max_r2_x4 = -1 if max_r is None else int(4 * max_r * max_r)
+    base_images = base_images.astype(volumes.dtype)
+    rot6 = _rot_to_compact(rotation_matrices, volumes.dtype)
+    out_type = jax.ShapeDtypeStruct(volumes.shape, volumes.dtype)
+
+    return jax.ffi.ffi_call(
+        _TARGET_PER_IMAGE_BP,
+        out_type,
+        input_output_aliases={2: 0},
+        vmap_method="sequential",
+    )(
+        base_images,
+        rot6,
+        volumes,
+        image_h=H,
+        image_w=W,
+        vol_n0=N0,
+        vol_n1=N1,
+        vol_n2=N2,
+        upsampling=ups,
+        max_r2_x4=max_r2_x4,
+    )
+
+
+@functools.partial(jax.jit, static_argnums=(2, 3, 4, 5, 6, 7, 8))
 def batch_project(
     volumes: jax.Array,
     rotation_matrices: jax.Array,
@@ -863,6 +1663,7 @@ def batch_project(
     half_volume: bool = False,
     half_image: bool = False,
     max_r: float | None = None,
+    relion_texture_interp: bool = False,
 ) -> jax.Array:
     """Project a batch of volumes to 2D images via vmap over single-volume project.
 
@@ -878,21 +1679,6 @@ def batch_project(
     -------
     complex array, shape ``(batch, n_images, n_pixels)``.
     """
-    # TODO: The underlying CUDA batch_project_kernel loops over volumes
-    # sequentially per-thread (`for b in 0..batch_size`), causing L2 cache
-    # thrashing when batch is large (e.g. 161 basis vectors × 256³ volumes).
-    # Each thread jumps 128 MB between volumes, far exceeding L2 capacity
-    # (40 MB on A100), so every read is a cache miss.
-    #
-    # Fix options for the CUDA kernel:
-    #   1. Parallelize over volumes in the grid dimension (one thread-block
-    #      per volume×image×pixel-tile) so all threads in a block read from
-    #      the same volume → cache-friendly.
-    #   2. Tile the volume batch loop with shared memory staging.
-    #
-    # For now, vmap over single-volume `project` is ~30-40x faster for large
-    # batches because each kernel launch processes one volume that stays
-    # cache-hot for all images.
     return jax.vmap(
         lambda v: project(
             v,
@@ -903,6 +1689,7 @@ def batch_project(
             half_volume=half_volume,
             half_image=half_image,
             max_r=max_r,
+            relion_texture_interp=relion_texture_interp,
         )
     )(volumes)
 
@@ -976,78 +1763,3 @@ class GpuArray:
             pass  # destructors must not raise
 
 
-def _random_rotations_6(n, rng=None):
-    """(n, 6) float32: first two rows of random rotation matrices."""
-    if rng is None:
-        rng = np.random.default_rng()
-    z = rng.standard_normal((n, 3, 3))
-    q, r = np.linalg.qr(z)
-    d = np.sign(np.diagonal(r, axis1=1, axis2=2))
-    q = q * d[:, None, :]
-    det = np.linalg.det(q)
-    q[det < 0] *= -1
-    return q[:, :2, :].reshape(n, 6).astype(np.float32)
-
-
-class CudaBenchmarker:
-    """Benchmark helper using ctypes (no JAX overhead)."""
-
-    def __init__(self, image_shape, volume_shape, order=1, half_volume=False, half_image=False):
-        self.ih, self.iw_full = image_shape
-        self.N0, self.N1, self.N2 = volume_shape
-        self.order = order
-        self.half_volume = int(half_volume)
-        self.half_image = int(half_image)
-        self.ups = self.N0 // self.ih
-        self.center = float(self.N0 // 2)
-        self.N2_eff = self.N2 // 2 + 1 if half_volume else self.N2
-
-        if half_image:
-            self.iw = self.iw_full // 2 + 1
-        else:
-            self.iw = self.iw_full
-        self.n_pixels = self.ih * self.iw
-
-        self._lib = _get_lib()
-
-    def benchmark(self, n_images, n_iters=100, kind="backproject"):
-        rng = np.random.default_rng(42)
-        vol_size = self.N0 * self.N1 * self.N2_eff
-        vol_f32 = rng.standard_normal(vol_size * 2).astype(np.float32)
-        img_f32 = rng.standard_normal(n_images * self.n_pixels * 2).astype(np.float32)
-        rots = _random_rotations_6(n_images, rng)
-
-        vol_d = GpuArray(vol_f32)
-        img_d = GpuArray(img_f32)
-        rot_d = GpuArray(rots)
-
-        fn = self._lib.benchmark_backproject_c if kind == "backproject" else self._lib.benchmark_project_c
-        fn.restype = ctypes.c_float
-        ms = fn(
-            vol_d.as_float_ptr(),
-            img_d.as_float_ptr(),
-            rot_d.as_float_ptr(),
-            n_images,
-            self.n_pixels,
-            self.ih,
-            self.iw,
-            self.N0,
-            self.N1,
-            self.N2,
-            self.ups,
-            ctypes.c_float(self.center),
-            self.order,
-            self.half_volume,
-            self.half_image,
-            self.iw_full,
-            n_iters,
-        )
-
-        vol_d.free()
-        img_d.free()
-        rot_d.free()
-        return {
-            "ms_total": float(ms),
-            "ms_per_iter": float(ms) / n_iters,
-            "throughput_img_per_s": n_images * n_iters / (float(ms) / 1000.0),
-        }

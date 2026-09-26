@@ -26,8 +26,18 @@ import numpy as np
 import recovar.core.fourier_transform_utils as ftu
 
 
-@functools.partial(jax.custom_vjp, nondiff_argnums=(2, 3, 4, 5, 6, 7))
-def cuda_project(volume, rotation_matrices, image_shape, volume_shape, order, half_volume, half_image, max_r=None):
+@functools.partial(jax.custom_vjp, nondiff_argnums=(2, 3, 4, 5, 6, 7, 8))
+def cuda_project(
+    volume,
+    rotation_matrices,
+    image_shape,
+    volume_shape,
+    order,
+    half_volume,
+    half_image,
+    max_r=None,
+    relion_texture_interp=False,
+):
     """Project volume to images via CUDA kernel (all half-vol/half-img combos)."""
     from recovar.cuda_backproject import project
 
@@ -40,15 +50,37 @@ def cuda_project(volume, rotation_matrices, image_shape, volume_shape, order, ha
         half_volume=half_volume,
         half_image=half_image,
         max_r=max_r,
+        relion_texture_interp=relion_texture_interp,
     )
 
 
-def _cuda_project_fwd(volume, rotation_matrices, image_shape, volume_shape, order, half_volume, half_image, max_r):
-    out = cuda_project(volume, rotation_matrices, image_shape, volume_shape, order, half_volume, half_image, max_r)
+def _cuda_project_fwd(
+    volume,
+    rotation_matrices,
+    image_shape,
+    volume_shape,
+    order,
+    half_volume,
+    half_image,
+    max_r,
+    relion_texture_interp,
+):
+    out = cuda_project(
+        volume,
+        rotation_matrices,
+        image_shape,
+        volume_shape,
+        order,
+        half_volume,
+        half_image,
+        max_r,
+        relion_texture_interp,
+    )
     return out, (rotation_matrices,)
 
 
-def _cuda_project_bwd(image_shape, volume_shape, order, half_volume, half_image, max_r, res, g):
+def _cuda_project_bwd(image_shape, volume_shape, order, half_volume, half_image, max_r, relion_texture_interp, res, g):
+    _ = relion_texture_interp
     (rotation_matrices,) = res
     if order == 3:
         # Cubic backproject not supported in CUDA (64 atomic ops per pixel).

@@ -8,8 +8,40 @@ import numpy as np
 from recovar import core, utils, jax_config
 
 logger = logging.getLogger(__name__)
-from recovar.simulation import simulator
+from recovar.simulation import simulator, solvent_contrast
 from recovar.core import linalg, mask
+
+
+def load_ground_truth_volumes(simulation_info, volumes_path_root=None):
+    """Load the flat Fourier volumes the simulator actually projected.
+
+    Applies the stored global ``scale_vol`` and, when
+    ``simulation_info["atomic_solvent_correction"]`` is an enabled record whose
+    ``ground_truth_representation`` is ``"uncorrected_inputs"``, the recorded
+    solvent-contrast operator ``T`` (exactly once; the input files are never
+    modified). Datasets without the record keep the legacy uncorrected truth.
+    See ``docs/math/atomic_solvent_contrast.md``.
+    """
+    volumes_path_root = simulation_info["volumes_path_root"] if volumes_path_root is None else volumes_path_root
+    record = solvent_contrast.record_from_simulation_info(simulation_info)
+    if "scale_vol" in simulation_info:
+        volumes = simulator.load_volumes_from_folder(
+            volumes_path_root,
+            simulation_info["grid_size"],
+            simulation_info["trailing_zero_format_in_vol_name"],
+            normalize=False,
+        )
+        if record is not None and record["ground_truth_representation"] == solvent_contrast.UNCORRECTED_INPUTS:
+            return solvent_contrast.apply_record(volumes * simulation_info["scale_vol"], record)
+        return volumes * simulation_info["scale_vol"]
+    if record is not None:
+        raise ValueError("atomic solvent correction record requires scale_vol in simulation_info")
+    return simulator.load_volumes_from_folder(
+        volumes_path_root,
+        simulation_info["grid_size"],
+        simulation_info["trailing_zero_format_in_vol_name"],
+        normalize=True,
+    )
 
 
 def load_heterogeneous_reconstruction(simulation_info_file, volumes_path_root=None, load_volumes=True):
@@ -18,27 +50,7 @@ def load_heterogeneous_reconstruction(simulation_info_file, volumes_path_root=No
     else:
         simulation_info = utils.pickle_load(simulation_info_file)
 
-    volumes_path_root = simulation_info["volumes_path_root"] if volumes_path_root is None else volumes_path_root
-
-    if load_volumes:
-        if "scale_vol" in simulation_info:
-            volumes = simulator.load_volumes_from_folder(
-                volumes_path_root,
-                simulation_info["grid_size"],
-                simulation_info["trailing_zero_format_in_vol_name"],
-                normalize=False,
-            )
-            volumes = volumes * simulation_info["scale_vol"]
-        else:
-            volumes = simulator.load_volumes_from_folder(
-                volumes_path_root,
-                simulation_info["grid_size"],
-                simulation_info["trailing_zero_format_in_vol_name"],
-                normalize=True,
-            )
-
-    else:
-        volumes = None
+    volumes = load_ground_truth_volumes(simulation_info, volumes_path_root) if load_volumes else None
 
     return HeterogeneousVolumeDistribution(
         volumes, simulation_info["image_assignment"], simulation_info["per_image_contrast"]
@@ -46,6 +58,15 @@ def load_heterogeneous_reconstruction(simulation_info_file, volumes_path_root=No
 
 
 class HeterogeneousVolumeDistribution:
+    """Weighted ensemble of ground-truth volumes and its mean, covariance and PCs.
+
+    All statistics are computed from ``volumes`` as given. For a dataset
+    simulated with the atomic solvent correction these are the effective
+    volumes ``T(V)`` from :func:`load_ground_truth_volumes`, so the mean is
+    ``T(mean)``, the covariance ``T C T*`` and the PCs come from the centered
+    corrected ensemble with the same state weights.
+    """
+
     def __init__(self, volumes, image_assignments, contrasts, valid_indices=None, vol_batch_size=None):
 
         self.volume_shape = utils.guess_vol_shape_from_vol_size(volumes.shape[-1])
