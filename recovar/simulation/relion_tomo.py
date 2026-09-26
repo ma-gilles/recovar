@@ -137,6 +137,7 @@ def generate_relion5_tomo_dataset(
     contrast_std=0.1,
     hidden_tilt_fraction=0.0,
     origin_std_angstrom=0.0,
+    particle_eulers=None,
     volume_distribution=None,
     premultiplied_ctf=False,
     trailing_zero_format_in_vol_name=True,
@@ -175,6 +176,10 @@ def generate_relion5_tomo_dataset(
         (``rlnOriginX/Y/ZAngst``, tomogram frame). Every tilt image of the particle is
         shifted by its projection, ``Aproj_i[:2] o`` (RELION's
         ``Experiment::getTranslationInTiltSeries``); 0 writes centred particles.
+    particle_eulers : array of shape (n_particles, 3) or None
+        Particle poses as RELION Euler angles (rot, tilt, psi) in degrees (ZYZ,
+        ``rlnAngleRot/Tilt/Psi``), e.g. a preferred-orientation distribution. None draws
+        uniform random rotations from ``seed``. The other random draws do not depend on it.
     tomogram_size : tuple of int
         ``rlnTomoSizeX/Y/Z`` in bin-1 pixels; must be even.
     atomic_solvent_correction, solvent_contrast_a, solvent_contrast_B, atomic_bfactor
@@ -270,7 +275,12 @@ def generate_relion5_tomo_dataset(
     half_extent = 0.4 * np.asarray(tomogram_size, dtype=float) * voxel_size
     half_extent[2] = 0.3 * tomogram_size[2] * voxel_size
     coords = rng.uniform(-half_extent, half_extent, size=(n_particles, 3))
-    eulers = Rotation.random(n_particles, random_state=seed).as_euler("ZYZ", degrees=True)
+    if particle_eulers is None:
+        eulers = Rotation.random(n_particles, random_state=seed).as_euler("ZYZ", degrees=True)
+    else:
+        eulers = np.asarray(particle_eulers, dtype=np.float64)
+        if eulers.shape != (n_particles, 3) or not np.all(np.isfinite(eulers)):
+            raise ValueError(f"particle_eulers must be finite with shape ({n_particles}, 3), got {eulers.shape}")
     visible = rng.random((n_particles, n_tilts)) >= hidden_tilt_fraction
     visible[:, np.argmin(np.abs(tilt_angles))] = True
     particle_names = [f"{tomo_names[t]}/{i}" for t, i in zip(particle_tomo, particle_index)]

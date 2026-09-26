@@ -199,6 +199,57 @@ def test_ground_truth_offsets_project_into_every_tilt(tmp_path):
         )
 
 
+def test_given_particle_eulers_are_written_and_simulated(tmp_path):
+    """particle_eulers replaces the uniform draw; STAR poses and per-tilt rotations follow it, the rest is unchanged."""
+    _write_volume(tmp_path)
+    eulers = np.array([[10.0, 5.0, -30.0], [-120.0, 12.0, 45.0], [170.0, 2.0, 100.0], [60.0, 20.0, -170.0]])
+    kwargs = dict(
+        n_particles=4,
+        grid_size=GRID,
+        n_tomograms=2,
+        max_tilt=30.0,
+        tilt_step=10.0,
+        tomogram_size=(512, 512, 128),
+        origin_std_angstrom=2.0,
+        seed=7,
+    )
+    given = relion_tomo.generate_relion5_tomo_dataset(
+        str(tmp_path / "given"), str(tmp_path / "vol"), VOXEL, particle_eulers=eulers, **kwargs
+    )
+    uniform = relion_tomo.generate_relion5_tomo_dataset(
+        str(tmp_path / "uniform"), str(tmp_path / "vol"), VOXEL, **kwargs
+    )
+    particles, _ = starfile.read_star(given["particles"])
+    written = particles[["_rlnAngleRot", "_rlnAngleTilt", "_rlnAnglePsi"]].values.astype(float)
+    np.testing.assert_allclose(written, eulers, atol=1e-6)
+    # Per-tilt rotation Aproj_i = A_row A_pose^T depends only on the tilt, so it matches the uniform-pose dataset row by row.
+    uniform_particles, _ = starfile.read_star(uniform["particles"])
+    a_proj = {}
+    for label, ps in (("given", particles), ("uniform", uniform_particles)):
+        flat, _ = starfile.read_star(str(tmp_path / label / "particles_2d.star"))
+        pose = dict(
+            zip(
+                ps["_rlnTomoParticleName"].values,
+                ps[["_rlnAngleRot", "_rlnAngleTilt", "_rlnAnglePsi"]].values.astype(float),
+            )
+        )
+        a_proj[label] = np.stack(
+            [
+                _relion_euler_matrix(*row[["_rlnAngleRot", "_rlnAngleTilt", "_rlnAnglePsi"]].values.astype(float))
+                @ _relion_euler_matrix(*pose[row["_rlnGroupName"]]).T
+                for _, row in flat.iterrows()
+            ]
+        )
+    np.testing.assert_allclose(a_proj["given"], a_proj["uniform"], atol=1e-5)
+    np.testing.assert_allclose(
+        given["simulation_info"]["particle_origins_angstrom"], uniform["simulation_info"]["particle_origins_angstrom"]
+    )
+    with pytest.raises(ValueError, match="particle_eulers"):
+        relion_tomo.generate_relion5_tomo_dataset(
+            str(tmp_path / "bad"), str(tmp_path / "vol"), VOXEL, particle_eulers=eulers[:3], **kwargs
+        )
+
+
 def test_relion_dose_weight_matches_ctf_h():
     """exp(-0.5 dose / (0.245 u2^-0.8325 + 2.81)) with weight 1 at u2 = 0, as in RELION's CTF::getCTF."""
     u2 = np.array([0.0, 1e-4, 0.01, 0.0625])
