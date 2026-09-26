@@ -448,12 +448,15 @@ def adjoint_slice_volume_indexed(
     max_r=_AUTO,
     relion_x_half=False,
     upsampling=None,
+    runtime_max_r=None,
 ):
     """Adjoint slice extraction from a compact indexed pixel layout.
 
     ``pixel_indices`` contains flattened pixel locations in the original image
     grid (or packed half-image grid when ``half_image=True``). This is useful
     for Fourier-windowed paths that gather a compact subset of frequencies.
+    ``runtime_max_r`` (CUDA only) clips at a traced radius up to the static
+    ``max_r`` (``recovar.cuda_backproject.backproject_indexed``).
     """
     slices = jnp.asarray(slices)
     pixel_indices = jnp.asarray(pixel_indices, dtype=jnp.int32).reshape(-1)
@@ -490,7 +493,11 @@ def adjoint_slice_volume_indexed(
             max_r=_cuda_max_r(max_r, image_shape, volume_shape),
             relion_x_half=relion_x_half,
             upsampling=upsampling,
+            runtime_max_r=runtime_max_r,
         )
+
+    if runtime_max_r is not None:
+        raise NotImplementedError("a runtime backprojection radius requires the CUDA backproject kernel")
 
     if upsampling is not None:
         raise NotImplementedError("an explicit upsampling requires the CUDA backproject kernel")

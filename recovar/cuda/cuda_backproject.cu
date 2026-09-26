@@ -587,12 +587,20 @@ backproject_indexed_kernel(
     int upsampling, int full_image_w,
     T max_r2,
     int relion_fold_x,
-    int skip_zero_values = 0)
+    int skip_zero_values = 0,
+    const int64_t* __restrict__ runtime_max_r2_x4 = nullptr)
 {
     __shared__ T R[6];
 
     const int img_idx = blockIdx.x;
     const int pix     = blockIdx.y * BLOCK_SIZE + threadIdx.x;
+    /* A runtime radius (quarter-pixel^2 in padded units, as the attribute)
+     * replaces the attribute: every cutoff below reads max_r2, so one program
+     * serves every radius up to the volume's capacity. */
+    if (runtime_max_r2_x4 != nullptr) {
+        const int64_t x4 = *runtime_max_r2_x4;
+        max_r2 = x4 < 0 ? (T)-1 : (T)x4 / (T)4;
+    }
 
     if (threadIdx.x < 6) R[threadIdx.x] = rot[img_idx * 6 + threadIdx.x];
     __syncthreads();
@@ -1752,8 +1760,11 @@ cudaError_t launch_backproject_indexed(
     int64_t full_iw, int64_t real_data = 0, int64_t max_r2_x4 = -1,
     int64_t relion_fold_x = 0,
     int64_t relion_block_topology = 0,
-    int64_t skip_zero_values = 0)
+    int64_t skip_zero_values = 0,
+    const int64_t* runtime_max_r2_x4 = nullptr)
 {
+    if (runtime_max_r2_x4 != nullptr && relion_block_topology)
+        return cudaErrorInvalidValue;
     const int N2_eff = half_vol ? (int)(N2 / 2 + 1) : (int)N2;
     const T c0 = (T)(N0 / 2);
     const T c1 = (T)(N1 / 2);
@@ -1766,7 +1777,7 @@ cudaError_t launch_backproject_indexed(
         backproject_indexed_kernel<T, O, HV, HI, RD><<<grid, block, 0, s>>>( \
             vol, img, pixel_indices, rot, (int)n_pixels, (int)ih, (int)iw, \
             (int)N0, (int)N1, N2_eff, c0, c1, c2, (int)ups, (int)full_iw, max_r2, (int)relion_fold_x, \
-            (int)skip_zero_values)
+            (int)skip_zero_values, runtime_max_r2_x4)
 
     int key = (real_data ? 8 : 0) | (order ? 4 : 0) | (half_vol ? 2 : 0) | (half_img ? 1 : 0);
     if (!relion_block_topology) switch (key) {
@@ -2480,8 +2491,19 @@ static ffi::Error BackprojectIndexedCommon(
     ffi::AnyBuffer img,
     ffi::AnyBuffer pixel_indices,
     ffi::AnyBuffer rot,
-    ffi::Result<ffi::AnyBuffer> vol_out)
+    ffi::Result<ffi::AnyBuffer> vol_out,
+    const ffi::AnyBuffer* runtime_max_r2_x4 = nullptr)
 {
+    const int64_t* runtime_radius = nullptr;
+    if (runtime_max_r2_x4 != nullptr) {
+        if (runtime_max_r2_x4->element_type() != ffi::DataType::S64 ||
+            runtime_max_r2_x4->dimensions().size() != 0)
+            return ffi::Error::InvalidArgument("backproject_indexed: the runtime radius must be an int64 scalar");
+        if (relion_block_topology)
+            return ffi::Error::InvalidArgument(
+                "backproject_indexed: a runtime radius is not implemented for the RELION block topology");
+        runtime_radius = static_cast<const int64_t*>(runtime_max_r2_x4->untyped_data());
+    }
     if (skip_zero_values && relion_block_topology)
         return ffi::Error::InvalidArgument("backproject_indexed: skip_zero_values is not implemented for the RELION block topology");
     if (pixel_indices.element_type() != ffi::DataType::S32)
@@ -2501,28 +2523,28 @@ static ffi::Error BackprojectIndexedCommon(
             stream, (float*)vol_ptr, (const float*)img_ptr, (const int32_t*)pix_ptr, (const float*)rot_ptr,
             n_images, n_pixels, image_h, image_w, N0, N1, N2, upsampling,
             order, half_volume, half_image, full_image_w, /*real_data=*/0, max_r2_x4,
-            relion_fold_x, relion_block_topology, skip_zero_values);
+            relion_fold_x, relion_block_topology, skip_zero_values, runtime_radius);
         break;
     case ffi::DataType::C128:
         err = launch_backproject_indexed<double>(
             stream, (double*)vol_ptr, (const double*)img_ptr, (const int32_t*)pix_ptr, (const double*)rot_ptr,
             n_images, n_pixels, image_h, image_w, N0, N1, N2, upsampling,
             order, half_volume, half_image, full_image_w, /*real_data=*/0, max_r2_x4,
-            relion_fold_x, relion_block_topology, skip_zero_values);
+            relion_fold_x, relion_block_topology, skip_zero_values, runtime_radius);
         break;
     case ffi::DataType::F32:
         err = launch_backproject_indexed<float>(
             stream, (float*)vol_ptr, (const float*)img_ptr, (const int32_t*)pix_ptr, (const float*)rot_ptr,
             n_images, n_pixels, image_h, image_w, N0, N1, N2, upsampling,
             order, half_volume, half_image, full_image_w, /*real_data=*/1, max_r2_x4,
-            relion_fold_x, relion_block_topology, skip_zero_values);
+            relion_fold_x, relion_block_topology, skip_zero_values, runtime_radius);
         break;
     case ffi::DataType::F64:
         err = launch_backproject_indexed<double>(
             stream, (double*)vol_ptr, (const double*)img_ptr, (const int32_t*)pix_ptr, (const double*)rot_ptr,
             n_images, n_pixels, image_h, image_w, N0, N1, N2, upsampling,
             order, half_volume, half_image, full_image_w, /*real_data=*/1, max_r2_x4,
-            relion_fold_x, relion_block_topology, skip_zero_values);
+            relion_fold_x, relion_block_topology, skip_zero_values, runtime_radius);
         break;
     default:
         return ffi::Error::InvalidArgument("backproject_indexed: images must be C64, C128, F32, or F64");
@@ -2752,6 +2774,51 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Arg<ffi::AnyBuffer>()           /* pixel_indices */
         .Arg<ffi::AnyBuffer>()           /* rot           */
         .Arg<ffi::AnyBuffer>()           /* vol_in        */
+        .Ret<ffi::AnyBuffer>()           /* vol_out (aliased with vol_in) */
+);
+
+/* The same kernel with the radius as a device scalar (int64 max_r2_x4 in padded
+ * units), so the program is not keyed on it: a pass whose volume is a stable
+ * capacity class clips each call at RELION's logical radius. The max_r2_x4
+ * attribute gives the capacity and is ignored by the kernel. */
+ffi::Error BackprojectIndexedRuntimeRadiusImpl(
+    cudaStream_t stream,
+    RECOVAR_BACKPROJECT_INDEXED_ATTRS,
+    ffi::AnyBuffer img,
+    ffi::AnyBuffer pixel_indices,
+    ffi::AnyBuffer rot,
+    ffi::AnyBuffer /*vol_in*/,
+    ffi::AnyBuffer runtime_max_r2_x4,
+    ffi::Result<ffi::AnyBuffer> vol_out)
+{
+    return BackprojectIndexedCommon(
+        stream, image_h, image_w, N0, N1, N2, upsampling, order, half_volume, half_image,
+        full_image_w, max_r2_x4, relion_fold_x, relion_block_topology, /*skip_zero_values=*/0,
+        img, pixel_indices, rot, vol_out, &runtime_max_r2_x4);
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    BackprojectIndexedRuntimeRadius, BackprojectIndexedRuntimeRadiusImpl,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Attr<int64_t>("image_h")
+        .Attr<int64_t>("image_w")
+        .Attr<int64_t>("N0")
+        .Attr<int64_t>("N1")
+        .Attr<int64_t>("N2")
+        .Attr<int64_t>("upsampling")
+        .Attr<int64_t>("order")
+        .Attr<int64_t>("half_volume")
+        .Attr<int64_t>("half_image")
+        .Attr<int64_t>("full_image_w")
+        .Attr<int64_t>("max_r2_x4")
+        .Attr<int64_t>("relion_fold_x")
+        .Attr<int64_t>("relion_block_topology")
+        .Arg<ffi::AnyBuffer>()           /* img              */
+        .Arg<ffi::AnyBuffer>()           /* pixel_indices    */
+        .Arg<ffi::AnyBuffer>()           /* rot              */
+        .Arg<ffi::AnyBuffer>()           /* vol_in           */
+        .Arg<ffi::AnyBuffer>()           /* runtime max_r2_x4, int64 scalar */
         .Ret<ffi::AnyBuffer>()           /* vol_out (aliased with vol_in) */
 );
 

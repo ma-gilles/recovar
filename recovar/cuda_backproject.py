@@ -539,6 +539,7 @@ _ffi_lock = threading.Lock()
 _TARGET_BACKPROJECT = "cuda_backproject"
 _TARGET_BACKPROJECT_INDEXED = "cuda_backproject_indexed"
 _TARGET_BACKPROJECT_INDEXED_SKIP_ZERO = "cuda_backproject_indexed_skip_zero"
+_TARGET_BACKPROJECT_INDEXED_RUNTIME_RADIUS = "cuda_backproject_indexed_runtime_radius"
 _BACKPROJECT_SKIP_ZERO_ENV = "RECOVAR_BACKPROJECT_SKIP_ZERO"
 _TARGET_BACKPROJECT_INDEXED_SIGNATURE = "cuda_backproject_indexed_signature"
 _TARGET_PROJECT = "cuda_project"
@@ -803,6 +804,10 @@ _OPTIONAL_FFI_REGISTRATIONS = {
     _TARGET_BACKPROJECT_INDEXED_SKIP_ZERO: (
         "BackprojectIndexedSkipZero",
         "RECOVAR_BACKPROJECT_SKIP_ZERO requires an explicit CUDA build with BackprojectIndexedSkipZero",
+    ),
+    _TARGET_BACKPROJECT_INDEXED_RUNTIME_RADIUS: (
+        "BackprojectIndexedRuntimeRadius",
+        "a runtime backprojection radius requires a CUDA build with BackprojectIndexedRuntimeRadius",
     ),
 }
 
@@ -1187,6 +1192,7 @@ def backproject_indexed(
     max_r: float | None = None,
     relion_x_half: bool = False,
     upsampling: int | None = None,
+    runtime_max_r=None,
 ) -> jax.Array:
     """Back-project images whose pixels are stored in a compact indexed layout.
 
@@ -1196,6 +1202,13 @@ def backproject_indexed(
 
     ``max_r`` clips the image radius; ``upsampling`` gives the volume padding when
     the images are on another grid (see ``_infer_backproject_upsampling``).
+
+    ``runtime_max_r`` (a traced scalar in image Fourier pixels, not a program
+    key) replaces ``max_r`` as the clip while the static ``max_r`` still sizes
+    the volume: every cutoff of the kernel -- the image radius, RELION's 3-D
+    radius check and its compact trilinear bound -- reads the runtime value, so
+    one program serves every radius up to ``max_r``. It is encoded exactly as the
+    static radius is (``_encode_max_r``).
     """
     _ensure_ffi()
     _validate_inputs(volume_shape, image_shape, order, half_volume, half_image, max_r=max_r, upsampling=upsampling)
@@ -1222,6 +1235,21 @@ def backproject_indexed(
     rot6 = _rot_to_compact(rotation_matrices, _volume_real_dtype(volume))
     out_type = jax.ShapeDtypeStruct(volume.shape, volume.dtype)
 
+    if runtime_max_r is not None:
+        if use_relion_block_topology or backproject_skip_zero_requested():
+            raise NotImplementedError(
+                "a runtime backprojection radius is implemented for the ordinary indexed kernel only"
+            )
+        _ensure_optional_ffi(_TARGET_BACKPROJECT_INDEXED_RUNTIME_RADIUS)
+        ups = int(kw["upsampling"])
+        padded = jnp.asarray(runtime_max_r, dtype=jnp.float64) * float(ups)
+        runtime_max_r2_x4 = jnp.round(padded * padded * 4.0).astype(jnp.int64)
+        return jax.ffi.ffi_call(
+            _TARGET_BACKPROJECT_INDEXED_RUNTIME_RADIUS,
+            out_type,
+            input_output_aliases={3: 0},
+            vmap_method="sequential",
+        )(images, pixel_indices, rot6, volume, runtime_max_r2_x4, **kw)
     target = _backproject_indexed_target(use_relion_block_topology)
     return jax.ffi.ffi_call(
         target,
