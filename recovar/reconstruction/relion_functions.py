@@ -663,13 +663,33 @@ def _relion_reconstruct_floor_shell_indices(volume_shape, padding_factor, *, hal
     return jnp.floor(shell).astype(jnp.int32).reshape(-1)
 
 
-def _relion_reconstruct_floor_volume(regularized_filter, volume_shape, padding_factor, *, half_volume, max_res_shell):
-    """Return RELION's 1/1000 shell-average floor in padded Fourier layout."""
+def _relion_reconstruct_floor_volume(
+    regularized_filter,
+    volume_shape,
+    padding_factor,
+    *,
+    half_volume,
+    max_res_shell,
+    max_res_shell_bound=None,
+):
+    """Return RELION's 1/1000 shell-average floor in padded Fourier layout.
+
+    ``max_res_shell`` is a Python int, or, with a static ``max_res_shell_bound``
+    at least as large, a traced int32 scalar: the shell sums then span the bound
+    and the shells at or above ``max_res_shell`` take no weight, which gives the
+    same per-shell averages while one program serves every ``max_res_shell`` up
+    to the bound.
+    """
 
     regularized_filter = jnp.asarray(regularized_filter)
     if max_res_shell is None:
         max_res_shell = int(volume_shape[0]) // (2 * int(padding_factor))
-    max_res_shell = max(1, int(max_res_shell))
+    if max_res_shell_bound is None:
+        max_res_shell = max(1, int(max_res_shell))
+        shell_length = max_res_shell
+    else:
+        shell_length = max(1, int(max_res_shell_bound))
+        max_res_shell = jnp.maximum(jnp.asarray(max_res_shell, dtype=jnp.int32), 1)
     shell = _relion_reconstruct_floor_shell_indices(volume_shape, padding_factor, half_volume=half_volume)
     shell_clipped = jnp.minimum(shell, max_res_shell - 1)
     average_filter = regularized_filter.reshape(-1)
@@ -690,11 +710,19 @@ def _relion_reconstruct_floor_volume(regularized_filter, volume_shape, padding_f
     shell_sum = jnp.bincount(
         average_shell_clipped,
         weights=jnp.where(average_valid, average_filter, 0.0),
-        length=max_res_shell,
+        length=shell_length,
     )
-    shell_count = jnp.bincount(average_shell_clipped, weights=valid_weights, length=max_res_shell)
+    shell_count = jnp.bincount(average_shell_clipped, weights=valid_weights, length=shell_length)
     shell_avg = jnp.where(shell_count > 0, shell_sum / shell_count, 0.0) / 1000.0
     return shell_avg[shell_clipped].reshape(regularized_filter.shape)
+
+
+def _relion_prior_radius(padding_factor, max_res_shell):
+    """``padding_factor * max_res_shell`` as RELION's MAP-prior radius; a traced shell stays traced."""
+
+    if isinstance(max_res_shell, (int, np.integer)):
+        return float(padding_factor) * float(max_res_shell)
+    return float(padding_factor) * jnp.asarray(max_res_shell, dtype=jnp.float64)
 
 
 def adjust_regularization_relion_style(
@@ -711,6 +739,7 @@ def adjust_regularization_relion_style(
     tau_is_1d=False,
     relion_filter_scale=None,
     large_grid_single_precision=False,
+    max_res_shell_bound=None,
 ):
     """Adjust the RELION-style regularization filter.
 
@@ -725,6 +754,10 @@ def adjust_regularization_relion_style(
 
     ``minres_map`` mirrors RELION's ``--minres_map``: the Wiener prior term is
     only added for shells ``ires >= minres_map``.
+
+    With ``relion_native_shell_floor``, ``max_res_shell`` may be a traced int32
+    scalar when ``max_res_shell_bound`` gives a static upper bound
+    (:func:`_relion_reconstruct_floor_volume`).
     """
     volume_shape = tuple(int(s) for s in volume_shape)
     native_volume_shape = (
@@ -780,7 +813,7 @@ def adjust_regularization_relion_style(
                     frequency_shift=0,
                     rounded=False,
                 ).reshape(-1)
-                prior_radius = float(padding_factor) * float(max_res_shell)
+                prior_radius = _relion_prior_radius(padding_factor, max_res_shell)
                 inv_tau = jnp.where(radial * radial < prior_radius * prior_radius, inv_tau, 0)
             if int(minres_map) > 0:
                 shell = fourier_transform_utils.get_grid_of_radial_distances_real(
@@ -802,6 +835,7 @@ def adjust_regularization_relion_style(
                 padding_factor,
                 half_volume=True,
                 max_res_shell=max_res_shell,
+                max_res_shell_bound=max_res_shell_bound,
             )
         else:
             if max_res_shell is None:
@@ -837,7 +871,7 @@ def adjust_regularization_relion_style(
                 scaled=False,
             )
             radial_sq = jnp.sum(pixels * pixels, axis=-1)
-            prior_radius = float(padding_factor) * float(max_res_shell)
+            prior_radius = _relion_prior_radius(padding_factor, max_res_shell)
             inv_tau = jnp.where(radial_sq < prior_radius * prior_radius, inv_tau, 0)
         if int(minres_map) > 0:
             pixels = fourier_transform_utils.get_k_coordinate_of_each_pixel(
@@ -859,6 +893,7 @@ def adjust_regularization_relion_style(
             padding_factor,
             half_volume=False,
             max_res_shell=max_res_shell,
+            max_res_shell_bound=max_res_shell_bound,
         )
     else:
         if max_res_shell is None:
@@ -1119,7 +1154,9 @@ def _relion_current_size_decenter_mask(volume_shape, radius, *, half_volume):
         frequency_shift=0,
         rounded=False,
     )
-    radius = float(radius)
+    # A Python number or a traced scalar (post_process_from_filter_v2's
+    # logical_current_size); integer radii square exactly either way.
+    radius = jnp.asarray(radius, dtype=radial.dtype)
     return radial * radial <= radius * radius
 
 
@@ -1196,6 +1233,7 @@ def post_process_from_filter_v2(
     return_fftw_half_before_ifft=False,
     return_wiener_half_before_window=False,
     fft_compute_dtype=None,
+    logical_current_size=None,
 ):
     """Post-process RELION-style reconstruction from filter weights.
 
@@ -1211,6 +1249,13 @@ def post_process_from_filter_v2(
     The ``tau2_fudge`` parameter (default 1.0) is forwarded to
     :func:`adjust_regularization_relion_style` and mirrors RELION's
     ``--tau2_fudge`` flag.
+
+    ``logical_current_size`` (a traced int32 scalar, not a program key) takes
+    the place of ``current_size`` in those support rules while the static
+    ``current_size`` bounds it: a caller that zero-pads the accumulator to a
+    larger stable class and passes the class size as ``current_size`` reuses
+    one program for every current size in the class. The padded voxels lie
+    outside the logical support, so the result is the logical one.
 
     ``current_size`` (when given) matches the two distinct support rules in
     RELION's ``BackProjector::reconstruct``. ``Projector::decenter`` copies the
@@ -1279,10 +1324,17 @@ def post_process_from_filter_v2(
 
     # Wiener spatial mask: match RELION's max_r2 skip when current_size given.
     current_size_limited = current_size is not None and current_size > 0
-    if current_size_limited:
+    max_res_shell_bound = None
+    if current_size_limited and logical_current_size is not None:
+        native_r_max = jnp.asarray(logical_current_size, dtype=jnp.int32) // 2
+        wiener_radius = volume_upsampling_factor * native_r_max
+        max_res_shell_bound = int(current_size) // 2
+    elif current_size_limited:
         wiener_radius = volume_upsampling_factor * (int(current_size) // 2)
         native_r_max = int(current_size) // 2
     else:
+        if logical_current_size is not None:
+            raise ValueError("logical_current_size needs a positive static current_size as its bound")
         wiener_radius = upsampled_volume_shape[0] // 2 - 1
         native_r_max = None
 
@@ -1339,6 +1391,7 @@ def post_process_from_filter_v2(
         tau_is_1d=tau_is_1d,
         relion_filter_scale=relion_filter_scale,
         large_grid_single_precision=use_large_accumulator_single_precision,
+        max_res_shell_bound=max_res_shell_bound,
     )
     vol = (F_ty_flat * valid_indices) / Ft_ctf2
 
