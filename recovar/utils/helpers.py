@@ -117,13 +117,74 @@ def get_gpu_memory_total(device=0):
             )
             return int(80)
     else:
-        available_gb = int(psutil.virtual_memory().available / 1e9)
+        available_gb = int(host_memory_available_bytes() / 1e9)
         # Use half of available RAM as a safety margin for CPU-only mode
         cpu_limit = max(1, available_gb // 2)
         logger.info(
-            "GPU not found. Using %d GB (half of %d GB available RAM) for batching on CPU.", cpu_limit, available_gb
+            "GPU not found. Using %d GB (half of %d GB available to this job) for batching on CPU.", cpu_limit, available_gb
         )
         return cpu_limit
+
+
+def _cgroup_available_bytes(cgroup_root, proc_cgroup):
+    """Smallest (limit - usage) over this process's cgroup and its ancestors, or None without a limit.
+
+    cgroup v2 (``0::<path>``: ``memory.max`` / ``memory.current``) and v1 (the ``memory`` controller:
+    ``memory.limit_in_bytes`` / ``memory.usage_in_bytes``). Slurm puts the job limit on an ancestor of the
+    step's cgroup, so every level up to the root is checked.
+    """
+    from pathlib import Path
+
+    try:
+        lines = Path(proc_cgroup).read_text().splitlines()
+    except OSError:
+        return None
+    candidates = []
+    for line in lines:
+        parts = line.split(":", 2)
+        if len(parts) != 3:
+            continue
+        hierarchy, controllers, path = parts
+        if hierarchy == "0" and controllers == "":
+            base, limit_name, usage_name = Path(cgroup_root), "memory.max", "memory.current"
+        elif "memory" in controllers.split(","):
+            base, limit_name, usage_name = Path(cgroup_root) / "memory", "memory.limit_in_bytes", "memory.usage_in_bytes"
+        else:
+            continue
+        node = base / path.lstrip("/")
+        while True:
+            try:
+                limit_text = (node / limit_name).read_text().strip()
+                usage = int((node / usage_name).read_text().strip())
+            except (OSError, ValueError):
+                limit_text = None
+            if limit_text and limit_text != "max":
+                limit = int(limit_text)
+                if limit < (1 << 60):  # v1 reports "no limit" as a huge number
+                    candidates.append(max(0, limit - usage))
+            if node == base or node.parent == node:
+                break
+            node = node.parent
+    return min(candidates) if candidates else None
+
+
+def host_memory_available_bytes(*, cgroup_root="/sys/fs/cgroup", proc_cgroup="/proc/self/cgroup", environ=None, node_available=None):
+    """Host memory this process may still use: the node's available RAM, capped by the job's memory limit.
+
+    The job limit is the tightest cgroup (limit - usage) of this process and its ancestors; without a
+    readable cgroup limit, ``SLURM_MEM_PER_NODE`` (MB) minus this process's resident size. A batch size
+    derived from the node's RAM alone overshoots any job whose ``--mem`` is below it.
+    """
+    environ = os.environ if environ is None else environ
+    available = int(psutil.virtual_memory().available if node_available is None else node_available)
+    cgroup = _cgroup_available_bytes(cgroup_root, proc_cgroup)
+    if cgroup is not None:
+        return min(available, cgroup)
+    slurm_mb = environ.get("SLURM_MEM_PER_NODE")
+    if slurm_mb and slurm_mb.isdigit() and int(slurm_mb) > 0:
+        rss = psutil.Process(os.getpid()).memory_info().rss
+        return min(available, max(0, int(slurm_mb) * 1024 * 1024 - rss))
+    return available
 
 
 def get_gpu_memory_used(device=0):
