@@ -725,6 +725,38 @@ def _relion_prior_radius(padding_factor, max_res_shell):
     return float(padding_factor) * jnp.asarray(max_res_shell, dtype=jnp.float64)
 
 
+def _clamp_shell_floor(avged_reg, volume_shape, max_res_shell, floor_clamp_shell):
+    """Repeat the last shell below the clamp shell from the clamp shell on.
+
+    The clamp shell is ``max_res_shell`` when given, else ``floor_clamp_shell``
+    (traced), else ``volume_shape[0] // 2 - 1``.
+    """
+
+    if max_res_shell is None and floor_clamp_shell is not None:
+        clamp = jnp.asarray(floor_clamp_shell, dtype=jnp.int32)
+        shells = jnp.arange(avged_reg.shape[0], dtype=jnp.int32)
+        return jnp.where(shells >= clamp, avged_reg[clamp - 1], avged_reg)
+    if max_res_shell is None:
+        max_res_shell = volume_shape[0] // 2 - 1
+    return avged_reg.at[max_res_shell:].set(avged_reg[max_res_shell - 1])
+
+
+def _radial_mask_traced_radius(volume_shape, radius):
+    """:func:`recovar.core.mask.get_radial_mask` with a traced radius.
+
+    The threshold ``radius + 1e-7`` is formed in the distance's own dtype, as
+    the static radius (a Python number) is when it meets the distance array, so
+    integer radii select the same voxels.
+    """
+
+    coords = fourier_transform_utils.get_k_coordinate_of_each_pixel(
+        volume_shape, voxel_size=1, scaled=False
+    ).reshape(list(volume_shape) + [len(list(volume_shape))])
+    distance = jnp.linalg.norm(coords, axis=-1)
+    threshold = jnp.asarray(radius, dtype=distance.dtype) + jnp.asarray(1e-7, dtype=distance.dtype)
+    return distance < threshold
+
+
 def adjust_regularization_relion_style(
     filter,
     volume_shape,
@@ -740,6 +772,7 @@ def adjust_regularization_relion_style(
     relion_filter_scale=None,
     large_grid_single_precision=False,
     max_res_shell_bound=None,
+    floor_clamp_shell=None,
 ):
     """Adjust the RELION-style regularization filter.
 
@@ -758,6 +791,12 @@ def adjust_regularization_relion_style(
     With ``relion_native_shell_floor``, ``max_res_shell`` may be a traced int32
     scalar when ``max_res_shell_bound`` gives a static upper bound
     (:func:`_relion_reconstruct_floor_volume`).
+
+    Without it and without ``max_res_shell``, the shell-averaged floor repeats
+    shell ``volume_shape[0] // 2 - 2`` from shell ``volume_shape[0] // 2 - 1``
+    on. ``floor_clamp_shell`` (a traced int32 scalar) moves that shell for a
+    caller that zero-pads the accumulator: passing the logical accumulator's
+    ``size // 2 - 1`` reproduces the logical floor inside the padded grid.
     """
     volume_shape = tuple(int(s) for s in volume_shape)
     native_volume_shape = (
@@ -838,10 +877,8 @@ def adjust_regularization_relion_style(
                 max_res_shell_bound=max_res_shell_bound,
             )
         else:
-            if max_res_shell is None:
-                max_res_shell = volume_shape[0] // 2 - 1
             avged_reg = _average_over_shells_half(regularized_filter, volume_shape, frequency_shift=0) / 1000
-            avged_reg = avged_reg.at[max_res_shell:].set(avged_reg[max_res_shell - 1])
+            avged_reg = _clamp_shell_floor(avged_reg, volume_shape, max_res_shell, floor_clamp_shell)
             avged_reg_volume = utils.make_radial_image_half(avged_reg, volume_shape).reshape(regularized_filter.shape)
 
         regularized_filter = jnp.maximum(regularized_filter, avged_reg_volume)
@@ -896,10 +933,8 @@ def adjust_regularization_relion_style(
             max_res_shell_bound=max_res_shell_bound,
         )
     else:
-        if max_res_shell is None:
-            max_res_shell = volume_shape[0] // 2 - 1
         avged_reg = regularization.average_over_shells(regularized_filter, volume_shape, frequency_shift=0) / 1000
-        avged_reg = avged_reg.at[max_res_shell:].set(avged_reg[max_res_shell - 1])
+        avged_reg = _clamp_shell_floor(avged_reg, volume_shape, max_res_shell, floor_clamp_shell)
         avged_reg_volume = utils.make_radial_image(avged_reg, volume_shape).reshape(regularized_filter.shape)
 
     regularized_filter = jnp.maximum(regularized_filter, avged_reg_volume)
@@ -1234,6 +1269,7 @@ def post_process_from_filter_v2(
     return_wiener_half_before_window=False,
     fft_compute_dtype=None,
     logical_current_size=None,
+    logical_accumulator_size=None,
 ):
     """Post-process RELION-style reconstruction from filter weights.
 
@@ -1256,6 +1292,12 @@ def post_process_from_filter_v2(
     larger stable class and passes the class size as ``current_size`` reuses
     one program for every current size in the class. The padded voxels lie
     outside the logical support, so the result is the logical one.
+
+    ``logical_accumulator_size`` (a traced int32 scalar) is the same device for
+    a reconstruction without ``current_size``: the accumulator's own size sets
+    the Wiener mask radius and the floor's clamp shell there, so a caller that
+    zero-pads a smaller accumulator to a fixed grid passes the logical size and
+    gets the logical reconstruction from one program.
 
     ``current_size`` (when given) matches the two distinct support rules in
     RELION's ``BackProjector::reconstruct``. ``Projector::decenter`` copies the
@@ -1337,6 +1379,12 @@ def post_process_from_filter_v2(
             raise ValueError("logical_current_size needs a positive static current_size as its bound")
         wiener_radius = upsampled_volume_shape[0] // 2 - 1
         native_r_max = None
+    floor_clamp_shell = None
+    if logical_accumulator_size is not None:
+        if current_size_limited:
+            raise ValueError("logical_accumulator_size applies to a reconstruction without current_size")
+        wiener_radius = jnp.asarray(logical_accumulator_size, dtype=jnp.int32) // 2 - 1
+        floor_clamp_shell = wiener_radius
 
     if input_half_volume:
         packed_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(upsampled_volume_shape)
@@ -1352,8 +1400,13 @@ def post_process_from_filter_v2(
                 half_volume=True,
             )
         else:
+            radial_mask = (
+                mask.get_radial_mask(upsampled_volume_shape, radius=wiener_radius)
+                if floor_clamp_shell is None
+                else _radial_mask_traced_radius(upsampled_volume_shape, wiener_radius)
+            )
             valid_mask = fourier_transform_utils.full_volume_to_half_volume(
-                mask.get_radial_mask(upsampled_volume_shape, radius=wiener_radius),
+                radial_mask,
                 upsampled_volume_shape,
             )
         valid_indices = valid_mask.reshape(-1).astype(Ft_ctf_flat.real.dtype)
@@ -1370,7 +1423,11 @@ def post_process_from_filter_v2(
                 half_volume=False,
             )
         else:
-            valid_mask = mask.get_radial_mask(upsampled_volume_shape, radius=wiener_radius)
+            valid_mask = (
+                mask.get_radial_mask(upsampled_volume_shape, radius=wiener_radius)
+                if floor_clamp_shell is None
+                else _radial_mask_traced_radius(upsampled_volume_shape, wiener_radius)
+            )
         valid_indices = valid_mask.reshape(-1).astype(Ft_ctf_flat.real.dtype)
 
     tau_for_filter = tau
@@ -1392,6 +1449,7 @@ def post_process_from_filter_v2(
         relion_filter_scale=relion_filter_scale,
         large_grid_single_precision=use_large_accumulator_single_precision,
         max_res_shell_bound=max_res_shell_bound,
+        floor_clamp_shell=floor_clamp_shell,
     )
     vol = (F_ty_flat * valid_indices) / Ft_ctf2
 
