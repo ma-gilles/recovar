@@ -48,6 +48,12 @@ were already multiplied by $\exp(-100\,|\mathbf q|^2/4)$ when they were made
 `atomic_bfactor=0` (`--atomic-bfactor 0`) to add only the solvent term; relax's
 fixture scripts do this automatically.
 
+The B-factors stack: $B_\text{atomic}$ is applied on projection on top of whatever B the input maps
+already carry, so the effective total is their sum. Sources with a built-in default are
+`generate_trajectory_volumes` (`Bfactor=80`), `simulate_data` on its `disc_type="pdb"` path
+(`Bfactor=100`) and the bundled asset maps (100). To make $B_\text{atomic}$ the single total, build the
+source maps at B = 0; relax's fixture scripts do this and treat `--atomic-bfactor` as the total.
+
 ## Where it is applied
 
 [`generate_synthetic_dataset`](../../recovar/simulation/simulator.py)

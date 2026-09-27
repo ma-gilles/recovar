@@ -351,7 +351,10 @@ def generate_trajectory_volumes(
     voxel_size : float or None
         Voxel size in Angstroms.  Default: ``4.25 * 128 / grid_size``.
     Bfactor : float
-        B-factor for Fourier-space dampening.
+        B-factor (A^2, RELION convention exp(-B |q|^2 / 4)) baked into the written maps; default 80.
+        It stacks with the EM-development preset's ``atomic_bfactor`` (default 100) when these maps
+        are later projected with that preset on: the effective total is the sum. Pass
+        ``Bfactor=0`` to leave the total to the preset (see ``solvent_contrast``).
     max_rotation_degrees : float
         Maximum rotation angle for the trajectory.
     path_fn : callable or None

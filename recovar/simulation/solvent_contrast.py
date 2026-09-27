@@ -41,6 +41,10 @@ UNCORRECTED_INPUTS = "uncorrected_inputs"
 CORRECTED_EFFECTIVE = "corrected_effective"
 
 # The EM/VDAM development preset: ``generate_synthetic_dataset(..., **EM_DEVELOPMENT_PRESET)``.
+# Its ``atomic_bfactor`` (default 100 A^2) is applied on projection ON TOP of any B already in the input
+# maps: ``generate_trajectory_volumes`` bakes in its ``Bfactor`` (default 80), ``simulate_data``'s
+# ``disc_type="pdb"`` path its ``Bfactor`` (default 100), and the bundled ``assets/vol*.mrc`` carry 100.
+# The effective total is the sum; set the source B to 0 (or ``atomic_bfactor`` to 0) to avoid stacking.
 EM_DEVELOPMENT_PRESET = {
     "atomic_solvent_correction": True,
     "solvent_contrast_a": DEFAULT_A,

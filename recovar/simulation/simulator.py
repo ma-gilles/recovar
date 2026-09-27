@@ -1382,6 +1382,13 @@ def simulate_data(
     noise_rng_batch_size=None,
     noise_transform_batch_size=None,
 ):
+    """Simulate a batch-streamed particle stack from ``volumes``.
+
+    ``Bfactor`` (A^2, default 100) applies only on the ``disc_type="pdb"`` path, where ``volumes`` are
+    atom groups turned into maps here; it stacks with the EM-development preset's ``atomic_bfactor``
+    (``solvent_contrast``, default 100) when that preset is also on, so the effective total is the sum.
+    Other ``disc_type`` values take the volumes as given.
+    """
 
     if disc_type == "pdb":
         from recovar.simulation import simulate_scattering_potential as gsm
