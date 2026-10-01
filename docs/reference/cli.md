@@ -286,7 +286,8 @@ See [Cryo-ET](../guide/cryo-et.md#importing-from-relion5) for usage details.
 
 Simulate a RELION 5 subtomogram dataset in the 2D-stack format that
 `relion_refine --ios optimisation_set.star` reads: `tomograms.star`, per-tilt-series
-STARs, `particles.star` (`rlnTomoSubTomosAre2DStacks 1`, one optics row per group), one
+STARs, `particles.star` (`rlnTomoSubTomosAre2DStacks 1`; one optics group per tomogram, as
+RELION 5's tomogram import writes, each with its optics setting's values), one
 `_stack2d.mrcs` per particle and `particles_2d.star` (the `parse_relion5_tomo` output).
 Images use RELION's CTF and dose weighting. Implementation:
 `recovar.simulation.relion_tomo.generate_relion5_tomo_dataset`.
@@ -299,7 +300,8 @@ recovar make_relion_tomo_dataset vols/vol 4.25 1200 -o project --grid-size 128 -
 |------|---------|-------------|
 | `volumes_path_root`, `voxel_size`, `n_particles` | Required | Volume prefix (`<prefix>0000.mrc`, ...), its voxel size at `--grid-size`, particle count |
 | `-o`, `--output` | Required | Output RELION project directory |
-| `--optics-groups` | 2 | Optics groups (differing voltage, Cs, amplitude contrast and noise) |
+| `--optics-groups` | 1 | Optics settings (differing voltage, Cs, amplitude contrast and noise); tomogram t uses setting t mod n |
+| `--optics-group-per-tomogram` / `--no-optics-group-per-tomogram` | per tomogram | One optics group per tomogram, or one shared group per setting |
 | `--n-tomograms`, `--max-tilt`, `--tilt-step`, `--dose-per-tilt` | 4, 60, 3, 3 | Tilt-series geometry (dose-symmetric scheme) |
 | `--snr`, `--hidden-tilt-fraction`, `--premultiplied-ctf`, `--seed` | 0.05, 0, False, 0 | Noise, invisible tilts, CTF-premultiplied stacks, seed |
 | `--no-atomic-solvent-correction` | preset on | Turn off the EM-development atomic-volume transform (solvent contrast and B-factor, [docs](../math/atomic_solvent_contrast.md)) for experimental maps |

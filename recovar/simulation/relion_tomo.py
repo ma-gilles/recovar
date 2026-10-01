@@ -123,7 +123,8 @@ def generate_relion5_tomo_dataset(
     *,
     grid_size=128,
     n_tomograms=4,
-    optics_groups=DEFAULT_OPTICS_GROUPS,
+    optics_groups=DEFAULT_OPTICS_GROUPS[:1],
+    optics_group_per_tomogram=True,
     max_tilt=60.0,
     tilt_step=3.0,
     dose_per_tilt=3.0,
@@ -158,13 +159,20 @@ def generate_relion5_tomo_dataset(
     n_particles : int
         Particles in total, spread evenly over ``n_tomograms``.
     optics_groups : sequence of dict
-        One dict per optics group with ``voltage`` (kV), ``cs`` (mm),
+        The optics settings: one dict per setting with ``voltage`` (kV), ``cs`` (mm),
         ``amp_contrast`` and ``noise_scale`` (noise standard-deviation factor),
         and optionally ``pixel_size`` (A) and ``box_size`` (px), which default to
-        ``voxel_size`` and ``grid_size``. A group's volume is Fourier-resampled to
+        ``voxel_size`` and ``grid_size``. A setting's volume is Fourier-resampled to
         its pixel size, so ``grid_size * voxel_size / pixel_size`` must be an even
         integer. RELION puts the reference on group 1's grid.
-        Tomogram ``t`` belongs to group ``t % len(optics_groups)``.
+        Tomogram ``t`` is imaged with setting ``t % len(optics_groups)``. The default
+        is one setting, so every tomogram has the same optics.
+    optics_group_per_tomogram : bool
+        Write one optics group per tomogram (``opticsGroup<t+1>`` with its setting's
+        values), as RELION 5's tomogram import does; this is the default. False writes
+        one optics group per setting, shared by its tomograms. Images and noise are
+        simulated per setting either way, so tomograms with one setting share one
+        noise level.
     snr : float
         Mean per-pixel noise-free signal power of the first optics group's images
         over the per-pixel noise power shared by all groups (before ``noise_scale``).
@@ -196,7 +204,12 @@ def generate_relion5_tomo_dataset(
         saved as ``simulation_info.pkl``.
     """
     rng = np.random.default_rng(seed)
-    optics_groups = [{"pixel_size": voxel_size, "box_size": grid_size, **og} for og in optics_groups]
+    settings = [{"pixel_size": voxel_size, "box_size": grid_size, **og} for og in optics_groups]
+    # Each tomogram's setting, each tomogram's STAR optics group and each group's setting.
+    tomo_settings = np.arange(n_tomograms) % len(settings)
+    tomo_optics = np.arange(n_tomograms) if optics_group_per_tomogram else tomo_settings
+    group_settings = tomo_settings if optics_group_per_tomogram else np.arange(len(settings))
+    optics_groups = [settings[s] for s in group_settings]
     if any(s % 2 for s in tomogram_size):
         raise ValueError(f"tomogram_size must be even (RELION centres at int(size/2)), got {tomogram_size}")
     os.makedirs(os.path.join(output_folder, "tilt_series"), exist_ok=True)
@@ -219,7 +232,6 @@ def generate_relion5_tomo_dataset(
     tilt_angles, acquisition_index = dose_symmetric_tilt_scheme(max_tilt, tilt_step)
     n_tilts = tilt_angles.size
     tomo_names = [f"TS_{t + 1:02d}" for t in range(n_tomograms)]
-    tomo_optics = np.arange(n_tomograms) % len(optics_groups)
     tomo_rows = []
     for t, name in enumerate(tomo_names):
         og = optics_groups[tomo_optics[t]]
@@ -359,6 +371,7 @@ def generate_relion5_tomo_dataset(
     particle_volume = rng.choice(volumes.shape[0], size=n_particles, p=volume_distribution)
     particle_contrast = 1 + rng.normal(0, contrast_std, n_particles)
     row_optics = optics_df["_rlnOpticsGroup"].searchsorted(flat_df["_rlnOpticsGroup"].values.astype(int))
+    row_settings = group_settings[row_optics]
     # The tilt's projection matrix: the flattened per-tilt matrix is Aproj_i times the pose.
     row_projection = np.einsum(
         "iab,icb->iac",
@@ -367,10 +380,10 @@ def generate_relion5_tomo_dataset(
     )
     row_pixel = np.array([optics_groups[g]["pixel_size"] for g in row_optics])
     row_translations = np.einsum("iab,ib->ia", row_projection[:, :2, :], origins[row_particle]) / row_pixel[:, None]
-    row_images, noise_variances = optics_groups_sim.simulate_optics_groups(
+    row_images, setting_noise_variances = optics_groups_sim.simulate_optics_groups(
         volumes,
-        optics_groups,
-        row_optics,
+        settings,
+        row_settings,
         rots,
         ctf_params,
         particle_volume[row_particle],
@@ -422,7 +435,9 @@ def generate_relion5_tomo_dataset(
         solvent_contrast.METADATA_KEY: solvent_record,
         "image_assignment": particle_volume[row_particle],
         "per_image_contrast": particle_contrast[row_particle],
-        "noise_variance_per_optics_group": noise_variances,
+        # Per STAR optics group (a group's noise is its setting's).
+        "noise_variance_per_optics_group": [setting_noise_variances[g] for g in group_settings],
+        "optics_settings": [dict(og) for og in settings],
         "snr": snr,
         "optics_groups": [dict(og) for og in optics_groups],
         "premultiplied_ctf": premultiplied_ctf,

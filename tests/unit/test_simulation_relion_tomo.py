@@ -58,6 +58,7 @@ def dataset(tmp_path_factory):
         n_particles=6,
         grid_size=GRID,
         n_tomograms=2,
+        optics_groups=optics_groups.DEFAULT_OPTICS_GROUPS,
         max_tilt=30.0,
         tilt_step=10.0,
         tomogram_size=(512, 512, 128),
@@ -164,6 +165,68 @@ def test_optics_group_noise_scale_and_normalised_stacks(dataset):
         np.testing.assert_allclose(stack[:, background].mean(axis=1), 0.0, atol=1e-4)
         np.testing.assert_allclose(stack[:, background].std(axis=1), 1.0, rtol=1e-3)
     assert os.path.isfile(out / "simulation_info.pkl")
+
+
+@pytest.mark.parametrize("per_tomogram", [True, False])
+def test_one_optics_group_per_tomogram_by_default(tmp_path, per_tomogram):
+    """RELION 5's tomogram import writes one optics group per tomogram: the default.
+
+    Two settings over four tomograms (tomogram t uses setting t % 2): per tomogram gives four groups
+    with their settings' values and group t + 1 for tomogram t's particles; shared gives one group per
+    setting. Images and noise are simulated per setting either way, so groups with one setting share
+    its noise variance.
+    """
+    _write_volume(tmp_path)
+    result = relion_tomo.generate_relion5_tomo_dataset(
+        str(tmp_path / "project"),
+        str(tmp_path / "vol"),
+        VOXEL,
+        n_particles=8,
+        grid_size=GRID,
+        n_tomograms=4,
+        optics_groups=optics_groups.DEFAULT_OPTICS_GROUPS,
+        optics_group_per_tomogram=per_tomogram,
+        max_tilt=20.0,
+        tilt_step=10.0,
+        tomogram_size=(512, 512, 128),
+        seed=2,
+    )
+    particles, optics = starfile.read_star(result["particles"])
+    tomograms, _ = starfile.read_star(result["tomograms"])
+    tomo_index = {name: t for t, name in enumerate(tomograms["_rlnTomoName"])}
+    groups = 4 if per_tomogram else 2
+    assert optics["_rlnOpticsGroup"].astype(int).tolist() == list(range(1, groups + 1))
+    assert optics["_rlnVoltage"].astype(float).tolist() == [300.0, 200.0] * (groups // 2)
+    for name, group in zip(particles["_rlnTomoName"], particles["_rlnOpticsGroup"].astype(int)):
+        t = tomo_index[name]
+        assert group == (t + 1 if per_tomogram else t % 2 + 1)
+        assert tomograms["_rlnOpticsGroupName"][t] == f"opticsGroup{group}"
+    noise = result["simulation_info"]["noise_variance_per_optics_group"]
+    assert len(noise) == groups
+    if per_tomogram:
+        for g in (2, 3):  # the same setting as group g - 2: one noise variance
+            np.testing.assert_allclose(noise[g], noise[g - 2], rtol=1e-12)
+
+
+def test_default_is_one_shared_optics_setting(tmp_path):
+    """Without optics settings every tomogram gets RELION's first default optics, in its own group."""
+    _write_volume(tmp_path)
+    result = relion_tomo.generate_relion5_tomo_dataset(
+        str(tmp_path / "project"),
+        str(tmp_path / "vol"),
+        VOXEL,
+        n_particles=3,
+        grid_size=GRID,
+        n_tomograms=3,
+        max_tilt=10.0,
+        tilt_step=10.0,
+        tomogram_size=(512, 512, 128),
+        seed=1,
+    )
+    _, optics = starfile.read_star(result["particles"])
+    assert optics["_rlnOpticsGroupName"].tolist() == ["opticsGroup1", "opticsGroup2", "opticsGroup3"]
+    for column, value in (("_rlnVoltage", 300.0), ("_rlnSphericalAberration", 2.7), ("_rlnAmplitudeContrast", 0.1)):
+        assert optics[column].astype(float).tolist() == [value] * 3
 
 
 def test_ground_truth_offsets_project_into_every_tilt(tmp_path):

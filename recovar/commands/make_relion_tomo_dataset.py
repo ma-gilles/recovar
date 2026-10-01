@@ -28,8 +28,15 @@ def add_args(parser):
         "--optics-groups",
         type=int,
         choices=range(1, len(relion_tomo.DEFAULT_OPTICS_GROUPS) + 1),
-        default=len(relion_tomo.DEFAULT_OPTICS_GROUPS),
-        help="Number of optics groups taken from relion_tomo.DEFAULT_OPTICS_GROUPS",
+        default=1,
+        help="Number of optics settings taken from relion_tomo.DEFAULT_OPTICS_GROUPS (tomogram t uses setting t %% n)",
+    )
+    parser.add_argument(
+        "--optics-group-per-tomogram",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="One optics group per tomogram, as RELION 5's tomogram import writes (default); "
+        "--no-optics-group-per-tomogram shares one group per setting",
     )
     parser.add_argument("--max-tilt", type=float, default=60.0)
     parser.add_argument("--tilt-step", type=float, default=3.0)
@@ -57,6 +64,7 @@ def main():
         grid_size=args.grid_size,
         n_tomograms=args.n_tomograms,
         optics_groups=relion_tomo.DEFAULT_OPTICS_GROUPS[: args.optics_groups],
+        optics_group_per_tomogram=args.optics_group_per_tomogram,
         max_tilt=args.max_tilt,
         tilt_step=args.tilt_step,
         dose_per_tilt=args.dose_per_tilt,
