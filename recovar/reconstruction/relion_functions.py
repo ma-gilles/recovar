@@ -663,6 +663,36 @@ def _relion_reconstruct_floor_shell_indices(volume_shape, padding_factor, *, hal
     return jnp.floor(shell).astype(jnp.int32).reshape(-1)
 
 
+def _relion_x_half_multiplicity_in_native_half(volume_shape):
+    """How many of RELION's stored entries each entry of a native packed half stands for.
+
+    RELION's shell loops visit every stored entry of its x-half (``kx >= 0``,
+    axis 0 of the public ``(x, y, z)`` layout) once. The native packed half
+    keeps ``kz >= 0`` instead and holds, for each of RELION's entries, either
+    that entry or its Hermitian mate. Where ``kz`` has a distinct mate (not 0,
+    not an even axis' Nyquist), an entry stands for one of RELION's entries, or
+    for two when its mate lies in RELION's half as well: the ``kx = 0`` plane
+    and an even axis' x-Nyquist plane. On the ``kz`` own-mate planes both mates
+    are stored, and only those RELION stores count. The entries standing for
+    two take the value of one of them for both, so the input must be
+    Hermitian-symmetric on those planes.
+
+    Returns a NumPy int8 table (0, 1 or 2) of shape ``(Nx, 1, Nz // 2 + 1)``
+    that broadcasts over the packed half of ``volume_shape``.
+    """
+
+    n_x = int(volume_shape[0])
+    n_z = int(volume_shape[-1])
+    k_x = np.arange(-(n_x // 2), n_x - n_x // 2, dtype=np.int64)
+    x_nyquist = (k_x == -(n_x // 2)) if n_x % 2 == 0 else np.zeros(n_x, dtype=bool)
+    stored = (k_x >= 0) | x_nyquist
+    x_own_mate = (k_x == 0) | x_nyquist
+    k_z = np.arange(n_z // 2 + 1, dtype=np.int64)
+    z_own_mate = (k_z == 0) | ((n_z % 2 == 0) & (k_z == n_z // 2))
+    multiplicity = np.where(z_own_mate[None, :], stored[:, None], 1 + x_own_mate[:, None])
+    return multiplicity.astype(np.int8).reshape(n_x, 1, n_z // 2 + 1)
+
+
 def _relion_reconstruct_floor_volume(
     regularized_filter,
     volume_shape,
@@ -706,10 +736,20 @@ def _relion_reconstruct_floor_volume(
     average_valid = average_shell < max_res_shell
     average_shell_clipped = jnp.minimum(average_shell, max_res_shell - 1)
     dtype = regularized_filter.real.dtype
-    valid_weights = average_valid.astype(dtype)
+    if half_volume:
+        # The native half is packed along z, RELION's along x: weight each
+        # stored entry by the number of RELION's entries it stands for, so the
+        # doubled Hermitian pairs are those of the kx=0 plane, not of kz=0.
+        half_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(volume_shape)
+        multiplicity = jnp.asarray(_relion_x_half_multiplicity_in_native_half(volume_shape), dtype=dtype)
+        valid_weights = jnp.where(average_valid.reshape(half_shape), multiplicity, 0).reshape(-1)
+        sum_weights = average_filter * valid_weights
+    else:
+        valid_weights = average_valid.astype(dtype)
+        sum_weights = jnp.where(average_valid, average_filter, 0.0)
     shell_sum = jnp.bincount(
         average_shell_clipped,
-        weights=jnp.where(average_valid, average_filter, 0.0),
+        weights=sum_weights,
         length=shell_length,
     )
     shell_count = jnp.bincount(average_shell_clipped, weights=valid_weights, length=shell_length)
