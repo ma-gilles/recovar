@@ -58,7 +58,6 @@ for mode in $CUDA_MODES; do
 #SBATCH --mem=200GB
 #SBATCH --time=${TIME_LIMIT}
 #SBATCH --output=$OUT_ROOT/logs/${mode}-${gb}gb-%j.out
-#SBATCH --exclusive
 ${dependency_line}
 
 set -euo pipefail

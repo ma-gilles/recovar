@@ -113,11 +113,6 @@ for i in "${!G_NAMES[@]}"; do
     walltime="${G_TIME[$i]}"
     pytest_args="${G_ARGS[$i]}"
 
-    EXCLUSIVE_LINE=""
-    if [[ "$mem" == "500GB" ]]; then
-        EXCLUSIVE_LINE="#SBATCH --exclusive"
-    fi
-
     SCRIPT="${SLURMO_DIR}/job_${TAG}_${name}.sh"
     XML_OUT="${RESULTS_DIR}/${TAG}_${name}.xml"
 
@@ -132,7 +127,6 @@ for i in "${!G_NAMES[@]}"; do
 #SBATCH --mem=${mem}
 #SBATCH --time=${walltime}
 #SBATCH --output=${SLURMO_DIR}/recovar-${name}-%j.out
-${EXCLUSIVE_LINE}
 
 set -euo pipefail
 

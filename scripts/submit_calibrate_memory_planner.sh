@@ -54,7 +54,6 @@ for cmd in "${COMMANDS[@]}"; do
 #SBATCH --mem=200GB
 #SBATCH --time=${TIME_LIMIT}
 #SBATCH --output=$RUNS_ROOT/logs/${cell_id}-%j.out
-#SBATCH --exclusive
 
 set -euo pipefail
 cd "${WORKDIR}"
