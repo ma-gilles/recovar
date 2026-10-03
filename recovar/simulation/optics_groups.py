@@ -75,7 +75,8 @@ def simulate_optics_groups(
     belongs to group ``row_optics[r]`` (an index into ``optics_groups``, dicts with
     ``pixel_size``, ``box_size`` and ``noise_scale``), shows volume ``row_volume[r]``
     with contrast ``row_contrast[r]`` at rotation ``rots[r]`` and CTF parameters
-    ``ctf_params[r]`` evaluated by ``ctf_evaluator``. The first ``n_probe`` rows of
+    ``ctf_params[r]`` evaluated by ``ctf_evaluator`` (or by ``ctf_evaluator[g]`` when it is
+    a sequence with one evaluator per group). The first ``n_probe`` rows of
     each group calibrate the noise.
 
     Returns the per-row images (a list, each on its group's box) and the per-pixel
@@ -90,6 +91,7 @@ def simulate_optics_groups(
     target_noise_power = None
     for g, og in enumerate(optics_groups):
         pixel_size, box_size = og["pixel_size"], og["box_size"]
+        group_ctf_evaluator = ctf_evaluator[g] if isinstance(ctf_evaluator, (list, tuple)) else ctf_evaluator
         if pixel_size == voxel_size and box_size == grid_size:
             volumes_g = volumes
         else:
@@ -116,7 +118,7 @@ def simulate_optics_groups(
                     np.zeros((rows.size, 2)) if row_translations is None else row_translations[rows],
                     ctf_params[rows],
                 ),
-                ctf_evaluator=ctf_evaluator,
+                ctf_evaluator=group_ctf_evaluator,
                 grid_size=box_size,
             )
             return simulator.simulate_data(

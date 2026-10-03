@@ -419,3 +419,107 @@ def test_cli_preset_on_by_default_with_opt_out():
     assert solvent_contrast.kwargs_from_cli_args(parser.parse_args(base))["atomic_solvent_correction"] is True
     off = parser.parse_args(base + ["--no-atomic-solvent-correction"])
     assert solvent_contrast.kwargs_from_cli_args(off)["atomic_solvent_correction"] is False
+
+
+def test_zernike_indices_and_beam_tilt_follow_relion():
+    """Zernike::oddIndexToMN / evenIndexToMN and TiltHelper::insertTilt, written out from RELION's code."""
+    assert [relion_tomo.odd_index_to_mn(i) for i in range(6)] == [(-1, 1), (1, 1), (-3, 3), (-1, 3), (1, 3), (3, 3)]
+    assert [relion_tomo.even_index_to_mn(i) for i in range(9)] == [
+        (0, 0), (-2, 2), (0, 2), (2, 2), (-4, 4), (-2, 4), (0, 4), (2, 4), (4, 4)
+    ]
+    lam = 12.2643247 / np.sqrt(300e3 * (1.0 + 300e3 * 0.978466e-6))
+    scale = 2.7 * 20000 * lam * lam * 3.141592654
+    got = relion_tomo.odd_coefficients_with_beam_tilt([0, 0, 40, 0, 0, -30], (1.6, -1.2), 2.7, 300)
+    z3x, z3y = -scale * 1.6 / 3.0, -scale * -1.2 / 3.0
+    np.testing.assert_allclose(got, [2 * z3y, 2 * z3x, 40, z3y, z3x, -30], rtol=1e-12)
+    # Z_3^-3 = rho^3 sin(3 phi), Z_4^0 = 6 rho^4 - 6 rho^2 + 1 at (x, y) in 1/A.
+    freqs = np.array([[0.1, 0.05], [-0.02, 0.2], [0.0, 0.0]])
+    rho, phi = np.hypot(freqs[:, 0], freqs[:, 1]), np.arctan2(freqs[:, 1], freqs[:, 0])
+    np.testing.assert_allclose(
+        relion_tomo.zernike_phase([0, 0, 2.0], relion_tomo.odd_index_to_mn, freqs), 2.0 * rho**3 * np.sin(3 * phi)
+    )
+    np.testing.assert_allclose(
+        relion_tomo.zernike_phase([0, 0, 0, 0, 0, 0, 1.5], relion_tomo.even_index_to_mn, freqs),
+        1.5 * (6 * rho**4 - 6 * rho**2 + 1),
+    )
+
+
+def test_relion_tomo_ctf_adds_even_phase_at_the_magnified_frequency():
+    """CTF::getCTF: every term at M k, with the even Zernike phase added to gamma."""
+    from recovar import core
+    from recovar.core import fourier_transform_utils as ftu
+
+    params = np.zeros((2, 11))
+    params[:, :6] = [[15000, 14500, 30, 300, 2.7, 0.1], [22000, 22000, 0, 300, 2.7, 0.1]]
+    params[:, core.CTFParamIndex.CONTRAST] = 1.0
+    params[:, core.CTFParamIndex.DOSE] = [0.0, 45.0]
+    mag = np.array([[1.015, 0.004], [0.004, 0.99]])
+    even = [0, 0, 0, 0, 400, 0, 0, 0, -300]
+    plain = np.asarray(relion_tomo.relion_tomo_ctf(params, (16, 16), 3.0))
+    np.testing.assert_array_equal(
+        np.asarray(relion_tomo.relion_tomo_ctf(params, (16, 16), 3.0, even_zernike=[0.0] * 9)), plain
+    )
+    got = np.asarray(relion_tomo.relion_tomo_ctf(params, (16, 16), 3.0, mag_matrix=mag, even_zernike=even))
+    freqs = np.asarray(ftu.get_k_coordinate_of_each_pixel((16, 16), 3.0, scaled=True), dtype=np.float64) @ mag.T
+    gamma = relion_tomo.zernike_phase(even, relion_tomo.even_index_to_mn, freqs)
+    expected = np.asarray(core.evaluate_ctf(freqs, params[:, :9], gamma)) * np.asarray(
+        relion_tomo.relion_dose_weight((freqs**2).sum(-1), params[:, 9])
+    )
+    np.testing.assert_allclose(got, expected, rtol=1e-4, atol=1e-5)  # float32 grid vs float64 reference
+    assert np.max(np.abs(got - plain)) > 0.1
+
+
+def test_odd_modulation_is_a_real_unit_phase_that_demodulation_undoes():
+    """Images carry exp(i phase); multiplying their transform by exp(-i phase) gives the input back."""
+    from recovar.core import fourier_transform_utils as ftu
+
+    rng = np.random.default_rng(0)
+    images = rng.normal(size=(3, 16, 16)).astype(np.float64)
+    freqs = np.asarray(ftu.get_k_coordinate_of_each_pixel((16, 16), 3.0, scaled=True), dtype=np.float64)
+    phase = relion_tomo.zernike_phase([0.0, 0.0, 40.0, 0.0, 0.0, -30.0], relion_tomo.odd_index_to_mn, freqs)
+    out = relion_tomo.modulate_odd_aberrations(images, freqs, phase)
+    assert out.dtype == images.dtype
+    ft = np.asarray(ftu.get_dft2(out)) * np.exp(-1j * phase).reshape(16, 16)[None]
+    back = np.asarray(ftu.get_idft2(ft)).real
+    # Only the unpaired Nyquist row and column (index 0 of the centred grid) lose their imaginary part.
+    mask = np.ones((16, 16), bool)
+    mask[0, :] = mask[:, 0] = False
+    np.testing.assert_allclose(
+        np.asarray(ftu.get_dft2(back))[:, mask], np.asarray(ftu.get_dft2(images))[:, mask], atol=1e-9
+    )
+    assert np.max(np.abs(out - images)) > 0.1 * np.std(images)
+
+
+def test_optics_aberrations_are_written_and_applied(tmp_path):
+    """Optics settings with aberrations write RELION's columns and change only their own images."""
+    _write_volume(tmp_path)
+    base = dict(voltage=300.0, cs=2.7, amp_contrast=0.1, noise_scale=1.0)
+    aberrated = dict(
+        base,
+        beam_tilt=(1.6, -1.2),
+        odd_zernike=[0, 0, 40, 0, 0, -30],
+        even_zernike=[0, 0, 0, 0, 400, 0, 0, 0, -300],
+        mag_matrix=[[1.015, 0.004], [0.004, 0.99]],
+    )
+    kwargs = dict(
+        n_particles=4, grid_size=GRID, n_tomograms=2, max_tilt=30.0, tilt_step=10.0, tomogram_size=(512, 512, 128),
+        snr=1e6, seed=5,
+    )
+    plain = relion_tomo.generate_relion5_tomo_dataset(
+        str(tmp_path / "plain"), str(tmp_path / "vol"), VOXEL, optics_groups=[base, base], **kwargs
+    )
+    mixed = relion_tomo.generate_relion5_tomo_dataset(
+        str(tmp_path / "mixed"), str(tmp_path / "vol"), VOXEL, optics_groups=[base, aberrated], **kwargs
+    )
+    _, plain_optics = starfile.read_star(plain["particles"])
+    assert not any(c.startswith(("_rlnOddZernike", "_rlnEvenZernike", "_rlnBeamTilt", "_rlnMagMat")) for c in plain_optics)
+    particles, optics = starfile.read_star(mixed["particles"])
+    assert list(optics["_rlnOddZernike"]) == ["[0,0,0,0,0,0]", "[0,0,40,0,0,-30]"]
+    assert list(optics["_rlnEvenZernike"]) == ["[0,0,0,0,0,0,0,0,0]", "[0,0,0,0,400,0,0,0,-300]"]
+    np.testing.assert_allclose(optics["_rlnBeamTiltX"].astype(float), [0.0, 1.6])
+    np.testing.assert_allclose(optics["_rlnMagMat00"].astype(float), [1.0, 1.015])
+    np.testing.assert_allclose(optics["_rlnMagMat01"].astype(float), [0.0, 0.004])
+    for name, group in zip(particles["_rlnImageName"], particles["_rlnOpticsGroup"].astype(int)):
+        with mrcfile.open(tmp_path / "plain" / name) as a, mrcfile.open(tmp_path / "mixed" / name) as b:
+            difference = np.max(np.abs(a.data - b.data))
+        assert (difference > 1e-2) == (group == 2), (name, group, difference)

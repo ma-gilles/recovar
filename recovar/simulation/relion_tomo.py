@@ -30,7 +30,9 @@ The RELION conventions are listed in the cryo-ET port plan
 (``pr179_coordination/cryoet_plan_20260923/PLAN.md``).
 """
 
+import functools
 import logging
+import math
 import os
 
 import jax.numpy as jnp
@@ -61,8 +63,14 @@ def relion_dose_weight(freq_sq, dose):
     return jnp.exp(-0.5 * jnp.asarray(dose)[:, None] / critical_exposure[None, :])
 
 
-def relion_tomo_ctf(ctf_params, image_shape, voxel_size, *, half_image=False):
-    """CTF of a RELION tomo image: SPA CTF (with ``CONTRAST`` = ``rlnCtfScalefactor``) times the dose weight."""
+def relion_tomo_ctf(ctf_params, image_shape, voxel_size, *, half_image=False, mag_matrix=None, even_zernike=None):
+    """CTF of a RELION tomo image: SPA CTF (with ``CONTRAST`` = ``rlnCtfScalefactor``) times the dose weight.
+
+    ``mag_matrix`` (``rlnMagMat``, 2x2) and ``even_zernike`` (``rlnEvenZernike``) are the
+    image's optics-group terms as ``CTF::getCTF`` applies them: every term, damping
+    included, is evaluated at the magnified frequency ``M k``, and the even Zernike
+    phase ``sum_i c_i Z_i(M k)`` (:func:`zernike_phase`) is added to ``gamma``.
+    """
     grid_fn = (
         fourier_transform_utils.get_k_coordinate_of_each_pixel_half
         if half_image
@@ -70,8 +78,112 @@ def relion_tomo_ctf(ctf_params, image_shape, voxel_size, *, half_image=False):
     )
     ctf_params = jnp.asarray(ctf_params)
     freqs = grid_fn(image_shape, voxel_size, scaled=True, dtype=jnp.result_type(ctf_params, jnp.float32))
-    ctf = core.evaluate_ctf(freqs, ctf_params[:, : int(core.CTFParamIndex.DOSE)])
+    if mag_matrix is not None:
+        freqs = freqs @ jnp.asarray(np.asarray(mag_matrix).T, dtype=freqs.dtype)
+    gamma_offset = None
+    if even_zernike is not None and np.any(np.asarray(even_zernike) != 0):
+        gamma_offset = zernike_phase(even_zernike, even_index_to_mn, freqs)
+    ctf = core.evaluate_ctf(freqs, ctf_params[:, : int(core.CTFParamIndex.DOSE)], gamma_offset)
     return ctf * relion_dose_weight(jnp.sum(freqs**2, axis=-1), ctf_params[:, core.CTFParamIndex.DOSE])
+
+
+# RELION's optics-group aberrations (src/jaz/gravis/Zernike.cpp, src/jaz/single_particle/obs_model.cpp,
+# tilt_helper.cpp), as relion_refine applies them to every tilt image. These are the simulator's own
+# implementation, an independent forward model for the codes that refine the data.
+
+
+def odd_index_to_mn(index):
+    """``Zernike::oddIndexToMN``: the ``(m, n)`` of odd Zernike coefficient ``index``."""
+    k = int((np.sqrt(1 + 4 * index) - 1.0) / 2.0)
+    n = 2 * k + 1
+    return 2 * (index - (k * k + k)) - n, n
+
+
+def even_index_to_mn(index):
+    """``Zernike::evenIndexToMN``: the ``(m, n)`` of even Zernike coefficient ``index``."""
+    k = int(np.sqrt(float(index)))
+    return 2 * (index - k * k - k), 2 * k
+
+
+def _zernike_cartesian(xp, m, n, x, y):
+    """``Zernike::Z_cart``: ``R_n^|m|(rho)`` times ``cos(m phi)`` (m >= 0) or ``sin(-m phi)``."""
+    rho = xp.hypot(x, y)
+    phi = xp.where((x == 0) & (y == 0), 0.0, xp.arctan2(y, x))
+    a = abs(m)
+    radial = xp.zeros_like(rho)
+    if (n - a) % 2 == 0:
+        for k in range((n - a) // 2 + 1):
+            c = (-1) ** k * math.factorial(n - k)
+            c /= math.factorial(k) * math.factorial((n + a) // 2 - k) * math.factorial((n - a) // 2 - k)
+            radial = radial + c * rho ** (n - 2 * k)
+    return radial * (xp.cos(m * phi) if m >= 0 else xp.sin(-m * phi))
+
+
+def zernike_phase(coefficients, index_to_mn, freqs):
+    """``sum_i c_i Z_i(k)`` at frequencies ``freqs`` ``(n, 2)`` in 1/A (``getGammaOffset``, ``getPhaseCorrection``).
+
+    NumPy frequencies give a NumPy phase; JAX frequencies (e.g. inside a traced CTF evaluator) a JAX phase.
+    """
+    xp = np if isinstance(freqs, np.ndarray) else jnp
+    x, y = freqs[:, 0], freqs[:, 1]
+    phase = xp.zeros_like(x)
+    for index, c in enumerate(coefficients):
+        if c != 0:
+            m, n = index_to_mn(index)
+            phase = phase + float(c) * _zernike_cartesian(xp, m, n, x, y)
+    return phase
+
+
+def relion_wavelength(voltage_kv):
+    """Electron wavelength in A (``ObservationModel``, obs_model.cpp)."""
+    volts = float(voltage_kv) * 1e3
+    return 12.2643247 / np.sqrt(volts * (1.0 + volts * 0.978466e-6))
+
+
+def odd_coefficients_with_beam_tilt(odd_zernike, beam_tilt_mrad, cs_mm, voltage_kv):
+    """``TiltHelper::insertTilt``: the odd Zernike coefficients with a beam tilt ``(x, y)`` in mrad added."""
+    coefficients = [float(c) for c in (odd_zernike or [])]
+    if beam_tilt_mrad is None:
+        return coefficients
+    coefficients += [0.0] * max(0, 6 - len(coefficients))
+    lam = relion_wavelength(voltage_kv)
+    scale = float(cs_mm) * 20000 * lam * lam * 3.141592654
+    z3x = -scale * float(beam_tilt_mrad[0]) / 3.0
+    z3y = -scale * float(beam_tilt_mrad[1]) / 3.0
+    coefficients[1] += 2.0 * z3x
+    coefficients[0] += 2.0 * z3y
+    coefficients[4] += z3x
+    coefficients[3] += z3y
+    return coefficients
+
+
+def modulate_odd_aberrations(images, phase_freqs, odd_phase):
+    """Images ``[n, N, N]`` with their Fourier transform times ``exp(i phase)``.
+
+    relion_refine demodulates every image by ``exp(-i phase)`` of its optics group's odd
+    aberrations before scoring and backprojection (``ObservationModel::demodulatePhase``),
+    so recorded images carry ``exp(i phase)``. ``odd_phase`` is the phase at the centred
+    frequency grid ``phase_freqs`` of :func:`fourier_transform_utils.get_k_coordinate_of_each_pixel`.
+    """
+    images = np.asarray(images)
+    shape = images.shape[-2:]
+    factor = np.exp(1j * np.asarray(odd_phase)).reshape(shape)
+    ft = np.asarray(fourier_transform_utils.get_dft2(jnp.asarray(images)))
+    return np.asarray(fourier_transform_utils.get_idft2(jnp.asarray(ft * factor[None]))).real.astype(images.dtype)
+
+
+def _setting_aberrations(setting):
+    """``(mag_matrix, even_zernike, odd coefficients)`` of an optics setting; None where absent."""
+    mag = setting.get("mag_matrix")
+    even = setting.get("even_zernike")
+    odd = odd_coefficients_with_beam_tilt(
+        setting.get("odd_zernike"), setting.get("beam_tilt"), setting["cs"], setting["voltage"]
+    )
+    return (
+        None if mag is None else np.asarray(mag, dtype=np.float64),
+        None if even is None or not np.any(np.asarray(even) != 0) else list(even),
+        odd if np.any(np.asarray(odd) != 0) else None,
+    )
 
 
 def dose_symmetric_tilt_scheme(max_tilt=60.0, tilt_step=3.0, group_size=2):
@@ -113,6 +225,30 @@ def _relion_euler_matrix(eulers):
 
 def _visible_frames_string(mask):
     return "[" + ",".join(str(int(v)) for v in mask) + "]"
+
+
+def _relion_vector(values):
+    return "[" + ",".join(f"{float(v):.10g}" for v in values) + "]"
+
+
+def _write_optics_aberrations(optics_df, optics_groups):
+    """Add the groups' aberration columns to the optics table (only the features some group uses)."""
+    if any(og.get("odd_zernike") is not None for og in optics_groups):
+        optics_df["_rlnOddZernike"] = [_relion_vector(og.get("odd_zernike") or [0.0] * 6) for og in optics_groups]
+    if any(og.get("beam_tilt") is not None for og in optics_groups):
+        tilts = [og.get("beam_tilt") or (0.0, 0.0) for og in optics_groups]
+        optics_df["_rlnBeamTiltX"] = [float(t[0]) for t in tilts]
+        optics_df["_rlnBeamTiltY"] = [float(t[1]) for t in tilts]
+    if any(og.get("even_zernike") is not None for og in optics_groups):
+        optics_df["_rlnEvenZernike"] = [_relion_vector(og.get("even_zernike") or [0.0] * 9) for og in optics_groups]
+    if any(og.get("mag_matrix") is not None for og in optics_groups):
+        mags = [
+            np.eye(2) if og.get("mag_matrix") is None else np.asarray(og["mag_matrix"], dtype=np.float64)
+            for og in optics_groups
+        ]
+        for i in range(2):
+            for j in range(2):
+                optics_df[f"_rlnMagMat{i}{j}"] = [float(m[i, j]) for m in mags]
 
 
 def generate_relion5_tomo_dataset(
@@ -162,7 +298,14 @@ def generate_relion5_tomo_dataset(
         The optics settings: one dict per setting with ``voltage`` (kV), ``cs`` (mm),
         ``amp_contrast`` and ``noise_scale`` (noise standard-deviation factor),
         and optionally ``pixel_size`` (A) and ``box_size`` (px), which default to
-        ``voxel_size`` and ``grid_size``. A setting's volume is Fourier-resampled to
+        ``voxel_size`` and ``grid_size``. Optional RELION optics-group aberrations, written
+        to the optics table and applied to the images as relion_refine models them:
+        ``beam_tilt`` (``(x, y)`` mrad, ``rlnBeamTiltX/Y``), ``odd_zernike`` and
+        ``even_zernike`` (coefficient lists, ``rlnOddZernike``/``rlnEvenZernike``) and
+        ``mag_matrix`` (2x2, ``rlnMagMat00..11``). Projections use ``inv(M3) A`` (RELION's
+        ``applyAnisoMag``), the CTF is evaluated at ``M k`` with the even Zernike phase
+        (:func:`relion_tomo_ctf`), and each image is multiplied by ``exp(i phase)`` of the
+        odd terms (:func:`modulate_odd_aberrations`). A setting's volume is Fourier-resampled to
         its pixel size, so ``grid_size * voxel_size / pixel_size`` must be an even
         integer. RELION puts the reference on group 1's grid.
         Tomogram ``t`` is imaged with setting ``t % len(optics_groups)``. The default
@@ -205,6 +348,7 @@ def generate_relion5_tomo_dataset(
     """
     rng = np.random.default_rng(seed)
     settings = [{"pixel_size": voxel_size, "box_size": grid_size, **og} for og in optics_groups]
+    setting_aberrations = [_setting_aberrations(setting) for setting in settings]
     # Each tomogram's setting, each tomogram's STAR optics group and each group's setting.
     tomo_settings = np.arange(n_tomograms) % len(settings)
     tomo_optics = np.arange(n_tomograms) if optics_group_per_tomogram else tomo_settings
@@ -336,6 +480,7 @@ def generate_relion5_tomo_dataset(
             "_rlnImageSize": [og["box_size"] for og in optics_groups],
         }
     )
+    _write_optics_aberrations(optics_df, optics_groups)
     particles_path = os.path.join(output_folder, "particles.star")
     starfile.write_star_blocks(
         particles_path,
@@ -380,15 +525,27 @@ def generate_relion5_tomo_dataset(
     )
     row_pixel = np.array([optics_groups[g]["pixel_size"] for g in row_optics])
     row_translations = np.einsum("iab,ib->ia", row_projection[:, :2, :], origins[row_particle]) / row_pixel[:, None]
+    # Anisotropic magnification: recovar's projection matrices are inv(A)^T, so RELION's inv(M3) A
+    # (ObservationModel::applyAnisoMag) is M3^T inv(A)^T.
+    row_projection_rots = np.array(rots, dtype=np.float64, copy=True)
+    for setting, (mag, _even, _odd) in enumerate(setting_aberrations):
+        if mag is not None:
+            mag3 = np.eye(3)
+            mag3[:2, :2] = mag
+            rows = row_settings == setting
+            row_projection_rots[rows] = np.einsum("ij,njk->nik", mag3.T, row_projection_rots[rows])
     row_images, setting_noise_variances = optics_groups_sim.simulate_optics_groups(
         volumes,
         settings,
         row_settings,
-        rots,
+        row_projection_rots.astype(np.asarray(rots).dtype),
         ctf_params,
         particle_volume[row_particle],
         particle_contrast[row_particle],
-        ctf_evaluator=relion_tomo_ctf,
+        ctf_evaluator=[
+            functools.partial(relion_tomo_ctf, mag_matrix=mag, even_zernike=even)
+            for mag, even, _odd in setting_aberrations
+        ],
         volumes_path_root=volumes_path_root,
         trailing_zero_format_in_vol_name=trailing_zero_format_in_vol_name,
         voxel_size=voxel_size,
@@ -403,6 +560,26 @@ def generate_relion5_tomo_dataset(
         premultiplied_ctf=premultiplied_ctf,
         row_translations=row_translations,
     )
+
+    for setting, (mag, _even, odd) in enumerate(setting_aberrations):
+        rows = np.nonzero(row_settings == setting)[0]
+        if odd is None or rows.size == 0:
+            continue
+        box = settings[setting]["box_size"]
+        freqs = np.asarray(
+            fourier_transform_utils.get_k_coordinate_of_each_pixel(
+                (box, box), settings[setting]["pixel_size"], scaled=True, dtype=jnp.float64
+            )
+        )
+        if mag is not None:
+            freqs = freqs @ mag.T
+        phase = zernike_phase(odd, odd_index_to_mn, freqs)
+        for start in range(0, rows.size, 1024):
+            block = rows[start : start + 1024]
+            for row, image in zip(
+                block, modulate_odd_aberrations(np.stack([row_images[r] for r in block]), freqs, phase)
+            ):
+                row_images[row] = image
 
     # Tilt images are normalised as relion_preprocess --norm does (background mean 0 and
     # standard deviation 1 per image), as the SPA writer does; RELION's refinement has

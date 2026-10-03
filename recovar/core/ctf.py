@@ -151,7 +151,7 @@ def as_ctf_evaluator(fn_or_evaluator):
 
 
 @jax.jit
-def evaluate_ctf(freqs, ctf_params):
+def evaluate_ctf(freqs, ctf_params, gamma_offset=None):
     """Evaluate the Contrast Transfer Function for a batch of images.
 
     Broadcasts per-image parameters over a shared frequency grid in a
@@ -165,6 +165,9 @@ def evaluate_ctf(freqs, ctf_params):
         Packed CTF parameters per image.  Layout: ``[DFU, DFV, DFANG,
         VOLT, CS, W, PHASE_SHIFT, BFACTOR, CONTRAST, ...]`` — see
         :class:`CTFParamIndex`.
+    gamma_offset : array ``(n_pixels,)`` or None
+        Phase added to the CTF's ``gamma`` at every pixel (RELION's even Zernike
+        aberrations, ``CTF::getCTF``'s ``gammaOffset``); None adds nothing.
 
     Returns
     -------
@@ -192,6 +195,8 @@ def evaluate_ctf(freqs, ctf_params):
     # (n_images, 1) * (n_pixels,) → (n_images, n_pixels)
     df = 0.5 * (dfu + dfv + (dfu - dfv) * jnp.cos(2 * (ang - dfang)))
     gamma = 2 * jnp.pi * (-0.5 * df * lam * s2 + 0.25 * cs * lam**3 * s2**2) - phase_shift
+    if gamma_offset is not None:
+        gamma = gamma + jnp.asarray(gamma_offset)[None, :]
     ctf = (1 - w**2) ** 0.5 * jnp.sin(gamma) - w * jnp.cos(gamma)
     ctf = ctf * jnp.exp(-bfactor / 4 * s2)
     return ctf * contrast
