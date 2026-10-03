@@ -742,8 +742,11 @@ def _relion_reconstruct_floor_volume(
         # doubled Hermitian pairs are those of the kx=0 plane, not of kz=0.
         half_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(volume_shape)
         multiplicity = jnp.asarray(_relion_x_half_multiplicity_in_native_half(volume_shape), dtype=dtype)
-        valid_weights = jnp.where(average_valid.reshape(half_shape), multiplicity, 0).reshape(-1)
-        sum_weights = average_filter * valid_weights
+        valid_half = average_valid.reshape(half_shape)
+        valid_weights = jnp.where(valid_half, multiplicity, 0).reshape(-1)
+        # Masked, not multiplied by a zero weight: a non-finite value outside
+        # the averaged shells must not reach a shell sum.
+        sum_weights = jnp.where(valid_half, average_filter.reshape(half_shape) * multiplicity, 0).reshape(-1)
     else:
         valid_weights = average_valid.astype(dtype)
         sum_weights = jnp.where(average_valid, average_filter, 0.0)

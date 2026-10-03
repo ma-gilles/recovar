@@ -156,6 +156,26 @@ def test_floor_volume_keeps_the_filter_dtype_and_layout(dtype):
         assert floor.shape == given.shape
 
 
+@pytest.mark.parametrize("size, padding_factor", [(15, 2), (16, 2)])
+def test_non_finite_filter_outside_the_averaged_shells_does_not_reach_the_floor(size, padding_factor):
+    """Only shells below ``max_res_shell`` are averaged; a value outside them is masked, not weighted by zero."""
+
+    shape = (size,) * 3
+    max_res_shell = 2
+    values = _anisotropic_filter(size)
+    expected = _to_half(_relion_floor_volume(values, padding_factor, max_res_shell))
+    half_filter = _to_half(values).copy()
+    # The corner (-k_max, -k_max, k_max) of the native half lies beyond every averaged shell.
+    half_filter[0, 0, -1] = np.inf
+
+    half = relion_functions._relion_reconstruct_floor_volume(
+        jnp.asarray(half_filter), shape, padding_factor, half_volume=True, max_res_shell=max_res_shell
+    )
+
+    assert np.all(np.isfinite(np.asarray(half)))
+    np.testing.assert_allclose(np.asarray(half), expected, rtol=1e-12, atol=0)
+
+
 def test_floor_volume_single_precision_matches_relion_x_half_rule():
     """Float32 filter, as the large-grid route passes: tolerance limited by single precision.
 
