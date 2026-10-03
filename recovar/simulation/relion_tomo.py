@@ -319,6 +319,9 @@ def generate_relion5_tomo_dataset(
     snr : float
         Mean per-pixel noise-free signal power of the first optics group's images
         over the per-pixel noise power shared by all groups (before ``noise_scale``).
+    premultiplied_ctf : bool
+        Write CTF-premultiplied tilt images (``rlnCtfDataAreCtfPremultiplied 1``, the default of RELION 5's
+        ``relion_tomo_subtomo``): each image, noise included, multiplied by RELION's CTF of its tilt.
     hidden_tilt_fraction : float
         Probability that a tilt is marked invisible for a particle (the zero
         tilt is always visible). Hidden tilts get no slice in the stack.
@@ -561,6 +564,10 @@ def generate_relion5_tomo_dataset(
         row_translations=row_translations,
     )
 
+    if premultiplied_ctf:
+        # simulate_data multiplies by recovar's CTF, which is minus RELION's (CTF::getCTF returns
+        # -sin(gamma)); relion_tomo_subtomo premultiplies by RELION's, so a RELION reader sees CTF^2 X.
+        row_images = [-image for image in row_images]
     for setting, (mag, _even, odd) in enumerate(setting_aberrations):
         rows = np.nonzero(row_settings == setting)[0]
         if odd is None or rows.size == 0:

@@ -523,3 +523,35 @@ def test_optics_aberrations_are_written_and_applied(tmp_path):
         with mrcfile.open(tmp_path / "plain" / name) as a, mrcfile.open(tmp_path / "mixed" / name) as b:
             difference = np.max(np.abs(a.data - b.data))
         assert (difference > 1e-2) == (group == 2), (name, group, difference)
+
+
+def test_premultiplied_images_carry_relions_ctf(tmp_path):
+    """A premultiplied tilt image is RELION's CTF (minus recovar's) times the plain image (noise-free here)."""
+    from recovar.core import fourier_transform_utils as ftu
+
+    _write_volume(tmp_path)
+    kwargs = dict(
+        n_particles=3, grid_size=GRID, n_tomograms=1, max_tilt=20.0, tilt_step=10.0, tomogram_size=(512, 512, 128),
+        snr=1e6, seed=11,
+    )
+    out = {}
+    for premultiplied in (False, True):
+        res = relion_tomo.generate_relion5_tomo_dataset(
+            str(tmp_path / str(premultiplied)), str(tmp_path / "vol"), VOXEL, premultiplied_ctf=premultiplied, **kwargs
+        )
+        info = res["simulation_info"]
+        flat, _ = starfile.read_star(str(tmp_path / str(premultiplied) / "particles_2d.star"))
+        images = []
+        for row, name in enumerate(flat["_rlnImageName"]):
+            index, stack = name.split("@")
+            with mrcfile.open(tmp_path / str(premultiplied) / stack) as mrc:
+                image = np.asarray(mrc.data[int(index) - 1], dtype=np.float64)
+            images.append(image * info["flat_rows_bg_std"][row] + info["flat_rows_bg_mean"][row])
+        out[premultiplied] = (np.stack(images), info["flat_rows_ctf_params"])
+    (plain, params), (premultiplied, _) = out[False], out[True]
+    ctf = np.asarray(relion_tomo.relion_tomo_ctf(params, (GRID, GRID), VOXEL)).reshape(-1, GRID, GRID)
+    expected = np.asarray(ftu.get_dft2(plain)) * -ctf
+    got = np.asarray(ftu.get_dft2(premultiplied))
+    for g, e in zip(got, expected):
+        corr = np.real(np.vdot(g, e)) / np.sqrt(np.vdot(g, g).real * np.vdot(e, e).real)
+        assert corr > 0.99, corr
