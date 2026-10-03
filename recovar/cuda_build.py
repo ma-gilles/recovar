@@ -344,7 +344,7 @@ class NativeLibrary:
                 return
             lib = self.get_lib()
             if self.loaded_path:
-                cuda_backproject._preflight_check(pathlib.Path(self.loaded_path))
+                cuda_backproject._preflight_check(pathlib.Path(self.loaded_path), make_dir=self.make_dir)
             for target, symbol in self.registrations:
                 jax.ffi.register_ffi_target(target, jax.ffi.pycapsule(getattr(lib, symbol)), platform="CUDA")
             self.ffi_registered = True

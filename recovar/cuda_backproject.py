@@ -569,7 +569,9 @@ _FFI_REGISTRATIONS: tuple[tuple[str, str], ...] = (
 )
 
 
-_preflight_ok: bool | None = None  # None = not checked yet
+# Preflight verdict per checked library path ({str(path): ok}); None = nothing checked yet. Each library is
+# checked once: recovar's pipeline library and any library registered through cuda_build.NativeLibrary.
+_preflight_ok: dict[str, bool] | None = None
 
 
 def _detect_gpu_compute_cap() -> tuple[str, str] | None:
@@ -610,8 +612,75 @@ def _detect_gpu_compute_cap() -> tuple[str, str] | None:
     return None
 
 
+_FATBIN_MAGIC = 0xBA55ED50
+
+
+def _fatbin_arches(so_path: pathlib.Path) -> tuple[set[str], set[str]]:
+    """Return (sass_arches, ptx_arches) read from the ``.nv_fatbin`` section of a 64-bit ELF library.
+
+    The fallback when cuobjdump is not installed (GPU nodes often have the driver but no toolkit):
+    each fat binary container (magic ``0xBA55ED50``, then version u16, header size u16, payload size
+    u64) holds entries whose header starts with kind u16 (1 = PTX, 2 = SASS ELF), version u16, header
+    size u32 and padded payload size u32, with the target architecture as u32 at byte 28. Agrees with
+    ``cuobjdump --list-elf/--list-ptx`` on sm_60/70/80/90 SASS and compute_90 PTX builds (CUDA 12.8).
+    """
+    import struct
+
+    sass: set[str] = set()
+    ptx: set[str] = set()
+    try:
+        data = pathlib.Path(so_path).read_bytes()
+        if data[:4] != b"\x7fELF" or data[4] != 2 or data[5] != 1:
+            return sass, ptx
+        (shoff,) = struct.unpack_from("<Q", data, 0x28)
+        shentsize, shnum, shstrndx = struct.unpack_from("<HHH", data, 0x3A)
+
+        def section(index):
+            return struct.unpack_from("<IIQQQQIIQQ", data, shoff + index * shentsize)
+
+        strings = section(shstrndx)[4]
+        fatbin = None
+        for index in range(shnum):
+            header = section(index)
+            name_start = strings + header[0]
+            if data[name_start : data.index(b"\0", name_start)] == b".nv_fatbin":
+                fatbin = data[header[4] : header[4] + header[5]]
+                break
+        if fatbin is None:
+            return sass, ptx
+        pos = 0
+        while pos + 16 <= len(fatbin):
+            magic, _version, header_size, fat_size = struct.unpack_from("<IHHQ", fatbin, pos)
+            if magic != _FATBIN_MAGIC:
+                pos += 8  # containers are 8-byte aligned
+                continue
+            entry, stop = pos + header_size, pos + header_size + fat_size
+            while entry + 32 <= stop:
+                kind, _ver, entry_header, padded_size = struct.unpack_from("<HHII", fatbin, entry)
+                (arch,) = struct.unpack_from("<I", fatbin, entry + 28)
+                if kind == 1:
+                    ptx.add(str(arch))
+                elif kind == 2:
+                    sass.add(str(arch))
+                if entry_header + padded_size <= 0:
+                    break
+                entry += entry_header + padded_size
+            pos = stop
+    except (OSError, ValueError, struct.error):
+        return set(), set()
+    return sass, ptx
+
+
 def _detect_so_arches(so_path: pathlib.Path) -> tuple[set[str], set[str]]:
-    """Return (sass_arches, ptx_arches) from cuobjdump --list-elf."""
+    """Return (sass_arches, ptx_arches) from cuobjdump --list-elf, or from the fat binary without cuobjdump."""
+    sass, ptx = _cuobjdump_arches(so_path)
+    if not sass and not ptx:
+        sass, ptx = _fatbin_arches(so_path)
+    return sass, ptx
+
+
+def _cuobjdump_arches(so_path: pathlib.Path) -> tuple[set[str], set[str]]:
+    """Return (sass_arches, ptx_arches) from cuobjdump --list-elf/--list-ptx (empty without cuobjdump)."""
     sass: set[str] = set()
     ptx: set[str] = set()
     try:
@@ -667,17 +736,21 @@ def _detect_nvcc_version() -> str | None:
     return None
 
 
-def _preflight_check(so_path: pathlib.Path) -> None:
-    """One-time check that the loaded .so supports the running GPU.
+def _preflight_check(so_path: pathlib.Path, make_dir: pathlib.Path | None = None) -> None:
+    """One-time check per library that the loaded .so supports the running GPU.
 
     Raises RuntimeError with a detailed, actionable message if the GPU's
     compute capability is not covered by the .so's compiled targets.
-    Silently succeeds (logs a warning) if the probe tools are unavailable.
+    Silently succeeds (logs a warning) if the targets cannot be read.
+    ``make_dir`` is the directory whose Makefile builds this library (recovar's by default).
     """
     global _preflight_ok
-    if _preflight_ok is not None:
+    if _preflight_ok is None:
+        _preflight_ok = {}
+    key = str(pathlib.Path(so_path).resolve())
+    if key in _preflight_ok:
         return
-    _preflight_ok = True  # assume OK; set False only on confirmed mismatch
+    _preflight_ok[key] = True  # assume OK; set False only on confirmed mismatch
 
     gpu_info = _detect_gpu_compute_cap()
     if gpu_info is None:
@@ -691,9 +764,9 @@ def _preflight_check(so_path: pathlib.Path) -> None:
     gpu_name, gpu_cap = gpu_info
     sass_arches, ptx_arches = _detect_so_arches(so_path)
     if not sass_arches and not ptx_arches:
-        # cuobjdump not available — can't check
+        # neither cuobjdump nor the fat binary gave the targets — can't check
         logger.warning(
-            "recovar could not inspect the CUDA kernel targets (cuobjdump not found); "
+            f"recovar could not inspect the CUDA kernel targets of {so_path}; "
             "if the next call fails with 'no kernel image', see "
             "https://github.com/ma-gilles/recovar/issues/131"
         )
@@ -705,19 +778,19 @@ def _preflight_check(so_path: pathlib.Path) -> None:
     ptx_covered = any(int(p) <= gpu_cap_int for p in ptx_arches)
 
     if sass_covered or ptx_covered:
-        _preflight_ok = True
+        _preflight_ok[key] = True
         return
 
     # Not covered — build the detailed error message
-    _preflight_ok = False
+    _preflight_ok[key] = False
     nvcc_ver = _detect_nvcc_version()
-    makefile_dir = str(_LIB_DIR)
-    makefile_path = str(_LIB_DIR / "Makefile")
+    makefile_dir = str(make_dir or _LIB_DIR)
+    makefile_path = str(pathlib.Path(makefile_dir) / "Makefile")
     so_arches_str = ", ".join(f"sm_{a}" for a in sorted(sass_arches))
     ptx_desc = f"targets {', '.join(f'sm_{p}' for p in sorted(ptx_arches))} or higher only" if ptx_arches else "none"
 
     msg = f"""\
-recovar's custom CUDA kernel cannot run on your GPU.
+The custom CUDA library {so_path.name} cannot run on your GPU.
 
 What's going wrong
 ------------------
