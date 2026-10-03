@@ -48,25 +48,35 @@ def estimate_principal_components(
     eigenvectors and eigenvalues via SVD.
 
     Args:
-        dataset: A ``CryoEMDataset`` with ``halfset_indices`` set.
-        options: Pipeline options namespace.
-        means: Dict with mean volume estimates.
-        mean_prior: Prior mean volume (Fourier coefficients).
-        volume_mask: Binary mask selecting valid voxels.
-        dilated_volume_mask: Dilated version of *volume_mask*.
-        valid_idx: Indices of valid Fourier frequencies.
-        batch_size: Image batch size for GPU processing.
-        gpu_memory_to_use: Available GPU memory in GB.
-        covariance_options: Options dict (default: auto-generated).
-        variance_estimate: Pre-computed variance estimate.
-        use_reg_mean_in_contrast: Use regularized mean for contrast estimation.
-        use_multi_gpu: Distribute across multiple GPUs.
-        n_gpus: Number of GPUs (``None`` = auto-detect).
+        dataset (CryoEMDataset): A ``CryoEMDataset`` with ``halfset_indices`` set.
+        options (argparse.Namespace): Pipeline options namespace.
+        means (recovar.reconstruction.homogeneous.MeanEstimate): Structured mean reconstruction
+            estimates.
+        mean_prior (numpy.ndarray | jax.Array): Spectral variance prior on the flattened Fourier
+            volume grid.
+        volume_mask (numpy.ndarray | jax.Array): Binary mask selecting valid voxels.
+        dilated_volume_mask (numpy.ndarray | jax.Array): Dilated version of *volume_mask*.
+        valid_idx (numpy.ndarray | jax.Array): Legacy frequency mask, forwarded to covariance
+            computation but unused there.
+        batch_size (int): Compatibility argument; currently unused.
+        gpu_memory_to_use (float): Available GPU memory in GB.
+        covariance_options (dict[str, object] | None): Options dict (default: auto-generated).
+        variance_estimate (numpy.ndarray | jax.Array | None): Pre-computed variance estimate.
+        use_reg_mean_in_contrast (bool): Use regularized mean for contrast estimation.
+        use_multi_gpu (bool): Distribute across multiple GPUs.
+        n_gpus (int | None): Number of GPUs (``None`` = auto-detect).
+        vol_batch_size (int | None): Volume batch size; estimated from GPU memory
+            when omitted.
 
     Returns:
-        Tuple ``(u, s, covariance_cols, picked_frequencies, column_fscs)``
-        where *u* and *s* are dicts with keys ``'real'`` and ``'rescaled'``
-        containing eigenvectors and eigenvalues respectively.
+        u (dict[str, numpy.ndarray | jax.Array | None]): Eigenvectors under
+            ``real`` and ``rescaled``, with optional ``rescaled_no_contrast``.
+            Intermediate arrays become ``None`` unless ``keep_intermediate`` is set.
+        s (dict[str, numpy.ndarray | jax.Array]): Corresponding eigenvalue arrays.
+        covariance_cols (dict[str, numpy.ndarray | None]): Regularized columns
+            under ``est_mask``, or ``None`` when intermediates are discarded.
+        picked_frequencies (numpy.ndarray): Flat Fourier indices of sampled columns.
+        column_fscs (numpy.ndarray): FSC curve for each sampled column.
     """
     covariance_options = (
         covariance_estimation.get_default_covariance_computation_options()

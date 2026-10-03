@@ -68,10 +68,12 @@ def pad_volume_spatial_domain(images, padding):
 
 
 def unpad_volume_spatial_domain(volume, padding):
+    pad_before = padding // 2
+    pad_after = padding - pad_before
     return volume[
-        padding // 2 : volume.shape[0] - padding // 2,
-        padding // 2 : volume.shape[1] - padding // 2,
-        padding // 2 : volume.shape[2] - padding // 2,
+        pad_before : volume.shape[0] - pad_after,
+        pad_before : volume.shape[1] - pad_after,
+        pad_before : volume.shape[2] - pad_after,
     ]
 
 

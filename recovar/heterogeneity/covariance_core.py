@@ -57,18 +57,15 @@ def get_per_image_tight_mask(
     soften=-1,
 ):
 
+    # Mask projection always uses linear interpolation, regardless of the
+    # reconstruction interpolation requested by the caller.
     disc_type = "linear_interp"
 
-    if disc_type == "cubic":
-        extra_padding = 0
-        mask_ft = volume_mask
-    else:
-        # if padding is already there, do nothing else double image size.
-        extra_padding = grid_size if (padding == 0) else 0
-        # Do this in half precision? Shouldn't matter much.
-        volume_mask = volume_mask.reshape(volume_shape)
-        volume_mask = pad.pad_volume_spatial_domain(volume_mask, extra_padding).real
-        mask_ft = fourier_transform_utils.get_dft3(volume_mask).reshape(-1)
+    # If padding is already present, keep it; otherwise double the image size.
+    extra_padding = grid_size if (padding == 0) else 0
+    volume_mask = volume_mask.reshape(volume_shape)
+    volume_mask = pad.pad_volume_spatial_domain(volume_mask, extra_padding).real
+    mask_ft = fourier_transform_utils.get_dft3(volume_mask).reshape(-1)
 
     padded_image_shape = tuple(np.array(image_shape) + extra_padding)
     padded_volume_shape = tuple(np.array(volume_shape) + extra_padding)

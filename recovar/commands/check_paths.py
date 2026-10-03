@@ -200,3 +200,7 @@ def _check_paths(fmt, filepath, raw_paths, datadir, strip_prefix, n_show):
             prefix = missing_paths[0][0].rsplit("/", 1)[0]
             logger.info("    - You may also need: --strip-prefix %s", prefix)
     logger.info("")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,4 +1,5 @@
 import os
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -87,26 +88,36 @@ def test_remove_stale_fast_marching_build_artifacts_only_removes_legacy_root_ent
 @pytest.fixture(scope="module")
 def built_package_artifacts(tmp_path_factory):
     dist_dir = tmp_path_factory.mktemp("package-dist")
+    source_dir = tmp_path_factory.mktemp("package-source")
+    # Build without Git discovery or a stale egg-info/SOURCES.txt manifest.
+    # Neither may hide missing source fragments in an archive-based install.
+    for filename in ("setup.py", "setup_helpers.py", "pyproject.toml", "MANIFEST.in", "README.md", "LICENSE"):
+        shutil.copy2(REPO_ROOT / filename, source_dir / filename)
+    shutil.copytree(
+        REPO_ROOT / "recovar",
+        source_dir / "recovar",
+        ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.so", "*.o"),
+    )
     env = dict(os.environ, PYTHONNOUSERSITE="1")
 
     subprocess.run(
         [sys.executable, "setup.py", "sdist", "--dist-dir", str(dist_dir)],
-        cwd=REPO_ROOT,
+        cwd=source_dir,
         env=env,
         check=True,
         capture_output=True,
         text=True,
     )
+    sdist = next(dist_dir.glob("*.tar.gz"))
     subprocess.run(
-        [sys.executable, "-m", "pip", "wheel", ".", "--no-deps", "--no-build-isolation", "-w", str(dist_dir)],
-        cwd=REPO_ROOT,
+        [sys.executable, "-m", "pip", "wheel", str(sdist), "--no-deps", "--no-build-isolation", "-w", str(dist_dir)],
+        cwd=source_dir,
         env=env,
         check=True,
         capture_output=True,
         text=True,
     )
 
-    sdist = next(dist_dir.glob("*.tar.gz"))
     wheel = next(dist_dir.glob("*.whl"))
     return sdist, wheel
 
@@ -120,12 +131,17 @@ def test_sdist_and_wheel_include_cuda_build_files(built_package_artifacts):
     with zipfile.ZipFile(wheel) as zf:
         wheel_names = set(zf.namelist())
 
-    assert any(name.endswith("/recovar/cuda/Makefile") for name in sdist_names)
-    assert any(name.endswith("/recovar/cuda/cuda_backproject.cu") for name in sdist_names)
+    cuda_dir = REPO_ROOT / "recovar" / "cuda"
+    required_cuda_files = {"recovar/cuda/Makefile", "recovar/cuda/cuda_backproject.cu"}
+    required_cuda_files.update(
+        path.relative_to(REPO_ROOT).as_posix()
+        for path in cuda_dir.rglob("*")
+        if path.is_file() and path.suffix in {".cu", ".cuh", ".inc"}
+    )
+    for filename in sorted(required_cuda_files):
+        assert any(name.endswith(f"/{filename}") for name in sdist_names), filename
+        assert filename in wheel_names, filename
     assert any(name.endswith("/setup_helpers.py") for name in sdist_names)
-
-    assert "recovar/cuda/Makefile" in wheel_names
-    assert "recovar/cuda/cuda_backproject.cu" in wheel_names
 
 
 def test_wheel_excludes_legacy_root_fast_marching_entries(built_package_artifacts):

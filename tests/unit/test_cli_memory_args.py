@@ -7,9 +7,9 @@ from __future__ import annotations
 
 import argparse
 import subprocess
-import sys
 
 import pytest
+from conftest import repo_python_command, repo_subprocess_env
 
 pytestmark = [pytest.mark.unit]
 
@@ -30,11 +30,14 @@ _HEAVY_GPU_COMMANDS = [
 
 def _help_text_for(cmd: str) -> str:
     result = subprocess.run(
-        [sys.executable, "-m", "recovar.command_line", cmd, "--help"],
+        repo_python_command("-m", "recovar.command_line", cmd, "--help"),
+        env=repo_subprocess_env(),
         capture_output=True,
         text=True,
         timeout=60,
     )
+    # A failed child (including its import-root check) must not pass on text alone.
+    assert result.returncode == 0, result.stderr[-2000:]
     return result.stdout + result.stderr
 
 

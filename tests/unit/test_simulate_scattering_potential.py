@@ -8,6 +8,41 @@ from recovar.simulation import simulate_scattering_potential as ssp
 pytestmark = pytest.mark.unit
 
 
+def test_grid_nufft_forwards_explicit_thread_count(monkeypatch):
+    calls = []
+
+    def fake_nufft3d1(x, y, z, weights, n_modes, **kwargs):
+        del x, y, z, weights
+        calls.append(kwargs)
+        return np.zeros(n_modes, dtype=np.complex128)
+
+    monkeypatch.setattr(ssp.finufft, "nufft3d1", fake_nufft3d1)
+    atom_coords = np.zeros((1, 3), dtype=np.float64)
+    weights = np.ones(1, dtype=np.complex128)
+
+    ssp.get_fourier_transform_of_molecules_on_k_grid(
+        atom_coords,
+        weights,
+        voxel_size=1.0,
+        grid_size=4,
+        finufft_nthreads=1,
+    )
+
+    assert calls == [{"isign": -1, "eps": ssp.FINUFFT_EPS, "nthreads": 1}]
+
+
+@pytest.mark.parametrize("nthreads", [0, -1, 1.5, True])
+def test_grid_nufft_rejects_invalid_thread_count(nthreads):
+    with pytest.raises(ValueError, match="finufft_nthreads"):
+        ssp.get_fourier_transform_of_molecules_on_k_grid(
+            np.zeros((1, 3), dtype=np.float64),
+            np.ones(1, dtype=np.complex128),
+            voxel_size=1.0,
+            grid_size=4,
+            finufft_nthreads=nthreads,
+        )
+
+
 def test_get_exponent_and_constant_of_gaussian_ft_scales_with_sigma():
     sigma_small = 0.7
     sigma_large = 1.4

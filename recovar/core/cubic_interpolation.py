@@ -203,14 +203,14 @@ def map_coordinates(input, coordinates, order, mode="wrap", cval=0.0):
     Coordinates are shifted by -1 for periodic convention.
 
     Args:
-        input: Input array to interpolate
-        coordinates: Sequence of coordinate arrays
-        order: Interpolation order (must be 3)
-        mode: Boundary mode (default 'wrap' for periodic)
-        cval: Fill value for out-of-bounds
+        input (ArrayLike): Input array to interpolate
+        coordinates (Sequence[ArrayLike]): Sequence of coordinate arrays
+        order (int): Interpolation order (must be 3)
+        mode (str): Boundary mode (default 'wrap' for periodic)
+        cval (float | complex): Fill value for out-of-bounds
 
     Returns:
-        Interpolated values
+        values (Array): Interpolated values
     """
     if order != 3:
         raise NotImplementedError(f"This implementation only supports cubic splines (order=3), got order={order}")
@@ -226,11 +226,11 @@ def map_coordinates_with_cubic_spline(coefficients, coordinates, mode="wrap", cv
     Coordinates are shifted by -1 for periodic convention.
 
     Args:
-        coefficients: Precomputed spline coefficients (ndim-dimensional).
-        coordinates: Either a sequence of ndim coordinate arrays, or a single
+        coefficients (ArrayLike): Precomputed spline coefficients (ndim-dimensional).
+        coordinates (ArrayLike | Sequence[ArrayLike]): Either a sequence of ndim coordinate arrays, or a single
             array of shape ``(ndim, ...)`` (scipy convention).
-        mode: Boundary mode (default 'wrap' for periodic).
-        cval: Fill value for out-of-bounds.
+        mode (str): Boundary mode (default 'wrap' for periodic).
+        cval (float | complex): Fill value for out-of-bounds.
     """
     coefficients = jnp.asarray(coefficients)
     ndim = coefficients.ndim

@@ -122,6 +122,18 @@ def test_compute_travel_time_finite_and_zero_at_start():
     assert tt[0, 0] > tt[7, 7]
 
 
+def test_compute_travel_time_clips_out_of_bounds_start(caplog):
+    density = np.ones((16, 16), dtype=np.float64)
+    bounds = [(-1.0, 1.0), (-1.0, 1.0)]
+
+    with caplog.at_level("WARNING"):
+        tt = trajectory.compute_travel_time(density, np.array([-1.2, 18.7]), bounds)
+
+    assert np.isfinite(tt).all()
+    assert tt[0, 15] == 0.0
+    assert "Clipped trajectory start index" in caplog.text
+
+
 def test_find_trajectory_in_grid_finds_path():
     n = 32
     ax = np.linspace(-2.0, 2.0, n, dtype=np.float64)

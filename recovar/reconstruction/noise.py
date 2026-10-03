@@ -8,14 +8,14 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
-from recovar.utils.nvtx_shim import nvtx
 
 import recovar.core.forward as core_forward
 import recovar.core.fourier_transform_utils as fourier_transform_utils
-from recovar import core, utils, jax_config
+from recovar import core, jax_config, utils
 from recovar.core.configs import ForwardModelConfig, ModelState
 from recovar.heterogeneity import covariance_core
 from recovar.reconstruction import regularization
+from recovar.utils.nvtx_shim import nvtx
 
 logger = logging.getLogger(__name__)
 
@@ -167,9 +167,8 @@ def as_noise_model(cov_noise, image_shape):
     -------
     RadialNoiseModel or ConstantNoiseModel
     """
-    import numpy as _np
 
-    arr = _np.asarray(cov_noise)
+    arr = np.asarray(cov_noise)
     half_pixel_count = image_shape[0] * (image_shape[1] // 2 + 1)
     pixel_count = image_shape[0] * image_shape[1]
     if arr.ndim == 1 and arr.size not in (pixel_count, half_pixel_count):
@@ -272,15 +271,20 @@ def predict_noise_variance(
     """Predict noise variance in images, optionally handling upsampling.
 
     Args:
-        noise_variance: Base noise variance (radial or scalar)
-        CTF_params: CTF parameters
-        voxel_size: Voxel size
-        ctf: Function to compute CTF
-        image_masks: Image masks
-        image_shape: Image shape
-        radial: Whether noise is radial
-        premultiplied_ctf: Whether CTF is premultiplied
-        upsample_factor: Factor to upsample by (default 1 for no upsampling)
+        noise_variance (numpy.ndarray | jax.Array): Radial noise profile, or a one-element array for
+            white noise.
+            Upsampling requires a one-dimensional profile.
+        CTF_params (numpy.ndarray | jax.Array): CTF parameters
+        voxel_size (float): Voxel size in Angstroms.
+        ctf (Callable): CTF evaluator accepting parameters, image shape and voxel size.
+        image_masks (numpy.ndarray | jax.Array): Real-space masks, shape ``(n_images, H, W)``.
+        image_shape (tuple[int, int]): Image shape
+        radial (bool): Compatibility argument; the input is always expanded radially.
+        premultiplied_ctf (bool): Whether CTF is premultiplied
+        upsample_factor (int): Factor to upsample by (default 1 for no upsampling)
+
+    Returns:
+        variance (jax.Array): Masked Fourier noise power, shape ``(n_images, H, W)``.
     """
     if upsample_factor > 1:
         # Interpolate noise_variance onto a finer grid using JAX operations
@@ -358,23 +362,29 @@ def fit_noise_model_to_images(
     """Fit noise model to images, handling tilt series data specially.
 
     Args:
-        experiment_dataset: Dataset containing images and metadata
-        volume_mask: Mask for the volume
-        mean_estimate: Estimate of mean volume
-        image_subset: Subset of images to use, or None for all
-        batch_size: Batch size for processing
-        invert_mask: Whether to invert the mask
-        disc_type: Type of discretization to use
-        use_batch_solver: Whether to use batch solver vs full dataset
-        tilt_dose_inner: Whether this is an inner call for tilt series
+        experiment_dataset (CryoEMDataset): Dataset containing images and metadata
+        volume_mask (numpy.ndarray | jax.Array): Mask for the volume
+        mean_estimate (numpy.ndarray | jax.Array): Mean volume in flattened centered Fourier layout.
+        image_subset (numpy.ndarray | None): Subset of images to use, or None for all
+        batch_size (int): Batch size for processing
+        invert_mask (bool): Whether to invert the mask
+        disc_type (str): Compatibility argument; initialization uses linear interpolation.
+        use_batch_solver (bool): Whether to use batch solver vs full dataset
+        tilt_dose_inner (bool): Whether to suppress the outer per-dose fitting loop.
+        image_n_iter (int | float): Image budget per stochastic optimization pass;
+            converted to steps by dividing by batch size. Used only by the
+            batch solver; recursive per-dose calls use the default budget.
 
     Returns:
-        For tilt series: Array of noise variances per tilt
-        Otherwise: Single noise variance and initial estimate
+        fitted (jax.Array): Fitted radial noise profile. For variable radial
+            noise, profiles are stacked by ascending dose index, omitting
+            indices with no selected images.
+        initial (jax.Array): Initial radial noise estimate, with the same
+            stacking convention as ``fitted``.
     """
     # Import optimization libraries
-    from jaxopt import ScipyBoundedMinimize, OptaxSolver
     import optax
+    from jaxopt import OptaxSolver, ScipyBoundedMinimize
 
     # Special handling for tilt series data
     if isinstance(experiment_dataset.noise, VariableRadialNoiseModel) and not tilt_dose_inner:
@@ -782,6 +792,119 @@ def estimate_noise_level_no_masks(
     return estimated_noise
 
 
+def estimate_initial_noise_spectrum_from_unaligned_images(
+    experiment_dataset,
+    image_subset,
+    batch_size,
+    *,
+    apply_image_mask=False,
+):
+    """Approximate RELION's initial sigma2_noise estimate from particle spectra.
+
+    RELION initializes ``sigma2_noise`` from the average particle power spectrum
+    minus the power spectrum of the average image before the first refinement
+    iteration. This helper mirrors that structure for the benchmark harness so
+    the first E-step starts from a comparable likelihood scale.
+
+    Pass ``apply_image_mask=True`` to multiply each image by
+    ``experiment_dataset.image_mask`` before the FFT. This is **required** when
+    the downstream E-step also uses masked images (RELION-mode refinement),
+    because the noise spectrum must match the masking convention of the chi²
+    formula. Without it, recovar's chi² is ~3.3-6× too small at the matched
+    pose grid, collapsing the iter-1 posterior compared to RELION (verified
+    2026-04-08, see ``tmp/check_sigma2_mask.py``).
+
+    The returned spectrum is in **recovar's native FFT units**, i.e. it has the
+    same scale as ``|process_images(batch)|^2``. Downstream consumers (the
+    engine, ``make_radial_noise``, the M-step likelihood) all operate in these
+    same units, so the noise variance and the image power must agree
+    numerically. Do **not** rescale by ``(H*W)^2`` to "RELION units" — recovar
+    never converts the images, and the resulting per-pixel SNR² becomes
+    ``(H*W)^2`` too large, collapsing every posterior to a single rotation
+    (Pmax → 1.0). See ``tmp/diagnose_pmax_gap.py`` for the diagnostic that
+    pinned this in 2026-04-08.
+    """
+    from recovar.reconstruction import regularization
+
+    if image_subset is None:
+        image_subset = np.arange(experiment_dataset.n_images, dtype=np.int32)
+    image_subset = np.asarray(image_subset, dtype=np.int32)
+    if image_subset.size == 0:
+        raise ValueError("image_subset must contain at least one image")
+
+    batch_size = int(min(batch_size, image_subset.size))
+    sum_radial_power = None
+    sum_images = None
+    n_images = 0
+
+    for (
+        batch,
+        _rotation_matrices,
+        _translations,
+        _ctf_params,
+        _noise_variance,
+        _particle_indices,
+        _image_indices,
+    ) in experiment_dataset.iter_batches(batch_size, indices=image_subset):
+        batch = experiment_dataset.process_images(
+            batch, apply_image_mask=apply_image_mask,
+        )
+        batch_radial_power = regularization.batch_average_over_shells(
+            jnp.abs(batch) ** 2,
+            experiment_dataset.image_shape,
+            0,
+        )
+        batch_sum_images = jnp.sum(batch, axis=0)
+
+        if sum_radial_power is None:
+            sum_radial_power = jnp.sum(batch_radial_power, axis=0)
+            sum_images = batch_sum_images
+        else:
+            sum_radial_power = sum_radial_power + jnp.sum(batch_radial_power, axis=0)
+            sum_images = sum_images + batch_sum_images
+        n_images += int(batch.shape[0])
+
+    if n_images <= 0:
+        raise RuntimeError("No images were processed for initial noise estimation")
+
+    average_particle_power = sum_radial_power / float(n_images)
+    average_image = sum_images / float(n_images)
+    average_image_power = regularization.average_over_shells(
+        jnp.abs(average_image) ** 2,
+        experiment_dataset.image_shape,
+        0,
+    )
+
+    sigma2_noise = np.asarray(
+        0.5 * (average_particle_power - average_image_power),
+        dtype=np.float32,
+    )
+
+    positive_mask = sigma2_noise > 0
+    if not np.any(positive_mask):
+        logger.warning(
+            "Initial noise estimate had no positive shells; falling back to the particle power spectrum",
+        )
+        sigma2_noise = np.asarray(0.5 * average_particle_power, dtype=np.float32)
+        positive_mask = sigma2_noise > 0
+
+    if np.any(~positive_mask):
+        for idx in range(sigma2_noise.shape[0]):
+            if sigma2_noise[idx] > 0:
+                continue
+            replacement = None
+            if idx > 0 and sigma2_noise[idx - 1] > 0:
+                replacement = sigma2_noise[idx - 1]
+            else:
+                for jdx in range(idx + 1, sigma2_noise.shape[0]):
+                    if sigma2_noise[jdx] > 0:
+                        replacement = sigma2_noise[jdx]
+                        break
+            sigma2_noise[idx] = replacement if replacement is not None else 1.0
+
+    return jnp.asarray(sigma2_noise)
+
+
 def batch_make_radial_noise(average_image_PS, image_shape):
     return jax.vmap(lambda amp: make_radial_noise(amp, image_shape))(average_image_PS)
 
@@ -792,20 +915,22 @@ mean_fn = np.mean
 
 @nvtx.annotate("estimate_noise_variance", color="yellow", domain=NVTX_DOMAIN_NOISE)
 def estimate_noise_variance(experiment_dataset, batch_size, max_images=10000):
-    """Estimate per-image noise variance from corner pixels.
+    """Estimate a white-noise level and radial profile from image power.
 
-    Computes the noise power spectrum from image regions outside the
-    particle mask, subsampling to at most *max_images* for efficiency.
+    Averages the power of processed images, subsampling to at most
+    *max_images*. This estimator does not apply a separate solvent mask.
 
     Args:
-        experiment_dataset: A ``CryoEMDataset`` instance.
-        batch_size: Number of images to process per GPU batch.
-        max_images: Maximum number of images to use for estimation.
+        experiment_dataset (CryoEMDataset): A ``CryoEMDataset`` instance.
+        batch_size (int): Number of images to process per GPU batch.
+        max_images (int): Maximum number of images to use for estimation.
 
     Returns:
-        Tuple ``(cov_noise, radial_noise_profile)`` where *cov_noise*
-        is a scalar noise variance and *radial_noise_profile* is the
-        averaged radial power spectrum of the noise.
+        cov_noise (numpy.ndarray): Zero-dimensional array containing the median
+            of the average image power spectrum.
+        radial_noise_profile (numpy.ndarray): Shell averages of that spectrum,
+            with ``grid_size // 2 - 1`` entries. Both outputs use the dataset's
+            real dtype.
     """
     sum_sq = 0
 
@@ -1160,9 +1285,17 @@ def get_average_residual_square_v2(
     subset_fn=None,
 ):
 
-    if basis.shape[0] != experiment_dataset.volume_size:
+    # Auto-convert half-Fourier basis to full-Fourier (the canonical form
+    # ppca.EM now returns is half-Fourier; this consumer was written for the
+    # legacy full-Fourier shape and is updated to accept either).
+    from recovar.core import fourier_transform_utils as _ftu
+    half_vol_size = int(np.prod(_ftu.volume_shape_to_half_volume_shape(experiment_dataset.volume_shape)))
+    if basis.shape[0] == half_vol_size:
+        basis = _ftu.half_volume_to_full_volume(np.asarray(basis).T, experiment_dataset.volume_shape).T
+    elif basis.shape[0] != experiment_dataset.volume_size:
         raise ValueError(
-            f"input u should be volume_size x basis_size, got {basis.shape[0]} != {experiment_dataset.volume_size}"
+            f"input u should be volume_size or half_vol_size x basis_size, "
+            f"got {basis.shape[0]} (expected {experiment_dataset.volume_size} or {half_vol_size})"
         )
     st_time = time.time()
     basis = np.asarray(basis[:, : basis_coordinates.shape[-1]]).T
