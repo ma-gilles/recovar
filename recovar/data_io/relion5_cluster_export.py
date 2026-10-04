@@ -25,6 +25,8 @@ from recovar.output.output_paths import ResultPaths
 logger = logging.getLogger(__name__)
 _STR_COLUMNS = ["rlnGroupName", "rlnTomoParticleName", "rlnTomoName", "rlnTomoVisibleFrames"]
 _POSE_COLUMNS = ["rlnAngleRot", "rlnAngleTilt", "rlnAnglePsi"] + [f"rlnOrigin{axis}Angst" for axis in "XYZ"]
+_CLASS_STAR = "particles_classes.star"
+_CLASS_NUMBERING = "rlnClassNumber = RECOVAR cluster ID + 1 (RELION class numbers are 1-based)"
 
 
 def _require(condition, message):
@@ -346,6 +348,24 @@ def _native_inputs(particles, tomograms, selected_names, datadir, output):
     return documents, key, selected, native_rows, np.asarray(counts), tomo_documents, geometry_records, geometry_outputs
 
 
+def _class_table(frame, group_names, labels, particles, datadir):
+    """Label every retained native particle with ``rlnClassNumber = cluster + 1``.
+
+    Covers all clusters, in native row order, with the native poses and random subsets.
+    """
+    labelled = {name: int(label) for name, label in zip(group_names, labels) if label >= 0}
+    names = _identities(frame, "rlnTomoParticleName", unique=True)
+    _require(set(labelled).issubset(set(names)), "Labelled particle IDs are missing from native RELION STAR")
+    table = frame.loc[names.isin(list(labelled))].copy().reset_index(drop=True)
+    table["rlnImageName"] = [_resolve_reference(v, particles, datadir, must_exist=False) for v in table.rlnImageName]
+    if "rlnCtfImage" in table:
+        table["rlnCtfImage"] = [_resolve_image_reference(v, particles, datadir) for v in table.rlnCtfImage]
+    if "rlnClassNumber" in table:
+        logger.warning("Native STAR already has rlnClassNumber; %s replaces it with RECOVAR classes", _CLASS_STAR)
+    table["rlnClassNumber"] = [labelled[str(name)] + 1 for name in table.rlnTomoParticleName]
+    return table
+
+
 def _write_star(path, documents):
     # starfile.write has no overwrite switch (extra keywords are ignored), so refuse here.
     if os.path.lexists(path):
@@ -368,6 +388,9 @@ def export_clusters(
     trajectories=None,
 ):
     """Export one native STAR per selected cluster; preserve poses and halves by default.
+
+    Also writes ``particles_classes.star``: every retained particle of every
+    cluster with ``rlnClassNumber = cluster + 1``.
 
     ``pipeline`` is the actual Pipeline/job_NNNN directory, not its parent.
     ``analysis`` is its Analyze job directory containing data/kmeans_result.pkl.
@@ -468,6 +491,8 @@ def export_clusters(
             "native_visible_tilts": counts,
         }
     )
+    native = documents[particle_key]
+    class_table = _class_table(native, group_names, labels, particles, datadir)
     source_records = {
         "params": _record(paths.params),
         "particles_halfsets": _record(paths.particles_halfsets),
@@ -530,6 +555,11 @@ def export_clusters(
         )
     pd.DataFrame(summaries).to_csv(output / "summary.tsv", sep="\t", index=False)
     artifacts.append(_record(output / "summary.tsv"))
+    class_documents = dict(documents)
+    class_documents[particle_key] = class_table
+    _write_star(output / _CLASS_STAR, class_documents)
+    artifacts.append(_record(output / _CLASS_STAR))
+    class_counts = class_table.rlnClassNumber.value_counts().sort_index()
     manifest = {
         "schema_version": 1,
         "status": "completed",
@@ -545,6 +575,14 @@ def export_clusters(
         "exported_particles": len(selected),
         "kmeans_clusters": k,
         "clusters": summaries,
+        "class_star": {
+            "path": str(output / _CLASS_STAR),
+            "numbering": _CLASS_NUMBERING,
+            "particles": len(class_table),
+            "particles_per_class": {str(number): int(count) for number, count in class_counts.items()},
+            "source_particles_without_class": len(native) - len(class_table),
+            "policy": "all clusters regardless of --clusters; native poses and random subsets preserved",
+        },
         "output_files": artifacts,
         "mapping": "original physical index -> sorted unique flat rlnGroupName -> native rlnTomoParticleName; native row order retained",
         "pose_policy": "reset" if reset_poses else "preserve native STAR",

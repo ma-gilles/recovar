@@ -792,3 +792,50 @@ def test_write_star_refuses_existing_file(tmp_path):
     with pytest.raises(FileExistsError):
         _write_star(path, {"particles": pd.DataFrame({"rlnAngleRot": [0.0]})})
     assert path.read_text() == "keep this existing file\n"
+
+
+def _class_numbers(case):
+    table = _read(case.outdir / "particles_classes.star")["particles"]
+    return dict(zip(table["rlnTomoParticleName"], table["rlnClassNumber"]))
+
+
+def test_class_star_labels_every_retained_particle_by_identity(export_case):
+    case = export_case
+    # Canonical order is P1, P10, P2, P3, P4; P10 is not retained by the pipeline.
+    _halfsets(case, [0, 2], [3, 4])
+    _labels(case, [1, -1, 0, 1, 0])
+    manifest = _export(case, clusters=[1])
+    assert not (case.outdir / "cluster0").exists()
+    documents = _read(case.outdir / "particles_classes.star")
+    table = documents["particles"]
+    assert table["rlnTomoParticleName"].tolist() == ["tomo/P2", "tomo/P1", "tomo/P3", "tomo/P4"]
+    assert _class_numbers(case) == {"tomo/P2": 1, "tomo/P1": 2, "tomo/P3": 2, "tomo/P4": 1}
+    source = case.native.set_index("rlnTomoParticleName")
+    for column in ("rlnRandomSubset", "rlnAngleRot", "rlnOriginXAngst", "rlnCustomParticleValue"):
+        assert table[column].tolist() == source.loc[table["rlnTomoParticleName"], column].tolist()
+    assert all(Path(path).is_absolute() for path in table["rlnImageName"])
+    cluster_columns = _cluster(case, 1)["particles"].columns.tolist()
+    assert table.columns.tolist() == cluster_columns + ["rlnClassNumber"]
+    assert set(documents) == set(_cluster(case, 1))
+    record = manifest["class_star"]
+    assert Path(record["path"]) == case.outdir / "particles_classes.star"
+    assert "+ 1" in record["numbering"]
+    assert record["particles"] == 4
+    assert record["particles_per_class"] == {"1": 2, "2": 2}
+    assert record["source_particles_without_class"] == 1
+    assert str(case.outdir / "particles_classes.star") in [entry["path"] for entry in manifest["output_files"]]
+
+
+def test_class_star_replaces_existing_class_number_and_ignores_resets(export_case, caplog):
+    case = export_case
+    documents = _read(case.particles)
+    documents["particles"]["rlnClassNumber"] = [7, 7, 7, 7, 7]
+    starfile.write(documents, case.particles, overwrite=True)
+    with caplog.at_level("WARNING"):
+        _export(case, reset_poses=True, reset_halfsets=True)
+    assert "already has rlnClassNumber" in caplog.text
+    table = _read(case.outdir / "particles_classes.star")["particles"]
+    assert table.columns.tolist().count("rlnClassNumber") == 1
+    assert _class_numbers(case) == {"tomo/P2": 1, "tomo/P10": 1, "tomo/P1": 2, "tomo/P3": 2, "tomo/P4": 1}
+    assert table["rlnRandomSubset"].tolist() == [2, 1, 1, 2, 2]
+    assert table["rlnAngleRot"].tolist() == [11.0, 22.0, 33.0, 44.0, 55.0]
