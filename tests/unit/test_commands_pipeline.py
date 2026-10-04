@@ -136,9 +136,25 @@ def test_radial_explicit_and_premultiplied_new_estimator_unchanged(new_noise_est
     assert calls == [(True, "linear_interp"), (False, "linear_interp")]
 
 
-def test_radial_default_keeps_legacy_estimator(monkeypatch):
+@pytest.mark.parametrize(
+    ("requested", "tilt_series", "expected"),
+    [
+        (None, False, "radial"),
+        (None, True, "radial_per_tilt"),
+        ("radial", True, "radial"),
+        ("radial_per_tilt", False, "radial_per_tilt"),
+    ],
+)
+def test_noise_model_default_follows_tilt_series(requested, tilt_series, expected):
     parser = _parser_with_pipeline_args()
-    assert parser.get_default("noise_model") == "radial"
+    assert parser.get_default("noise_model") is None
+    args = SimpleNamespace(noise_model=requested, tilt_series=tilt_series)
+    assert pipeline_cmd._resolve_noise_model(args) == expected
+    assert args.noise_model == expected
+
+
+def test_radial_keeps_legacy_estimator(monkeypatch):
+    parser = _parser_with_pipeline_args()
     assert parser.get_default("new_noise_est") is False
     calls = []
     profile = np.full(4, 2.0)
