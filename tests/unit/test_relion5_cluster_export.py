@@ -12,7 +12,7 @@ import pandas as pd
 import pytest
 import starfile
 
-from recovar.data_io.relion5_cluster_export import export_clusters
+from recovar.data_io.relion5_cluster_export import _write_star, export_clusters
 
 pytestmark = pytest.mark.unit
 
@@ -784,3 +784,11 @@ def test_repeat_export_cannot_overwrite_completed_output(export_case):
     with pytest.raises((FileExistsError, ValueError)):
         _export(case)
     assert hashes == {path: _sha256(path) for path in hashes}
+
+
+def test_write_star_refuses_existing_file(tmp_path):
+    path = tmp_path / "particles.star"
+    path.write_text("keep this existing file\n")
+    with pytest.raises(FileExistsError):
+        _write_star(path, {"particles": pd.DataFrame({"rlnAngleRot": [0.0]})})
+    assert path.read_text() == "keep this existing file\n"
