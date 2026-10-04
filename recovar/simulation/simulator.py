@@ -177,7 +177,10 @@ def get_pose_ctf_generator(option):
     elif option == "dataset1":
         return get_params_generator(load_first_dataset_params)
     elif option == "nonuniform":
-        f = lambda x, y=0, z=0: random_sampling_scheme(x, y, z, uniform=False)
+
+        def f(x, y=0, z=0):
+            return random_sampling_scheme(x, y, z, uniform=False)
+
         return f
     elif option == "kent":
         return kent_sampling_scheme
@@ -379,6 +382,19 @@ def get_noise_model(option, grid_size):
         return np.ones(grid_size // 2 - 1)
 
 
+def validate_output_format(output_format, *, n_tilts=-1, premultiplied_ctf=False, create_nested_structure=False):
+    """Reject unsupported output combinations before doing simulation work."""
+    if output_format not in {"recovar", "relion5"}:
+        raise ValueError("output_format must be 'recovar' or 'relion5'")
+    if output_format == "relion5":
+        if n_tilts is None or n_tilts <= 0:
+            raise ValueError("RELION5 output requires tilt-series simulation (n_tilts > 0 / --tilt-series)")
+        if premultiplied_ctf:
+            raise ValueError("RELION5 output does not support premultiplied_ctf / --premultiplied-ctf")
+        if create_nested_structure:
+            raise ValueError("RELION5 output manages its own stack layout; do not use --create-nested-structure")
+
+
 def generate_synthetic_dataset(
     output_folder,
     voxel_size,
@@ -409,8 +425,14 @@ def generate_synthetic_dataset(
     nested_prefix="Extract/job193",
     percent_tilt_series_outliers=0.0,
     noise_rng_batch_size=None,
+    output_format="recovar",
 ):
     """
+    output_format : {"recovar", "relion5"}, default "recovar"
+        This legacy entry point retains its original RECOVAR benchmark defaults.
+        For explicit, dataset-independent simulation in either format, use
+        ``configured_simulation.run_configured_simulation``. Selecting relion5
+        here raises an error rather than silently using benchmark noise/CTFs.
     noise_rng_batch_size : int, optional
         Batch size used only to advance the random-noise stream. When omitted,
         it matches the image processing batch size. Supplying a fixed value
@@ -419,6 +441,18 @@ def generate_synthetic_dataset(
     """
     from recovar.output import output
 
+    validate_output_format(
+        output_format,
+        n_tilts=n_tilts,
+        premultiplied_ctf=premultiplied_ctf,
+        create_nested_structure=create_nested_structure,
+    )
+    if output_format == "relion5":
+        raise ValueError(
+            "RELION5 simulation requires explicit configuration: use "
+            "configured_simulation.run_configured_simulation or --simulation-config CONFIG.json. "
+            "This legacy generator retains dataset-specific RECOVAR defaults."
+        )
     output.mkdir_safe(output_folder)
     volumes = load_volumes_from_folder(volumes_path_root, grid_size, trailing_zero_format_in_vol_name, normalize=False)
     scale_vol = 1 / np.mean(np.linalg.norm(volumes, axis=(-1)))

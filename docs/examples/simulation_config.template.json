@@ -1,0 +1,24 @@
+{
+  "volumes": ["/path/to/your/ground_truth.mrc"],
+  "grid_size": null,
+  "n_particles": null,
+  "n_tilts": null,
+  "angle_per_tilt_deg": null,
+  "dose_per_tilt": null,
+  "seed": null,
+  "signal_scale": null,
+  "poses": {"mode": "uniform"},
+  "noise": {"model": "white", "std": null},
+  "ctf": {
+    "mode": "constant",
+    "defocus_u": null,
+    "defocus_v": null,
+    "defocus_angle_deg": null,
+    "voltage_kv": null,
+    "cs_mm": null,
+    "amplitude_contrast": null,
+    "phase_shift_deg": null,
+    "bfactor": null
+  },
+  "tilt_amplitude_weighting": null
+}

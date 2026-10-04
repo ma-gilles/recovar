@@ -1,10 +1,11 @@
 import argparse
 import logging
 import os
+import sys
 
 import numpy as np
-import recovar.jax_config
 
+import recovar.jax_config  # noqa: F401  # Initialize JAX before importing simulation code.
 from recovar.output import output
 from recovar.simulation import simulator
 
@@ -28,6 +29,9 @@ def make_test_dataset(
     volume_input=None,
     n_tilts=None,
     premultiplied_ctf=False,
+    output_format="recovar",
+    simulation_config=None,
+    dry_run=False,
 ):
     """Generate a synthetic test dataset used by integration tests and examples.
 
@@ -36,7 +40,32 @@ def make_test_dataset(
     - ``grid_size``: alias of ``image_size`` (takes precedence when provided)
     - ``volume_input``: volume prefix root (default: bundled assets)
     - ``n_tilts``: number of tilts for ``tilt_series=True`` (default: 27)
+    - ``simulation_config``: explicit dataset-independent JSON config; required
+      for ``output_format='relion5'``. Without it, RECOVAR keeps the legacy defaults.
     """
+    if simulation_config is not None:
+        from recovar.simulation.configured_simulation import load_simulation_config, run_configured_simulation
+
+        config = load_simulation_config(simulation_config)
+        return run_configured_simulation(
+            os.path.join(output_dir, "test_dataset"),
+            config,
+            output_format=output_format,
+            dry_run=dry_run,
+        )
+    if output_format == "relion5":
+        raise ValueError(
+            "RELION5 simulation requires --simulation-config CONFIG.json with explicit volumes, "
+            "noise, CTF, poses, dose and tilt settings; no benchmark defaults are assumed."
+        )
+    if dry_run:
+        raise ValueError("--dry-run requires --simulation-config CONFIG.json")
+    simulator.validate_output_format(
+        output_format,
+        n_tilts=(27 if n_tilts is None else n_tilts) if tilt_series else -1,
+        premultiplied_ctf=premultiplied_ctf,
+        create_nested_structure=create_nested_structure,
+    )
     if seed is not None:
         np.random.seed(seed)
     if grid_size is None:
@@ -87,6 +116,7 @@ def make_test_dataset(
             angle_per_tilt=3,
             percent_tilt_series_outliers=percent_tilt_series_outliers,
             premultiplied_ctf=premultiplied_ctf,
+            output_format=output_format,
         )
     else:
         image_stack, sim_info = simulator.generate_synthetic_dataset(
@@ -111,6 +141,7 @@ def make_test_dataset(
             nested_prefix=nested_prefix,
             percent_tilt_series_outliers=percent_tilt_series_outliers,
             premultiplied_ctf=premultiplied_ctf,
+            output_format=output_format,
         )
 
     logger.info("Finished generating dataset %s", output_folder)
@@ -128,7 +159,7 @@ def make_test_dataset(
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Generate a test dataset for recovar")
+    parser = argparse.ArgumentParser(description="Simulate images in RECOVAR or native RELION5 cryo-ET format")
     parser.add_argument("output_dir", nargs="?", default=os.getcwd(), help="Output directory for the test dataset")
     parser.add_argument("--noise-level", type=float, default=0.1, help="Noise level for the dataset")
     parser.add_argument("--n-images", type=int, help="Number of images to generate")
@@ -163,8 +194,63 @@ def main():
     )
     parser.add_argument("--seed", type=int, default=None, help="Random seed for reproducible dataset generation")
     parser.add_argument("--premultiplied-ctf", action="store_true", help="Generate dataset with premultiplied CTF")
+    parser.add_argument(
+        "--output-format",
+        choices=("recovar", "relion5"),
+        default="recovar",
+        help="Output format (default: recovar). relion5 requires --simulation-config; "
+        "writes native tomography STAR files and per-particle stacks.",
+    )
+    parser.add_argument(
+        "--simulation-config",
+        metavar="CONFIG.json",
+        help="Explicit volumes/noise/CTF/geometry JSON configuration; paths are relative to this file. "
+        "Required for relion5; may also be used for configurable RECOVAR output.",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Validate and print --simulation-config without generating images or creating output files.",
+    )
 
     args = parser.parse_args()
+
+    if args.simulation_config is not None:
+        legacy_options = {
+            "--noise-level",
+            "--n-images",
+            "--image-size",
+            "--grid-size",
+            "--volume-input",
+            "--n-tilts",
+            "--create-nested-structure",
+            "--nested-prefix",
+            "--tilt-series",
+            "--outlier-file-input",
+            "--percent-outliers",
+            "--percent-tilt-series-outliers",
+            "--seed",
+            "--premultiplied-ctf",
+        }
+        conflicts = sorted({arg.split("=", 1)[0] for arg in sys.argv[1:]} & legacy_options)
+        if conflicts:
+            parser.error(
+                "Put all simulation settings in CONFIG.json; cannot combine --simulation-config with "
+                + ", ".join(conflicts)
+            )
+        return make_test_dataset(
+            args.output_dir,
+            output_format=args.output_format,
+            simulation_config=args.simulation_config,
+            dry_run=args.dry_run,
+        )
+    if args.output_format == "relion5":
+        parser.error(
+            "--output-format relion5 requires --simulation-config CONFIG.json; "
+            "volumes, noise and CTF must be selected explicitly"
+        )
+    if args.dry_run:
+        parser.error("--dry-run requires --simulation-config CONFIG.json")
 
     make_test_dataset(
         args.output_dir,
@@ -182,6 +268,7 @@ def main():
         volume_input=args.volume_input,
         n_tilts=args.n_tilts,
         premultiplied_ctf=args.premultiplied_ctf,
+        output_format=args.output_format,
     )
 
 
