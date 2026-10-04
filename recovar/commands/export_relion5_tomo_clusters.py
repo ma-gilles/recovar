@@ -57,6 +57,7 @@ def main():
     manifest = export_clusters(**vars(args))
     print(f"Exported {manifest['exported_particles']} physical particles into {len(manifest['clusters'])} clusters.")
     print(f"Summary: {os.path.abspath(args.outdir)}/summary.tsv")
+    print(f"All classes (rlnClassNumber = cluster ID + 1): {manifest['class_star']['path']}")
 
 
 if __name__ == "__main__":

@@ -184,6 +184,7 @@ new_relion_clusters/
   manifest.json
   summary.tsv
   tomograms.star
+  particles_classes.star
   cluster0/
     particles.star
     optimisation_set.star
@@ -211,6 +212,22 @@ memberships before starting a separate RELION InitialModel, Class3D, or Refine3D
 job. Exporting subsets does not run any of those jobs. A configurable
 shell example is available at
 [`docs/examples/export_relion5_tomo_clusters.sh`](../examples/export_relion5_tomo_clusters.sh).
+
+### One STAR with class numbers
+
+The export also writes `particles_classes.star` at the output root: the native
+particle STAR with every particle RECOVAR retained, from all clusters whatever
+`--clusters` selects, and a `rlnClassNumber` column. RELION class numbers start
+at 1 and RECOVAR cluster IDs at 0, so **`rlnClassNumber` = cluster ID + 1**
+(cluster 0 is class 1). An `rlnClassNumber` already in the source STAR is
+replaced. Poses and `rlnRandomSubset` are kept from the source STAR even with
+`--reset-poses` or `--reset-halfsets`, and source particles that the pipeline did
+not retain are left out; `manifest.json` records the per-class counts and how
+many were left out.
+
+To separate one cluster further, run the pipeline on that cluster's own
+`clusterN/particles.star` with the exported `tomograms.star`, analyze, and export
+again.
 
 ## Using the GUI
 
