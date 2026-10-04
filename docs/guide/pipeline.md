@@ -146,7 +146,7 @@ Instructions below are tabbed for the **CLI** and the **GUI**. [How to launch th
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--noise-model` | radial | Noise model: `radial` or `white` |
+| `--noise-model` | `radial`; `radial_per_tilt` for tilt series | Noise model: `radial` (one radial spectrum) or `radial_per_tilt` (one per tilt; uses the new noise estimation automatically) |
 | `--mean-fn` | triangular | Mean function: `triangular` or `triangular_reg` |
 | `--gpu-budget-gb` | All | Soft GPU memory budget in GB for RECOVAR batch planning |
 | `--n-gpus` | All | Number of GPUs to use |

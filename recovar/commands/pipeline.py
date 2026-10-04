@@ -291,8 +291,12 @@ def add_args(parser: argparse.ArgumentParser):
     adv.add_argument(
         "--noise-model",
         dest="noise_model",
-        default="radial",
-        help="Noise model: radial (default) or radial_per_tilt (automatically uses new noise estimation)",
+        default=None,
+        help=(
+            "Noise model: radial or radial_per_tilt. Default: radial_per_tilt for tilt series "
+            "(--tilt-series or --tomograms), radial otherwise. radial_per_tilt automatically uses "
+            "new noise estimation."
+        ),
     )
     adv.add_argument(
         "--mean-fn",
@@ -511,6 +515,19 @@ def _noise_upper_bound_batch_size(grid_size: int, batch_size: int, gpu_budget_gb
         max(_NOISE_UB_MIN_WORKING_GB, float(gpu_budget_gb) * _NOISE_UB_WORKING_FRACTION),
     )
     return utils.safe_batch_size(min(batch_size, int(working_gb / per_image_gb)))
+
+
+def _resolve_noise_model(args):
+    """Fill in the ``--noise-model`` default once tilt-series mode is known.
+
+    Tilt series get one radial noise spectrum per tilt: noise power changes
+    with tilt angle and accumulated dose, and a single spectrum for all tilts
+    has produced NaN embeddings on in-situ data. Other data keep ``radial``.
+    """
+    if args.noise_model is None:
+        args.noise_model = "radial_per_tilt" if args.tilt_series else "radial"
+        logger.info("Setting noise_model to %s", args.noise_model)
+    return args.noise_model
 
 
 def _estimate_noise(dataset, means, dilated_volume_mask, batch_size, args, noise_model, gpu_budget_gb=None):
@@ -743,6 +760,8 @@ def standard_recovar_pipeline(args):
     paths.ensure_dirs()
     with open(paths.command_txt, "w") as text_file:
         text_file.write("python " + " ".join(sys.argv))
+
+    _resolve_noise_model(args)
 
     # CTF defaults
     if args.tilt_series_ctf is None:
