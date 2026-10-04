@@ -1,13 +1,14 @@
 """
 Unit tests for recovar.commands.pipeline and recovar.commands.pipeline_with_outliers.
 
-Only tests argument registration via add_args() – no actual EM execution.
+Tests argument registration and noise-estimator routing – no actual EM execution.
 """
 
 import argparse
 import sys
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
 pytest.importorskip("jax")  # pipeline.py imports jax at module level
@@ -74,6 +75,100 @@ def test_noise_upper_bound_batch_size_scales_with_grid_and_budget():
 
     assert 1 <= grid_512_large_budget < grid_256_large_budget < requested
     assert 1 <= grid_256_small_budget < grid_256_large_budget
+
+
+@pytest.fixture
+def new_noise_estimator(monkeypatch):
+    """Distinct noise rows make accidental global-profile broadcasting visible."""
+    calls = []
+    profiles = np.repeat([[2.0], [4.0], [6.0]], 4, axis=1)
+
+    def fit(*args, invert_mask, disc_type, **kwargs):
+        calls.append((invert_mask, disc_type))
+        if invert_mask:
+            return profiles.copy(), 10 * profiles
+        return np.full_like(profiles, 10.0), np.ones_like(profiles)
+
+    def legacy(*args, **kwargs):
+        raise AssertionError("legacy noise estimator used")
+
+    monkeypatch.setattr(pipeline_cmd.noise, "fit_noise_model_to_images", fit)
+    for name in (
+        "estimate_noise_variance_from_outside_mask_v2",
+        "estimate_radial_noise_statistic_from_outside_mask",
+        "estimate_radial_noise_upper_bound_from_inside_mask_v2",
+    ):
+        monkeypatch.setattr(pipeline_cmd.noise, name, legacy)
+    monkeypatch.setattr(pipeline_cmd.utils, "report_memory_device", lambda logger=None: None)
+    return calls, profiles
+
+
+@pytest.mark.parametrize("noise_model", ["radial_per_tilt", "radial-per-tilt"])
+@pytest.mark.parametrize("explicit_flag", [False, True])
+@pytest.mark.parametrize("mask", ["from_halfmaps", "mask.mrc"])
+def test_per_tilt_noise_automatically_uses_new_estimator(new_noise_estimator, noise_model, explicit_flag, mask):
+    calls, profiles = new_noise_estimator
+    result = pipeline_cmd._estimate_noise(
+        SimpleNamespace(),
+        SimpleNamespace(combined=object()),
+        object(),
+        8,
+        SimpleNamespace(new_noise_est=explicit_flag, premultiplied_ctf=False, mask=mask),
+        noise_model,
+    )
+    assert calls == [(True, "linear_interp"), (False, "linear_interp")]
+    np.testing.assert_array_equal(result["noise_var_used"], profiles)
+    np.testing.assert_array_equal(result["noise_group_masked_image_PS"], profiles)
+    np.testing.assert_array_equal(result["noise_group_image_PS"], 10 * profiles)
+
+
+@pytest.mark.parametrize("explicit_flag,premultiplied", [(True, False), (False, True), (True, True)])
+def test_radial_explicit_and_premultiplied_new_estimator_unchanged(new_noise_estimator, explicit_flag, premultiplied):
+    calls, _ = new_noise_estimator
+    pipeline_cmd._estimate_noise(
+        SimpleNamespace(),
+        SimpleNamespace(combined=object()),
+        object(),
+        8,
+        SimpleNamespace(new_noise_est=explicit_flag, premultiplied_ctf=premultiplied, mask="from_halfmaps"),
+        "radial",
+    )
+    assert calls == [(True, "linear_interp"), (False, "linear_interp")]
+
+
+def test_radial_default_keeps_legacy_estimator(monkeypatch):
+    parser = _parser_with_pipeline_args()
+    assert parser.get_default("noise_model") == "radial"
+    assert parser.get_default("new_noise_est") is False
+    calls = []
+    profile = np.full(4, 2.0)
+
+    def new(*args, **kwargs):
+        raise AssertionError("ordinary radial default changed to the new estimator")
+
+    def outside(*args, return_grouped):
+        assert return_grouped is True
+        calls.append("outside")
+        return profile, np.zeros(4), profile * 10, np.zeros(4), profile[None], (profile * 10)[None]
+
+    def upper(*args):
+        calls.append("upper")
+        return profile * 2, None, None
+
+    monkeypatch.setattr(pipeline_cmd.noise, "fit_noise_model_to_images", new)
+    monkeypatch.setattr(pipeline_cmd.noise, "estimate_radial_noise_statistic_from_outside_mask", outside)
+    monkeypatch.setattr(pipeline_cmd.noise, "estimate_radial_noise_upper_bound_from_inside_mask_v2", upper)
+    monkeypatch.setattr(pipeline_cmd.utils, "report_memory_device", lambda logger=None: None)
+    result = pipeline_cmd._estimate_noise(
+        SimpleNamespace(grid_size=64),
+        SimpleNamespace(combined=object()),
+        object(),
+        8,
+        SimpleNamespace(new_noise_est=False, premultiplied_ctf=False, mask="from_halfmaps"),
+        "radial",
+    )
+    assert calls == ["outside", "upper"]
+    np.testing.assert_array_equal(result["noise_var_used"], profile)
 
 
 def test_pipeline_registers_poses():
