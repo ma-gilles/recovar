@@ -347,7 +347,10 @@ def _native_inputs(particles, tomograms, selected_names, datadir, output):
 
 
 def _write_star(path, documents):
-    starfile.write(documents, path, overwrite=False, float_format="%.17g")
+    # starfile.write has no overwrite switch (extra keywords are ignored), so refuse here.
+    if os.path.lexists(path):
+        raise FileExistsError(f"Refusing to overwrite existing STAR file: {path}")
+    starfile.write(documents, path, float_format="%.17g")
 
 
 def export_clusters(
