@@ -28,8 +28,8 @@ def _write_text(path, text):
         f.write(textwrap.dedent(text))
 
 
-def _make_tilt_series_star(path, n_tilts=5):
-    """Write a minimal per-tilt-series .star file."""
+def _make_tilt_series_star(path, n_tilts=5, phase_shifts=None):
+    """Write a minimal per-tilt-series .star file; ``phase_shifts`` adds ``_rlnPhaseShift``."""
     header = textwrap.dedent("""\
         # version 50001
 
@@ -49,6 +49,8 @@ def _make_tilt_series_star(path, n_tilts=5):
         _rlnDefocusAngle #11
         _rlnCtfScalefactor #12
     """)
+    if phase_shifts is not None:
+        header += "_rlnPhaseShift #13\n"
     rows = []
     angles = np.linspace(-60, 60, n_tilts)
     for i, angle in enumerate(angles):
@@ -59,7 +61,7 @@ def _make_tilt_series_star(path, n_tilts=5):
             f"mic_{i:03d}.mrc {angle:.3f} {dose:.1f} "
             f"{angle:.3f} 0.0 {80.0 + i:.3f} "
             f"{i * 10.0:.1f} {i * -5.0:.1f} "
-            f"{dfu:.1f} {dfv:.1f} 45.0 {1.0 + i * 0.1:.3f}"
+            f"{dfu:.1f} {dfv:.1f} 45.0 {1.0 + i * 0.1:.3f}" + ("" if phase_shifts is None else f" {phase_shifts[i]}")
         )
     with open(path, "w") as f:
         f.write(header)
@@ -1455,12 +1457,35 @@ def _relion_tilt_defocus(tilt, tomo_size, pixel_size, hand, slope, centered_angs
     return hand * pixel_size * slope * depth
 
 
-def test_depth_defocus_matches_relion_with_origin_shift_slope_and_subtomogram_matrix(tmp_path):
-    """The per-tilt defocus follows RELION's getCtf, including the particle's origin shift and the defocus slope."""
-    n_tilts, pixel_size, hand, slope, tomo_size = 5, 1.5, -1.0, 1.3, (4096, 4096, 1000)
+def _relion_tilt_origin(tilt, subtomo_angles, origin_angst):
+    """RELION 5's 2D shift of one tilt image of a subtomogram particle, in Angstrom.
+
+    ``Experiment::read`` stores ``Aproj = projectionMatrices[f] * A_subtomo`` per image
+    (exp_model.cpp:1005-1021, 199-208) and ``getTranslationInTiltSeries`` returns
+    ``Aproj[:2] @ offset`` (exp_model.cpp:106-114); relion_refine shifts the image by it
+    as it does by an SPA origin (ml_optimiser.cpp:8206-8239).
+    """
+    r0 = _gl_rotation((1.0, 0.0, 0.0), tilt["x_tilt"])
+    r1 = _gl_rotation((0.0, 1.0, 0.0), tilt["y_tilt"])
+    r2 = _gl_rotation((0.0, 0.0, 1.0), tilt["z_rot"])
+    aproj = (r2 @ r1 @ r0)[:3, :3] @ _relion_subtomogram_matrix(*subtomo_angles)
+    return aproj[:2] @ np.asarray(origin_angst)
+
+
+_ORIGIN_PARTICLES = [
+    # centered coordinate (A), origin (A), subtomogram angles (deg)
+    ((310.0, -120.0, 180.0), (4.5, -3.25, 6.0), (20.0, 35.0, -50.0)),
+    ((-420.0, 250.0, -90.0), (-2.0, 7.5, -5.5), (-110.0, 80.0, 15.0)),
+]
+_ORIGIN_GEOMETRY = (5, 1.5, -1.0, 1.3, (4096, 4096, 1000))  # n_tilts, pixel size, hand, slope, tomogram size
+
+
+def _write_origin_project(tmp_path, particles, *, origin_columns=True, phase_shifts=None):
+    """Write tomograms, tilt-series and particles STAR files; return the tilt-series path."""
+    n_tilts, pixel_size, hand, slope, tomo_size = _ORIGIN_GEOMETRY
     ts_dir = tmp_path / "tilt_series"
     ts_dir.mkdir()
-    _make_tilt_series_star(str(ts_dir / "tomo_001.star"), n_tilts=n_tilts)
+    _make_tilt_series_star(str(ts_dir / "tomo_001.star"), n_tilts=n_tilts, phase_shifts=phase_shifts)
     _write_text(
         tmp_path / "tomograms.star",
         f"""\
@@ -1480,20 +1505,18 @@ def test_depth_defocus_matches_relion_with_origin_shift_slope_and_subtomogram_ma
         tomo_001 tilt_series/tomo_001.star {pixel_size} {hand:g} {tomo_size[0]} {tomo_size[1]} {tomo_size[2]} {slope}
         """,
     )
-    particles = [
-        # centered coordinate (A), origin (A), subtomogram angles (deg)
-        ((310.0, -120.0, 180.0), (4.5, -3.25, 6.0), (20.0, 35.0, -50.0)),
-        ((-420.0, 250.0, -90.0), (-2.0, 7.5, -5.5), (-110.0, 80.0, 15.0)),
-    ]
     visible = "[" + ",".join(["1"] * n_tilts) + "]"
     rows = [
-        f"tomo_001 {c[0]} {c[1]} {c[2]} {o[0]} {o[1]} {o[2]} 0.0 0.0 0.0 {a[0]} {a[1]} {a[2]} 1 tomo_001/{p + 1} "
+        f"tomo_001 {c[0]} {c[1]} {c[2]} "
+        + (f"{o[0]} {o[1]} {o[2]} " if origin_columns else "")
+        + f"0.0 0.0 0.0 {a[0]} {a[1]} {a[2]} 1 tomo_001/{p + 1} "
         f"Subtomograms/{p + 1}_stack2d.mrcs {p % 2 + 1} {visible}"
         for p, (c, o, a) in enumerate(particles)
     ]
     columns = (
         "_rlnTomoName _rlnCenteredCoordinateXAngst _rlnCenteredCoordinateYAngst _rlnCenteredCoordinateZAngst "
-        "_rlnOriginXAngst _rlnOriginYAngst _rlnOriginZAngst _rlnAngleRot _rlnAngleTilt _rlnAnglePsi "
+        + ("_rlnOriginXAngst _rlnOriginYAngst _rlnOriginZAngst " if origin_columns else "")
+        + "_rlnAngleRot _rlnAngleTilt _rlnAnglePsi "
         "_rlnTomoSubtomogramRot _rlnTomoSubtomogramTilt _rlnTomoSubtomogramPsi _rlnOpticsGroup _rlnTomoParticleName "
         "_rlnImageName _rlnRandomSubset _rlnTomoVisibleFrames"
     ).split()
@@ -1506,15 +1529,19 @@ def test_depth_defocus_matches_relion_with_origin_shift_slope_and_subtomogram_ma
         )
         f.write("".join(f"{c} #{i}\n" for i, c in enumerate(columns, 1)))
         f.write("\n".join(rows) + "\n")
+    return ts_dir / "tomo_001.star"
 
+
+def _convert_origin_project(tmp_path, particles, **kwargs):
+    """Convert a project of :func:`_write_origin_project`; yield ``(particle index, flat row, tilt dict, tilt row)``."""
+    ts_path = _write_origin_project(tmp_path, particles, **kwargs)
     output = tmp_path / "particles_2d.star"
     convert(str(tmp_path / "tomograms.star"), str(tmp_path / "particles.star"), str(output))
     rows_2d, _ = read_star(str(output))
-
-    ts_rows, _ = read_star(str(ts_dir / "tomo_001.star"))
-    for p, (centered, origin, subtomo_angles) in enumerate(particles):
-        got = rows_2d[rows_2d["_rlnGroupName"] == f"tomo_001/{p + 1}"]
-        for _, row in got.iterrows():
+    ts_rows, _ = read_star(str(ts_path))
+    matched = []
+    for p in range(len(particles)):
+        for _, row in rows_2d[rows_2d["_rlnGroupName"] == f"tomo_001/{p + 1}"].iterrows():
             tilt_row = ts_rows[ts_rows["_rlnMicrographName"] == row["_rlnMicrographName"]].iloc[0]
             tilt = {
                 "x_tilt": float(tilt_row["_rlnTomoXTilt"]),
@@ -1523,6 +1550,57 @@ def test_depth_defocus_matches_relion_with_origin_shift_slope_and_subtomogram_ma
                 "x_shift": float(tilt_row["_rlnTomoXShiftAngst"]),
                 "y_shift": float(tilt_row["_rlnTomoYShiftAngst"]),
             }
-            dz = _relion_tilt_defocus(tilt, tomo_size, pixel_size, hand, slope, centered, subtomo_angles, origin)
-            assert float(row["_rlnDefocusU"]) == pytest.approx(float(tilt_row["_rlnDefocusU"]) + dz, abs=1e-3)
-            assert float(row["_rlnDefocusV"]) == pytest.approx(float(tilt_row["_rlnDefocusV"]) + dz, abs=1e-3)
+            matched.append((p, row, tilt, tilt_row))
+    assert len(matched) == len(particles) * _ORIGIN_GEOMETRY[0]
+    return matched
+
+
+def test_depth_defocus_matches_relion_with_origin_shift_slope_and_subtomogram_matrix(tmp_path):
+    """The per-tilt defocus follows RELION's getCtf, including the particle's origin shift and the defocus slope."""
+    _, pixel_size, hand, slope, tomo_size = _ORIGIN_GEOMETRY
+    for p, row, tilt, tilt_row in _convert_origin_project(tmp_path, _ORIGIN_PARTICLES):
+        centered, origin, subtomo_angles = _ORIGIN_PARTICLES[p]
+        dz = _relion_tilt_defocus(tilt, tomo_size, pixel_size, hand, slope, centered, subtomo_angles, origin)
+        assert float(row["_rlnDefocusU"]) == pytest.approx(float(tilt_row["_rlnDefocusU"]) + dz, abs=1e-3)
+        assert float(row["_rlnDefocusV"]) == pytest.approx(float(tilt_row["_rlnDefocusV"]) + dz, abs=1e-3)
+
+
+def test_per_tilt_origins_are_relions_projected_3d_origin(tmp_path):
+    """Each flat row's 2D origin is ``Aproj[:2] @ rlnOrigin{X,Y,Z}Angst`` with ``Aproj = P_tilt A_subtomo``."""
+    seen_beam_component = False
+    for p, row, tilt, _ in _convert_origin_project(tmp_path, _ORIGIN_PARTICLES):
+        _, origin, subtomo_angles = _ORIGIN_PARTICLES[p]
+        expected = _relion_tilt_origin(tilt, subtomo_angles, origin)
+        got = np.array([float(row["_rlnOriginXAngst"]), float(row["_rlnOriginYAngst"])])
+        np.testing.assert_allclose(got, expected, rtol=0, atol=1e-9)
+        # The projection drops the origin's component along the beam, so the 2D norm is smaller.
+        seen_beam_component |= np.linalg.norm(expected) < np.linalg.norm(origin) - 0.5
+    assert seen_beam_component
+
+
+def _star_body(path):
+    with open(path) as f:
+        return f.read().split("\n", 1)[1]  # without the "# Created <time>" line
+
+
+def test_zero_and_missing_origins_write_zero_shifts(tmp_path):
+    """Zero origins and absent origin columns give the same file, with every 2D origin written as 0.0."""
+    zero = [(c, (0.0, 0.0, 0.0), a) for c, _, a in _ORIGIN_PARTICLES]
+    (tmp_path / "zero").mkdir()
+    (tmp_path / "missing").mkdir()
+    rows = _convert_origin_project(tmp_path / "zero", zero)
+    _convert_origin_project(tmp_path / "missing", zero, origin_columns=False)
+    assert {row[c] for _, row, _, _ in rows for c in ("_rlnOriginXAngst", "_rlnOriginYAngst")} == {"0.0"}
+    assert _star_body(tmp_path / "zero" / "particles_2d.star") == _star_body(tmp_path / "missing" / "particles_2d.star")
+
+
+def test_phase_shift_is_carried_per_tilt_when_present(tmp_path):
+    phase_shifts = [12.5, 0.0, 31.0, 47.25, 90.0]
+    (tmp_path / "with").mkdir()
+    (tmp_path / "without").mkdir()
+    for _, row, _, tilt_row in _convert_origin_project(tmp_path / "with", _ORIGIN_PARTICLES, phase_shifts=phase_shifts):
+        assert float(row["_rlnPhaseShift"]) == float(tilt_row["_rlnPhaseShift"])
+        assert float(row["_rlnPhaseShift"]) == phase_shifts[int(row["_rlnImageName"].split("@")[0]) - 1]
+    rows = _convert_origin_project(tmp_path / "without", _ORIGIN_PARTICLES)
+    assert all("_rlnPhaseShift" not in row.index for _, row, _, _ in rows)
+    assert all("_rlnCtfBfactor" not in row.index for _, row, _, _ in rows)
