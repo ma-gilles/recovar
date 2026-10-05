@@ -530,13 +530,18 @@ def _resolve_noise_model(args):
     return args.noise_model
 
 
+def _use_new_noise_estimator(args, noise_model):
+    """The per-tilt model, premultiplied CTF and ``--new-noise-est`` use the new estimator."""
+    return bool(args.new_noise_est or args.premultiplied_ctf or noise_model in _RADIAL_PER_TILT_NOISE_MODELS)
+
+
 def _estimate_noise(dataset, means, dilated_volume_mask, batch_size, args, noise_model, gpu_budget_gb=None):
     """Estimate radial noise variance from outside-mask and upper-bound methods.
 
     Returns a dict with all noise-related quantities needed by the pipeline.
     """
     radial_per_tilt = noise_model in _RADIAL_PER_TILT_NOISE_MODELS
-    use_new_noise_fn = args.new_noise_est or args.premultiplied_ctf or radial_per_tilt
+    use_new_noise_fn = _use_new_noise_estimator(args, noise_model)
     if radial_per_tilt and not (args.new_noise_est or args.premultiplied_ctf):
         logger.info("Enabling new noise estimation automatically for radial_per_tilt")
     logger.info("Using new noise estimation function?: %s", use_new_noise_fn)
