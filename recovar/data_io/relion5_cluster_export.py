@@ -82,7 +82,9 @@ def _select(particles, names, base):
     return table
 
 
-def export_clusters(*, pipeline, analysis, particles, tomograms, outdir, datadir=None, clusters=None):
+def export_clusters(
+    *, pipeline, analysis, particles, tomograms, outdir, datadir=None, clusters=None, flat_particles=None
+):
     """Write ``clusterN/{particles,optimisation_set}.star`` per cluster and ``particles_classes.star``.
 
     ``pipeline`` is the Pipeline/job_NNNN directory and ``analysis`` its Analyze job
@@ -95,8 +97,10 @@ def export_clusters(*, pipeline, analysis, particles, tomograms, outdir, datadir
     particles, tomograms = Path(particles).resolve(strict=True), Path(tomograms).resolve(strict=True)
     base = Path(datadir).resolve() if datadir is not None else particles.parent
 
-    arguments = _read_pickle(ResultPaths(str(pipeline)).params)["input_args"]
-    flat_star = (arguments if isinstance(arguments, dict) else vars(arguments))["particles"]
+    flat_star = flat_particles
+    if flat_star is None:
+        arguments = _read_pickle(ResultPaths(str(pipeline)).params)["input_args"]
+        flat_star = (arguments if isinstance(arguments, dict) else vars(arguments))["particles"]
     names = recovar_particle_names(flat_star)
     labels = cluster_labels(_read_pickle(Path(analysis) / "data" / "kmeans_result.pkl"), len(names))
     labelled = labels >= 0

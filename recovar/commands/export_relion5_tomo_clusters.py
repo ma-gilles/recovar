@@ -14,6 +14,9 @@ def main():
     parser.add_argument("--outdir", required=True, help="New or empty output directory")
     parser.add_argument("--clusters", help="Comma-separated cluster IDs to export, e.g. 0,2 (default: all)")
     parser.add_argument("--datadir", help="RELION project root for relative stack paths (default: --particles folder)")
+    parser.add_argument(
+        "--flat-particles", help="Flat STAR the pipeline ran on, if its recorded path no longer resolves from here"
+    )
     args = parser.parse_args()
     clusters = None if args.clusters is None else [int(c) for c in args.clusters.split(",")]
     # Some historical params pickles contain JAX arrays; no GPU is needed to unpickle them.
