@@ -94,14 +94,10 @@ You can then import `particles_subset.star` back into RELION or cryoSPARC for fo
 
 ## Exporting k-means clusters to native RELION-5 tomography
 
-The local `export_relion5_tomo_clusters` command selects native RELION particle
-rows using RECOVAR's physical-particle cluster labels. It does not copy image
-stacks, submit jobs, or convert flat tilt-image poses back into native tomography
-poses. Use the checkout containing this command; this example does not assume
-that it is available in an older installed RECOVAR release.
-
-Provide the completed Pipeline and Analyze directories, the native particle STAR
-to subset, and its corresponding tomogram STAR:
+`export_relion5_tomo_clusters` writes one native RELION 5 particle STAR per
+k-means cluster. It selects the native rows by particle name: RECOVAR particle
+`i` is the `i`-th sorted `rlnGroupName` of the flat STAR the pipeline ran on,
+which equals the native `rlnTomoParticleName`. Native row order is never used.
 
 ```bash
 recovar export_relion5_tomo_clusters \
@@ -113,121 +109,32 @@ recovar export_relion5_tomo_clusters \
     --outdir /path/to/new_relion_clusters
 ```
 
-`--particles` is the **native RELION-5 tomography STAR**, not RECOVAR's flattened
-`particles_2d.star`. This exporter supports native **2D particle tilt stacks**,
-not 3D pseudo-subtomograms. The STAR must describe the extracted stacks that
-RELION should read next. For example, labels from a D64 RECOVAR run can select D128 native
-particles when their particle IDs match. The exporter changes membership, not
-pixel size, image data, or pose units.
-
-### Identity mapping and input paths
-
-The exporter uses the Pipeline's saved physical-particle halfsets
-(`model/particles_halfsets.pkl`) together with its flat particle STAR to recover
-the mapping between analyzed particles and the canonical, lexically sorted
-`rlnGroupName` identities. It matches these identities to
-`rlnTomoParticleName` in the supplied native STAR. It does **not** assume that
-native STAR row order equals RECOVAR particle order.
-
-- The flat STAR is recovered from the Pipeline metadata. If its recorded path
-  has moved, supply `--flat-particles /path/to/particles_2d.star`; it must describe
-  the same particles and grouping used by that Pipeline.
-- Missing or ambiguous particle IDs, inconsistent mappings, and invalid label
-  assignments are errors; the exporter does not guess a correspondence.
-- Legacy label arrays may contain negative padding outside the valid analyzed
-  particle indices. Such padding is not an additional cluster and is not used
-  to select particles.
-- Relative native file references are resolved against `--datadir` when supplied;
-  otherwise the source STAR's parent directory is used. Supply the RELION project
-  root when references are project-relative, including paths in nested tomogram
-  metadata. The exporter copies the small nested tilt-STAR metadata files and
-  rebases their micrograph references to absolute paths, preserving any
-  `index@stack` prefixes. Numerical geometry is unchanged, and image pixels or
-  stacks are not copied. Referenced micrographs must remain available: RELION
-  reads the first micrograph's header even when refining extracted particle
-  stacks without loading the full tilt-series images.
-- If the next RELION job needs an existing motion/trajectory file, pass it
-  explicitly with `--trajectories /path/to/trajectories.star`. The exporter adds
-  that reference to the optimization set; it does not guess a trajectory file.
-  Only named trajectories, with one STAR block per `rlnTomoParticleName`, are
-  supported. Every selected particle must have finite XYZ shifts for **all
-  tomogram frames**, including invisible frames. Legacy row-indexed motion
-  files (`data_0`, `data_1`, ...) are rejected because subsetting particles would
-  invalidate their row-based association; trajectories are not converted.
-
-### Selecting clusters and preserving metadata
-
-By default, every cluster is exported into a **separate** directory. Add
-`--clusters 0,2` to export only clusters 0 and 2; this does not merge them.
-Cluster numbers retain RECOVAR's zero-based labels.
-
-Native Euler angles, XYZ origin shifts, existing halfset assignments, and
-visible-frame flags are preserved by default. Optics metadata and additional
-STAR blocks are retained. The supplied native STAR is therefore the authority
-for poses; no poses are inferred from the flat STAR during export.
-
-For a deliberately fresh alignment, `--reset-poses` zeroes the native Euler
-angles and XYZ origin shifts, including existing pose priors. It leaves tomogram
-geometry and subtomogram frame transforms unchanged. `--reset-halfsets` removes
-`rlnRandomSubset`, allowing RELION to assign new halfsets. These are explicit
-options, not required for ordinary subset export; leave them off when continuing
-to use the current poses and halfsets.
-
-### Outputs
-
-Use a new or empty output directory; existing exports are not overwritten.
-For a three-cluster analysis, the main files are shown below; copied tilt-STAR
-metadata files are also written under the output directory.
+`--particles` is the native RELION 5 particle STAR, not RECOVAR's flat
+`particles_2d.star`. Relative stack paths in it are resolved against `--datadir`
+(the RELION project root), or against the STAR's folder if `--datadir` is not
+given. `--clusters 0,2` exports only clusters 0 and 2, each in its own folder.
+The output directory must be new or empty.
 
 ```text
 new_relion_clusters/
-  manifest.json
-  summary.tsv
-  tomograms.star
-  particles_classes.star
+  summary.tsv                # particles per cluster
+  particles_classes.star     # all clustered particles, with rlnClassNumber
   cluster0/
-    particles.star
-    optimisation_set.star
-    membership.tsv
-  cluster1/
-    particles.star
-    optimisation_set.star
-    membership.tsv
-  cluster2/
-    particles.star
-    optimisation_set.star
-    membership.tsv
+    particles.star           # the native rows of cluster 0, with absolute stack paths
+    optimisation_set.star    # this particles.star and the original tomograms.star
+  ...
 ```
 
-Each `particles.star` is the native subset; `optimisation_set.star` connects that
-subset to the exported `tomograms.star`, whose tilt-series STAR references point
-to the copied metadata with rebased image paths. The geometry values and
-original pixel files are unchanged. An explicitly supplied trajectory file is
-also referenced by the optimization set. The membership tables record the selected
-particle identities, and the root summary reports cluster counts. The manifest
-records the export inputs and options for auditing.
+Each `particles.star` keeps every block, column and value of the native STAR,
+including poses and `rlnRandomSubset`. Particles that the pipeline did not keep
+are in no cluster. In `particles_classes.star`, **`rlnClassNumber` = cluster
+ID + 1** (cluster 0 is class 1); an existing `rlnClassNumber` is replaced.
 
-Check that `manifest.json` has `"status": "completed"`, and inspect the counts and
-memberships before starting a separate RELION InitialModel, Class3D, or Refine3D
-job. Exporting subsets does not run any of those jobs. A configurable
-shell example is available at
-[`docs/examples/export_relion5_tomo_clusters.sh`](../examples/export_relion5_tomo_clusters.sh).
-
-### One STAR with class numbers
-
-The export also writes `particles_classes.star` at the output root: the native
-particle STAR with every particle RECOVAR retained, from all clusters whatever
-`--clusters` selects, and a `rlnClassNumber` column. RELION class numbers start
-at 1 and RECOVAR cluster IDs at 0, so **`rlnClassNumber` = cluster ID + 1**
-(cluster 0 is class 1). An `rlnClassNumber` already in the source STAR is
-replaced. Poses and `rlnRandomSubset` are kept from the source STAR even with
-`--reset-poses` or `--reset-halfsets`, and source particles that the pipeline did
-not retain are left out; `manifest.json` records the per-class counts and how
-many were left out.
-
-To separate one cluster further, run the pipeline on that cluster's own
-`clusterN/particles.star` with the exported `tomograms.star`, analyze, and export
-again.
+To continue in RELION, run a new job from the original project directory (the
+tomograms STAR refers to its tilt series relative to it) with
+`clusterN/optimisation_set.star` as input. To split one cluster further, run the
+RECOVAR pipeline on `clusterN/particles.star` with the original
+`tomograms.star`, analyze, and export again.
 
 ## Using the GUI
 
