@@ -138,8 +138,11 @@ RECOVAR pipeline on `clusterN/particles.star` with the original
 
 ## Using the GUI
 
-For native RELION-5 tomography, use the identity-based command above. The GUI's
-row-based STAR export is not a replacement for this native tomography exporter.
+**Cryo-ET with RELION 5:** the GUI's **Export .star** writes a subset of the flat
+tilt-image STAR that RECOVAR ran on. That is fine for rerunning RECOVAR on the
+subset, but RELION 5 cannot refine from it. To take clusters back into RELION 5,
+use `recovar export_relion5_tomo_clusters` (above), which writes native
+`particles.star` and `optimisation_set.star` files.
 
 In the web GUI's **Latent Space Explorer** (available after running Analyze), you can pick particles interactively with the lasso, rectangle, or polygon tools -- no command line needed.
 
