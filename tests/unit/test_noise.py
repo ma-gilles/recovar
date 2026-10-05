@@ -20,6 +20,14 @@ def test_noise_upper_bound_ignores_zero_nonfinite_and_negative_shells():
     assert np.all(capped > 0)
 
 
+def test_observed_shell_percentile_ignores_voxels_without_data():
+    observed = np.linspace(80.0, 120.0, 96)
+    shell = np.concatenate([observed, np.zeros(4)])  # 4% of the shell has no data
+
+    assert noise._observed_shell_percentile(shell, 5) == np.percentile(observed, 5)
+    assert noise._observed_shell_percentile(np.zeros(10), 5) == 0.0
+
+
 def test_radial_noise_model_get_and_average():
     radial = np.array([1.0, 2.0, 3.0], dtype=np.float32)
     model = noise.RadialNoiseModel(radial, image_shape=(8, 8))

@@ -634,6 +634,19 @@ def _cap_noise_with_valid_upper_bound(noise_variance, upper_bound):
     return np.where(valid_bound & (noise_variance > upper_bound), upper_bound, noise_variance)
 
 
+def _observed_shell_percentile(signal_p_noise, q):
+    """Percentile of the signal-plus-noise power over the voxels that have data.
+
+    ``signal_p_noise`` is a mean of ``|image - CTF * mean|^2``, so it is positive
+    wherever an image contributed and exactly 0 in voxels no image reached (a
+    per-tilt subset can leave many). Counting those empty voxels would pull the
+    percentile to 0, or just above it when slightly fewer than q% are empty.
+    Returns 0, an unsupported bound, when the shell has no data.
+    """
+    observed = signal_p_noise[signal_p_noise > 0]
+    return np.percentile(observed, q) if observed.size else 0.0
+
+
 def upper_bound_noise_by_signal_p_noise_dispatched(noise_var_used, dataset, means, batch_size, dilated_volume_mask):
 
     if isinstance(dataset.noise, VariableRadialNoiseModel):
@@ -687,8 +700,7 @@ def upper_bound_noise_by_signal_p_noise(
 
         for k in range(n_shell_to_ub):
             if np.sum(rad_grid == k) > 0:
-                ub_noise_var_by_var_est[k] = np.percentile(noise_p_variance_est[rad_grid == k], 5)
-                ub_noise_var_by_var_est[k] = np.max([0, ub_noise_var_by_var_est[k]])
+                ub_noise_var_by_var_est[k] = _observed_shell_percentile(noise_p_variance_est[rad_grid == k], 5)
                 variance_est_low_res_5_pc[k] = np.percentile(variance_est["combined"][rad_grid == k], 5)
                 variance_est_low_res_median[k] = np.median(variance_est["combined"][rad_grid == k])
 
