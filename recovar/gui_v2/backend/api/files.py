@@ -36,12 +36,15 @@ _allowed_roots: list[str] = []
 def configure_allowed_roots(roots: list[str]) -> None:
     """Set the allowed root directories for the file browser."""
     global _allowed_roots
-    _allowed_roots = [os.path.abspath(r) for r in roots]
+    # Resolve symlinks so roots compare canonically with the resolved
+    # request paths in _check_path_allowed (e.g. HPC homes that symlink
+    # into project storage).
+    _allowed_roots = [str(Path(os.path.expanduser(r)).resolve()) for r in roots]
 
 
 def add_allowed_root(root: str) -> None:
     """Add an allowed root directory."""
-    _allowed_roots.append(os.path.abspath(root))
+    _allowed_roots.append(str(Path(os.path.expanduser(root)).resolve()))
 
 
 def _check_path_allowed(path: str) -> None:

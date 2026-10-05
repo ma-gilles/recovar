@@ -2,11 +2,10 @@
 
 RECOVAR analyzes conformational heterogeneity in cryo-EM and cryo-ET datasets. It reconstructs volumes, estimates conformational density in latent space, and identifies the image subsets associated with specific volume features.
 
-**[Full Documentation](https://ma-gilles.github.io/recovar)** | **[Paper](https://www.pnas.org/doi/abs/10.1073/pnas.2419140122)** | **[Talk](https://www.youtube.com/watch?v=cQBQlCCRp8Q&t=740s)**
+**[Full Documentation](https://ma-gilles.github.io/recovar)** | **[Paper](https://www.pnas.org/doi/abs/10.1073/pnas.2419140122)**
 
-> **Looking for the older release?** Active development happens on the `dev` branch. If you want the previous stable release (`0.4.5`, possibly more stable but missing recent features like `.cs`/`.star` auto-extraction), install with `pip install recovar==0.4.5` or check out the [`legacy-0.4.5`](https://github.com/ma-gilles/recovar/tree/legacy-0.4.5) branch.
 
-**License**: the code has been modified and is now under the PU-RL v2.0 license, and the code imports libraries that are under non-PU-RL v2.0 (including GPL) licenses. See [LICENSE](LICENSE).
+**License**: RECOVAR is licensed under the MIT License. See [LICENSE](https://github.com/ma-gilles/recovar/blob/main/LICENSE).
 
 ## Key features
 
@@ -239,8 +238,13 @@ If you use RECOVAR in your research, please cite:
 
 > Gilles, M.A. and Singer, A. (2025). Cryo-EM heterogeneity analysis using regularized covariance estimation and kernel regression. *Proceedings of the National Academy of Sciences*, 122(9), e2419140122. [doi:10.1073/pnas.2419140122](https://doi.org/10.1073/pnas.2419140122)
 
+The inputs needed to reproduce the experiments in this paper can be access on this [dropbox](https://www.dropbox.com/scl/fo/fjo8lwfj0xemqmki1dc30/AKISv4oMtt6q0gKGz59gFxM?rlkey=7xwnbaj4rb5r8f10nttsqexzr&st=2dze278r&dl=0). 
+
 ## Contact
 
 Marc Aurele Gilles — [gilles@princeton.edu](mailto:gilles@princeton.edu)
 
 Issues and feature requests: [GitHub Issues](https://github.com/ma-gilles/recovar/issues)
+
+<!-- Contributing: see CONTRIBUTING.md for dev setup -->
+
