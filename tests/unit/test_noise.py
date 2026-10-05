@@ -20,15 +20,12 @@ def test_noise_upper_bound_ignores_zero_nonfinite_and_negative_shells():
     assert np.all(capped > 0)
 
 
-def test_noise_upper_bound_ignores_bounds_far_below_fitted_noise():
-    """A bound just above zero is as unsupported as a zero bound."""
-    original = np.array([86.6, 86.6, 86.6, 86.6], dtype=np.float32)
-    fraction = noise._MIN_UPPER_BOUND_FRACTION
-    upper_bound = np.array([2.53, 0.9 * fraction * 86.6, fraction * 86.6, 64.6], dtype=np.float32)
+def test_observed_shell_percentile_ignores_voxels_without_data():
+    observed = np.linspace(80.0, 120.0, 96)
+    shell = np.concatenate([observed, np.zeros(4)])  # 4% of the shell has no data
 
-    capped = noise._cap_noise_with_valid_upper_bound(original, upper_bound)
-
-    np.testing.assert_array_equal(capped, np.array([86.6, 86.6, upper_bound[2], 64.6], dtype=np.float32))
+    assert noise._observed_shell_percentile(shell, 5) == np.percentile(observed, 5)
+    assert noise._observed_shell_percentile(np.zeros(10), 5) == 0.0
 
 
 def test_radial_noise_model_get_and_average():

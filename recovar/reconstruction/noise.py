@@ -620,27 +620,31 @@ def update_noise_variance(noise_variance, dataset):
     dataset.set_noise(noise_variance)
 
 
-# A supported signal-plus-noise bound is not far below the fitted noise. On an in situ GroEL
-# tilt-series set (box 64, 31 tilts, radial_per_tilt) cells away from unsupported regions had
-# bound/noise >= 0.33 (radial model >= 0.58), while cells beside a zero region reached 0.03.
-_MIN_UPPER_BOUND_FRACTION = 0.25
-
-
 def _cap_noise_with_valid_upper_bound(noise_variance, upper_bound):
-    """Apply only supported noise upper bounds.
+    """Apply only finite, strictly positive noise upper bounds.
 
-    The signal-plus-noise estimator returns zero, or a value just above zero, in
-    shells where it has no usable support; that is not a physical noise
-    estimate. Treating it as a real bound makes later whitening divide by
-    (nearly) zero, producing NaNs or huge weights in covariance embeddings and
-    PPCA sufficient statistics. A bound is applied only where it is finite and at
-    least ``_MIN_UPPER_BOUND_FRACTION`` times the fitted noise.
+    A zero returned by the signal-plus-noise estimator means that the shell
+    had no usable support; it is not a physical zero-noise estimate.  Treating
+    it as a real bound makes later whitening divide by zero, producing NaNs in
+    covariance embeddings and PPCA sufficient statistics.
     """
     noise_variance = np.asarray(noise_variance)
     upper_bound = np.asarray(upper_bound)
-    valid_bound = np.isfinite(upper_bound) & (upper_bound >= _MIN_UPPER_BOUND_FRACTION * noise_variance)
-    valid_bound &= upper_bound > 0
+    valid_bound = np.isfinite(upper_bound) & (upper_bound > 0)
     return np.where(valid_bound & (noise_variance > upper_bound), upper_bound, noise_variance)
+
+
+def _observed_shell_percentile(signal_p_noise, q):
+    """Percentile of the signal-plus-noise power over the voxels that have data.
+
+    ``signal_p_noise`` is a mean of ``|image - CTF * mean|^2``, so it is positive
+    wherever an image contributed and exactly 0 in voxels no image reached (a
+    per-tilt subset can leave many). Counting those empty voxels would pull the
+    percentile to 0, or just above it when slightly fewer than q% are empty.
+    Returns 0, an unsupported bound, when the shell has no data.
+    """
+    observed = signal_p_noise[signal_p_noise > 0]
+    return np.percentile(observed, q) if observed.size else 0.0
 
 
 def upper_bound_noise_by_signal_p_noise_dispatched(noise_var_used, dataset, means, batch_size, dilated_volume_mask):
@@ -696,8 +700,7 @@ def upper_bound_noise_by_signal_p_noise(
 
         for k in range(n_shell_to_ub):
             if np.sum(rad_grid == k) > 0:
-                ub_noise_var_by_var_est[k] = np.percentile(noise_p_variance_est[rad_grid == k], 5)
-                ub_noise_var_by_var_est[k] = np.max([0, ub_noise_var_by_var_est[k]])
+                ub_noise_var_by_var_est[k] = _observed_shell_percentile(noise_p_variance_est[rad_grid == k], 5)
                 variance_est_low_res_5_pc[k] = np.percentile(variance_est["combined"][rad_grid == k], 5)
                 variance_est_low_res_median[k] = np.median(variance_est["combined"][rad_grid == k])
 
