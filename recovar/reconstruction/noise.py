@@ -620,26 +620,17 @@ def update_noise_variance(noise_variance, dataset):
     dataset.set_noise(noise_variance)
 
 
-# A supported signal-plus-noise bound is not far below the fitted noise. On an in situ GroEL
-# tilt-series set (box 64, 31 tilts, radial_per_tilt) cells away from unsupported regions had
-# bound/noise >= 0.33 (radial model >= 0.58), while cells beside a zero region reached 0.03.
-_MIN_UPPER_BOUND_FRACTION = 0.25
-
-
 def _cap_noise_with_valid_upper_bound(noise_variance, upper_bound):
-    """Apply only supported noise upper bounds.
+    """Apply only finite, strictly positive noise upper bounds.
 
-    The signal-plus-noise estimator returns zero, or a value just above zero, in
-    shells where it has no usable support; that is not a physical noise
-    estimate. Treating it as a real bound makes later whitening divide by
-    (nearly) zero, producing NaNs or huge weights in covariance embeddings and
-    PPCA sufficient statistics. A bound is applied only where it is finite and at
-    least ``_MIN_UPPER_BOUND_FRACTION`` times the fitted noise.
+    A zero returned by the signal-plus-noise estimator means that the shell
+    had no usable support; it is not a physical zero-noise estimate.  Treating
+    it as a real bound makes later whitening divide by zero, producing NaNs in
+    covariance embeddings and PPCA sufficient statistics.
     """
     noise_variance = np.asarray(noise_variance)
     upper_bound = np.asarray(upper_bound)
-    valid_bound = np.isfinite(upper_bound) & (upper_bound >= _MIN_UPPER_BOUND_FRACTION * noise_variance)
-    valid_bound &= upper_bound > 0
+    valid_bound = np.isfinite(upper_bound) & (upper_bound > 0)
     return np.where(valid_bound & (noise_variance > upper_bound), upper_bound, noise_variance)
 
 
