@@ -680,6 +680,9 @@ def test_outliers_pipeline_cryo_et_regression_against_baseline(tmp_path):
         "--tilt-series",
         "--tilt-series-ctf",
         "relion5",
+        # The baseline was generated with the single radial noise model.
+        "--noise-model",
+        "radial",
         "--correct-contrast",
         "-o",
         str(pipeline_out),

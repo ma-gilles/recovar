@@ -65,7 +65,12 @@ The output is written to `subset_indices/indices.pkl`.
 
 ## Using extracted subsets
 
-The output is a `.pkl` file containing particle indices. To create a filtered STAR file:
+The commands above write a `.pkl` file containing indices, not a native RELION-5
+tomography input. Only load pickle files and RECOVAR results from trusted sources:
+loading a pickle can execute code.
+
+For single-particle data, the following example creates a filtered STAR file
+**only if the indices refer directly to its rows in exactly the same order**:
 
 ```python
 import pickle, starfile
@@ -80,7 +85,64 @@ starfile.write(data, "particles_subset.star")
 
 You can then import `particles_subset.star` back into RELION or cryoSPARC for focused refinement.
 
+!!! warning "Do not select tomography particles by tilt-image row number"
+    In cryo-ET, the flat STAR used by RECOVAR has one row per **tilt image**,
+    whereas the native RELION particle STAR has one row per **physical particle**.
+    Neither applying physical-particle cluster labels to flat STAR rows with
+    `.iloc` nor applying RECOVAR indices directly to a differently ordered native
+    STAR preserves particle identity. Use the identity-based exporter below.
+
+## Exporting k-means clusters to native RELION-5 tomography
+
+`export_relion5_tomo_clusters` writes one native RELION 5 particle STAR per
+k-means cluster. It selects the native rows by particle name: RECOVAR particle
+`i` is the `i`-th sorted `rlnGroupName` of the flat STAR the pipeline ran on,
+which equals the native `rlnTomoParticleName`. Native row order is never used.
+
+```bash
+recovar export_relion5_tomo_clusters \
+    --pipeline /path/to/Pipeline/job_0001 \
+    --analysis /path/to/Analyze/k3/job_0001 \
+    --particles /path/to/RELION/Refine3D/job012/run_data.star \
+    --tomograms /path/to/RELION/tomograms.star \
+    --datadir /path/to/RELION \
+    --outdir /path/to/new_relion_clusters
+```
+
+`--particles` is the native RELION 5 particle STAR, not RECOVAR's flat
+`particles_2d.star`. Relative stack paths in it are resolved against `--datadir`
+(the RELION project root), or against the STAR's folder if `--datadir` is not
+given. `--clusters 0,2` exports only clusters 0 and 2, each in its own folder.
+The output directory must be new or empty.
+
+```text
+new_relion_clusters/
+  summary.tsv                # particles per cluster
+  particles_classes.star     # all clustered particles, with rlnClassNumber
+  cluster0/
+    particles.star           # the native rows of cluster 0, with absolute stack paths
+    optimisation_set.star    # this particles.star and the original tomograms.star
+  ...
+```
+
+Each `particles.star` keeps every block, column and value of the native STAR,
+including poses and `rlnRandomSubset`. Particles that the pipeline did not keep
+are in no cluster. In `particles_classes.star`, **`rlnClassNumber` = cluster
+ID + 1** (cluster 0 is class 1); an existing `rlnClassNumber` is replaced.
+
+To continue in RELION, run a new job from the original project directory (the
+tomograms STAR refers to its tilt series relative to it) with
+`clusterN/optimisation_set.star` as input. To split one cluster further, run the
+RECOVAR pipeline on `clusterN/particles.star` with the original
+`tomograms.star`, analyze, and export again.
+
 ## Using the GUI
+
+**Cryo-ET with RELION 5:** the GUI's **Export .star** writes a subset of the flat
+tilt-image STAR that RECOVAR ran on. That is fine for rerunning RECOVAR on the
+subset, but RELION 5 cannot refine from it. To take clusters back into RELION 5,
+use `recovar export_relion5_tomo_clusters` (above), which writes native
+`particles.star` and `optimisation_set.star` files.
 
 In the web GUI's **Latent Space Explorer** (available after running Analyze), you can pick particles interactively with the lasso, rectangle, or polygon tools -- no command line needed.
 

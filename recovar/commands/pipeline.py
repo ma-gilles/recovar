@@ -25,6 +25,7 @@ _NOISE_UB_GB_PER_IMAGE_AT_GRID_256 = 0.117
 _NOISE_UB_WORKING_FRACTION = 0.15
 _NOISE_UB_MIN_WORKING_GB = 1.0
 _NOISE_UB_MAX_WORKING_GB = 12.0
+_RADIAL_PER_TILT_NOISE_MODELS = ("radial_per_tilt", "radial-per-tilt")
 
 
 def add_args(parser: argparse.ArgumentParser):
@@ -299,8 +300,12 @@ def add_args(parser: argparse.ArgumentParser):
     adv.add_argument(
         "--noise-model",
         dest="noise_model",
-        default="radial",
-        help="Noise model: radial (default) or white",
+        default=None,
+        help=(
+            "Noise model: radial or radial_per_tilt. Default: radial_per_tilt for tilt series "
+            "(--tilt-series or --tomograms), radial otherwise. radial_per_tilt automatically uses "
+            "new noise estimation."
+        ),
     )
     adv.add_argument(
         "--mean-fn",
@@ -332,7 +337,7 @@ def add_args(parser: argparse.ArgumentParser):
         "--new-noise-est",
         dest="new_noise_est",
         action="store_true",
-        help="Use new noise estimation",
+        help="Use new noise estimation (automatic for premultiplied CTF and radial_per_tilt)",
     )
     adv.add_argument(
         "--use_reg_mean_in_contrast",
@@ -521,12 +526,33 @@ def _noise_upper_bound_batch_size(grid_size: int, batch_size: int, gpu_budget_gb
     return utils.safe_batch_size(min(batch_size, int(working_gb / per_image_gb)))
 
 
+def _resolve_noise_model(args):
+    """Fill in the ``--noise-model`` default once tilt-series mode is known.
+
+    Tilt series get one radial noise spectrum per tilt: noise power changes
+    with tilt angle and accumulated dose, and a single spectrum for all tilts
+    has produced NaN embeddings on in-situ data. Other data keep ``radial``.
+    """
+    if args.noise_model is None:
+        args.noise_model = "radial_per_tilt" if args.tilt_series else "radial"
+        logger.info("Setting noise_model to %s", args.noise_model)
+    return args.noise_model
+
+
+def _use_new_noise_estimator(args, noise_model):
+    """The per-tilt model, premultiplied CTF and ``--new-noise-est`` use the new estimator."""
+    return bool(args.new_noise_est or args.premultiplied_ctf or noise_model in _RADIAL_PER_TILT_NOISE_MODELS)
+
+
 def _estimate_noise(dataset, means, dilated_volume_mask, batch_size, args, noise_model, gpu_budget_gb=None):
     """Estimate radial noise variance from outside-mask and upper-bound methods.
 
     Returns a dict with all noise-related quantities needed by the pipeline.
     """
-    use_new_noise_fn = args.new_noise_est or args.premultiplied_ctf
+    radial_per_tilt = noise_model in _RADIAL_PER_TILT_NOISE_MODELS
+    use_new_noise_fn = _use_new_noise_estimator(args, noise_model)
+    if radial_per_tilt and not (args.new_noise_est or args.premultiplied_ctf):
+        logger.info("Enabling new noise estimation automatically for radial_per_tilt")
     logger.info("Using new noise estimation function?: %s", use_new_noise_fn)
 
     noise_time = time.time()
@@ -577,7 +603,7 @@ def _estimate_noise(dataset, means, dilated_volume_mask, batch_size, args, noise
     radial_noise_var_outside_mask = masked_image_PS
     white_noise_var_outside_mask_val = np.median(masked_image_PS)
 
-    if use_new_noise_fn and noise_model not in ("radial", "radial_per_tilt"):
+    if use_new_noise_fn and noise_model != "radial" and not radial_per_tilt:
         raise ValueError(f"new noise fn only works with radial noise model, got {noise_model}")
 
     logger.info("time to estimate noise is %s", time.time() - noise_time)
@@ -817,6 +843,8 @@ def standard_recovar_pipeline(args):
     with open(paths.command_txt, "w") as text_file:
         text_file.write("python " + " ".join(sys.argv))
 
+    _resolve_noise_model(args)
+
     # CTF defaults
     if args.tilt_series_ctf is None:
         args.tilt_series_ctf = "relion5" if args.tilt_series else "cryoem"
@@ -1007,7 +1035,7 @@ def standard_recovar_pipeline(args):
     if noise_model == "radial":
         ds.set_radial_noise_model(None)
         logger.info("Setting noise model to radial")
-    elif noise_model in ("radial_per_tilt", "radial-per-tilt"):
+    elif noise_model in _RADIAL_PER_TILT_NOISE_MODELS:
         ds.set_variable_radial_noise_model(None)
         logger.info("Setting noise model to radial_per_tilt")
     else:

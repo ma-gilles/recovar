@@ -219,6 +219,8 @@ def main():
                     "pipeline_outliers_output",
                     "--tilt-series",
                     "--tilt-series-ctf=relion5",
+                    # The outlier baselines were generated with the single radial noise model.
+                    "--noise-model=radial",
                     "--k-rounds",
                     str(k_rounds),
                     "--use-contrast-detection",

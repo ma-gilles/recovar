@@ -1,7 +1,7 @@
 """
 Unit tests for recovar.commands.pipeline and recovar.commands.pipeline_with_outliers.
 
-Only tests argument registration via add_args() – no actual EM execution.
+Tests argument registration and noise-estimator routing – no actual EM execution.
 """
 
 import argparse
@@ -74,6 +74,38 @@ def test_noise_upper_bound_batch_size_scales_with_grid_and_budget():
 
     assert 1 <= grid_512_large_budget < grid_256_large_budget < requested
     assert 1 <= grid_256_small_budget < grid_256_large_budget
+
+
+@pytest.mark.parametrize(
+    ("requested", "tilt_series", "expected"),
+    [
+        (None, False, "radial"),
+        (None, True, "radial_per_tilt"),
+        ("radial", True, "radial"),
+        ("radial_per_tilt", False, "radial_per_tilt"),
+    ],
+)
+def test_noise_model_default_follows_tilt_series(requested, tilt_series, expected):
+    parser = _parser_with_pipeline_args()
+    assert parser.get_default("noise_model") is None
+    args = SimpleNamespace(noise_model=requested, tilt_series=tilt_series)
+    assert pipeline_cmd._resolve_noise_model(args) == expected
+    assert args.noise_model == expected
+
+
+@pytest.mark.parametrize(
+    ("noise_model", "new_noise_est", "premultiplied_ctf", "expected"),
+    [
+        ("radial_per_tilt", False, False, True),
+        ("radial-per-tilt", False, False, True),
+        ("radial", False, False, False),
+        ("radial", True, False, True),
+        ("radial", False, True, True),
+    ],
+)
+def test_new_noise_estimator_choice(noise_model, new_noise_est, premultiplied_ctf, expected):
+    args = SimpleNamespace(new_noise_est=new_noise_est, premultiplied_ctf=premultiplied_ctf)
+    assert pipeline_cmd._use_new_noise_estimator(args, noise_model) is expected
 
 
 def test_pipeline_registers_poses():

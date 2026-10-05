@@ -159,8 +159,8 @@ def _run_pipeline(
         cmd += ["--tilt-series"]
     if premultiplied_ctf:
         cmd += ["--premultiplied-ctf"]
-    if noise_model:
-        cmd += ["--noise-model", noise_model]
+    # Baselines without an explicit model were generated with the single radial noise model.
+    cmd += ["--noise-model", noise_model or "radial"]
     _run(cmd)
     assert (pipeline_out / "model" / "params.pkl").exists()
     return pipeline_out

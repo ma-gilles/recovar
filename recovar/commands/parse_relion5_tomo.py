@@ -43,7 +43,18 @@ class Tomogram:
     """
 
     def __init__(
-        self, pixel_size, defocus_u, defocus_v, defocus_angle, x_tilts, y_tilts, z_rots, x_shifts, y_shifts, hand
+        self,
+        pixel_size,
+        defocus_u,
+        defocus_v,
+        defocus_angle,
+        x_tilts,
+        y_tilts,
+        z_rots,
+        x_shifts,
+        y_shifts,
+        hand,
+        defocus_slope=1.0,
     ):
         self.pixel_size = pixel_size
         self.defocus_u = np.asarray(defocus_u, dtype=np.float64)
@@ -55,6 +66,7 @@ class Tomogram:
         self.x_shifts = x_shifts
         self.y_shifts = y_shifts
         self.hand = hand
+        self.defocus_slope = float(defocus_slope)
         self.n_tilts = len(x_tilts)
 
         # Build per-tilt rotation matrices
@@ -81,15 +93,21 @@ class Tomogram:
     # -- public API --
 
     def local_defocus(self, i_tilt, point_3d):
-        """Compute depth-corrected defocus at a 3D particle position."""
-        depth_offset = self._rzyx_matrices[i_tilt, 2, :] @ point_3d * self.hand
+        """Compute depth-corrected defocus at a 3D particle position.
+
+        RELION's ``Tomogram::getCtf`` (jaz/tomography/tomogram.cpp:277-289): the depth of the
+        position relative to the tomogram centre, times the handedness and the defocus slope.
+        """
+        depth_offset = self._rzyx_matrices[i_tilt, 2, :] @ point_3d * self.hand * self.defocus_slope
         return (
             self.defocus_u[i_tilt] + depth_offset,
             self.defocus_v[i_tilt] + depth_offset,
             self.defocus_angle[i_tilt],
         )
 
-    def expand_particles_batch(self, points_3d, image_names, tilt_df, group_names, base_orientations, random_subsets):
+    def expand_particles_batch(
+        self, points_3d, image_names, tilt_df, group_names, base_orientations, random_subsets, origins_3d=None
+    ):
         """Expand M particles sharing this Tomogram into 2D rows.
 
         All particles must share the same visible-frame set (same Tomogram).
@@ -102,6 +120,9 @@ class Tomogram:
         group_names : list[str] of length M
         base_orientations : Rotation batch of size M, or None
         random_subsets : ndarray (M,)
+        origins_3d : ndarray (M, 3) or None
+            Refined particle offsets ``A_subtomo @ rlnOrigin{X,Y,Z}Angst`` in the tomogram
+            frame, in Angstrom. Each tilt row gets their projection as its 2D origin.
 
         Returns
         -------
@@ -111,7 +132,7 @@ class Tomogram:
         n = self.n_tilts
 
         # --- Defocus: depth = points_3d @ depth_rows.T * hand -> (M, n) ---
-        depth_all = (points_3d @ self._depth_rows.T) * self.hand  # (M, n)
+        depth_all = (points_3d @ self._depth_rows.T) * (self.hand * self.defocus_slope)  # (M, n)
         dfu_all = self.defocus_u[None, :] + depth_all  # (M, n)
         dfv_all = self.defocus_v[None, :] + depth_all
         dfa_all = np.broadcast_to(self.defocus_angle[None, :], (M, n))
@@ -126,6 +147,16 @@ class Tomogram:
             euler_all = R.from_matrix(final_mats.reshape(M * n, 3, 3)).as_euler("ZYZ", degrees=True).reshape(M, n, 3)
         else:
             euler_all = np.zeros((M, n, 3))
+
+        # --- Per-tilt 2D origins ---
+        # relion_refine shifts tilt image f by Aproj_f[:2] @ origin, with Aproj_f the tilt's
+        # rotation times A_subtomo (Experiment::read, exp_model.cpp:1005-1021;
+        # getTranslationInTiltSeries, exp_model.cpp:106-114), using the image shift it applies
+        # to an SPA rlnOrigin (ml_optimiser.cpp:8206-8239). Adding 0.0 turns -0.0 into 0.0.
+        if origins_3d is None:
+            origins_2d = np.zeros((M, n, 2))
+        else:
+            origins_2d = np.einsum("nab,mb->mna", self._rzyx_matrices[:, :2, :], origins_3d) + 0.0
 
         # --- Tilt-level metadata (same for all particles sharing this Tomogram) ---
         mic_names = tilt_df["_rlnMicrographName"].values
@@ -158,7 +189,7 @@ class Tomogram:
                 img_name_flat[start + t] = f"{t + 1:06d}@{image_names[j]}"
             group_flat[start : start + n] = group_names[j]
 
-        return pd.DataFrame(
+        out = pd.DataFrame(
             {
                 "_rlnDefocusU": dfu_all.ravel(),
                 "_rlnDefocusV": dfv_all.ravel(),
@@ -174,13 +205,18 @@ class Tomogram:
                 "_rlnAngleRot": euler_all[:, :, 0].ravel(),
                 "_rlnAngleTilt": euler_all[:, :, 1].ravel(),
                 "_rlnAnglePsi": euler_all[:, :, 2].ravel(),
-                "_rlnOriginXAngst": 0.0,
-                "_rlnOriginYAngst": 0.0,
+                "_rlnOriginXAngst": origins_2d[:, :, 0].ravel(),
+                "_rlnOriginYAngst": origins_2d[:, :, 1].ravel(),
                 "_rlnRandomSubset": subset_flat,
                 "_rlnMicrographPreExposure": pre_exp_flat,
                 "_rlnTomoNominalStageTiltAngle": stage_tilt_flat,
             }
         )
+        # RELION reads the phase shift per tilt (tomogram_set.cpp:438-445). rlnCtfBfactor is not
+        # carried: RELION zeroes it when it dose-weights by rlnMicrographPreExposure.
+        if "_rlnPhaseShift" in tilt_df.columns:
+            out["_rlnPhaseShift"] = np.tile(tilt_df["_rlnPhaseShift"].values.astype(float), M)
+        return out
 
 
 # ---------------------------------------------------------------------------
@@ -266,9 +302,11 @@ def convert(tomograms_path, particles_path, output_path):
         hand_val = tomo_df["_rlnTomoHand"].values[tomo_idx]
         hand = -1 if float(hand_val) == -1 else 1
         pixel_size = float(tomo_df["_rlnTomoTiltSeriesPixelSize"].values[tomo_idx])
+        # rlnTomoDefocusSlope, 1 when absent (jaz/tomography/tomogram_set.cpp:497-503).
+        slope = float(tomo_df["_rlnTomoDefocusSlope"].values[tomo_idx]) if "_rlnTomoDefocusSlope" in tomo_df else 1.0
 
-        tilt_series_cache[tomo_name] = (ts_df, hand, pixel_size)
-        return ts_df, hand, pixel_size
+        tilt_series_cache[tomo_name] = (ts_df, hand, pixel_size, slope)
+        return ts_df, hand, pixel_size, slope
 
     # ---- Get optics info ----
     voltage = float(optics_df["_rlnVoltage"].values[0])
@@ -298,7 +336,7 @@ def convert(tomograms_path, particles_path, output_path):
     particles_processed = 0
 
     for (tomo_name, visible_indices), particle_indices in groups.items():
-        ts_df, hand, pixel_size = _get_tilt_series(tomo_name)
+        ts_df, hand, pixel_size, slope = _get_tilt_series(tomo_name)
         sub_ts_df = ts_df.iloc[list(visible_indices)].copy()
 
         # Build Tomogram once for this group
@@ -313,6 +351,7 @@ def convert(tomograms_path, particles_path, output_path):
             x_shifts=sub_ts_df["_rlnTomoXShiftAngst"].values.astype(float),
             y_shifts=sub_ts_df["_rlnTomoYShiftAngst"].values.astype(float),
             hand=hand,
+            defocus_slope=slope,
         )
 
         M = len(particle_indices)
@@ -347,6 +386,20 @@ def convert(tomograms_path, particles_path, output_path):
 
         R_base = R_particles * R_subtomo
 
+        # RELION evaluates the CTF depth at the origin-shifted position, coordinate - A_subtomo @ origin
+        # (Experiment::read, exp_model.cpp:1007-1020; ParticleSet::getPosition, particle_set.cpp:355-368).
+        # RELION's A_subtomo (Euler::anglesToMatrix3) is the transpose of SciPy's intrinsic ZYZ matrix.
+        origin_labels = ("_rlnOriginXAngst", "_rlnOriginYAngst", "_rlnOriginZAngst")
+        origins = np.column_stack(
+            [
+                particles_df[label].values[idxs].astype(float) if label in particles_df else np.zeros(M)
+                for label in origin_labels
+            ]
+        )
+        subtomo_matrices = R_subtomo.as_matrix().reshape(-1, 3, 3)
+        origins_3d = np.einsum("mba,mb->ma", np.broadcast_to(subtomo_matrices, (M, 3, 3)), origins)
+        points_3d = points_3d - origins_3d
+
         df_2d = tomogram.expand_particles_batch(
             points_3d,
             image_names,
@@ -354,6 +407,7 @@ def convert(tomograms_path, particles_path, output_path):
             group_names,
             R_base,
             random_subsets,
+            origins_3d=origins_3d,
         )
 
         all_rows.append(df_2d)

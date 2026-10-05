@@ -151,7 +151,8 @@ def _run_outliers_pipeline(
     # Run pipeline_with_outliers
     if n_tilts > 0:
         particles = str(dataset_dir / "particles.star")
-        pipe_extra = ["--tilt-series", "--tilt-series-ctf", "relion5"]
+        # The baseline was generated with the single radial noise model.
+        pipe_extra = ["--tilt-series", "--tilt-series-ctf", "relion5", "--noise-model", "radial"]
     else:
         particles = str(dataset_dir / f"particles.{grid}.mrcs")
         pipe_extra = []

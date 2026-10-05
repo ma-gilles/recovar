@@ -620,6 +620,29 @@ def update_noise_variance(noise_variance, dataset):
     dataset.set_noise(noise_variance)
 
 
+# A supported signal-plus-noise bound is not far below the fitted noise. On an in situ GroEL
+# tilt-series set (box 64, 31 tilts, radial_per_tilt) cells away from unsupported regions had
+# bound/noise >= 0.33 (radial model >= 0.58), while cells beside a zero region reached 0.03.
+_MIN_UPPER_BOUND_FRACTION = 0.25
+
+
+def _cap_noise_with_valid_upper_bound(noise_variance, upper_bound):
+    """Apply only supported noise upper bounds.
+
+    The signal-plus-noise estimator returns zero, or a value just above zero, in
+    shells where it has no usable support; that is not a physical noise
+    estimate. Treating it as a real bound makes later whitening divide by
+    (nearly) zero, producing NaNs or huge weights in covariance embeddings and
+    PPCA sufficient statistics. A bound is applied only where it is finite and at
+    least ``_MIN_UPPER_BOUND_FRACTION`` times the fitted noise.
+    """
+    noise_variance = np.asarray(noise_variance)
+    upper_bound = np.asarray(upper_bound)
+    valid_bound = np.isfinite(upper_bound) & (upper_bound >= _MIN_UPPER_BOUND_FRACTION * noise_variance)
+    valid_bound &= upper_bound > 0
+    return np.where(valid_bound & (noise_variance > upper_bound), upper_bound, noise_variance)
+
+
 def upper_bound_noise_by_signal_p_noise_dispatched(noise_var_used, dataset, means, batch_size, dilated_volume_mask):
 
     if isinstance(dataset.noise, VariableRadialNoiseModel):
@@ -695,10 +718,9 @@ def upper_bound_noise_by_signal_p_noise(
 
             # This is a bit of a hack. We are using the variance estimate to bound the noise variance
             # This is not correct, but it is better than nothing
-        noise_var_used[:n_shell_to_ub] = np.where(
-            noise_var_used[:n_shell_to_ub] > ub_noise_var_by_var_est,
-            ub_noise_var_by_var_est,
+        noise_var_used[:n_shell_to_ub] = _cap_noise_with_valid_upper_bound(
             noise_var_used[:n_shell_to_ub],
+            ub_noise_var_by_var_est,
         )
 
         noise_var_used = noise_var_used.astype(dataset.dtype_real)
