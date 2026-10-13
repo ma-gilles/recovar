@@ -1128,3 +1128,45 @@ def test_hermitian_fold_requires_a_half_volume(gpu_device):
                 half_volume=False,
                 hermitian_fold=True,
             )
+
+
+@pytest.mark.parametrize(
+    "N,upsampling,max_r_kind",
+    [(8, 1, "default"), (8, 1, "none"), (7, 1, "default"), (7, 1, "none"), (8, 2, "none")],
+)
+def test_per_image_backproject_is_restriction_of_full_volume_backproject(N, upsampling, max_r_kind, gpu_device):
+    """Each column of ``per_image_backproject`` is the full-volume backprojection of one image, kept on ``kz >= 0``.
+
+    The per-image kernel feeds PPCA's LHS, whose RHS comes from ``adjoint_slice_volume`` and whose prior is
+    ``full_volume_to_half_volume`` of a full volume, so it must be in the same (reconstruction) convention as
+    ``backproject(half_volume=True)``: no Hermitian fold. Real images (CTF^2-like), arbitrary values. Float64.
+    """
+    _skip_if_no_cuda()
+    import recovar.core.fourier_transform_utils as ftu
+    from recovar.cuda_backproject import backproject, per_image_backproject
+
+    rng = np.random.default_rng(24)
+    n_images = 4
+    image_shape = (N, N)
+    volume_shape = (upsampling * N,) * 3
+    max_r = N // 2 - 1 if max_r_kind == "default" else None
+    half_size = int(np.prod(ftu.volume_shape_to_half_volume_shape(volume_shape)))
+
+    with jax.default_device(gpu_device):
+        rots = _rotations_f64(n_images, rng)
+        images = jnp.asarray(rng.standard_normal((n_images, N * N)))
+        columns = per_image_backproject(
+            jnp.zeros((half_size, n_images), jnp.float64), images, rots, image_shape, volume_shape, max_r=max_r
+        )
+        for i in range(n_images):
+            full = backproject(
+                jnp.zeros(int(np.prod(volume_shape)), jnp.float64),
+                images[i : i + 1],
+                rots[i : i + 1],
+                image_shape,
+                volume_shape,
+                order=1,
+                max_r=max_r,
+            )
+            expected = ftu.full_volume_to_half_volume(full, volume_shape).reshape(-1)
+            assert _relative_error(columns[:, i], expected) < 1e-10

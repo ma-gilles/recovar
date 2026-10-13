@@ -28,7 +28,8 @@
  * half_volume_to_full_volume in fourier_transform_utils.py and is what a vjp
  * needs; it puts twice the full-volume value on interior kz.  CONJ_MODE below
  * is an optimization of the fold only and is disabled for the crop.  (The
- * per-image kernel at the end of this file still folds.)
+ * per-image kernel at the end of this file is crop-only: it feeds PPCA's LHS,
+ * which pairs with a crop RHS and a restricted prior.)
  * Do NOT use an FFT-based half→full expand; its VJP distributes gradients
  * differently, breaking the CUDA kernel's correctness.
  *
@@ -137,8 +138,7 @@ static __device__ __forceinline__ int64_t volume_spatial_offset(
  *
  * Only the backprojection handlers accept 2.  RELION's native-half layout
  * (relion_fold_x) is folded per pixel and keeps the fold path.
- * per_image_backproject_kernel has its own inline fold and does not read this
- * attribute yet. */
+ * per_image_backproject_kernel has no such attribute: it is always the crop. */
 static constexpr int64_t kHalfVolumeFold = 2;
 
 /* scatter_nearest: atomicAdd one value at the nearest voxel.
@@ -3252,6 +3252,10 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
  *
  * The output is then reduced via GEMM: (n_voxels, n_images) @ (n_images, n_channels)
  * to produce the final (n_voxels, n_channels) LHS.
+ *
+ * The half volume is in the reconstruction convention (see kHalfVolumeFold):
+ * the full-volume backprojection restricted to the stored kz >= 0 voxels; a
+ * kz < 0 stencil neighbor is dropped, not folded.  The images are full images.
  * ========================================================================= */
 
 template <typename T>
@@ -3320,18 +3324,13 @@ per_image_backproject_kernel(
                 const int kz = j2 - ic2;
                 const T trilinear_w = ww * w2[d2];
 
-                int sj0 = j0, sj1 = j1;
                 int hkz;
                 if (kz >= 0) { hkz = kz; }
                 else if ((N2_full & 1) == 0 && -kz == ic2) { hkz = ic2; }
-                else {
-                    sj0 = (N0 - (N0 & 1) - j0) % N0;
-                    sj1 = (N1 - (N1 & 1) - j1) % N1;
-                    hkz = -kz;
-                }
+                else { continue; }  /* crop: kz < 0 is not stored (reconstruction convention) */
                 if (hkz > ic2) continue;
 
-                const int voxel_idx = sj0 * spatial_stride0 + sj1 * spatial_stride1 + hkz;
+                const int voxel_idx = j0 * spatial_stride0 + j1 * spatial_stride1 + hkz;
                 /* Per-image slot: atomicAdd only competes with the ~8 neighbors
                  * from the same image's other pixels — near-zero contention. */
                 atomicAdd(&vols[voxel_idx * n_images + img_idx], trilinear_w * base_val);

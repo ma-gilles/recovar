@@ -1746,6 +1746,10 @@ def per_image_backproject(
 ) -> jax.Array:
     """Per-image backproject: output ``(half_vol, n_images)``.
 
+    ``base_images`` are full images.  The half volume is in the reconstruction
+    convention of :func:`backproject`: the full-volume backprojection restricted to
+    the stored ``kz >= 0`` voxels (no Hermitian fold).
+
     Each image scatters to its own column — near-zero atomicAdd contention.
     Follow with GEMM to reduce: ``result @ smz_tri → (half_vol, n_ch)``.
     """
