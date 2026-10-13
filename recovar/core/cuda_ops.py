@@ -5,8 +5,11 @@ all four volume/image format combinations (full/half volume × full/half image)
 via ``half_volume`` and ``half_image`` parameters.
 
 The custom_vjp backward pass is the exact transpose of the forward map and calls
-the CUDA backproject kernels **directly** into the matching volume layout.  For
-half volumes the kernel's Hermitian-fold scatter is that transpose, so interior
+the CUDA backproject kernels **directly** into the matching volume layout.  The
+kernels' default half-volume result is the *reconstruction* convention (the
+full-volume backprojection restricted to the stored kz >= 0 voxels), which is not
+a transpose; the backward asks for ``hermitian_fold=True``, the Hermitian-fold
+scatter that is the exact transpose of ``half_volume_to_full_volume``, so interior
 kz entries carry twice the full-volume value.  For half-image cotangents each
 packed pixel is scattered once, through ``backproject_indexed``: the dense
 ``half_image=True`` kernel also scatters the Hermitian partner of every interior
@@ -101,7 +104,8 @@ def _cuda_project_bwd(image_shape, volume_shape, order, half_volume, half_image,
     else:
         vol_shape = volume_shape
     vol = jnp.zeros(int(np.prod(vol_shape)), dtype=g.dtype)
-    kwargs = dict(order=order, half_volume=half_volume, half_image=False, max_r=max_r)
+    # The transpose of the half-volume expansion, not the reconstruction convention of the default.
+    kwargs = dict(order=order, half_volume=half_volume, half_image=False, max_r=max_r, hermitian_fold=half_volume)
     if half_image:
         # For half images, cuda_backproject.backproject expands the half image to full image
         # before scattering - resulting in double-counting the gradient w.r.t. to each internal frequency
