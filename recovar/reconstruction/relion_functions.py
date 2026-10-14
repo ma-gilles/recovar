@@ -12,7 +12,7 @@ import numpy as np
 
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar import core, jax_config, utils
-from recovar.core import mask, padding
+from recovar.core import linalg, mask, padding
 from recovar.core.configs import ForwardModelConfig
 from recovar.reconstruction import noise, regularization
 
@@ -624,6 +624,13 @@ as_flat_single_volume = _as_flat_single_volume
 
 
 def _average_over_shells_half(input_vec, volume_shape, frequency_shift=0):
+    """Shell mean of a packed half volume, as :func:`regularization.average_over_shells` of its expansion.
+
+    A packed voxel stands for itself and its Hermitian mate, except on the ``kz = 0`` plane and an
+    even axis' Nyquist plane, which are their own mates. Each is weighted by
+    :func:`linalg.half_spectrum_last_axis_weights` so the packed ``kz = 0`` plane is not over-counted.
+    Exact for a Hermitian-even ``input_vec`` and ``frequency_shift = 0``.
+    """
     radial_distances = (
         fourier_transform_utils.get_grid_of_radial_distances_real(
             volume_shape,
@@ -635,7 +642,14 @@ def _average_over_shells_half(input_vec, volume_shape, frequency_shift=0):
     )
     labels = radial_distances.reshape(-1)
     indices = jnp.arange(0, volume_shape[0] // 2 - 1)
-    return regularization.jax_scipy_nd_image_mean(input_vec.reshape(-1), labels=labels, index=indices)
+    values = input_vec.reshape(-1)
+    half_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(volume_shape)
+    weights = jnp.broadcast_to(
+        linalg.half_spectrum_last_axis_weights(volume_shape[-1], dtype=values.real.dtype), half_shape
+    ).reshape(-1)
+    weighted_sum = regularization.jax_scipy_nd_image_mean(values * weights, labels=labels, index=indices)
+    weight_sum = regularization.jax_scipy_nd_image_mean(weights, labels=labels, index=indices)
+    return jnp.where(weight_sum > 0, weighted_sum / jnp.where(weight_sum > 0, weight_sum, 1), 0)
 
 
 def _relion_reconstruct_floor_shell_indices(volume_shape, padding_factor, *, half_volume):
