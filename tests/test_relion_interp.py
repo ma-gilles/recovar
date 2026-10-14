@@ -382,7 +382,8 @@ class TestAdjointConsistency:
             half_image=half_image,
         )
 
-        # Adjoint: A†y
+        # Adjoint: A†y.  The transpose of the half-volume expansion, so the Hermitian fold: the default
+        # half-volume result is the reconstruction convention, which is not an adjoint of the projection.
         Ady = relion_interp.backproject(
             y,
             rots,
@@ -391,6 +392,7 @@ class TestAdjointConsistency:
             order=order,
             half_volume=half_volume,
             half_image=half_image,
+            hermitian_fold=half_volume,
         )
 
         # ⟨Ax, y⟩
@@ -693,7 +695,7 @@ class TestAdjointHalfImage:
             half_image=False,
         )
 
-        # Adjoint: A†y via half_image backprojection
+        # Adjoint: A†y via half_image backprojection (Hermitian fold for a half volume, see TestAdjointConsistency)
         Ady = relion_interp.backproject(
             y_half,
             rots,
@@ -702,6 +704,7 @@ class TestAdjointHalfImage:
             order=order,
             half_volume=half_volume,
             half_image=True,
+            hermitian_fold=half_volume,
         )
 
         lhs = jnp.sum(jnp.conj(Ax) * y_full).real

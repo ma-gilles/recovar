@@ -158,7 +158,12 @@ def test_project_cuda_vs_jax(order, half_vol, half_img, N, gpu_device):
 @pytest.mark.parametrize("order,half_vol,half_img", _ALL_COMBOS)
 @pytest.mark.parametrize("N", _SIZES)
 def test_backproject_cuda_vs_jax(order, half_vol, half_img, N, gpu_device):
-    """CUDA backproject must match JAX VJP adjoint for all mode combos."""
+    """CUDA backproject must match JAX VJP adjoint for all mode combos.
+
+    The VJP is the transpose, so half volumes use ``hermitian_fold=True``: the default ``half_volume=True`` result is
+    the reconstruction convention (the full-volume backprojection restricted to the stored half), which is checked
+    against the full volume in ``test_half_volume_backproject_is_restriction_of_full_volume_backproject``.
+    """
     _skip_if_no_cuda()
     import recovar.core.fourier_transform_utils as ftu
     from recovar.core.slicing import _jax_slice
@@ -199,6 +204,7 @@ def test_backproject_cuda_vs_jax(order, half_vol, half_img, N, gpu_device):
             order=order,
             half_volume=half_vol,
             half_image=half_img,
+            hermitian_fold=half_vol,
         )
 
         # --- JAX path (via VJP, bypassing CUDA dispatch) ---
@@ -312,7 +318,9 @@ def test_adjoint_consistency_cuda(order, half_vol, half_img, gpu_device):
             )
             imgs_for_ip = imgs_gpu
 
-        # Backward: backproject images to volume (always with half_img flag)
+        # Backward: backproject images to volume (always with half_img flag).  An adjoint identity needs the
+        # transpose of the half-volume expansion, i.e. the Hermitian fold; the default half-volume result is the
+        # reconstruction convention, which is not an adjoint of project.
         vol_zero = jnp.zeros_like(vol_gpu)
         bp = backproject(
             vol_zero,
@@ -323,6 +331,7 @@ def test_adjoint_consistency_cuda(order, half_vol, half_img, gpu_device):
             order=order,
             half_volume=half_vol,
             half_image=half_img,
+            hermitian_fold=half_vol,
         )
 
     # <Ax, y> and <x, A^T y>
@@ -900,7 +909,15 @@ def test_real_backproject_cuda_vs_jax(half_vol, half_img, gpu_device):
         imgs_gpu = jax.device_put(imgs_real)
 
         cuda_out = backproject(
-            vol_init, imgs_gpu, rots_gpu, image_shape, volume_shape, order=1, half_volume=half_vol, half_image=half_img
+            vol_init,
+            imgs_gpu,
+            rots_gpu,
+            image_shape,
+            volume_shape,
+            order=1,
+            half_volume=half_vol,
+            half_image=half_img,
+            hermitian_fold=half_vol,  # compared with the VJP below, which is the transpose
         )
 
         # JAX VJP with real inputs (always full volume, expand half_image)
