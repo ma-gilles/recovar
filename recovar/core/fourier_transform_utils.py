@@ -604,7 +604,8 @@ def half_image_to_full_image(half_image, image_shape):
 
     IMPORTANT: Do NOT change this to an FFT-based round-trip (e.g. irfft2 → fft2).
     This must stay consistent with half_volume_to_full_volume's approach so that
-    VJPs match the CUDA kernel's Hermitian fold scatter.
+    its VJP is the exact transpose the CUDA backproject kernels compute with
+    ``hermitian_fold=True``.
 
     Accepts either trailing packed grid shape
     `(..., *image_shape_to_half_image_shape(image_shape))` or flattened
@@ -665,14 +666,17 @@ def half_volume_to_full_volume(half_volume, volume_shape):
     frequencies) are filled as ``conj(half[(-i0)%N0, (-i1)%N1, |kz|])``.
 
     This approach has a simple VJP that matches per-voxel Hermitian folding
-    in the CUDA backproject kernel (unlike the FFT round-trip which
-    distributes gradients through the FFT chain differently).
+    in the CUDA backproject kernel's ``hermitian_fold=True`` mode (unlike the FFT
+    round-trip which distributes gradients through the FFT chain differently).
 
     IMPORTANT: Do NOT change this to an FFT-based round-trip (e.g. irfft3 → fft3).
     The VJP of an FFT round-trip distributes gradients differently than
-    per-voxel Hermitian folding, breaking the CUDA half-volume backproject
-    kernel's correctness.  The CUDA kernel's Hermitian fold scatter is
-    specifically designed to be the correct adjoint of THIS index-based expand.
+    per-voxel Hermitian folding, breaking the exactness of the vjp of a
+    half-volume projection (``core.cuda_ops``).  The kernel's Hermitian fold
+    scatter is specifically designed to be the correct adjoint of THIS
+    index-based expand.  The kernels' default half-volume result is not that
+    transpose: it is the full-volume backprojection restricted to the stored
+    half (the reconstruction convention), ``full_volume_to_half_volume`` of it.
 
     Accepts either trailing packed grid shape
     `(..., *volume_shape_to_half_volume_shape(volume_shape))` or flattened

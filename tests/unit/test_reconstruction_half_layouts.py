@@ -12,8 +12,10 @@ Three behaviours are pinned, each by its own test:
   built by ``adjoint_slice_volume`` in each ``(half_volume, half_image)`` layout and
   passed to ``post_process_from_filter_v2(input_half_volume=...)``, with a prior
   large enough that the floor is inactive.  This isolates the accumulator
-  convention (the half-volume Hermitian fold gives interior ``kz`` twice the
-  full-volume value, ``linalg.half_spectrum_last_axis_weights``).
+  convention: a half-volume accumulator is the full-volume one restricted to the
+  stored ``kz >= 0`` voxels.  Its Hermitian fold (the transpose, used by the vjp) gives
+  interior ``kz`` twice that value (``linalg.half_spectrum_last_axis_weights``), which
+  against a prior built on the full volume reconstructs a different map.
 * ``test_layout_reconstruction_matches_full_without_prior``: the same without a prior,
   where the floor can matter (sparse coverage at upsampling 2).
 * ``test_relion_style_triangular_kernel_matches_full_layout_reconstruction``: the
