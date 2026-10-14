@@ -40,6 +40,15 @@ pytestmark = pytest.mark.unit
 N = 16  # box size: small, but large enough that interior kz exists at every radius used
 N_IMAGES = 64
 RTOL = {np.float32: 1e-4, np.float64: 1e-10}
+# The JAX fallback rounds its interpolation weights to float32 (``wt = jnp.float32`` in
+# ``relion_interp._scatter_trilinear_full/_half``), so even float64 accumulations are Hermitian
+# only to single precision.  The CUDA kernels use the data precision and keep ``RTOL``, which
+# makes their float64 runs the companion of the JAX float64 runs, four orders tighter.
+JAX_FLOAT64_RTOL = 1e-6
+
+
+def _rtol(backend, dtype):
+    return JAX_FLOAT64_RTOL if backend == "jax" and dtype == np.float64 else RTOL[dtype]
 
 
 # ── Backend selection ────────────────────────────────────────────────
@@ -210,7 +219,7 @@ def test_layout_reconstruction_matches_full_with_prior(backend, upsampling, half
 
     actual = problem.post_process(ft_ctf, ft_y, tau, half_volume=half_volume)
 
-    assert _relative_error(actual, problem.reference_map(tau)) < RTOL[np.float64]
+    assert _relative_error(actual, problem.reference_map(tau)) < _rtol(backend, np.float64)
 
 
 @pytest.mark.parametrize("upsampling", [1, 2])
@@ -223,7 +232,7 @@ def test_layout_reconstruction_matches_full_without_prior(backend, upsampling, h
 
     actual = problem.post_process(ft_ctf, ft_y, None, half_volume=half_volume)
 
-    assert _relative_error(actual, problem.reference_map(None)) < RTOL[np.float64]
+    assert _relative_error(actual, problem.reference_map(None)) < _rtol(backend, np.float64)
 
 
 @pytest.mark.parametrize("dtype", [np.float32, np.float64], ids=["float32", "float64"])
@@ -244,4 +253,4 @@ def test_relion_style_triangular_kernel_matches_full_layout_reconstruction(backe
     )
     actual = problem.post_process(ft_ctf, ft_y, tau, half_volume=False)
 
-    assert _relative_error(actual, problem.reference_map(tau)) < RTOL[dtype]
+    assert _relative_error(actual, problem.reference_map(tau)) < _rtol(backend, dtype)
