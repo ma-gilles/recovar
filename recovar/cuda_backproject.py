@@ -1183,7 +1183,29 @@ def _project_ffi_kwargs(
     return kw, ih, iw_eff
 
 
-@functools.partial(jax.jit, static_argnums=(3, 4, 5, 6, 7, 8))
+# ``half_volume`` attribute value that selects the Hermitian fold (see ``_half_volume_attr``).
+_HALF_VOLUME_FOLD = 2
+
+
+def _half_volume_attr(half_volume: bool, hermitian_fold: bool) -> np.int64:
+    """Encode the half-volume convention in the ``half_volume`` FFI attribute.
+
+    0 is a full volume.  1 is a packed half volume in the *reconstruction*
+    convention: the full-volume backprojection restricted to the stored ``kz >= 0``
+    voxels, so ``half_volume_to_full_volume`` of it is the full-volume
+    backprojection (for Hermitian data).  2 is a packed half volume in the
+    *transpose* convention: the exact adjoint of ``half_volume_to_full_volume``,
+    where each ``kz < 0`` voxel is folded onto its Hermitian partner, so interior
+    ``kz`` carries twice the full-volume value for Hermitian data.  The handlers keep
+    their signature, so a caller that never asks for the fold does not change its
+    FFI call.
+    """
+    if hermitian_fold and not half_volume:
+        raise ValueError("hermitian_fold applies to a half volume only (half_volume=True)")
+    return np.int64(_HALF_VOLUME_FOLD if hermitian_fold else int(half_volume))
+
+
+@functools.partial(jax.jit, static_argnums=(3, 4, 5, 6, 7, 8, 9))
 def backproject(
     volume: jax.Array,
     images: jax.Array,
@@ -1194,6 +1216,7 @@ def backproject(
     half_volume: bool = False,
     half_image: bool = False,
     max_r: float | None = None,
+    hermitian_fold: bool = False,
 ) -> jax.Array:
     """Back-project *images* into *volume* (accumulate in-place via aliasing).
 
@@ -1210,10 +1233,22 @@ def backproject(
     volume_shape : (N0, N1, N2)   — full dimensions even when half_volume=True.
     order : 0 (nearest) or 1 (trilinear).
     half_volume : if True, volume is rfft-packed ``(N0*N1*(N2//2+1),)``.
+        The result is the full-volume backprojection restricted to the stored
+        ``kz >= 0`` voxels (the reconstruction convention), so it carries the
+        same values as the full volume and ``half_volume_to_full_volume`` of it
+        is the full-volume backprojection for Hermitian data.
     half_image : if True, images are rfft-packed ``(n, H*(W//2+1))``.
         Hermitian conjugates are scattered automatically.
     max_r : if not None, skip pixels whose rotated frequency radius
         exceeds this value (RELION-style sphere clipping).
+    hermitian_fold : with ``half_volume=True``, return the exact transpose of
+        ``half_volume_to_full_volume`` instead: each ``kz < 0`` voxel is folded
+        onto its Hermitian partner, so interior ``kz`` carries ``F(k) + conj(F(-k))``,
+        twice the full-volume value for Hermitian data.  This is what the vjp of
+        a half-volume projection needs (``core.cuda_ops``); reconstruction wants
+        the default.  Pair it with ``half_image=False`` and ``backproject_indexed`` for
+        half-image cotangents: with ``half_image=True`` the kernel also scatters
+        each interior pixel's Hermitian partner, which a transpose must not do.
 
     Returns
     -------
@@ -1222,6 +1257,7 @@ def backproject(
     _ensure_ffi()
     _validate_inputs(volume_shape, image_shape, order, half_volume, half_image, max_r=max_r)
     kw, ih, iw_eff = _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image, max_r)
+    kw["half_volume"] = _half_volume_attr(half_volume, hermitian_fold)
     rot6 = _rot_to_compact(rotation_matrices, _volume_real_dtype(volume))
     out_type = jax.ShapeDtypeStruct(volume.shape, volume.dtype)
 
@@ -1251,7 +1287,7 @@ def _backproject_indexed_target(use_relion_block_topology: bool) -> str:
     return _TARGET_BACKPROJECT_INDEXED
 
 
-@functools.partial(jax.jit, static_argnums=(4, 5, 6, 7, 8, 9, 10, 11))
+@functools.partial(jax.jit, static_argnums=(4, 5, 6, 7, 8, 9, 10, 11, 13))
 def backproject_indexed(
     volume: jax.Array,
     images: jax.Array,
@@ -1266,6 +1302,7 @@ def backproject_indexed(
     relion_x_half: bool = False,
     upsampling: int | None = None,
     runtime_max_r=None,
+    hermitian_fold: bool = False,
 ) -> jax.Array:
     """Back-project images whose pixels are stored in a compact indexed layout.
 
@@ -1282,12 +1319,22 @@ def backproject_indexed(
     radius check and its compact trilinear bound -- reads the runtime value, so
     one program serves every radius up to ``max_r``. It is encoded exactly as the
     static radius is (``_encode_max_r``).
+
+    ``half_volume=True`` gives the reconstruction convention of :func:`backproject`
+    (the full-volume backprojection restricted to the stored half);
+    ``hermitian_fold=True`` gives its exact transpose instead.  With
+    ``half_image=False`` and the pixels of a half image as ``pixel_indices``, each
+    packed pixel is scattered once and nothing else, which is the vjp of a
+    half-image projection.
     """
     _ensure_ffi()
     _validate_inputs(volume_shape, image_shape, order, half_volume, half_image, max_r=max_r, upsampling=upsampling)
     if relion_x_half and not (half_volume and half_image):
         raise ValueError("relion_x_half requires half_volume=True and half_image=True")
+    if relion_x_half and hermitian_fold:
+        raise ValueError("hermitian_fold does not apply to the RELION x-half layout (relion_x_half=True)")
     kw, _, _ = _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image, max_r, upsampling)
+    kw["half_volume"] = _half_volume_attr(half_volume, hermitian_fold)
     kw["relion_fold_x"] = np.int64(int(relion_x_half))
     use_relion_block_topology = bool(relion_x_half and relion_x_half_bp_block_topology_enabled())
     kw["relion_block_topology"] = np.int64(int(use_relion_block_topology))
@@ -1496,7 +1543,10 @@ def batch_backproject_indexed(
     relion_x_half: bool = False,
     upsampling: int | None = None,
 ) -> jax.Array:
-    """Back-project compact indexed images into a batch of volumes."""
+    """Back-project compact indexed images into a batch of volumes.
+
+    ``half_volume=True`` is the reconstruction convention of :func:`backproject`.
+    """
     _ensure_ffi()
     _validate_inputs(volume_shape, image_shape, order, half_volume, half_image, max_r=max_r, upsampling=upsampling)
     if relion_x_half and not (half_volume and half_image):
@@ -1662,7 +1712,8 @@ def batch_backproject(
     rotation_matrices : real, shape ``(n_images, 3, 3)``
         Shared across all volumes in the batch.
     image_shape, volume_shape, order, half_volume, half_image :
-        Same semantics as ``backproject()``.
+        Same semantics as ``backproject()``; ``half_volume=True`` is the
+        reconstruction convention (no Hermitian fold).
     max_r : if not None, skip pixels whose rotated frequency radius
         exceeds this value (RELION-style sphere clipping).
 
@@ -1694,6 +1745,10 @@ def per_image_backproject(
     max_r: float | None = None,
 ) -> jax.Array:
     """Per-image backproject: output ``(half_vol, n_images)``.
+
+    ``base_images`` are full images.  The half volume is in the reconstruction
+    convention of :func:`backproject`: the full-volume backprojection restricted to
+    the stored ``kz >= 0`` voxels (no Hermitian fold).
 
     Each image scatters to its own column — near-zero atomicAdd contention.
     Follow with GEMM to reduce: ``result @ smz_tri → (half_vol, n_ch)``.

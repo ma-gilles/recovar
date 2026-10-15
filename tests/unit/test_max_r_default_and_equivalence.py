@@ -270,10 +270,11 @@ class TestHalfFullEquivalence:
     def test_backproject_all_four_combos_self_consistent(self, N):
         """Backproject all 4 combos should produce volumes that re-project consistently.
 
-        Half_vol backproject has 2x weight on interior kz (CONJ_MODE),
-        so direct voxel comparison doesn't work. Instead verify that
-        the full-vol+full-img and full-vol+half-img backproject paths
-        produce the same full volume.
+        Verifies that the full-vol+full-img and full-vol+half-img backproject
+        paths produce the same full volume.  The half-volume layouts hold the
+        same values restricted to kz >= 0 (the reconstruction convention); they
+        are checked in tests/unit/test_cuda_jax_equivalence.py and
+        tests/unit/test_reconstruction_half_layouts.py.
         """
         image_shape = (N, N)
         volume_shape = (N, N, N)

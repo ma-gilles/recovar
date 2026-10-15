@@ -13,7 +13,7 @@
  *
  * v6 changes:
  *   - CONJ_MODE template parameter for ~2x scatter speedup when
- *     HALF_IMG + HALF_VOL: interior kz (0 < hkz < ic2) get doubled in
+ *     HALF_IMG + HALF_VOL with the Hermitian fold: interior kz (0 < hkz < ic2) get doubled in
  *     the primary scatter (CONJ_MODE=1) and skipped in the conjugate
  *     scatter (CONJ_MODE=2).  This works because for interior kz, the
  *     primary and conjugate scatters land at the same half-volume position
@@ -21,8 +21,15 @@
  *   - Nyquist fix: kz=-N/2 (Nyquist for even N) is self-conjugate and
  *     scatters directly (no fold/conj) — fixes off-by-one error
  *
- * IMPORTANT: The HALF_VOL scatter (Hermitian fold) is the correct adjoint
- * of the index-based half_volume_to_full_volume in fourier_transform_utils.py.
+ * HALF_VOL has two conventions, selected by the `half_volume` attribute
+ * (see kHalfVolumeFold below).  The default (1) is the RECONSTRUCTION
+ * convention: the full-volume backprojection restricted to the stored half.
+ * The Hermitian fold (2) is the exact adjoint of the index-based
+ * half_volume_to_full_volume in fourier_transform_utils.py and is what a vjp
+ * needs; it puts twice the full-volume value on interior kz.  CONJ_MODE below
+ * is an optimization of the fold only and is disabled for the crop.  (The
+ * per-image kernel at the end of this file is crop-only: it feeds PPCA's LHS,
+ * which pairs with a crop RHS and a restricted prior.)
  * Do NOT use an FFT-based half→full expand; its VJP distributes gradients
  * differently, breaking the CUDA kernel's correctness.
  *
@@ -116,12 +123,32 @@ static __device__ __forceinline__ int64_t volume_spatial_offset(
          + static_cast<int64_t>(i2);
 }
 
+/* Values of the `half_volume` attribute of the backprojection handlers.
+ *
+ *   0  full volume.
+ *   1  packed half volume, RECONSTRUCTION convention: the full-volume
+ *      backprojection restricted to the stored voxels (kz >= 0, and the even-N
+ *      Nyquist slot, which holds kz = -N/2).  Voxels with kz < 0 are dropped.
+ *      For Hermitian data, half_volume_to_full_volume of the result is the
+ *      full-volume backprojection, so it can be regularized and divided like it.
+ *   2  packed half volume, exact TRANSPOSE of half_volume_to_full_volume: a
+ *      voxel with kz < 0 is folded onto its Hermitian partner with conj, so
+ *      interior kz carries F(k) + conj(F(-k)) (twice the value for Hermitian
+ *      data).  This is what the vjp of a half-volume projection needs.
+ *
+ * Only the backprojection handlers accept 2.  RELION's native-half layout
+ * (relion_fold_x) is folded per pixel and keeps the fold path.
+ * per_image_backproject_kernel has no such attribute: it is always the crop. */
+static constexpr int64_t kHalfVolumeFold = 2;
+
 /* scatter_nearest: atomicAdd one value at the nearest voxel.
  *
- * HALF_VOL: Hermitian fold approach.  Voxels with kz >= 0 scatter
- * directly.  Voxels with kz < 0 are folded to the Hermitian partner
- * at ((N0-i0)%N0, (N1-i1)%N1, |kz|) with conjugated value.
- * This is the correct adjoint of half_volume_to_full_volume (expand).
+ * HALF_VOL: voxels with kz >= 0 scatter directly.  Voxels with kz < 0 are
+ * dropped (hermitian_fold == false, the reconstruction convention) or folded
+ * to the Hermitian partner at ((N0-i0)%N0, (N1-i1)%N1, |kz|) with conjugated
+ * value (hermitian_fold == true).  The fold is the exact adjoint of
+ * half_volume_to_full_volume (expand); the crop is the restriction of the
+ * full-volume scatter to the stored half.
  *
  * CONJ_MODE (only when HALF_VOL):
  *   0 = normal scatter
@@ -139,7 +166,8 @@ static __device__ __forceinline__ void scatter_nearest(
     T* __restrict__ vol,
     T rk0, T rk1, T rk2, T val_re, T val_im,
     T c0, T c1, T c2,
-    int N0, int N1, int N2_eff, int stride0, int stride1)
+    int N0, int N1, int N2_eff, int stride0, int stride1,
+    bool hermitian_fold)
 {
     const T g0 = rk0 + c0;
     const T g1 = rk1 + c1;
@@ -161,6 +189,10 @@ static __device__ __forceinline__ void scatter_nearest(
         } else if ((N2_full & 1) == 0 && -kz == ic2) {
             /* Nyquist (kz = -N/2 = +N/2): self-conjugate, scatter directly */
             hkz = ic2;
+        } else if (!hermitian_fold) {
+            /* Crop (reconstruction convention): a voxel with kz < 0 is not
+             * stored in the half volume and contributes nothing to it. */
+            return;
         } else {
             /* Fold to Hermitian partner in centered (fftshift) convention:
              * shifted[j] = Y[(j - N//2) % N], Hermitian u' = (N - u) % N,
@@ -229,6 +261,7 @@ static __device__ __forceinline__ void scatter_trilinear(
     T rk0, T rk1, T rk2, T val_re, T val_im,
     T c0, T c1, T c2,
     int N0, int N1, int N2_eff, int stride0, int stride1,
+    bool hermitian_fold,
     bool relion_floorf_quirk = false)
 {
     const T g0 = rk0 + c0;
@@ -286,6 +319,9 @@ static __device__ __forceinline__ void scatter_trilinear(
                     } else if ((N2_full & 1) == 0 && -kz == ic2) {
                         /* Nyquist: self-conjugate, scatter directly */
                         hkz = ic2;
+                    } else if (!hermitian_fold) {
+                        /* Crop: kz < 0 is not stored in the half volume. */
+                        continue;
                     } else {
                         /* Fold to Hermitian partner in centered convention:
                          * partner(j) = (N - (N & 1) - j) % N.
@@ -377,8 +413,10 @@ backproject_kernel(
     int N0, int N1, int N2_eff,
     T c0, T c1, T c2,
     int upsampling, int full_image_w,
-    T max_r2)
+    T max_r2,
+    int hv_fold)
 {
+    const bool hermitian_fold = (hv_fold != 0);
     __shared__ T R[6];
 
     const int img_idx = blockIdx.x;
@@ -466,7 +504,7 @@ backproject_kernel(
      * CONJ_MODE=1 doubles the primary but the conjugate can't match →
      * phantom contribution.  Disabling conj_opt when either is OOB
      * makes both fall back to normal (CONJ_MODE=0) scatter. */
-    bool conj_opt = HALF_IMG && HALF_VOL
+    bool conj_opt = HALF_IMG && HALF_VOL && hermitian_fold
         && (k1_idx > 0 && k1_idx * 2 != full_image_w)    /* non-boundary */
         && !(k0_idx == 0 && (image_h & 1) == 0);         /* not Nyquist row */
 
@@ -504,17 +542,17 @@ backproject_kernel(
     if (ORDER == 0) {
         if (conj_opt)
             scatter_nearest<T, true, 1, REAL_DATA>(vol, rk0, rk1, rk2, val_re, val_im,
-                                        c0, c1, c2, N0, N1, N2_eff, stride0, stride1);
+                                        c0, c1, c2, N0, N1, N2_eff, stride0, stride1, hermitian_fold);
         else
             scatter_nearest<T, HALF_VOL, 0, REAL_DATA>(vol, rk0, rk1, rk2, val_re, val_im,
-                                         c0, c1, c2, N0, N1, N2_eff, stride0, stride1);
+                                         c0, c1, c2, N0, N1, N2_eff, stride0, stride1, hermitian_fold);
     } else {
         if (conj_opt)
             scatter_trilinear<T, true, 1, REAL_DATA>(vol, rk0, rk1, rk2, val_re, val_im,
-                                          c0, c1, c2, N0, N1, N2_eff, stride0, stride1);
+                                          c0, c1, c2, N0, N1, N2_eff, stride0, stride1, hermitian_fold);
         else
             scatter_trilinear<T, HALF_VOL, 0, REAL_DATA>(vol, rk0, rk1, rk2, val_re, val_im,
-                                           c0, c1, c2, N0, N1, N2_eff, stride0, stride1);
+                                           c0, c1, c2, N0, N1, N2_eff, stride0, stride1, hermitian_fold);
     }
 
     /* Conjugate scatter for rfft non-boundary pixels.
@@ -543,28 +581,28 @@ backproject_kernel(
                 if (conj_opt)
                     scatter_nearest<T, true, 2, REAL_DATA>(vol, crk0, crk1, crk2,
                                                 val_re, conj_im,
-                                                c0, c1, c2, N0, N1, N2_eff, stride0, stride1);
+                                                c0, c1, c2, N0, N1, N2_eff, stride0, stride1, hermitian_fold);
                 else if (HALF_VOL)
                     scatter_nearest<T, true, 0, REAL_DATA>(vol, crk0, crk1, crk2,
                                                 val_re, conj_im,
-                                                c0, c1, c2, N0, N1, N2_eff, stride0, stride1);
+                                                c0, c1, c2, N0, N1, N2_eff, stride0, stride1, hermitian_fold);
                 else
                     scatter_nearest<T, false, 0, REAL_DATA>(vol, crk0, crk1, crk2,
                                               val_re, conj_im,
-                                              c0, c1, c2, N0, N1, N2_eff, stride0, stride1);
+                                              c0, c1, c2, N0, N1, N2_eff, stride0, stride1, hermitian_fold);
             } else {
                 if (conj_opt)
                     scatter_trilinear<T, true, 2, REAL_DATA>(vol, crk0, crk1, crk2,
                                                   val_re, conj_im,
-                                                  c0, c1, c2, N0, N1, N2_eff, stride0, stride1);
+                                                  c0, c1, c2, N0, N1, N2_eff, stride0, stride1, hermitian_fold);
                 else if (HALF_VOL)
                     scatter_trilinear<T, true, 0, REAL_DATA>(vol, crk0, crk1, crk2,
                                                   val_re, conj_im,
-                                                  c0, c1, c2, N0, N1, N2_eff, stride0, stride1);
+                                                  c0, c1, c2, N0, N1, N2_eff, stride0, stride1, hermitian_fold);
                 else
                     scatter_trilinear<T, false, 0, REAL_DATA>(vol, crk0, crk1, crk2,
                                                 val_re, conj_im,
-                                                c0, c1, c2, N0, N1, N2_eff, stride0, stride1);
+                                                c0, c1, c2, N0, N1, N2_eff, stride0, stride1, hermitian_fold);
             }
         }
     }
@@ -587,9 +625,11 @@ backproject_indexed_kernel(
     int upsampling, int full_image_w,
     T max_r2,
     int relion_fold_x,
+    int hv_fold,
     int skip_zero_values = 0,
     const int64_t* __restrict__ runtime_max_r2_x4 = nullptr)
 {
+    const bool hermitian_fold = (hv_fold != 0);
     __shared__ T R[6];
 
     const int img_idx = blockIdx.x;
@@ -731,7 +771,7 @@ backproject_indexed_kernel(
     const int stride1 = N2_eff;
     const int stride0 = N1 * N2_eff;
 
-    bool conj_opt = HALF_IMG && HALF_VOL && !relion_half_backproject
+    bool conj_opt = HALF_IMG && HALF_VOL && hermitian_fold && !relion_half_backproject
         && (k1_idx > 0 && k1_idx * 2 != full_image_w)
         && !(k0_idx == 0 && (image_h & 1) == 0);
 
@@ -763,17 +803,17 @@ backproject_indexed_kernel(
     if (ORDER == 0) {
         if (conj_opt)
             scatter_nearest<T, true, 1, REAL_DATA>(vol, rk0, rk1, rk2, val_re, val_im,
-                                        c0, c1, c2, N0, N1, N2_eff, stride0, stride1);
+                                        c0, c1, c2, N0, N1, N2_eff, stride0, stride1, hermitian_fold);
         else
             scatter_nearest<T, HALF_VOL, 0, REAL_DATA>(vol, rk0, rk1, rk2, val_re, val_im,
-                                         c0, c1, c2, N0, N1, N2_eff, stride0, stride1);
+                                         c0, c1, c2, N0, N1, N2_eff, stride0, stride1, hermitian_fold);
     } else {
         if (conj_opt)
             scatter_trilinear<T, true, 1, REAL_DATA>(vol, rk0, rk1, rk2, val_re, val_im,
-                                          c0, c1, c2, N0, N1, N2_eff, stride0, stride1);
+                                          c0, c1, c2, N0, N1, N2_eff, stride0, stride1, hermitian_fold);
         else
             scatter_trilinear<T, HALF_VOL, 0, REAL_DATA>(vol, rk0, rk1, rk2, val_re, val_im,
-                                           c0, c1, c2, N0, N1, N2_eff, stride0, stride1,
+                                           c0, c1, c2, N0, N1, N2_eff, stride0, stride1, hermitian_fold,
                                            relion_half_backproject);
     }
 
@@ -799,28 +839,28 @@ backproject_indexed_kernel(
                 if (conj_opt)
                     scatter_nearest<T, true, 2, REAL_DATA>(vol, crk0, crk1, crk2,
                                                 val_re, conj_im,
-                                                c0, c1, c2, N0, N1, N2_eff, stride0, stride1);
+                                                c0, c1, c2, N0, N1, N2_eff, stride0, stride1, hermitian_fold);
                 else if (HALF_VOL)
                     scatter_nearest<T, true, 0, REAL_DATA>(vol, crk0, crk1, crk2,
                                                 val_re, conj_im,
-                                                c0, c1, c2, N0, N1, N2_eff, stride0, stride1);
+                                                c0, c1, c2, N0, N1, N2_eff, stride0, stride1, hermitian_fold);
                 else
                     scatter_nearest<T, false, 0, REAL_DATA>(vol, crk0, crk1, crk2,
                                               val_re, conj_im,
-                                              c0, c1, c2, N0, N1, N2_eff, stride0, stride1);
+                                              c0, c1, c2, N0, N1, N2_eff, stride0, stride1, hermitian_fold);
             } else {
                 if (conj_opt)
                     scatter_trilinear<T, true, 2, REAL_DATA>(vol, crk0, crk1, crk2,
                                                   val_re, conj_im,
-                                                  c0, c1, c2, N0, N1, N2_eff, stride0, stride1);
+                                                  c0, c1, c2, N0, N1, N2_eff, stride0, stride1, hermitian_fold);
                 else if (HALF_VOL)
                     scatter_trilinear<T, true, 0, REAL_DATA>(vol, crk0, crk1, crk2,
                                                   val_re, conj_im,
-                                                  c0, c1, c2, N0, N1, N2_eff, stride0, stride1);
+                                                  c0, c1, c2, N0, N1, N2_eff, stride0, stride1, hermitian_fold);
                 else
                     scatter_trilinear<T, false, 0, REAL_DATA>(vol, crk0, crk1, crk2,
                                                 val_re, conj_im,
-                                                c0, c1, c2, N0, N1, N2_eff, stride0, stride1);
+                                                c0, c1, c2, N0, N1, N2_eff, stride0, stride1, hermitian_fold);
             }
         }
     }
@@ -1010,8 +1050,10 @@ batch_backproject_indexed_kernel(
     int n_images,
     int batch_size,
     T max_r2,
-    int relion_fold_x)
+    int relion_fold_x,
+    int hv_fold)
 {
+    const bool hermitian_fold = (hv_fold != 0);
     __shared__ T R[6];
 
     const int img_idx = blockIdx.x;
@@ -1100,7 +1142,7 @@ batch_backproject_indexed_kernel(
         ? static_cast<int64_t>(vol_stride)
         : static_cast<int64_t>(vol_stride) * 2;
 
-    bool conj_opt = HALF_IMG && HALF_VOL && !relion_half_backproject
+    bool conj_opt = HALF_IMG && HALF_VOL && hermitian_fold && !relion_half_backproject
         && (k1_idx > 0 && k1_idx * 2 != full_image_w)
         && !(k0_idx == 0 && (image_h & 1) == 0);
 
@@ -1148,18 +1190,18 @@ batch_backproject_indexed_kernel(
         if (ORDER == 0) {
             if (conj_opt)
                 scatter_nearest<T, true, 1, REAL_DATA>(vol, rk0, rk1, rk2, val_re, val_im,
-                                            c0, c1, c2, N0, N1, N2_eff, stride0, stride1);
+                                            c0, c1, c2, N0, N1, N2_eff, stride0, stride1, hermitian_fold);
             else
                 scatter_nearest<T, HALF_VOL, 0, REAL_DATA>(vol, rk0, rk1, rk2, val_re, val_im,
-                                             c0, c1, c2, N0, N1, N2_eff, stride0, stride1);
+                                             c0, c1, c2, N0, N1, N2_eff, stride0, stride1, hermitian_fold);
         } else {
             if (conj_opt)
                 scatter_trilinear<T, true, 1, REAL_DATA>(vol, rk0, rk1, rk2, val_re, val_im,
-                                              c0, c1, c2, N0, N1, N2_eff, stride0, stride1);
+                                              c0, c1, c2, N0, N1, N2_eff, stride0, stride1, hermitian_fold);
             else
                 scatter_trilinear<T, HALF_VOL, 0, REAL_DATA>(vol, rk0, rk1, rk2, val_re, val_im,
-                                               c0, c1, c2, N0, N1, N2_eff, stride0, stride1,
-                                               relion_half_backproject);
+                                               c0, c1, c2, N0, N1, N2_eff, stride0, stride1, hermitian_fold,
+                                           relion_half_backproject);
         }
 
         if (HALF_IMG && !relion_half_backproject) {
@@ -1184,28 +1226,28 @@ batch_backproject_indexed_kernel(
                     if (conj_opt)
                         scatter_nearest<T, true, 2, REAL_DATA>(vol, crk0, crk1, crk2,
                                                     val_re, conj_im,
-                                                    c0, c1, c2, N0, N1, N2_eff, stride0, stride1);
+                                                    c0, c1, c2, N0, N1, N2_eff, stride0, stride1, hermitian_fold);
                     else if (HALF_VOL)
                         scatter_nearest<T, true, 0, REAL_DATA>(vol, crk0, crk1, crk2,
                                                     val_re, conj_im,
-                                                    c0, c1, c2, N0, N1, N2_eff, stride0, stride1);
+                                                    c0, c1, c2, N0, N1, N2_eff, stride0, stride1, hermitian_fold);
                     else
                         scatter_nearest<T, false, 0, REAL_DATA>(vol, crk0, crk1, crk2,
                                                   val_re, conj_im,
-                                                  c0, c1, c2, N0, N1, N2_eff, stride0, stride1);
+                                                  c0, c1, c2, N0, N1, N2_eff, stride0, stride1, hermitian_fold);
                 } else {
                     if (conj_opt)
                         scatter_trilinear<T, true, 2, REAL_DATA>(vol, crk0, crk1, crk2,
                                                       val_re, conj_im,
-                                                      c0, c1, c2, N0, N1, N2_eff, stride0, stride1);
+                                                      c0, c1, c2, N0, N1, N2_eff, stride0, stride1, hermitian_fold);
                     else if (HALF_VOL)
                         scatter_trilinear<T, true, 0, REAL_DATA>(vol, crk0, crk1, crk2,
                                                       val_re, conj_im,
-                                                      c0, c1, c2, N0, N1, N2_eff, stride0, stride1);
+                                                      c0, c1, c2, N0, N1, N2_eff, stride0, stride1, hermitian_fold);
                     else
                         scatter_trilinear<T, false, 0, REAL_DATA>(vol, crk0, crk1, crk2,
                                                     val_re, conj_im,
-                                                    c0, c1, c2, N0, N1, N2_eff, stride0, stride1);
+                                                    c0, c1, c2, N0, N1, N2_eff, stride0, stride1, hermitian_fold);
                 }
             }
         }
@@ -1717,13 +1759,14 @@ cudaError_t launch_backproject(
     const T c1 = (T)(N1 / 2);
     const T c2 = (T)(N2 / 2);
     const T max_r2 = max_r2_x4 < 0 ? (T)-1 : (T)max_r2_x4 / (T)4;
+    const int hv_fold = (half_vol == kHalfVolumeFold) ? 1 : 0;
     dim3 grid((int)n_images, ((int)n_pixels + BLOCK_SIZE - 1) / BLOCK_SIZE);
     dim3 block(BLOCK_SIZE);
 
     #define BP(O, HV, HI, RD) \
         backproject_kernel<T, O, HV, HI, RD><<<grid, block, 0, s>>>( \
             vol, img, rot, (int)n_pixels, (int)ih, (int)iw, \
-            (int)N0, (int)N1, N2_eff, c0, c1, c2, (int)ups, (int)full_iw, max_r2)
+            (int)N0, (int)N1, N2_eff, c0, c1, c2, (int)ups, (int)full_iw, max_r2, hv_fold)
 
     int key = (real_data ? 8 : 0) | (order ? 4 : 0) | (half_vol ? 2 : 0) | (half_img ? 1 : 0);
     switch (key) {
@@ -1770,6 +1813,9 @@ cudaError_t launch_backproject_indexed(
     const T c1 = (T)(N1 / 2);
     const T c2 = (T)(N2 / 2);
     const T max_r2 = max_r2_x4 < 0 ? (T)-1 : (T)max_r2_x4 / (T)4;
+    /* RELION's native-half layout is folded per pixel and never reaches the
+     * stencil fold, so it keeps the fold path byte for byte. */
+    const int hv_fold = (half_vol == kHalfVolumeFold || relion_fold_x) ? 1 : 0;
     dim3 grid((int)n_images, ((int)n_pixels + BLOCK_SIZE - 1) / BLOCK_SIZE);
     dim3 block(BLOCK_SIZE);
 
@@ -1777,7 +1823,7 @@ cudaError_t launch_backproject_indexed(
         backproject_indexed_kernel<T, O, HV, HI, RD><<<grid, block, 0, s>>>( \
             vol, img, pixel_indices, rot, (int)n_pixels, (int)ih, (int)iw, \
             (int)N0, (int)N1, N2_eff, c0, c1, c2, (int)ups, (int)full_iw, max_r2, (int)relion_fold_x, \
-            (int)skip_zero_values, runtime_max_r2_x4)
+            hv_fold, (int)skip_zero_values, runtime_max_r2_x4)
 
     int key = (real_data ? 8 : 0) | (order ? 4 : 0) | (half_vol ? 2 : 0) | (half_img ? 1 : 0);
     if (!relion_block_topology) switch (key) {
@@ -1807,7 +1853,7 @@ cudaError_t launch_backproject_indexed(
             batch_backproject_indexed_kernel<T, O, HV, HI, RD, true><<<relion_grid, relion_block, 0, s>>>( \
                 vol, img, pixel_indices, rot, (int)n_pixels, (int)ih, (int)iw, \
                 (int)N0, (int)N1, N2_eff, c0, c1, c2, (int)ups, (int)full_iw, \
-                vol_stride, (int)n_images, 1, max_r2, (int)relion_fold_x)
+                vol_stride, (int)n_images, 1, max_r2, (int)relion_fold_x, hv_fold)
         switch (key) {
         case  0: RBPI(0, false, false, false); break;
         case  1: RBPI(0, false, true,  false); break;
@@ -1927,6 +1973,7 @@ cudaError_t launch_batch_backproject_indexed(
     const T c1 = (T)(N1 / 2);
     const T c2 = (T)(N2 / 2);
     const T max_r2 = max_r2_x4 < 0 ? (T)-1 : (T)max_r2_x4 / (T)4;
+    const int hv_fold = (half_vol == kHalfVolumeFold || relion_fold_x) ? 1 : 0;
     dim3 grid((int)n_images, ((int)n_pixels + BLOCK_SIZE - 1) / BLOCK_SIZE);
     dim3 block(BLOCK_SIZE);
 
@@ -1934,7 +1981,7 @@ cudaError_t launch_batch_backproject_indexed(
         batch_backproject_indexed_kernel<T, O, HV, HI, RD><<<grid, block, 0, s>>>( \
             vols, imgs, pixel_indices, rot, (int)n_pixels, (int)ih, (int)iw, \
             (int)N0, (int)N1, N2_eff, c0, c1, c2, (int)ups, (int)full_iw, \
-            vol_stride, (int)n_images, (int)batch_size, max_r2, (int)relion_fold_x)
+            vol_stride, (int)n_images, (int)batch_size, max_r2, (int)relion_fold_x, hv_fold)
 
     int key = (real_data ? 8 : 0) | (order ? 4 : 0) | (half_vol ? 2 : 0) | (half_img ? 1 : 0);
     if (!relion_block_topology) switch (key) {
@@ -1963,7 +2010,7 @@ cudaError_t launch_batch_backproject_indexed(
             batch_backproject_indexed_kernel<T, O, HV, HI, RD, true><<<relion_grid, relion_block, 0, s>>>( \
                 vols, imgs, pixel_indices, rot, (int)n_pixels, (int)ih, (int)iw, \
                 (int)N0, (int)N1, N2_eff, c0, c1, c2, (int)ups, (int)full_iw, \
-                vol_stride, (int)n_images, (int)batch_size, max_r2, (int)relion_fold_x)
+                vol_stride, (int)n_images, (int)batch_size, max_r2, (int)relion_fold_x, hv_fold)
         switch (key) {
         case  0: RBBPI(0, false, false, false); break;
         case  1: RBBPI(0, false, true,  false); break;
@@ -2211,8 +2258,10 @@ batch_backproject_kernel(
     int vol_stride,    /* N0*N1*N2_eff (complex elements for complex, real for REAL_DATA) */
     int n_images,
     int batch_size,
-    T max_r2)
+    T max_r2,
+    int hv_fold)
 {
+    const bool hermitian_fold = (hv_fold != 0);
     __shared__ T R[6];
 
     const int img_idx = blockIdx.x;
@@ -2267,7 +2316,7 @@ batch_backproject_kernel(
      * EXCEPT k0_idx==0 with even H where crk ≠ -rk), AND when both
      * primary and conjugate positions are within volume bounds.
      * See backproject_kernel comments for detailed explanation. */
-    bool conj_opt = HALF_IMG && HALF_VOL
+    bool conj_opt = HALF_IMG && HALF_VOL && hermitian_fold
         && (k1_idx > 0 && k1_idx * 2 != full_image_w)
         && !(k0_idx == 0 && (image_h & 1) == 0);
 
@@ -2319,17 +2368,17 @@ batch_backproject_kernel(
         if (ORDER == 0) {
             if (conj_opt)
                 scatter_nearest<T, true, 1, REAL_DATA>(vol, rk0, rk1, rk2, val_re, val_im,
-                                            c0, c1, c2, N0, N1, N2_eff, stride0, stride1);
+                                            c0, c1, c2, N0, N1, N2_eff, stride0, stride1, hermitian_fold);
             else
                 scatter_nearest<T, HALF_VOL, 0, REAL_DATA>(vol, rk0, rk1, rk2, val_re, val_im,
-                                             c0, c1, c2, N0, N1, N2_eff, stride0, stride1);
+                                             c0, c1, c2, N0, N1, N2_eff, stride0, stride1, hermitian_fold);
         } else {
             if (conj_opt)
                 scatter_trilinear<T, true, 1, REAL_DATA>(vol, rk0, rk1, rk2, val_re, val_im,
-                                              c0, c1, c2, N0, N1, N2_eff, stride0, stride1);
+                                              c0, c1, c2, N0, N1, N2_eff, stride0, stride1, hermitian_fold);
             else
                 scatter_trilinear<T, HALF_VOL, 0, REAL_DATA>(vol, rk0, rk1, rk2, val_re, val_im,
-                                               c0, c1, c2, N0, N1, N2_eff, stride0, stride1);
+                                               c0, c1, c2, N0, N1, N2_eff, stride0, stride1, hermitian_fold);
         }
 
         if (do_conj_scatter) {
@@ -2338,28 +2387,28 @@ batch_backproject_kernel(
                 if (conj_opt)
                     scatter_nearest<T, true, 2, REAL_DATA>(vol, crk0, crk1, crk2,
                                                 val_re, conj_im,
-                                                c0, c1, c2, N0, N1, N2_eff, stride0, stride1);
+                                                c0, c1, c2, N0, N1, N2_eff, stride0, stride1, hermitian_fold);
                 else if (HALF_VOL)
                     scatter_nearest<T, true, 0, REAL_DATA>(vol, crk0, crk1, crk2,
                                                 val_re, conj_im,
-                                                c0, c1, c2, N0, N1, N2_eff, stride0, stride1);
+                                                c0, c1, c2, N0, N1, N2_eff, stride0, stride1, hermitian_fold);
                 else
                     scatter_nearest<T, false, 0, REAL_DATA>(vol, crk0, crk1, crk2,
                                               val_re, conj_im,
-                                              c0, c1, c2, N0, N1, N2_eff, stride0, stride1);
+                                              c0, c1, c2, N0, N1, N2_eff, stride0, stride1, hermitian_fold);
             } else {
                 if (conj_opt)
                     scatter_trilinear<T, true, 2, REAL_DATA>(vol, crk0, crk1, crk2,
                                                   val_re, conj_im,
-                                                  c0, c1, c2, N0, N1, N2_eff, stride0, stride1);
+                                                  c0, c1, c2, N0, N1, N2_eff, stride0, stride1, hermitian_fold);
                 else if (HALF_VOL)
                     scatter_trilinear<T, true, 0, REAL_DATA>(vol, crk0, crk1, crk2,
                                                   val_re, conj_im,
-                                                  c0, c1, c2, N0, N1, N2_eff, stride0, stride1);
+                                                  c0, c1, c2, N0, N1, N2_eff, stride0, stride1, hermitian_fold);
                 else
                     scatter_trilinear<T, false, 0, REAL_DATA>(vol, crk0, crk1, crk2,
                                                 val_re, conj_im,
-                                                c0, c1, c2, N0, N1, N2_eff, stride0, stride1);
+                                                c0, c1, c2, N0, N1, N2_eff, stride0, stride1, hermitian_fold);
             }
         }
     }
@@ -2382,6 +2431,7 @@ cudaError_t launch_batch_backproject(
     const T c1 = (T)(N1 / 2);
     const T c2 = (T)(N2 / 2);
     const T max_r2 = max_r2_x4 < 0 ? (T)-1 : (T)max_r2_x4 / (T)4;
+    const int hv_fold = (half_vol == kHalfVolumeFold) ? 1 : 0;
     dim3 grid((int)n_images, ((int)n_pixels + BLOCK_SIZE - 1) / BLOCK_SIZE);
     dim3 block(BLOCK_SIZE);
 
@@ -2389,7 +2439,7 @@ cudaError_t launch_batch_backproject(
         batch_backproject_kernel<T, O, HV, HI, RD><<<grid, block, 0, s>>>( \
             vols, imgs, rot, (int)n_pixels, (int)ih, (int)iw, \
             (int)N0, (int)N1, N2_eff, c0, c1, c2, (int)ups, (int)full_iw, \
-            vol_stride, (int)n_images, (int)batch_size, max_r2)
+            vol_stride, (int)n_images, (int)batch_size, max_r2, hv_fold)
 
     int key = (real_data ? 8 : 0) | (order ? 4 : 0) | (half_vol ? 2 : 0) | (half_img ? 1 : 0);
     switch (key) {
@@ -3202,6 +3252,10 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
  *
  * The output is then reduced via GEMM: (n_voxels, n_images) @ (n_images, n_channels)
  * to produce the final (n_voxels, n_channels) LHS.
+ *
+ * The half volume is in the reconstruction convention (see kHalfVolumeFold):
+ * the full-volume backprojection restricted to the stored kz >= 0 voxels; a
+ * kz < 0 stencil neighbor is dropped, not folded.  The images are full images.
  * ========================================================================= */
 
 template <typename T>
@@ -3270,18 +3324,13 @@ per_image_backproject_kernel(
                 const int kz = j2 - ic2;
                 const T trilinear_w = ww * w2[d2];
 
-                int sj0 = j0, sj1 = j1;
                 int hkz;
                 if (kz >= 0) { hkz = kz; }
                 else if ((N2_full & 1) == 0 && -kz == ic2) { hkz = ic2; }
-                else {
-                    sj0 = (N0 - (N0 & 1) - j0) % N0;
-                    sj1 = (N1 - (N1 & 1) - j1) % N1;
-                    hkz = -kz;
-                }
+                else { continue; }  /* crop: kz < 0 is not stored (reconstruction convention) */
                 if (hkz > ic2) continue;
 
-                const int voxel_idx = sj0 * spatial_stride0 + sj1 * spatial_stride1 + hkz;
+                const int voxel_idx = j0 * spatial_stride0 + j1 * spatial_stride1 + hkz;
                 /* Per-image slot: atomicAdd only competes with the ~8 neighbors
                  * from the same image's other pixels — near-zero contention. */
                 atomicAdd(&vols[voxel_idx * n_images + img_idx], trilinear_w * base_val);

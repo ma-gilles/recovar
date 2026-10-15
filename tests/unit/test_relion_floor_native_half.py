@@ -14,7 +14,7 @@ import numpy as np
 import pytest
 
 from recovar.core import fourier_transform_utils
-from recovar.reconstruction import relion_functions
+from recovar.reconstruction import regularization, relion_functions
 
 pytestmark = pytest.mark.unit
 
@@ -212,4 +212,35 @@ def test_regularized_filter_agrees_between_full_and_native_half(size, padding_fa
     expected = np.maximum(values, _relion_floor_volume(values, padding_factor, max_res_shell))
     assert np.any(expected > values)
     np.testing.assert_allclose(np.asarray(full), expected, rtol=1e-12, atol=0)
+    np.testing.assert_allclose(np.asarray(half), _to_half(np.asarray(full)), rtol=1e-12, atol=0)
+
+
+@pytest.mark.parametrize("size", [8, 9, 16])
+def test_shell_mean_of_a_half_volume_equals_that_of_the_full_volume(size):
+    """The default floor's shell mean counts the own-mate ``kz = 0`` plane once, as the full cube does."""
+
+    shape = (size,) * 3
+    values = _anisotropic_filter(size)
+
+    full = regularization.average_over_shells(jnp.asarray(values), shape)
+    half = relion_functions._average_over_shells_half(jnp.asarray(_to_half(values)), shape)
+
+    np.testing.assert_allclose(np.asarray(half), np.asarray(full), rtol=1e-12, atol=0)
+
+
+@pytest.mark.parametrize("size", [8, 9, 16])
+def test_default_floor_agrees_between_full_and_half_volume(size):
+    """Without the RELION-native floor, through ``adjust_regularization_relion_style``."""
+
+    shape = (size,) * 3
+    values = _anisotropic_filter(size)
+    k = _centered_frequencies(size)
+    # Unsampled voxels, symmetric under k -> -k, so the floor is what the caller divides by.
+    empty = (np.abs(k)[:, None, None] + np.abs(k)[None, :, None] + np.abs(k)[None, None, :]) % 3 == 0
+    values = np.where(empty, 0.0, values)
+
+    full = relion_functions.adjust_regularization_relion_style(jnp.asarray(values), shape, half_volume=False)
+    half = relion_functions.adjust_regularization_relion_style(jnp.asarray(_to_half(values)), shape, half_volume=True)
+
+    assert np.any(np.asarray(full) > values)
     np.testing.assert_allclose(np.asarray(half), _to_half(np.asarray(full)), rtol=1e-12, atol=0)
