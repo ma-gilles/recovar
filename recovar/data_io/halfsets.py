@@ -42,6 +42,7 @@ class HalfsetDatasetSpec:
     premultiplied_ctf: bool = False
     strip_prefix: str | None = None
     downsample_D: int | None = None
+    dtype: type = np.complex64
 
     @classmethod
     def from_args(cls, args):
@@ -68,6 +69,7 @@ class HalfsetDatasetSpec:
             strip_prefix=getattr(args, "strip_prefix", None),
             downsample_D=getattr(args, "downsample", None),
             uninvert_data=uninvert_data,
+            dtype=getattr(args, "dtype", np.complex64),
         )
 
 
@@ -80,11 +82,11 @@ def split_index_list(all_valid_image_indices, split_random_seed=0):
     """Split a list of indices into two balanced halves with reproducible randomization.
 
     Args:
-        all_valid_image_indices: Array of indices to split
-        split_random_seed: Random seed for reproducible splits
+        all_valid_image_indices (numpy.ndarray | list[int]): Indices to split.
+        split_random_seed (int): Random seed for reproducible splits.
 
     Returns:
-        List of two numpy arrays containing the split indices
+        halves (list[numpy.ndarray]): Two arrays containing the split indices.
     """
     all_valid_image_indices = np.asarray(all_valid_image_indices)
     if len(all_valid_image_indices) == 0:
@@ -123,16 +125,17 @@ def get_split_indices(
     """Get indices for splitting dataset into halfsets.
 
     Args:
-        particles_file: Path to particles STAR file
-        datadir: Data directory (optional)
-        strip_prefix: Prefix to strip from file paths (optional)
-        ind_file: File containing specific indices to use (optional)
-        split_random_seed: Random seed for reproducible splits
-        validate_split: Whether to validate the split is balanced
-        n_images: Pre-computed image count (avoids re-reading the file)
+        particles_file (str): Path to particle metadata or an image stack.
+        datadir (str | None): Base directory for relative particle paths.
+        strip_prefix (str | None): Prefix to strip from file paths.
+        ind_file (str | pathlib.Path | numpy.ndarray | list[int] | None): Index
+            file or explicit indices selecting the images to split.
+        split_random_seed (int): Random seed for reproducible splits.
+        validate_split (bool): Check balance and reject overlapping halves.
+        n_images (int | None): Pre-computed image count, avoiding a metadata read.
 
     Returns:
-        List of two numpy arrays containing indices for each halfset
+        halves (list[numpy.ndarray]): Two arrays containing indices for each halfset.
     """
     from recovar.data_io.cryoem_dataset import get_num_images_in_dataset
 
@@ -362,6 +365,7 @@ def load_halfset_dataset(spec: HalfsetDatasetSpec, *, ind_split, lazy=False):
         premultiplied_ctf=spec.premultiplied_ctf,
         strip_prefix=spec.strip_prefix,
         downsample_D=spec.downsample_D,
+        dtype=spec.dtype,
     )
 
     orig_to_local = np.empty(int(all_indices.max()) + 1, dtype=np.int32)

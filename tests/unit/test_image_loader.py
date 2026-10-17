@@ -1,12 +1,12 @@
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
-from pathlib import Path
 
-from recovar.data_io import image_loader
-from recovar.data_io import starfile
 from recovar import utils
 from recovar.data_io import image_backends as cryo_dataset
+from recovar.data_io import image_loader, starfile
 
 pytestmark = pytest.mark.unit
 
@@ -99,6 +99,149 @@ def test_mrc_loader_reads_real_file_sequential_and_random(tmp_path):
     np.testing.assert_allclose(rnd, data[[4, 2, 0]])
 
 
+def test_mrc_loader_load_all_fast_path_returns_fromfile_buffer_without_workspace(monkeypatch, tmp_path):
+    data = np.arange(6 * 4 * 4, dtype=np.float32).reshape(6, 4, 4)
+    mrc_path = tmp_path / "particles.mrcs"
+    utils.write_mrc(str(mrc_path), data)
+
+    loader = image_loader.MRCLoader(str(mrc_path), lazy=True)
+    fromfile_results = []
+    original_fromfile = image_loader.np.fromfile
+
+    def _tracking_fromfile(*args, **kwargs):
+        result = original_fromfile(*args, **kwargs)
+        fromfile_results.append(result)
+        return result
+
+    def _unexpected_workspace(*args, **kwargs):
+        raise AssertionError("contiguous fast path allocated a separate output workspace")
+
+    def _unexpected_unique(*args, **kwargs):
+        raise AssertionError("contiguous fast path unnecessarily de-duplicated indices")
+
+    monkeypatch.setattr(image_loader.np, "fromfile", _tracking_fromfile)
+    monkeypatch.setattr(image_loader.np, "empty", _unexpected_workspace)
+    monkeypatch.setattr(image_loader.np, "unique", _unexpected_unique)
+    loader.load_all()
+    out = loader._cached
+    monkeypatch.undo()
+
+    np.testing.assert_array_equal(out, data)
+    assert len(fromfile_results) == 1
+    assert out.base is fromfile_results[0]
+    assert np.shares_memory(out, fromfile_results[0])
+    assert out.flags.c_contiguous
+    assert out.flags.writeable
+    np.testing.assert_array_equal(loader.get(np.array([4, 1], dtype=np.int32)), data[[4, 1]])
+
+
+def test_mrc_loader_contiguous_fast_path_uses_physical_subset_order(monkeypatch, tmp_path):
+    data = np.arange(7 * 4 * 4, dtype=np.float32).reshape(7, 4, 4)
+    mrc_path = tmp_path / "particles.mrcs"
+    utils.write_mrc(str(mrc_path), data)
+
+    loader = image_loader.MRCLoader(
+        str(mrc_path), indices=np.array([0, 3, 4, 5, 6], dtype=np.int32), lazy=True
+    )
+    original_unique = image_loader.np.unique
+
+    def _unexpected_unique(*args, **kwargs):
+        raise AssertionError("physically contiguous subset unnecessarily de-duplicated indices")
+
+    monkeypatch.setattr(image_loader.np, "unique", _unexpected_unique)
+    out = loader.get(np.array([1, 2, 3], dtype=np.int32))
+    monkeypatch.setattr(image_loader.np, "unique", original_unique)
+
+    np.testing.assert_array_equal(out, data[3:6])
+
+
+def test_mrc_loader_permuted_contiguous_set_reorders_fromfile_buffer_in_place(monkeypatch, tmp_path):
+    data = np.arange(7 * 4 * 4, dtype=np.float32).reshape(7, 4, 4)
+    mrc_path = tmp_path / "particles.mrcs"
+    utils.write_mrc(str(mrc_path), data)
+
+    loader = image_loader.MRCLoader(str(mrc_path), lazy=True)
+    request = np.array([3, 0, 6, 1, 5, 2, 4], dtype=np.int32)
+    fromfile_results = []
+    original_fromfile = image_loader.np.fromfile
+    original_empty = image_loader.np.empty
+
+    def _tracking_fromfile(*args, **kwargs):
+        result = original_fromfile(*args, **kwargs)
+        fromfile_results.append(result)
+        return result
+
+    def _reject_stack_workspace(shape, *args, **kwargs):
+        if tuple(shape) == data.shape:
+            raise AssertionError("permuted contiguous path allocated a stack-sized output workspace")
+        return original_empty(shape, *args, **kwargs)
+
+    monkeypatch.setattr(image_loader.np, "fromfile", _tracking_fromfile)
+    monkeypatch.setattr(image_loader.np, "empty", _reject_stack_workspace)
+    out = loader.get(request)
+    monkeypatch.undo()
+
+    np.testing.assert_array_equal(out, data[request])
+    assert len(fromfile_results) == 1
+    assert np.shares_memory(out, fromfile_results[0])
+    assert out.flags.c_contiguous
+
+
+def test_mrc_loader_permuted_contiguous_subrange_uses_physical_offset(monkeypatch, tmp_path):
+    data = np.arange(8 * 4 * 4, dtype=np.float32).reshape(8, 4, 4)
+    mrc_path = tmp_path / "particles.mrcs"
+    utils.write_mrc(str(mrc_path), data)
+    loader = image_loader.MRCLoader(str(mrc_path), lazy=True)
+    request = np.array([5, 3, 4], dtype=np.int32)
+    fromfile_results = []
+    original_fromfile = image_loader.np.fromfile
+
+    def _tracking_fromfile(*args, **kwargs):
+        result = original_fromfile(*args, **kwargs)
+        fromfile_results.append(result)
+        return result
+
+    monkeypatch.setattr(image_loader.np, "fromfile", _tracking_fromfile)
+    out = loader.get(request)
+
+    np.testing.assert_array_equal(out, data[request])
+    assert len(fromfile_results) == 1
+    assert np.shares_memory(out, fromfile_results[0])
+
+
+@pytest.mark.parametrize("dtype", [np.int8, np.int16, np.uint16, np.float32])
+def test_mrc_loader_permuted_contiguous_set_preserves_file_dtype(dtype, tmp_path):
+    import mrcfile
+
+    data = np.arange(5 * 4 * 4).reshape(5, 4, 4).astype(dtype)
+    mrc_path = tmp_path / f"permuted_{np.dtype(dtype).name}.mrcs"
+    with mrcfile.new(str(mrc_path), overwrite=True) as mrc:
+        mrc.set_data(data)
+    loader = image_loader.MRCLoader(str(mrc_path), lazy=True)
+    request = np.array([3, 0, 4, 1, 2], dtype=np.int32)
+
+    out = loader.get(request)
+
+    assert out.dtype == data.dtype
+    np.testing.assert_array_equal(out, data[request])
+
+
+@pytest.mark.parametrize("dtype", [np.int8, np.int16, np.uint16, np.float32])
+def test_mrc_loader_contiguous_fast_path_preserves_file_dtype(dtype, tmp_path):
+    import mrcfile
+
+    data = np.arange(5 * 4 * 4).reshape(5, 4, 4).astype(dtype)
+    mrc_path = tmp_path / f"particles_{np.dtype(dtype).name}.mrcs"
+    with mrcfile.new(str(mrc_path), overwrite=True) as mrc:
+        mrc.set_data(data)
+
+    loader = image_loader.MRCLoader(str(mrc_path), lazy=True)
+    out = loader.get(np.array([1, 2, 3], dtype=np.int32))
+
+    assert out.dtype == data.dtype
+    np.testing.assert_array_equal(out, data[1:4])
+
+
 def test_mrc_loader_duplicate_indices_preserve_order_and_duplicates(tmp_path):
     data = np.arange(5 * 4 * 4, dtype=np.float32).reshape(5, 4, 4)
     mrc_path = tmp_path / "particles.mrcs"
@@ -108,6 +251,23 @@ def test_mrc_loader_duplicate_indices_preserve_order_and_duplicates(tmp_path):
     req = np.array([4, 2, 4, 0], dtype=np.int32)
     out = loader.get(req)
     np.testing.assert_allclose(out, data[req])
+
+
+def test_mrc_loader_duplicate_indices_with_contiguous_unique_set_expand_in_requested_order(monkeypatch, tmp_path):
+    data = np.arange(5 * 4 * 4, dtype=np.float32).reshape(5, 4, 4)
+    mrc_path = tmp_path / "particles.mrcs"
+    utils.write_mrc(str(mrc_path), data)
+    loader = image_loader.MRCLoader(str(mrc_path), lazy=True)
+    request = np.array([3, 1, 3, 2, 1], dtype=np.int32)
+
+    def _unexpected_in_place_permutation(*args, **kwargs):
+        raise AssertionError("duplicate expansion entered the unique-permutation path")
+
+    monkeypatch.setattr(image_loader, "_permute_image_rows_in_place", _unexpected_in_place_permutation)
+
+    out = loader.get(request)
+
+    np.testing.assert_array_equal(out, data[request])
 
 
 def test_mrc_loader_empty_request_returns_empty_batch(tmp_path):
@@ -244,6 +404,59 @@ def test_multi_mrc_loader_indices_filtering_preserves_order(tmp_path):
     np.testing.assert_allclose(out[0], b[1])
     np.testing.assert_allclose(out[1], a[1])
     np.testing.assert_allclose(out[2], b[0])
+
+
+def test_multi_mrc_loader_single_source_returns_child_allocation_directly(monkeypatch, tmp_path):
+    data = np.arange(5 * 4 * 4, dtype=np.float32).reshape(5, 4, 4)
+    mrc_path = tmp_path / "particles.mrcs"
+    utils.write_mrc(str(mrc_path), data)
+    df = pd.DataFrame(
+        {
+            "mrc_file": [str(mrc_path)] * 4,
+            "mrc_index": [4, 1, 3, 0],
+        }
+    )
+    loader = image_loader.MultiMRCLoader(df, lazy=True, max_threads=2)
+    child = loader._loaders[str(mrc_path)]
+    requested_rows = np.array([3, 0, 2], dtype=np.int32)
+    child_result = data[np.array([0, 4, 3], dtype=np.int32)].copy()
+    original_empty = image_loader.np.empty
+
+    def _child_load(indices):
+        np.testing.assert_array_equal(indices, np.array([0, 4, 3], dtype=np.int64))
+        return child_result
+
+    def _reject_image_workspace(shape, *args, **kwargs):
+        if tuple(shape) == child_result.shape:
+            raise AssertionError("single-source wrapper allocated a second output workspace")
+        return original_empty(shape, *args, **kwargs)
+
+    monkeypatch.setattr(child, "_load", _child_load)
+    monkeypatch.setattr(image_loader.np, "empty", _reject_image_workspace)
+    out = loader.get(requested_rows)
+
+    assert out is child_result
+
+
+def test_multi_mrc_loader_single_requested_file_preserves_outer_dtype_for_multifile_loader(tmp_path):
+    first = np.arange(2 * 4 * 4, dtype=np.float32).reshape(2, 4, 4)
+    second = (100 + np.arange(2 * 4 * 4)).reshape(2, 4, 4).astype(np.int16)
+    first_path = tmp_path / "first.mrcs"
+    second_path = tmp_path / "second.mrcs"
+    utils.write_mrc(str(first_path), first)
+    utils.write_mrc(str(second_path), second)
+    df = pd.DataFrame(
+        {
+            "mrc_file": [str(first_path), str(first_path), str(second_path), str(second_path)],
+            "mrc_index": [0, 1, 0, 1],
+        }
+    )
+    loader = image_loader.MultiMRCLoader(df, lazy=True, max_threads=2)
+
+    out = loader.get(np.array([3, 2], dtype=np.int32))
+
+    assert out.dtype == np.float32
+    np.testing.assert_array_equal(out, second[[1, 0]].astype(np.float32))
 
 
 def test_multi_mrc_loader_constructor_accepts_boolean_subset_mask(tmp_path):
@@ -474,6 +687,43 @@ def test_star_loader_uses_star_parent_when_datadir_missing(tmp_path):
     loader = image_loader.StarLoader(str(star_path), lazy=True)
     out = loader.get(np.array([1], dtype=np.int32))
     np.testing.assert_allclose(out[0], data[1])
+
+
+def test_star_loader_permuted_single_stack_cache_uses_one_full_buffer(monkeypatch, tmp_path):
+    data = np.arange(6 * 4 * 4, dtype=np.float32).reshape(6, 4, 4)
+    mrc_path = tmp_path / "stack.mrcs"
+    utils.write_mrc(str(mrc_path), data)
+    physical_order = np.array([0, 5, 2, 1, 4, 3], dtype=np.int32)
+    df = pd.DataFrame(
+        {"_rlnImageName": [f"{int(index) + 1}@{mrc_path.name}" for index in physical_order]}
+    )
+    star_path = tmp_path / "particles.star"
+    starfile.write_star(str(star_path), data=df)
+    loader = image_loader.StarLoader(str(star_path), lazy=True)
+    fromfile_results = []
+    original_fromfile = image_loader.np.fromfile
+    original_empty = image_loader.np.empty
+
+    def _tracking_fromfile(*args, **kwargs):
+        result = original_fromfile(*args, **kwargs)
+        fromfile_results.append(result)
+        return result
+
+    def _reject_stack_workspace(shape, *args, **kwargs):
+        if tuple(shape) == data.shape:
+            raise AssertionError("single-stack STAR cache allocated a second full output workspace")
+        return original_empty(shape, *args, **kwargs)
+
+    monkeypatch.setattr(image_loader.np, "fromfile", _tracking_fromfile)
+    monkeypatch.setattr(image_loader.np, "empty", _reject_stack_workspace)
+    loader.load_all()
+    cached = loader._cached
+    monkeypatch.undo()
+
+    np.testing.assert_array_equal(cached, data[physical_order])
+    assert len(fromfile_results) == 1
+    assert np.shares_memory(cached, fromfile_results[0])
+    np.testing.assert_array_equal(loader.get(np.array([4, 1], dtype=np.int32)), data[physical_order[[4, 1]]])
 
 
 def test_star_loader_rejects_missing_rlnimagename_column(tmp_path):

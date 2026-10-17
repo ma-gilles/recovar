@@ -36,6 +36,13 @@ To disable staging even when $TMPDIR is set::
 
     export RECOVAR_CACHE_DIR=        # empty string = disabled
 
+The ``$TMPDIR`` fallback stages only when ``$TMPDIR`` is on a node-local
+filesystem. A ``$TMPDIR`` on GPFS, Lustre, NFS or another network filesystem
+would copy the stack from one network filesystem to another, which costs the
+full read, leaves a second copy behind (55.9 TB of such copies were found and
+deleted on this cluster on 2026-09-11) and speeds nothing up. Set
+``RECOVAR_CACHE_DIR`` explicitly to stage there anyway.
+
 Measured speedup (D=256, 300K images, 39 GB, A100-SXM4-80GB)
 -------------------------------------------------------------
 +---------------------------+--------+--------+--------+-----------+
@@ -90,6 +97,16 @@ When a job ends and a new job starts (possibly on a different node), the
 old ``$TMPDIR`` is gone, so staging happens again from scratch. This is
 by design -- each Slurm job gets fresh local storage.
 
+Strict staging
+--------------
+:func:`stage_stacks` is for callers that were explicitly asked to read from
+local storage (relax's RELION-style ``--scratch_dir``): it checks free space
+once before copying, raises :class:`StagingSpaceError` or the copy error
+instead of falling back, and uses the same cache layout, so loaders opened
+afterwards with ``RECOVAR_CACHE_DIR`` pointing there read the staged copies.
+:meth:`~recovar.data_io.image_loader.ImageLoader.stack_files` lists the files a
+particle file references.
+
 What gets staged
 ----------------
 Only MRC/MRCS particle stacks are staged, because they are the only
@@ -123,18 +140,86 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
+NETWORK_FILESYSTEM_TYPES = frozenset(
+    {
+        "9p",
+        "afs",
+        "beegfs",
+        "ceph",
+        "cifs",
+        "fuse.sshfs",
+        "gpfs",
+        "lustre",
+        "nfs",
+        "nfs4",
+        "panfs",
+        "smb2",
+        "smb3",
+    }
+)
+
+
+def filesystem_type(path: str) -> Optional[str]:
+    """Return the filesystem type mounted at *path*, or None if it cannot be read.
+
+    The nearest existing ancestor is used, so a directory that a job has not
+    created yet resolves to the filesystem it would be created on.
+    """
+
+    try:
+        with open("/proc/mounts", encoding="utf-8") as handle:
+            mounts = [line.split() for line in handle]
+    except OSError:
+        return None
+    probe = os.path.abspath(path)
+    while not os.path.exists(probe):
+        parent = os.path.dirname(probe)
+        if parent == probe:
+            break
+        probe = parent
+    best_point, best_type = "", None
+    for fields in mounts:
+        if len(fields) < 3:
+            continue
+        point, fs_type = fields[1], fields[2]
+        if (probe == point or probe.startswith(point.rstrip("/") + "/")) and len(point) >= len(best_point):
+            best_point, best_type = point, fs_type
+    return best_type
+
+
+def is_network_filesystem(path: str) -> bool:
+    """Whether *path* lives on a shared network filesystem (GPFS, Lustre, NFS, ...)."""
+
+    fs_type = filesystem_type(path)
+    return fs_type is not None and fs_type.lower() in NETWORK_FILESYSTEM_TYPES
+
+
 def get_cache_dir() -> Optional[str]:
     """Return the configured staging directory, or None if disabled.
 
     Resolution order:
-    1. ``RECOVAR_CACHE_DIR`` env var (empty string -> disabled)
-    2. ``TMPDIR`` env var (standard SLURM/HPC per-job local scratch)
+    1. ``RECOVAR_CACHE_DIR`` env var (empty string -> disabled), honored as given
+    2. ``TMPDIR`` env var, but only when it is on a node-local filesystem:
+       staging from one network filesystem to another buys nothing and leaves a
+       second copy of the stack behind
     3. None (no staging)
     """
     val = os.environ.get("RECOVAR_CACHE_DIR")
     if val is not None:
         return val or None  # '' -> explicitly disabled
-    return os.environ.get("TMPDIR")
+    tmpdir = os.environ.get("TMPDIR")
+    if not tmpdir:
+        return None
+    if is_network_filesystem(tmpdir):
+        logger.info(
+            "Staging disabled: TMPDIR %s is on a %s filesystem, so a staged copy would be "
+            "network-to-network. Set RECOVAR_CACHE_DIR to a node-local path (or to TMPDIR "
+            "itself) to stage anyway.",
+            tmpdir,
+            filesystem_type(tmpdir),
+        )
+        return None
+    return tmpdir
 
 
 def stage_mrc(src_path: str, cache_dir: str) -> str:
@@ -160,11 +245,10 @@ def stage_mrc(src_path: str, cache_dir: str) -> str:
     str
         Path to the staged file, or *src_path* unchanged if staging
         fails for any reason (permission error, disk full, ...).
+        :func:`stage_stacks` is the strict variant that raises instead.
     """
     # Skip if source is already inside the cache directory.
-    abs_src = os.path.abspath(src_path)
-    abs_cache = os.path.abspath(cache_dir)
-    if abs_src.startswith(abs_cache + os.sep) or abs_src == abs_cache:
+    if _is_under(src_path, cache_dir):
         logger.debug("Source already under cache_dir, skipping: %s", src_path)
         return src_path
 
@@ -173,56 +257,124 @@ def stage_mrc(src_path: str, cache_dir: str) -> str:
     except OSError:
         return src_path  # source missing -- let the caller raise
 
-    key = _cache_key(abs_src, stat)
-    suffix = Path(src_path).suffix or ".mrcs"
-    stage_dir = Path(abs_cache) / "recovar_cache"
-    dest = stage_dir / f"{key}{suffix}"
-    sentinel = stage_dir / f"{key}.ok"
-
-    try:
-        stage_dir.mkdir(parents=True, exist_ok=True)
-    except OSError as exc:
-        logger.warning("Cannot create cache dir %s (%s); reading from source.", stage_dir, exc)
-        return src_path
-
+    dest, sentinel = _staged_paths(src_path, stat, cache_dir)
     if dest.exists() and sentinel.exists():
         logger.debug("Cache hit: %s -> %s", os.path.basename(src_path), dest)
         return str(dest)
 
-    size_gb = stat.st_size / 1e9
-    logger.info(
-        "Staging %.2f GB to local storage: %s",
-        size_gb,
-        os.path.basename(src_path),
-    )
-    t0 = time.monotonic()
-
-    tmp_path: Optional[str] = None
     try:
-        tmp_fd, tmp_path = tempfile.mkstemp(dir=stage_dir, suffix=".tmp")
-        os.close(tmp_fd)
-        shutil.copy2(src_path, tmp_path)
-        os.replace(tmp_path, str(dest))  # atomic
-        sentinel.write_text(str(stat.st_mtime_ns))
-        tmp_path = None  # ownership transferred
-    except Exception as exc:
-        logger.warning("Staging failed (%s); falling back to source: %s", exc, src_path)
-        if tmp_path is not None:
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
+        dest.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        logger.warning("Cannot create cache dir %s (%s); reading from source.", dest.parent, exc)
         return src_path
 
-    elapsed = time.monotonic() - t0
-    mb_s = (stat.st_size / 1e6) / elapsed if elapsed > 0 else 0
-    logger.info("Staged %s in %.1fs (%.0f MB/s)", os.path.basename(src_path), elapsed, mb_s)
+    try:
+        _copy_into_stage(src_path, stat, dest, sentinel)
+    except Exception as exc:
+        logger.warning("Staging failed (%s); falling back to source: %s", exc, src_path)
+        return src_path
     return str(dest)
+
+
+class StagingSpaceError(OSError):
+    """The staging directory lacks the free space a strict staging request needs."""
+
+
+def stage_stacks(src_paths, cache_dir: str, *, keep_free_bytes: int = 0) -> dict:
+    """Copy every file in *src_paths* into *cache_dir*, or raise.
+
+    The strict counterpart of :func:`stage_mrc`, for callers that were asked to
+    read from local storage and must not silently read the source instead
+    (RELION ``--scratch_dir``). The free space of *cache_dir* is checked once,
+    before anything is copied: the files not yet staged, plus
+    *keep_free_bytes* of headroom, must fit, or :class:`StagingSpaceError` is
+    raised and nothing is written. Any copy failure propagates.
+
+    Staged files use the same layout and cache key as :func:`stage_mrc`, so an
+    :class:`~recovar.data_io.image_loader.MRCLoader` opened afterwards with
+    ``RECOVAR_CACHE_DIR=cache_dir`` reads the staged copies.
+
+    Returns
+    -------
+    dict
+        Source path -> staged path, in the order of *src_paths* (duplicates
+        collapsed).
+    """
+    sources = list(dict.fromkeys(str(path) for path in src_paths))
+    planned = []
+    for src in sources:
+        if _is_under(src, cache_dir):
+            raise ValueError(f"Source {src} is already inside the staging directory {cache_dir}")
+        stat = os.stat(src)
+        dest, sentinel = _staged_paths(src, stat, cache_dir)
+        planned.append((src, stat, dest, sentinel))
+
+    needed = sum(stat.st_size for _, stat, dest, sentinel in planned if not (dest.exists() and sentinel.exists()))
+    stage_dir = Path(os.path.abspath(cache_dir)) / "recovar_cache"
+    stage_dir.mkdir(parents=True, exist_ok=True)
+    free = shutil.disk_usage(stage_dir).free
+    if needed + int(keep_free_bytes) > free:
+        raise StagingSpaceError(
+            f"Staging {len(sources)} particle stack file(s) needs {needed / 1e9:.2f} GB plus "
+            f"{int(keep_free_bytes) / 1e9:.2f} GB kept free, but {stage_dir} has only "
+            f"{free / 1e9:.2f} GB free. Use a larger local directory or read from the source."
+        )
+
+    staged = {}
+    t0 = time.monotonic()
+    for src, stat, dest, sentinel in planned:
+        if not (dest.exists() and sentinel.exists()):
+            _copy_into_stage(src, stat, dest, sentinel)
+        staged[src] = str(dest)
+    elapsed = time.monotonic() - t0
+    logger.info(
+        "Staged %d file(s), %.2f GB copied, into %s in %.1fs",
+        len(staged),
+        needed / 1e9,
+        stage_dir,
+        elapsed,
+    )
+    return staged
 
 
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+
+def _is_under(path: str, directory: str) -> bool:
+    abs_path = os.path.abspath(path)
+    abs_dir = os.path.abspath(directory)
+    return abs_path == abs_dir or abs_path.startswith(abs_dir + os.sep)
+
+
+def _staged_paths(src_path: str, stat: os.stat_result, cache_dir: str):
+    """Destination and completion-sentinel paths of *src_path* inside *cache_dir*."""
+    key = _cache_key(os.path.abspath(src_path), stat)
+    suffix = Path(src_path).suffix or ".mrcs"
+    stage_dir = Path(os.path.abspath(cache_dir)) / "recovar_cache"
+    return stage_dir / f"{key}{suffix}", stage_dir / f"{key}.ok"
+
+
+def _copy_into_stage(src_path: str, stat: os.stat_result, dest: Path, sentinel: Path) -> None:
+    """Copy *src_path* to *dest* through a temp file and mark it complete; raise on failure."""
+    logger.info("Staging %.2f GB to local storage: %s", stat.st_size / 1e9, os.path.basename(src_path))
+    t0 = time.monotonic()
+    tmp_fd, tmp_path = tempfile.mkstemp(dir=dest.parent, suffix=".tmp")
+    os.close(tmp_fd)
+    try:
+        shutil.copy2(src_path, tmp_path)
+        os.replace(tmp_path, str(dest))  # atomic
+    except BaseException:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+    sentinel.write_text(str(stat.st_mtime_ns))
+    elapsed = time.monotonic() - t0
+    mb_s = (stat.st_size / 1e6) / elapsed if elapsed > 0 else 0
+    logger.info("Staged %s in %.1fs (%.0f MB/s)", os.path.basename(src_path), elapsed, mb_s)
 
 
 def _cache_key(abs_path: str, stat: os.stat_result) -> str:
