@@ -6,7 +6,7 @@ import numpy as np
 import recovar.jax_config
 
 from recovar.output import output
-from recovar.simulation import simulator
+from recovar.simulation import simulator, solvent_contrast
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +28,11 @@ def make_test_dataset(
     volume_input=None,
     n_tilts=None,
     premultiplied_ctf=False,
+    noise_rng_batch_size=None,
+    atomic_solvent_correction=False,
+    solvent_contrast_a=None,
+    solvent_contrast_B=None,
+    atomic_bfactor=None,
 ):
     """Generate a synthetic test dataset used by integration tests and examples.
 
@@ -36,6 +41,12 @@ def make_test_dataset(
     - ``grid_size``: alias of ``image_size`` (takes precedence when provided)
     - ``volume_input``: volume prefix root (default: bundled assets)
     - ``n_tilts``: number of tilts for ``tilt_series=True`` (default: 27)
+    - ``noise_rng_batch_size``: fixed simulator RNG chunk size for
+      reproducible particles across memory-driven processing batch sizes
+    - ``atomic_solvent_correction``, ``solvent_contrast_a``, ``solvent_contrast_B``,
+      ``atomic_bfactor``: opt-in EM-development transform for atomic-model
+      volumes (solvent contrast plus B-factor), forwarded to
+      :func:`recovar.simulation.simulator.generate_synthetic_dataset`
     """
     if seed is not None:
         np.random.seed(seed)
@@ -87,6 +98,11 @@ def make_test_dataset(
             angle_per_tilt=3,
             percent_tilt_series_outliers=percent_tilt_series_outliers,
             premultiplied_ctf=premultiplied_ctf,
+            noise_rng_batch_size=noise_rng_batch_size,
+            atomic_solvent_correction=atomic_solvent_correction,
+            solvent_contrast_a=solvent_contrast_a,
+            solvent_contrast_B=solvent_contrast_B,
+            atomic_bfactor=atomic_bfactor,
         )
     else:
         image_stack, sim_info = simulator.generate_synthetic_dataset(
@@ -111,6 +127,11 @@ def make_test_dataset(
             nested_prefix=nested_prefix,
             percent_tilt_series_outliers=percent_tilt_series_outliers,
             premultiplied_ctf=premultiplied_ctf,
+            noise_rng_batch_size=noise_rng_batch_size,
+            atomic_solvent_correction=atomic_solvent_correction,
+            solvent_contrast_a=solvent_contrast_a,
+            solvent_contrast_B=solvent_contrast_B,
+            atomic_bfactor=atomic_bfactor,
         )
 
     logger.info("Finished generating dataset %s", output_folder)
@@ -163,6 +184,13 @@ def main():
     )
     parser.add_argument("--seed", type=int, default=None, help="Random seed for reproducible dataset generation")
     parser.add_argument("--premultiplied-ctf", action="store_true", help="Generate dataset with premultiplied CTF")
+    parser.add_argument(
+        "--noise-rng-batch-size",
+        type=int,
+        default=None,
+        help="Fixed simulator noise RNG chunk size for reproducible generation across processing batch sizes",
+    )
+    solvent_contrast.add_cli_arguments(parser)
 
     args = parser.parse_args()
 
@@ -182,6 +210,8 @@ def main():
         volume_input=args.volume_input,
         n_tilts=args.n_tilts,
         premultiplied_ctf=args.premultiplied_ctf,
+        noise_rng_batch_size=args.noise_rng_batch_size,
+        **solvent_contrast.kwargs_from_cli_args(args),
     )
 
 
