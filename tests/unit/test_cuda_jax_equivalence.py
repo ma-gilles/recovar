@@ -158,7 +158,12 @@ def test_project_cuda_vs_jax(order, half_vol, half_img, N, gpu_device):
 @pytest.mark.parametrize("order,half_vol,half_img", _ALL_COMBOS)
 @pytest.mark.parametrize("N", _SIZES)
 def test_backproject_cuda_vs_jax(order, half_vol, half_img, N, gpu_device):
-    """CUDA backproject must match JAX VJP adjoint for all mode combos."""
+    """CUDA backproject must match JAX VJP adjoint for all mode combos.
+
+    The VJP is the transpose, so half volumes use ``hermitian_fold=True``: the default ``half_volume=True`` result is
+    the reconstruction convention (the full-volume backprojection restricted to the stored half), which is checked
+    against the full volume in ``test_half_volume_backproject_is_restriction_of_full_volume_backproject``.
+    """
     _skip_if_no_cuda()
     import recovar.core.fourier_transform_utils as ftu
     from recovar.core.slicing import _jax_slice
@@ -199,6 +204,7 @@ def test_backproject_cuda_vs_jax(order, half_vol, half_img, N, gpu_device):
             order=order,
             half_volume=half_vol,
             half_image=half_img,
+            hermitian_fold=half_vol,
         )
 
         # --- JAX path (via VJP, bypassing CUDA dispatch) ---
@@ -312,7 +318,9 @@ def test_adjoint_consistency_cuda(order, half_vol, half_img, gpu_device):
             )
             imgs_for_ip = imgs_gpu
 
-        # Backward: backproject images to volume (always with half_img flag)
+        # Backward: backproject images to volume (always with half_img flag).  An adjoint identity needs the
+        # transpose of the half-volume expansion, i.e. the Hermitian fold; the default half-volume result is the
+        # reconstruction convention, which is not an adjoint of project.
         vol_zero = jnp.zeros_like(vol_gpu)
         bp = backproject(
             vol_zero,
@@ -323,6 +331,7 @@ def test_adjoint_consistency_cuda(order, half_vol, half_img, gpu_device):
             order=order,
             half_volume=half_vol,
             half_image=half_img,
+            hermitian_fold=half_vol,
         )
 
     # <Ax, y> and <x, A^T y>
@@ -338,6 +347,108 @@ def test_adjoint_consistency_cuda(order, half_vol, half_img, gpu_device):
             f"half_img={half_img}. <Ax,y>={lhs:.6e}, <x,A^Ty>={rhs:.6e}"
         ),
     )
+
+
+# ── Custom VJP: exact transpose of the forward projection ────────────
+
+
+def _crandn(rng, shape):
+    return jnp.asarray(rng.standard_normal(shape) + 1j * rng.standard_normal(shape))
+
+
+@pytest.mark.parametrize("order,half_vol,half_img", _ALL_COMBOS)
+@pytest.mark.parametrize("upsampling", [1, 2])
+@pytest.mark.parametrize("N", [8, 7])
+def test_cuda_project_vjp_is_exact_transpose(order, half_vol, half_img, upsampling, N, gpu_device):
+    """The custom backward is the exact vjp of ``cuda_project`` for any complex volume and cotangent.
+
+    ``cuda_project`` is real-linear, so its vjp ``u`` of a cotangent ``g`` satisfies
+    ``Re sum(u * dv) == Re sum(g * project(dv))`` for every complex ``dv``: no Hermitian symmetry is assumed, unlike
+    the adjoint test above and the finite-difference tests below. In particular a half-image backward must not scatter
+    the Hermitian partner of a packed pixel (that is the transpose of the full-image operator).
+    Float64, default clipping radius ``N // 2 - 1`` (at larger radii the even-box Nyquist plane of a non-Hermitian
+    half volume is read differently by the forward and backward kernels, so the identity needs Hermitian volumes there).
+    """
+    import recovar.core.fourier_transform_utils as ftu
+    from recovar.core.cuda_ops import cuda_project
+
+    rng = np.random.default_rng(7)
+    n_images = 6
+    image_shape = (N, N)
+    volume_shape = (upsampling * N,) * 3
+    max_r = N // 2 - 1
+    vol_shape = ftu.volume_shape_to_half_volume_shape(volume_shape) if half_vol else volume_shape
+    n_pixels = N * (N // 2 + 1) if half_img else N * N
+
+    with jax.default_device(gpu_device):
+        rots = jnp.asarray(_random_rotations(n_images, rng).astype(np.float64))
+        dv = _crandn(rng, int(np.prod(vol_shape)))
+        g = _crandn(rng, (n_images, n_pixels))
+        out, vjp_fn = jax.vjp(
+            lambda v: cuda_project(v, rots, image_shape, volume_shape, order, half_vol, half_img, max_r), dv
+        )
+        (u,) = vjp_fn(g)
+        lhs = float(jnp.real(jnp.sum(u * dv)))
+        rhs = float(jnp.real(jnp.sum(g * out)))
+
+    np.testing.assert_allclose(
+        lhs,
+        rhs,
+        rtol=1e-10,
+        err_msg=f"vjp is not the transpose of project: Re<vjp(g),dv>={lhs:.12e}, Re<g,project(dv)>={rhs:.12e}",
+    )
+
+
+def _half_image_vjp_vs_finite_difference(dtype, upsampling, half_volume):
+    """Directional derivative of a real linear functional of half-image slices vs an exact finite difference."""
+    import recovar.core.fourier_transform_utils as ftu
+    from recovar import core
+
+    box = 8
+    rng = np.random.default_rng(11)
+    image_shape = (box, box)
+    rotations = jnp.asarray(_random_rotations(3, rng).astype(dtype))
+    vol = jnp.asarray(rng.normal(size=(box,) * 3).astype(dtype))
+    if upsampling > 1:
+        vol = jnp.pad(vol, ((box // 2, box // 2),) * 3)
+    n_pixels = box * (box // 2 + 1)
+    c = jnp.asarray(rng.normal(size=(3, n_pixels)) + 1j * rng.normal(size=(3, n_pixels)))
+
+    def f(v):
+        w = ftu.get_dft3_real(v) if half_volume else ftu.get_dft3(v)
+        out = core.slice_volume(
+            w.reshape(-1),
+            rotations,
+            image_shape,
+            (upsampling * box,) * 3,
+            "linear_interp",
+            half_volume=half_volume,
+            half_image=True,
+        )
+        return jnp.sum(jnp.real(jnp.conj(c.astype(out.dtype)) * out))
+
+    direction = jnp.asarray(rng.normal(size=vol.shape).astype(dtype))
+    analytic = float(jnp.sum(jax.grad(f)(vol) * direction))
+    finite_difference = float(f(vol + direction) - f(vol))  # f is linear in the volume: exact
+    return analytic, finite_difference
+
+
+@pytest.mark.parametrize("upsampling", [1, 2])
+@pytest.mark.parametrize("half_volume", [True, False])
+def test_slice_volume_half_image_vjp_matches_finite_difference(gpu_device, upsampling, half_volume):
+    """Through ``slice_volume`` the half-image backward must not double interior columns. Float32 test."""
+    with jax.default_device(gpu_device):
+        analytic, finite_difference = _half_image_vjp_vs_finite_difference(np.float32, upsampling, half_volume)
+    np.testing.assert_allclose(analytic, finite_difference, rtol=1e-4)
+
+
+@pytest.mark.parametrize("upsampling", [1, 2])
+@pytest.mark.parametrize("half_volume", [True, False])
+def test_slice_volume_half_image_vjp_matches_finite_difference_f64(gpu_device, upsampling, half_volume):
+    """Float64 companion: proves the float32 gap above is rounding noise."""
+    with jax.default_device(gpu_device):
+        analytic, finite_difference = _half_image_vjp_vs_finite_difference(np.float64, upsampling, half_volume)
+    np.testing.assert_allclose(analytic, finite_difference, rtol=1e-8)
 
 
 # ── High-level API: slice_volume dispatch consistency ────────────────
@@ -758,7 +869,15 @@ def test_real_backproject_cuda_vs_jax(half_vol, half_img, gpu_device):
         imgs_gpu = jax.device_put(imgs_real)
 
         cuda_out = backproject(
-            vol_init, imgs_gpu, rots_gpu, image_shape, volume_shape, order=1, half_volume=half_vol, half_image=half_img
+            vol_init,
+            imgs_gpu,
+            rots_gpu,
+            image_shape,
+            volume_shape,
+            order=1,
+            half_volume=half_vol,
+            half_image=half_img,
+            hermitian_fold=half_vol,  # compared with the VJP below, which is the transpose
         )
 
         # JAX VJP with real inputs (always full volume, expand half_image)
@@ -834,3 +953,161 @@ def test_rectangular_images_cuda_vs_jax(gpu_device):
         rtol=1e-4,
         err_msg="Rectangular images (32x64): CUDA != JAX",
     )
+
+
+# ── Half-volume backprojection: reconstruction convention and Hermitian fold ──
+#
+# ``backproject(half_volume=True)`` is the reconstruction convention: the full-volume backprojection restricted to
+# the stored ``kz >= 0`` voxels, so a regularization added voxel by voxel means the same in either layout.
+# ``hermitian_fold=True`` is its exact transpose (what a vjp needs): interior ``kz`` carries ``F(k) + conj(F(-k))``.
+
+
+def _rotations_f64(n, rng):
+    q, r = np.linalg.qr(rng.standard_normal((n, 3, 3)))
+    q = q * np.sign(np.diagonal(r, axis1=1, axis2=2))[:, None, :]
+    q[np.linalg.det(q) < 0, :, 0] *= -1
+    return jnp.asarray(q)
+
+
+def _cuda_backproject_zero_init(images, rots, image_shape, volume_shape, *, order, half_vol, half_img, max_r, fold):
+    import recovar.core.fourier_transform_utils as ftu
+    from recovar.cuda_backproject import backproject
+
+    shape = ftu.volume_shape_to_half_volume_shape(volume_shape) if half_vol else volume_shape
+    return backproject(
+        jnp.zeros(int(np.prod(shape)), images.dtype),
+        images,
+        rots,
+        image_shape,
+        volume_shape,
+        order=order,
+        half_volume=half_vol,
+        half_image=half_img,
+        max_r=max_r,
+        hermitian_fold=fold,
+    )
+
+
+def _relative_error(actual, expected):
+    actual, expected = np.asarray(actual), np.asarray(expected)
+    return float(np.linalg.norm(actual - expected) / np.linalg.norm(expected))
+
+
+@pytest.mark.parametrize("max_r_kind", ["default", "none"])
+@pytest.mark.parametrize("order", _ORDERS)
+@pytest.mark.parametrize("half_img", [False, True])
+@pytest.mark.parametrize("N,upsampling", [(8, 1), (8, 2), (7, 1)])
+def test_half_volume_backproject_is_restriction_of_full_volume_backproject(
+    N, upsampling, half_img, order, max_r_kind, gpu_device, request
+):
+    """The default half-volume result keeps the stored ``kz >= 0`` voxels of the full-volume backprojection.
+
+    Arbitrary complex images, so this is a statement about the operator, not about Hermitian data. It fails if a
+    ``kz < 0`` voxel is folded into the half volume. Float64.
+    """
+    if N % 2 and max_r_kind == "none":
+        # Separate, pre-existing bug: the half-volume kernels take the full z size as 2 * (N // 2), so for odd N
+        # they treat kz = -(N // 2) as a self-conjugate Nyquist plane.  The default max_r never reaches it.
+        request.applymarker(
+            pytest.mark.xfail(strict=True, reason="odd-N half-volume kernels treat kz = -(N // 2) as Nyquist")
+        )
+    _skip_if_no_cuda()
+    import recovar.core.fourier_transform_utils as ftu
+
+    rng = np.random.default_rng(21)
+    image_shape = (N, N)
+    volume_shape = (upsampling * N,) * 3
+    max_r = N // 2 - 1 if max_r_kind == "default" else None
+    n_pixels = N * (N // 2 + 1) if half_img else N * N
+
+    with jax.default_device(gpu_device):
+        rots = _rotations_f64(6, rng)
+        images = _crandn(rng, (6, n_pixels))
+        kwargs = dict(order=order, half_img=half_img, max_r=max_r, fold=False)
+        full = _cuda_backproject_zero_init(images, rots, image_shape, volume_shape, half_vol=False, **kwargs)
+        half = _cuda_backproject_zero_init(images, rots, image_shape, volume_shape, half_vol=True, **kwargs)
+
+    expected = ftu.full_volume_to_half_volume(full, volume_shape).reshape(-1)
+    assert _relative_error(half, expected) < 1e-10
+
+
+@pytest.mark.parametrize("order", _ORDERS)
+@pytest.mark.parametrize("half_img", [False, True])
+@pytest.mark.parametrize("N", [8, 7])
+def test_hermitian_fold_is_transpose_of_half_volume_expansion(N, half_img, order, gpu_device):
+    """``hermitian_fold=True`` is ``E^T`` of the full-volume backprojection, ``E = half_volume_to_full_volume``.
+
+    The reference pulls the full-volume backprojection back through ``jax.vjp`` of the expansion, so it does not
+    depend on any kernel. Arbitrary complex images. Float64.
+    """
+    _skip_if_no_cuda()
+    import recovar.core.fourier_transform_utils as ftu
+
+    rng = np.random.default_rng(22)
+    image_shape = (N, N)
+    volume_shape = (N,) * 3
+    n_pixels = N * (N // 2 + 1) if half_img else N * N
+    half_size = int(np.prod(ftu.volume_shape_to_half_volume_shape(volume_shape)))
+
+    with jax.default_device(gpu_device):
+        rots = _rotations_f64(6, rng)
+        images = _crandn(rng, (6, n_pixels))
+        kwargs = dict(order=order, half_img=half_img, max_r=N // 2 - 1)
+        full = _cuda_backproject_zero_init(
+            images, rots, image_shape, volume_shape, half_vol=False, fold=False, **kwargs
+        )
+        fold = _cuda_backproject_zero_init(images, rots, image_shape, volume_shape, half_vol=True, fold=True, **kwargs)
+        _, pullback = jax.vjp(
+            lambda h: ftu.half_volume_to_full_volume(h, volume_shape).reshape(-1), jnp.zeros(half_size, images.dtype)
+        )
+        expected = pullback(full)[0]
+
+    assert _relative_error(fold, expected) < 1e-10
+
+
+@pytest.mark.parametrize("order", _ORDERS)
+@pytest.mark.parametrize("half_img", [False, True])
+@pytest.mark.parametrize("N", [8, 7])
+def test_hermitian_fold_is_twice_the_restriction_on_interior_kz(N, half_img, order, gpu_device):
+    """For Hermitian images the transpose is ``D`` times the default half-volume result.
+
+    ``D = linalg.half_spectrum_last_axis_weights``: 2 on interior ``kz``, 1 on ``kz = 0`` and the Nyquist plane.
+    This is the factor a reconstruction would otherwise inherit. Float64.
+    """
+    _skip_if_no_cuda()
+    import recovar.core.fourier_transform_utils as ftu
+    from recovar.core import linalg
+
+    rng = np.random.default_rng(23)
+    image_shape = (N, N)
+    volume_shape = (N,) * 3
+
+    with jax.default_device(gpu_device):
+        rots = _rotations_f64(6, rng)
+        full_images = ftu.get_dft2(jnp.asarray(rng.standard_normal((6, N, N)))).reshape(6, -1)
+        images = ftu.full_image_to_half_image(full_images, image_shape) if half_img else full_images
+        kwargs = dict(order=order, half_img=half_img, max_r=N // 2 - 1, half_vol=True)
+        crop = _cuda_backproject_zero_init(images, rots, image_shape, volume_shape, fold=False, **kwargs)
+        fold = _cuda_backproject_zero_init(images, rots, image_shape, volume_shape, fold=True, **kwargs)
+
+    packed = ftu.volume_shape_to_half_volume_shape(volume_shape)
+    weights = linalg.half_spectrum_last_axis_weights(N, dtype=jnp.float64)
+    assert _relative_error(fold, (crop.reshape(packed) * weights).reshape(-1)) < 1e-10
+
+
+def test_hermitian_fold_requires_a_half_volume(gpu_device):
+    """The fold is a half-volume convention: asking for it with a full volume is an error, not a silent no-op."""
+    _skip_if_no_cuda()
+    from recovar.cuda_backproject import backproject
+
+    with jax.default_device(gpu_device):
+        with pytest.raises(ValueError, match="hermitian_fold"):
+            backproject(
+                jnp.zeros(8**3, jnp.complex64),
+                jnp.zeros((1, 64), jnp.complex64),
+                jnp.eye(3, dtype=jnp.float32)[None],
+                (8, 8),
+                (8, 8, 8),
+                half_volume=False,
+                hermitian_fold=True,
+            )

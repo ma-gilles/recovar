@@ -1439,7 +1439,13 @@ def test_adjoint_jax_half_image_matches_expand(monkeypatch, disc_type):
 @pytest.mark.parametrize("disc_type", ["nearest", "linear_interp"])
 @pytest.mark.parametrize("half_volume", [False, True])
 def test_adjoint_dot_product_consistency(monkeypatch, disc_type, half_volume):
-    """Adjoint dot-product test: <A*y, x> == <y, Ax> for full-image paths."""
+    """Adjoint dot-product test: <A*y, x> == <y, Ax> for full-image paths.
+
+    With ``half_volume=True`` the backprojection is the reconstruction operator, the
+    full-volume backprojection restricted to ``kz >= 0``, not the transpose of the
+    half-volume projection.  For Hermitian images its expansion is the full-volume
+    backprojection, so the identity is checked on the expanded volume.
+    """
     monkeypatch.setattr(core_slicing, "_on_gpu", lambda: False)
 
     rng = np.random.default_rng(5005)
@@ -1469,7 +1475,11 @@ def test_adjoint_dot_product_consistency(monkeypatch, disc_type, half_volume):
         )
     )
 
-    img_in = jnp.array(_random_complex_images_half_image(rng, n_images, image_shape))
+    if half_volume:
+        real_images = rng.standard_normal((n_images,) + image_shape).astype(np.float32)
+        img_in = jnp.asarray(fourier_transform_utils.get_dft2(real_images)).reshape(n_images, -1).astype(jnp.complex64)
+    else:
+        img_in = jnp.array(_random_complex_images_half_image(rng, n_images, image_shape))
 
     # Adjoint: A*y
     adj = np.asarray(
@@ -1484,7 +1494,11 @@ def test_adjoint_dot_product_consistency(monkeypatch, disc_type, half_volume):
         )
     )
 
-    lhs = np.sum(adj.conj() * np.asarray(vol_in)).real
+    if half_volume:
+        adj = np.asarray(fourier_transform_utils.half_volume_to_full_volume(jnp.asarray(adj), volume_shape))
+        lhs = np.sum(adj.conj() * np.asarray(vol_full)).real
+    else:
+        lhs = np.sum(adj.conj() * np.asarray(vol_in)).real
     rhs = np.sum(np.asarray(img_in).conj() * fwd).real
 
     np.testing.assert_allclose(

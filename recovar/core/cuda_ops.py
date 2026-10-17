@@ -4,14 +4,20 @@ Provides ``cuda_project`` — a single unified projection function that handles
 all four volume/image format combinations (full/half volume × full/half image)
 via ``half_volume`` and ``half_image`` parameters.
 
-The custom_vjp backward pass calls the CUDA backproject kernel **directly**
-with matching half_volume/half_image flags.  For half-volume outputs, the
-backward uses Hermitian-fold scatter with CONJ_MODE optimization (~2x scatter
-speedup for HALF_IMG + HALF_VOL: doubles primary weights on interior kz and
-skips redundant conjugate scatters).
+The custom_vjp backward pass is the exact transpose of the forward map and calls
+the CUDA backproject kernel **directly** into the matching volume layout.  The
+kernel's default half-volume result is the *reconstruction* convention (the
+full-volume backprojection restricted to the stored kz >= 0 voxels), which is not
+a transpose; the backward asks for ``hermitian_fold=True``, the Hermitian-fold
+scatter that is the exact transpose of ``half_volume_to_full_volume``, so interior
+kz entries carry twice the full-volume value.  A half-image cotangent is placed
+at its packed pixels of a zero full image (the transpose of the packing) and
+scattered as a full image: the ``half_image=True`` kernel also scatters the
+Hermitian partner of every interior packed pixel (the adjoint of the *full*-image
+operator, which is what reconstruction wants), and would double count in a vjp.
 
 IMPORTANT: Do NOT replace the backward with full-volume backproject + contract.
-That would lose half-volume memory savings and the ~2x CONJ_MODE speedup.
+That would lose the half-volume memory savings.
 
 Import from ``slicing.py``; do not import ``cuda_backproject`` directly from
 user-facing modules.
@@ -66,6 +72,12 @@ def _cuda_project_bwd(image_shape, volume_shape, order, half_volume, half_image,
     else:
         vol_shape = volume_shape
     vol = jnp.zeros(int(np.prod(vol_shape)), dtype=g.dtype)
+    if half_image:
+        # Transpose of the packing: each packed pixel's cotangent goes to its own
+        # full-grid pixel once; the Hermitian partner pixels are never read by the
+        # forward map and stay zero.
+        pixel_indices = ftu._half_image_pixel_indices(image_shape)
+        g = jnp.zeros((g.shape[0], int(np.prod(image_shape))), dtype=g.dtype).at[:, pixel_indices].set(g)
     grad_vol = backproject(
         vol,
         g,
@@ -74,8 +86,9 @@ def _cuda_project_bwd(image_shape, volume_shape, order, half_volume, half_image,
         volume_shape,
         order=order,
         half_volume=half_volume,
-        half_image=half_image,
+        half_image=False,
         max_r=max_r,
+        hermitian_fold=half_volume,
     )
     return grad_vol, jnp.zeros_like(rotation_matrices)
 
