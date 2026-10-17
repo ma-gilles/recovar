@@ -1,5 +1,13 @@
 # Documentation Development Guide
 
+## Scope
+
+The GUI-first guidance below applies to user-facing product documentation.
+`docs/development/` and `docs/math/` are for contributors and methods developers:
+use precise technical prose, runnable commands, mathematical/code references
+and explicit evidence states there. Follow the root development contract and
+keep historical experiments separate from current instructions.
+
 ## Vision
 
 The docs should be the **best documentation among cryo-EM heterogeneity tools** (cryoDRGN, RELION multi-body, 3DFlex, etc.). Inspired by **cryoSPARC docs**: clean, GUI-focused, professional, good screenshots.
@@ -32,18 +40,19 @@ When a user lands on the homepage, they should immediately see:
 ## Build & Preview
 
 ```bash
-pip install mkdocs mkdocs-material mkdocstrings mkdocstrings-python
-mkdocs serve    # preview at http://localhost:8000/recovar/
-mkdocs build    # build to site/
+pixi install -e docs --locked
+pixi run -e docs mkdocs serve    # preview at http://localhost:8000/recovar/
+pixi run -e docs docs-build      # strict build to site/
 ```
 
-GitHub Pages deploys from the `main` branch automatically.
+The docs workflow deploys on matching pushes to `dev` or manual dispatch; see `.github/workflows/docs.yml`.
 
 ## Structure
 
 ```
 docs/
   index.md                    # Homepage — hero, features, example outputs
+  development/                # Contributor code map, Della runbook, benchmark contract and current EM status
   getting-started/            # Install tab: installation, quickstart, docker, testing
   guide/                      # Processing tab: tutorials, workflow, advanced topics
   reference/                  # CLI & API tab: CLI commands, file formats, Python API
