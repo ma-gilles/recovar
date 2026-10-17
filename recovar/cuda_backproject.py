@@ -714,7 +714,27 @@ def _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image, max_r
     )
 
 
-@functools.partial(jax.jit, static_argnums=(3, 4, 5, 6, 7, 8))
+# ``half_volume`` attribute value that selects the Hermitian fold (see ``_half_volume_attr``).
+_HALF_VOLUME_FOLD = 2
+
+
+def _half_volume_attr(half_volume: bool, hermitian_fold: bool) -> np.int64:
+    """Encode the half-volume convention in the ``half_volume`` FFI attribute.
+
+    0 is a full volume.  1 is a packed half volume in the *reconstruction*
+    convention: the full-volume backprojection restricted to the stored ``kz >= 0``
+    voxels, so ``half_volume_to_full_volume`` of it is the full-volume
+    backprojection (for Hermitian data).  2 is a packed half volume in the
+    *transpose* convention: the exact adjoint of ``half_volume_to_full_volume``,
+    where each ``kz < 0`` voxel is folded onto its Hermitian partner, so interior
+    ``kz`` carries twice the full-volume value for Hermitian data.
+    """
+    if hermitian_fold and not half_volume:
+        raise ValueError("hermitian_fold applies to a half volume only (half_volume=True)")
+    return np.int64(_HALF_VOLUME_FOLD if hermitian_fold else int(half_volume))
+
+
+@functools.partial(jax.jit, static_argnums=(3, 4, 5, 6, 7, 8, 9))
 def backproject(
     volume: jax.Array,
     images: jax.Array,
@@ -725,6 +745,7 @@ def backproject(
     half_volume: bool = False,
     half_image: bool = False,
     max_r: float | None = None,
+    hermitian_fold: bool = False,
 ) -> jax.Array:
     """Back-project *images* into *volume* (accumulate in-place via aliasing).
 
@@ -741,10 +762,22 @@ def backproject(
     volume_shape : (N0, N1, N2)   — full dimensions even when half_volume=True.
     order : 0 (nearest) or 1 (trilinear).
     half_volume : if True, volume is rfft-packed ``(N0*N1*(N2//2+1),)``.
+        The result is the full-volume backprojection restricted to the stored
+        ``kz >= 0`` voxels (the reconstruction convention), so it carries the
+        same values as the full volume and ``half_volume_to_full_volume`` of it
+        is the full-volume backprojection for Hermitian data.
     half_image : if True, images are rfft-packed ``(n, H*(W//2+1))``.
         Hermitian conjugates are scattered automatically.
     max_r : if not None, skip pixels whose rotated frequency radius
         exceeds this value (RELION-style sphere clipping).
+    hermitian_fold : with ``half_volume=True``, return the exact transpose of
+        ``half_volume_to_full_volume`` instead: each ``kz < 0`` voxel is folded
+        onto its Hermitian partner, so interior ``kz`` carries ``F(k) + conj(F(-k))``,
+        twice the full-volume value for Hermitian data.  This is what the vjp of
+        a half-volume projection needs (``core.cuda_ops``); reconstruction wants
+        the default.  Use it with ``half_image=False``: with ``half_image=True``
+        the kernel also scatters each interior pixel's Hermitian partner, which
+        a transpose must not do.
 
     Returns
     -------
@@ -753,6 +786,7 @@ def backproject(
     _ensure_ffi()
     _validate_inputs(volume_shape, image_shape, order, half_volume, half_image)
     kw, ih, iw_eff = _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image, max_r)
+    kw["half_volume"] = _half_volume_attr(half_volume, hermitian_fold)
     rot6 = _rot_to_compact(rotation_matrices, _volume_real_dtype(volume))
     out_type = jax.ShapeDtypeStruct(volume.shape, volume.dtype)
 
@@ -831,7 +865,8 @@ def batch_backproject(
     rotation_matrices : real, shape ``(n_images, 3, 3)``
         Shared across all volumes in the batch.
     image_shape, volume_shape, order, half_volume, half_image :
-        Same semantics as ``backproject()``.
+        Same semantics as ``backproject()``; ``half_volume=True`` is the
+        reconstruction convention (no Hermitian fold).
     max_r : if not None, skip pixels whose rotated frequency radius
         exceeds this value (RELION-style sphere clipping).
 

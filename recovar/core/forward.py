@@ -91,7 +91,9 @@ def adjoint_forward_model(
     half_image : if True, *slices* are rfft-packed half-spectrum images.
         CTF is computed in half-spectrum format when ``skip_ctf=False``.
     half_volume : if True, output volume uses rfft-packed layout
-        ``(N0 * N1 * (N2 // 2 + 1),)``.  Only supported with CUDA.
+        ``(N0 * N1 * (N2 // 2 + 1),)``: the full-volume backprojection restricted
+        to the stored ``kz >= 0`` voxels, not the transpose of ``forward_model``
+        (see :func:`adjoint_slice_volume`).
     """
     if not skip_ctf:
         slices = slices * config.compute_ctf(ctf_params, half_image=half_image)

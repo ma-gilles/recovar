@@ -438,12 +438,17 @@ def _scatter_trilinear_full(n_voxels, g0, g1, g2, vals, N0, N1, N2):
     return vol
 
 
-def _scatter_trilinear_half(n_voxels_half, g0, g1, g2, vals, N0, N1, N2):
+def _scatter_trilinear_half(n_voxels_half, g0, g1, g2, vals, N0, N1, N2, hermitian_fold=False):
     """Trilinear scatter-add to a half (kz ≥ 0) volume.
 
-    Per-neighbor Hermitian fold: for each of the 8 trilinear neighbors,
-    if kz < 0, fold to Hermitian partner and conjugate the value.
-    This matches RELION's backprojection into the asymmetric half.
+    For each of the 8 trilinear neighbors with kz < 0 (the even-N Nyquist slot
+    ``kz = -N/2`` excepted, which is stored directly):
+
+    * ``hermitian_fold=False`` (the reconstruction convention): the neighbor is dropped,
+      because the half volume stores only ``kz >= 0``.  The result is the full-volume
+      scatter restricted to the stored voxels.
+    * ``hermitian_fold=True``: the neighbor is folded onto its Hermitian partner with
+      the value conjugated, the exact transpose of ``half_volume_to_full_volume``.
     """
     ic2 = N2 // 2
     N2_half = ic2 + 1
@@ -485,6 +490,8 @@ def _scatter_trilinear_half(n_voxels_half, g0, g1, g2, vals, N0, N1, N2):
                 hkz = jnp.where(use_neg, -kz_mapped, kz_mapped)
 
                 in_bounds = in_bounds & (hkz >= 0) & (hkz < N2_half)
+                if not hermitian_fold:
+                    in_bounds = in_bounds & ~use_neg
                 flat_idx = sj0 * stride0 + sj1 * stride1 + hkz
                 flat_idx = jnp.where(in_bounds, flat_idx, 0)
 
@@ -510,8 +517,13 @@ def _scatter_nearest_full(n_voxels, g0, g1, g2, vals, N0, N1, N2):
     return jnp.zeros(n_voxels, dtype=vals.dtype).at[flat_idx].add(weighted)
 
 
-def _scatter_nearest_half(n_voxels_half, g0, g1, g2, vals, N0, N1, N2):
-    """Nearest-neighbor scatter-add to a half volume with Hermitian fold."""
+def _scatter_nearest_half(n_voxels_half, g0, g1, g2, vals, N0, N1, N2, hermitian_fold=False):
+    """Nearest-neighbor scatter-add to a half volume.
+
+    A voxel with ``kz < 0`` is dropped (``hermitian_fold=False``, the reconstruction
+    convention) or folded onto its Hermitian partner with the value conjugated
+    (``hermitian_fold=True``); see :func:`_scatter_trilinear_half`.
+    """
     ic2 = N2 // 2
     N2_half = ic2 + 1
 
@@ -532,6 +544,8 @@ def _scatter_nearest_half(n_voxels_half, g0, g1, g2, vals, N0, N1, N2):
     hkz = jnp.where(use_neg, -kz_mapped, kz_mapped)
 
     in_bounds = (i0 >= 0) & (i0 < N0) & (i1 >= 0) & (i1 < N1) & (i2 >= 0) & (i2 < N2) & (hkz >= 0) & (hkz < N2_half)
+    if not hermitian_fold:
+        in_bounds = in_bounds & ~use_neg
     flat_idx = sj0 * (N1 * N2_half) + sj1 * N2_half + hkz
     flat_idx = jnp.where(in_bounds, flat_idx, 0)
     sv = jnp.where(use_neg, jnp.conj(vals), vals)
@@ -540,7 +554,18 @@ def _scatter_nearest_half(n_voxels_half, g0, g1, g2, vals, N0, N1, N2):
 
 
 def _backproject_one_image(
-    pixel_freqs, rotation_matrix, img_vals, center, N0, N1, N2, order, half_volume, max_r2, n_voxels_out
+    pixel_freqs,
+    rotation_matrix,
+    img_vals,
+    center,
+    N0,
+    N1,
+    N2,
+    order,
+    half_volume,
+    max_r2,
+    n_voxels_out,
+    hermitian_fold=False,
 ):
     """Backproject one image into a volume.
 
@@ -566,9 +591,9 @@ def _backproject_one_image(
 
     if half_volume:
         if order == 1:
-            return _scatter_trilinear_half(n_voxels_out, g0, g1, g2, img_vals, N0, N1, N2)
+            return _scatter_trilinear_half(n_voxels_out, g0, g1, g2, img_vals, N0, N1, N2, hermitian_fold)
         else:
-            return _scatter_nearest_half(n_voxels_out, g0, g1, g2, img_vals, N0, N1, N2)
+            return _scatter_nearest_half(n_voxels_out, g0, g1, g2, img_vals, N0, N1, N2, hermitian_fold)
     else:
         if order == 1:
             return _scatter_trilinear_full(n_voxels_out, g0, g1, g2, img_vals, N0, N1, N2)
@@ -576,8 +601,18 @@ def _backproject_one_image(
             return _scatter_nearest_full(n_voxels_out, g0, g1, g2, img_vals, N0, N1, N2)
 
 
-@functools.partial(jax.jit, static_argnums=(2, 3, 4, 5, 6, 7))
-def backproject(imgs, rotations, image_shape, volume_shape, order=1, half_volume=False, half_image=False, max_r=None):
+@functools.partial(jax.jit, static_argnums=(2, 3, 4, 5, 6, 7, 8))
+def backproject(
+    imgs,
+    rotations,
+    image_shape,
+    volume_shape,
+    order=1,
+    half_volume=False,
+    half_image=False,
+    max_r=None,
+    hermitian_fold=False,
+):
     """RELION-style backprojection (adjoint of forward projection).
 
     Scatters 2D Fourier image values back into a 3D Fourier volume using
@@ -594,13 +629,21 @@ def backproject(imgs, rotations, image_shape, volume_shape, order=1, half_volume
         image_shape: ``(H, W)`` full real-space image dimensions
         volume_shape: ``(N0, N1, N2)`` full volume dimensions
         order: 0 or 1
-        half_volume: if True, output is kz ≥ 0 half-volume
+        half_volume: if True, output is the kz ≥ 0 half-volume holding the
+            full-volume backprojection restricted to the stored voxels (the
+            reconstruction convention)
         half_image: if True, input images are rfft-packed
         max_r: optional spherical frequency cutoff
+        hermitian_fold: with ``half_volume``, fold each kz < 0 voxel onto its
+            Hermitian partner instead (the exact transpose of
+            ``half_volume_to_full_volume``; interior kz carries twice the
+            full-volume value for Hermitian data).
 
     Returns:
         Volume: flat ``(n_voxels,)`` complex
     """
+    if hermitian_fold and not half_volume:
+        raise ValueError("hermitian_fold applies to a half volume only (half_volume=True)")
     N0, N1, N2 = volume_shape
     H, W = image_shape
 
@@ -656,6 +699,7 @@ def backproject(imgs, rotations, image_shape, volume_shape, order=1, half_volume
             half_volume,
             max_r2,
             n_voxels,
+            hermitian_fold,
         )
 
         if half_image:
@@ -677,9 +721,9 @@ def backproject(imgs, rotations, image_shape, volume_shape, order=1, half_volume
 
             if half_volume:
                 if order == 1:
-                    vol = vol + _scatter_trilinear_half(n_voxels, cg0, cg1, cg2, conj_vals, N0, N1, N2)
+                    vol = vol + _scatter_trilinear_half(n_voxels, cg0, cg1, cg2, conj_vals, N0, N1, N2, hermitian_fold)
                 else:
-                    vol = vol + _scatter_nearest_half(n_voxels, cg0, cg1, cg2, conj_vals, N0, N1, N2)
+                    vol = vol + _scatter_nearest_half(n_voxels, cg0, cg1, cg2, conj_vals, N0, N1, N2, hermitian_fold)
             else:
                 if order == 1:
                     vol = vol + _scatter_trilinear_full(n_voxels, cg0, cg1, cg2, conj_vals, N0, N1, N2)

@@ -19,7 +19,7 @@ import pytest
 from jax import random
 
 from recovar.core import fourier_transform_utils as ftu
-from recovar.core import relion_interp, slicing
+from recovar.core import linalg, relion_interp, slicing
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -382,7 +382,8 @@ class TestAdjointConsistency:
             half_image=half_image,
         )
 
-        # Adjoint: A†y
+        # Adjoint: A†y.  The transpose of the half-volume expansion, so the Hermitian fold: the default
+        # half-volume result is the reconstruction convention, which is not an adjoint of the projection.
         Ady = relion_interp.backproject(
             y,
             rots,
@@ -391,6 +392,7 @@ class TestAdjointConsistency:
             order=order,
             half_volume=half_volume,
             half_image=half_image,
+            hermitian_fold=half_volume,
         )
 
         # ⟨Ax, y⟩
@@ -693,7 +695,7 @@ class TestAdjointHalfImage:
             half_image=False,
         )
 
-        # Adjoint: A†y via half_image backprojection
+        # Adjoint: A†y via half_image backprojection (Hermitian fold for a half volume, see TestAdjointConsistency)
         Ady = relion_interp.backproject(
             y_half,
             rots,
@@ -702,6 +704,7 @@ class TestAdjointHalfImage:
             order=order,
             half_volume=half_volume,
             half_image=True,
+            hermitian_fold=half_volume,
         )
 
         lhs = jnp.sum(jnp.conj(Ax) * y_full).real
@@ -952,6 +955,133 @@ class TestSlicingDispatch:
             rtol=1e-5,
             atol=1e-6,
             err_msg=f"Dispatch vs direct: order={order} hv={half_volume} hi={half_image}",
+        )
+
+
+# ---------------------------------------------------------------------------
+# Test: half-volume backprojection, reconstruction convention vs Hermitian fold
+# ---------------------------------------------------------------------------
+
+
+class TestHalfVolumeBackprojectionConvention:
+    """``half_volume=True`` is the full-volume backprojection restricted to the stored ``kz >= 0`` voxels.
+
+    That is the reconstruction convention: a regularization added voxel by voxel means the same in either
+    layout.  ``hermitian_fold=True`` is the exact transpose of ``half_volume_to_full_volume`` (what a vjp needs):
+    interior ``kz`` carries ``F(k) + conj(F(-k))``.  The CUDA kernels follow the same two conventions
+    (``tests/unit/test_cuda_jax_equivalence.py``).
+
+    For Hermitian images the fold equals ``D`` times the default, ``D = half_spectrum_last_axis_weights``.  That
+    needs a Hermitian full-volume accumulation, and this scatter rounds its interpolation weights to float32, so
+    the two tests that depend on it use the float32-level ``_FLOAT32_RTOL``.  The ``D`` comparison also runs in
+    float64 on the CUDA kernels, which hold it to 1e-10
+    (``test_hermitian_fold_is_twice_the_restriction_on_interior_kz`` in ``tests/unit/test_cuda_jax_equivalence.py``).
+    """
+
+    _FLOAT32_RTOL = 1e-6  # float32 eps is 1.2e-7; the float32 weights give 4e-8 to 7e-8 here
+
+    @staticmethod
+    def _inputs(N, half_image, seed):
+        rng = np.random.default_rng(seed)
+        q, r = np.linalg.qr(rng.standard_normal((6, 3, 3)))
+        q = q * np.sign(np.diagonal(r, axis1=1, axis2=2))[:, None, :]
+        q[np.linalg.det(q) < 0, :, 0] *= -1
+        n_pixels = N * (N // 2 + 1) if half_image else N * N
+        images = rng.standard_normal((6, n_pixels)) + 1j * rng.standard_normal((6, n_pixels))
+        return jnp.asarray(q), jnp.asarray(images)
+
+    @pytest.mark.parametrize("max_r_kind", ["default", "none"])
+    @pytest.mark.parametrize("order", [0, 1])
+    @pytest.mark.parametrize("half_image", [False, True], ids=["full_image", "half_image"])
+    @pytest.mark.parametrize("N", [8, 7])
+    def test_half_volume_is_restriction_of_full_volume(self, N, half_image, order, max_r_kind):
+        """Arbitrary complex images, so this is a statement about the operator, not about Hermitian data."""
+        rots, images = self._inputs(N, half_image, seed=31)
+        max_r = N // 2 - 1 if max_r_kind == "default" else None
+        kwargs = dict(order=order, half_image=half_image, max_r=max_r)
+        full = relion_interp.backproject(images, rots, (N, N), (N,) * 3, half_volume=False, **kwargs)
+        half = relion_interp.backproject(images, rots, (N, N), (N,) * 3, half_volume=True, **kwargs)
+
+        expected = ftu.full_volume_to_half_volume(full, (N,) * 3).reshape(-1)
+        np.testing.assert_allclose(
+            np.asarray(half), np.asarray(expected), rtol=1e-10, atol=1e-10 * float(jnp.abs(expected).max())
+        )
+
+    @pytest.mark.parametrize("order", [0, 1])
+    @pytest.mark.parametrize("half_image", [False, True], ids=["full_image", "half_image"])
+    @pytest.mark.parametrize("N", [8, 7])
+    def test_hermitian_fold_is_transpose_of_half_volume_expansion(self, N, half_image, order):
+        """The reference pulls the full-volume backprojection back through ``jax.vjp`` of the expansion."""
+        rots, images = self._inputs(N, half_image, seed=32)
+        volume_shape = (N,) * 3
+        kwargs = dict(order=order, half_image=half_image, max_r=N // 2 - 1)
+        full = relion_interp.backproject(images, rots, (N, N), volume_shape, half_volume=False, **kwargs)
+        fold = relion_interp.backproject(
+            images, rots, (N, N), volume_shape, half_volume=True, hermitian_fold=True, **kwargs
+        )
+
+        half_size = int(np.prod(ftu.volume_shape_to_half_volume_shape(volume_shape)))
+        _, pullback = jax.vjp(
+            lambda h: ftu.half_volume_to_full_volume(h, volume_shape).reshape(-1), jnp.zeros(half_size, images.dtype)
+        )
+        expected = pullback(full)[0]
+        np.testing.assert_allclose(
+            np.asarray(fold), np.asarray(expected), rtol=1e-10, atol=1e-10 * float(jnp.abs(expected).max())
+        )
+
+    def test_hermitian_fold_requires_a_half_volume(self):
+        """The fold is a half-volume convention: asking for it with a full volume is an error, not a no-op."""
+        rots, images = self._inputs(8, False, seed=33)
+        with pytest.raises(ValueError, match="hermitian_fold"):
+            relion_interp.backproject(images, rots, (8, 8), (8,) * 3, half_volume=False, hermitian_fold=True)
+
+    @staticmethod
+    def _hermitian_images(N, half_image, seed):
+        rng = np.random.default_rng(seed)
+        full = ftu.get_dft2(jnp.asarray(rng.standard_normal((6, N, N)))).reshape(6, -1)
+        return ftu.full_image_to_half_image(full, (N, N)) if half_image else full
+
+    @pytest.mark.parametrize("order", [0, 1])
+    @pytest.mark.parametrize("half_image", [False, True], ids=["full_image", "half_image"])
+    @pytest.mark.parametrize("N", [8, 7])
+    def test_full_volume_backprojection_of_hermitian_images_is_hermitian(self, N, half_image, order):
+        """A Hermitian backprojection is Hermitian, to float32 precision (the interpolation weights are float32)."""
+        rots, _ = self._inputs(N, half_image, seed=34)
+        images = self._hermitian_images(N, half_image, seed=34)
+        volume_shape = (N,) * 3
+        full = relion_interp.backproject(
+            images, rots, (N, N), volume_shape, order=order, half_image=half_image, max_r=N // 2 - 1
+        )
+        grid = np.asarray(full).reshape(volume_shape)
+        partner = [(N - (N & 1) - np.arange(N)) % N] * 3
+        mirrored = np.conj(grid[np.ix_(*partner)])
+        assert np.linalg.norm(grid - mirrored) / np.linalg.norm(grid) < self._FLOAT32_RTOL
+
+    @pytest.mark.parametrize("order", [0, 1])
+    @pytest.mark.parametrize("half_image", [False, True], ids=["full_image", "half_image"])
+    @pytest.mark.parametrize("N", [8, 7])
+    def test_hermitian_fold_is_twice_the_restriction_on_interior_kz(self, N, half_image, order):
+        """For Hermitian images the transpose is ``D`` times the default half-volume result.
+
+        ``D`` is 2 on interior ``kz`` and 1 on ``kz = 0`` and the Nyquist plane: the factor a reconstruction would
+        otherwise inherit.
+        """
+        rots, _ = self._inputs(N, half_image, seed=35)
+        images = self._hermitian_images(N, half_image, seed=35)
+        volume_shape = (N,) * 3
+        kwargs = dict(order=order, half_volume=True, half_image=half_image, max_r=N // 2 - 1)
+        crop = relion_interp.backproject(images, rots, (N, N), volume_shape, **kwargs)
+        fold = relion_interp.backproject(images, rots, (N, N), volume_shape, hermitian_fold=True, **kwargs)
+
+        packed = ftu.volume_shape_to_half_volume_shape(volume_shape)
+        weights = linalg.half_spectrum_last_axis_weights(N, dtype=jnp.float64)
+        expected = (crop.reshape(packed) * weights).reshape(-1)
+        # float32 interpolation weights leave the full-volume accumulation Hermitian only to float32 precision
+        np.testing.assert_allclose(
+            np.asarray(fold),
+            np.asarray(expected),
+            rtol=self._FLOAT32_RTOL,
+            atol=self._FLOAT32_RTOL * float(jnp.abs(expected).max()),
         )
 
 
