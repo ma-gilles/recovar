@@ -52,7 +52,6 @@ echo ">>> Starting server..."
 cd "$REPO_DIR"
 pixi run python -m recovar.gui_v2.backend.main --port "$PORT" > "$QA_DIR/server.log" 2>&1 &
 SERVER_PID=$!
-sleep 5
 
 cleanup() {
     kill $SERVER_PID 2>/dev/null || true
@@ -63,6 +62,11 @@ trap cleanup EXIT
 
 # Check server — it may ignore --port
 ACTUAL_PORT=$PORT
+for _ in $(seq 1 60); do
+    curl -sf "http://localhost:$PORT/api/system/info" > /dev/null 2>&1 && break
+    kill -0 "$SERVER_PID" 2>/dev/null || break
+    sleep 1
+done
 if ! curl -sf "http://localhost:$PORT/api/system/info" > /dev/null 2>&1; then
     ACTUAL_PORT=$(grep -oP 'running on http://127\.0\.0\.1:\K\d+' "$QA_DIR/server.log" | head -1)
     if [[ -n "$ACTUAL_PORT" ]] && curl -sf "http://localhost:$ACTUAL_PORT/api/system/info" > /dev/null 2>&1; then

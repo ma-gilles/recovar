@@ -60,6 +60,15 @@ def main():
     sim_path = os.path.join(dataset_dir, "simulation_info.pkl")
     with open(sim_path, "rb") as f:
         sim_info = pickle.load(f)
+    # This script deliberately runs the published package, whose flat
+    # ``recovar.simulator`` layout predates the atomic-volume transform, so it
+    # cannot rebuild corrected ground truth. Refuse rather than score against
+    # uncorrected volumes.
+    if (sim_info.get("atomic_solvent_correction") or {}).get("enabled", False):
+        raise SystemExit(
+            f"{sim_path} was simulated with the atomic solvent/B-factor transform; "
+            "the published recovar cannot load that ground truth."
+        )
     gt_noise = np.asarray(sim_info["noise_variance"]).ravel()
     gt_contrasts = np.asarray(sim_info["per_image_contrast"]).ravel()
     pa = np.asarray(sim_info["image_assignment"]).ravel()
