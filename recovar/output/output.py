@@ -87,20 +87,35 @@ def plot_over_density(density, trajectories = None, latent_space_bounds = None, 
     trajectory paths, subsampled volume positions, and/or cluster center markers.
 
     Args:
-        density: N-D density array on a regular grid (or None to compute on the fly).
-        trajectories: List of trajectory arrays, each of shape (n_pts, n_dims).
-        latent_space_bounds: Array of shape (n_dims, 2) giving [min, max] per axis.
-        subsampled: List of subsampled trajectory arrays for volume markers.
-        colors: Color list for trajectories.
-        plot_folder: Directory to save PNG files. If None, plots are not saved.
-        cmap: Matplotlib colormap name for the density.
-        same_st_end: If True, only draw start/end markers for the first trajectory.
-        zs: Latent coordinates, shape (n_particles, n_dims).
-        cov_zs: Per-particle covariance matrices for on-the-fly density computation.
-        points: Extra points (e.g. cluster centers) to scatter on top.
-        projection_function: Callable to project the density onto 2 axes.
-        annotate: Whether to annotate *points* with integer labels.
-        slice_point: Slice coordinate for the projection function.
+        density (numpy.ndarray | jax.Array | None): N-D density array on a regular grid (or None to
+            compute on the fly).
+        trajectories (Sequence[numpy.ndarray] | None): List of trajectory arrays, each of shape
+            (n_pts, n_dims).
+        latent_space_bounds (numpy.ndarray | jax.Array | None): Array of shape (n_dims, 2) giving
+            [min, max] per axis.
+        subsampled (Sequence[numpy.ndarray] | None): List of subsampled trajectory arrays for volume
+            markers.
+        colors (Sequence[str | tuple[float, ...]] | None): Color list for trajectories.
+        plot_folder (str | None): Filename prefix for PNG files; include a trailing separator
+            when using a directory. ``None`` leaves figures open.
+        cmap (str | matplotlib.colors.Colormap): Matplotlib colormap name for the density.
+        same_st_end (bool): If True, only draw start/end markers for the first trajectory.
+        zs (numpy.ndarray | jax.Array | None): Latent coordinates, shape (n_particles, n_dims).
+        cov_zs (numpy.ndarray | jax.Array | None): Per-particle posterior precision matrices for
+            density computation.
+        points (numpy.ndarray | None): Extra points in density-grid coordinates to scatter on top.
+        projection_function (str | None): Projection selector: ``None`` sums, ``slice`` takes a
+            central
+            slice, and ``slice_point`` selects the supplied coordinate. The
+            legacy string ``sum`` passes validation but is not mapped to a
+            callable; use ``None`` for summation.
+        annotate (bool): Whether to annotate *points* with integer labels.
+        slice_point (numpy.ndarray | jax.Array | None): Slice coordinate for the projection
+            function.
+
+    Returns:
+        result (None): Creates density panels, saving and closing them when
+            ``plot_folder`` is supplied.
     """
     colors = ['k', 'cornflowerblue', 'g' , 'r', 'b', 'w', 'c'] if colors is None else colors
     path_exists = trajectories is not None
@@ -254,6 +269,21 @@ def save_covar_output_volumes(output_folder, mean, u, s, mask, volume_shape,  us
     if us_to_var is None:
         us_to_var = [4, 10, 20]
 
+    # Auto-convert half-Fourier basis to full-Fourier. ppca.EM now returns u
+    # in its natural half-Fourier shape (half_vol, q); this function was
+    # written for the legacy full-Fourier shape and uses linalg.batch_idft3
+    # which expects full Fourier. Detect and convert.
+    vol_size = int(np.prod(volume_shape))
+    half_vol_size = int(np.prod(fourier_transform_utils.volume_shape_to_half_volume_shape(volume_shape)))
+    u_arr = np.asarray(u)
+    if u_arr.shape[0] == half_vol_size:
+        u = fourier_transform_utils.half_volume_to_full_volume(u_arr.T, volume_shape).T
+    elif u_arr.shape[0] != vol_size:
+        raise ValueError(
+            f"save_covar_output_volumes: u should be (vol_size, q) or (half_vol, q), "
+            f"got shape {u_arr.shape} (expected vol_size={vol_size} or half_vol={half_vol_size})"
+        )
+
     vol_dir = os.path.join(output_folder, 'volumes')
     mkdir_safe(vol_dir)
     n_available = int(u.shape[-1])
@@ -295,6 +325,8 @@ def build_params_dict(
     column_fscs,
     picked_frequencies,
     input_args,
+    extras=None,
+    mean_prior=None,
 ):
     """Build the params dict saved as ``model/params.pkl``.
 
@@ -342,8 +374,10 @@ def build_params_dict(
         Frequency indices selected for covariance columns.
     input_args : Namespace
         The full command-line arguments used to run the pipeline.
+    extras : dict or None
+        Optional additional fields to merge into the params dict.
     """
-    return {
+    result = {
         'version': '0.7',
         'volume_shape': volume_shape,
         'voxel_size': voxel_size,
@@ -365,12 +399,23 @@ def build_params_dict(
         'variance_est': variance_est,
         'variance_fsc': variance_fsc,
         'noise_p_variance_est': noise_p_variance_est,
+        # ``mean_prior`` is the per-Fourier-voxel signal-variance prior the
+        # pipeline derived from the mean half-maps via FSC (the same array
+        # that ``compute_regularized_covariance_columns`` feeds into the
+        # covariance Wiener filter as ``regularization_init = (mean_prior +
+        # epsilon) * REG_INIT_MULTIPLIER / cov_noise``). Saving it lets the
+        # downstream PPCA refinement build a W prior in the same Wiener
+        # shape rather than re-deriving one from the init W's row norms.
+        'mean_prior': None if mean_prior is None else np.asarray(mean_prior),
         'covariance_options': covariance_options,
         'column_fscs': column_fscs,
         'picked_frequencies': picked_frequencies,
         # Input
         'input_args': input_args,
     }
+    if extras:
+        result.update(extras)
+    return result
 
 
 def build_embedding_dict(latent_coords, latent_coords_noreg,
@@ -413,6 +458,8 @@ def save_pipeline_results(
     particles_ind_split,
     ind_split,
     zs_full=None,
+    ppca_loadings=None,
+    ppca_iteration_data=None,
 ):
     """Save all pipeline results to disk.
 
@@ -432,6 +479,11 @@ def save_pipeline_results(
         Per-image halfset indices.
     zs_full : dict or None
         Full latent coordinates before complement-mask trimming (if applicable).
+    ppca_loadings : ndarray or None
+        Optional PPCA loading matrix ``W`` saved separately when the pipeline
+        uses the PPCA refinement path.
+    ppca_iteration_data : list[dict] or None
+        Optional per-iteration PPCA diagnostics.
     """
     paths.ensure_dirs()
 
@@ -445,6 +497,11 @@ def save_pipeline_results(
 
     if zs_full is not None:
         utils.pickle_dump(zs_full, paths.zs_with_complement)
+
+    if ppca_loadings is not None:
+        np.save(paths.ppca_loadings, np.asarray(ppca_loadings))
+    if ppca_iteration_data is not None:
+        utils.pickle_dump(ppca_iteration_data, paths.ppca_iteration_data)
 
     write_metadata_json(paths, result)
 
@@ -582,6 +639,11 @@ def write_metadata_json(paths, result):
         },
     }
 
+    if os.path.isfile(paths.ppca_loadings):
+        metadata['files']['ppca_loadings'] = 'model/ppca_loadings.npy'
+    if os.path.isfile(paths.ppca_iteration_data):
+        metadata['files']['ppca_iteration_data'] = 'model/ppca_iteration_data.pkl'
+
     try:
         with open(paths.metadata, 'w') as f:
             json.dump(metadata, f, indent=2)
@@ -596,12 +658,14 @@ def kmeans_analysis(output_folder, zs, n_clusters = 20):
     combinations of the first few latent dimensions.
 
     Args:
-        output_folder: Directory to save PCA scatter PNGs and center data.
-        zs: Latent coordinates, shape (n_particles, n_dims).
-        n_clusters: Number of k-means clusters.
+        output_folder (str): Directory prefix for PCA scatter PNGs, including a trailing
+            separator. Center coordinates and labels are returned.
+        zs (numpy.ndarray | jax.Array): Latent coordinates, shape (n_particles, n_dims).
+        n_clusters (int): Number of k-means clusters.
 
     Returns:
-        Tuple of (labels, centers) from k-means clustering.
+        centers (numpy.ndarray): Cluster centers, shape ``(n_clusters, n_dims)``.
+        labels (numpy.ndarray): Cluster assignment per input particle.
     """
     reorder = zs.shape[1] != 1
     labels, centers = cluster_kmeans(zs, n_clusters, reorder = reorder)
@@ -636,15 +700,22 @@ def kmeans_analysis(output_folder, zs, n_clusters = 20):
 
 
 def plot_umap(output_folder, zs, centers):
-    """Generate UMAP embedding plots with cluster center overlay.
+    """Plot precomputed UMAP coordinates with cluster-center overlays.
 
-    Creates scatter and hexbin UMAP projections saved as PNGs in
-    ``output_folder/umap/``.
+    Creates scatter and hexbin plots of the first two supplied coordinates.
+    This helper does not compute the UMAP embedding or create a directory.
 
     Args:
-        output_folder: Parent directory; a ``umap/`` subdirectory is created.
-        zs: Latent coordinates, shape (n_particles, n_dims).
-        centers: Cluster centers, shape (n_clusters, n_dims).
+        output_folder (str | None): Existing directory prefix, including a trailing separator.
+            ``None`` leaves figures open.
+        zs (numpy.ndarray | jax.Array): Precomputed UMAP coordinates, shape ``(n_particles,
+            n_dims)``.
+        centers (numpy.ndarray | jax.Array): Center positions in the same coordinate system as
+            ``zs``.
+
+    Returns:
+        result (None): Draws the supplied coordinates; saves figures when an
+            output prefix is provided.
     """
     def plot_axes(axes = [0,1]):
         fig,ax = scatter_annotate(zs[:,axes[0]], zs[:,axes[1]], centers=centers[:,axes], centers_ind=None, annotate=True, labels=None, alpha=0.1, s=1)
@@ -971,7 +1042,8 @@ class PipelineOutput:
             return self.embedding[key]
 
         elif key == 'unsorted_embedding':
-            return utils.pickle_load(self.paths.embeddings)
+            self._ensure_embedding_raw_loaded()
+            return self.embedding
 
         elif key in ('u', 'u_real'):
             return self.get_u_real(50) if key == 'u_real' else self.get_u(50)
@@ -1006,6 +1078,14 @@ class PipelineOutput:
             return utils.load_mrc(self.paths.dilated_mask_volume)
         elif key == 'covariance_cols':
             return utils.pickle_load(self.paths.covariance_cols)
+        elif key in ('ppca_W', 'W'):
+            if not os.path.isfile(self.paths.ppca_loadings):
+                raise KeyError(f"key '{key}' not found in PipelineOutput")
+            return np.load(self.paths.ppca_loadings)
+        elif key == 'ppca_iteration_data':
+            if not os.path.isfile(self.paths.ppca_iteration_data):
+                raise KeyError("key 'ppca_iteration_data' not found in PipelineOutput")
+            return utils.pickle_load(self.paths.ppca_iteration_data)
 
         elif key in ('dataset', 'lazy_dataset'):
             ds = halfsets.load_halfset_dataset_from_args(
@@ -1041,6 +1121,10 @@ class PipelineOutput:
         keys = list(self.params.keys())
         keys += list(self._EMBEDDING_ENTRIES)
         keys += ['u', 'u_real', 'mean', 'volume_mask', 'dilated_volume_mask', 'covariance_cols', 'dataset', 'lazy_dataset', 'variance', 'variance20', 'focus_mask', 'image_snr', 'mean_halfmaps', 'halfsets', 'input_args', 'unsorted_embedding']
+        if os.path.isfile(self.paths.ppca_loadings):
+            keys += ['ppca_W', 'W']
+        if os.path.isfile(self.paths.ppca_iteration_data):
+            keys.append('ppca_iteration_data')
         return keys
 
 
@@ -1051,24 +1135,33 @@ def add_noise_to_loaded_dataset(ds, noise_variance):
         ds.set_variable_radial_noise_model(noise_variance)
 
 def make_trajectory_plots_from_results(pipeline_output, basis_size, output_folder, cryos = None, z_st = None, z_end = None, gt_volumes= None, n_vols_along_path = 6, plot_llh = False,  input_density = None, latent_space_bounds = None):
-    """Compute minimum-energy trajectories and generate volume/density plots.
+    """Compute latent trajectories and save path and density diagnostics.
 
-    Finds optimal paths between start and end latent coordinates (or between
-    ground-truth volume endpoints), generates volumes along the path, and
-    saves density overlay plots.
+    Finds paths between the supplied latent endpoints and writes ``path.json``
+    and density overlays. Volume reconstruction is performed separately.
 
     Args:
-        pipeline_output: Pipeline output object with embeddings and covariance.
-        basis_size: Number of PCA dimensions for trajectory computation.
-        output_folder: Directory to write trajectory volumes and plots.
-        cryos: CryoEMDataset (optional; loaded from pipeline_output if None).
-        z_st: Start point in latent space, shape (n_dims,).
-        z_end: End point in latent space, shape (n_dims,).
-        gt_volumes: Ground-truth volumes for automatic endpoint selection.
-        n_vols_along_path: Number of volumes to generate along the trajectory.
-        plot_llh: Whether to generate per-volume likelihood scatter plots.
-        input_density: Pre-computed density array (or None to compute).
-        latent_space_bounds: Bounds for the latent space grid.
+        pipeline_output (PipelineOutput): Pipeline output with latent coordinates and posterior
+            precisions.
+        basis_size (int): Number of PCA dimensions for trajectory computation.
+        output_folder (str): Directory to write path coordinates and plots.
+        cryos (CryoEMDataset | None): CryoEMDataset (optional; loaded from pipeline_output if None).
+        z_st (numpy.ndarray | jax.Array | None): Start point in latent space, shape (n_dims,).
+        z_end (numpy.ndarray | jax.Array | None): End point in latent space, shape (n_dims,).
+        gt_volumes (numpy.ndarray | jax.Array | None): Legacy argument accepted by the initial
+            validation but not
+            forwarded to the path solver. Supply explicit ``z_st`` and ``z_end``.
+        n_vols_along_path (int): Number of path positions to select for later reconstruction.
+        plot_llh (bool): Whether to generate per-volume likelihood scatter plots.
+        input_density (numpy.ndarray | jax.Array | None): Pre-computed density array (or None to
+            compute).
+        latent_space_bounds (numpy.ndarray | jax.Array | None): Bounds for the latent space grid.
+
+    Returns:
+        path (numpy.ndarray | jax.Array): Computed path in latent coordinates.
+        path_subsampled (numpy.ndarray | jax.Array): Path positions selected
+            according to ``n_vols_along_path``. The one-dimensional branch
+            returns one-dimensional arrays.
     """
     if not (((z_st is not None) and (z_end is not None)) or (gt_volumes is not None)):
         raise ValueError("either z_st and z_end should be passed, or gt_volumes")
@@ -1257,9 +1350,14 @@ def standard_pipeline_plots(po, zdim_key, output_folder):
     FSC, PC scatter) plus a consolidated ``pipeline_summary.png``.
 
     Args:
-        po: Pipeline output object.
-        zdim_key: Latent dimension key for embeddings/contrasts.
-        output_folder: Directory to save plots into.
+        po (PipelineOutput): Pipeline output object.
+        zdim_key (int | str): Latent key for contrast plots. PC plots independently prefer
+            key 4, falling back to the first available latent key.
+        output_folder (str | os.PathLike): Directory to save plots into.
+
+    Returns:
+        result (None): Saves available plots. Missing or insufficient latent
+            coordinates stop PC analysis before the consolidated summary.
     """
     from recovar.output import plot_utils
     mkdir_safe(output_folder)

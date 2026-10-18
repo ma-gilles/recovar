@@ -186,7 +186,6 @@ def write_run_metadata(args, outdir, logger=None):
     identical CLI flags but different shell env can be distinguished.
     """
     import json as _json
-    import os as _os
     import subprocess as _subprocess
 
     from recovar.utils.memory_planner import diagnostics_dir
@@ -225,7 +224,7 @@ def write_run_metadata(args, outdir, logger=None):
             "RECOVAR_DISABLE_CUDA",
             "JAX_PLATFORMS",
         ]
-        env_record = {k: _os.environ.get(k) for k in env_keys}
+        env_record = {k: os.environ.get(k) for k in env_keys}
         (diag / "allocator_env.json").write_text(_json.dumps(env_record, indent=2))
     except Exception as exc:
         if logger is not None:

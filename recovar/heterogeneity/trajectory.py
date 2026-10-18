@@ -140,8 +140,22 @@ def get_grid_spacing(latent_space_bounds, density):
 
 def compute_travel_time(density, g_st, latent_space_bounds):
     dx = get_grid_spacing(latent_space_bounds, density)
-    travel_time = fast_marching.point_source_travel_time(density, g_st, dx=dx)
-    travel_time[tuple(g_st)] = 0
+    g_st = np.asarray(g_st)
+    if g_st.shape != (density.ndim,):
+        raise ValueError(f"g_st shape {g_st.shape} must match density ndim {density.ndim}")
+
+    g_st_idx = np.rint(g_st).astype(int)
+    g_st_clipped = np.clip(g_st_idx, 0, np.asarray(density.shape, dtype=int) - 1)
+    if not np.array_equal(g_st_idx, g_st_clipped):
+        logger.warning(
+            "Clipped trajectory start index from %s to %s for density shape %s",
+            g_st_idx.tolist(),
+            g_st_clipped.tolist(),
+            density.shape,
+        )
+
+    travel_time = fast_marching.point_source_travel_time(density, g_st_clipped, dx=dx)
+    travel_time[tuple(g_st_clipped)] = 0
     return travel_time
 
 

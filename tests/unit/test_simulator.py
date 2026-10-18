@@ -1,5 +1,6 @@
 import numpy as np
 import pytest
+import builtins
 
 pytest.importorskip("jax")
 pytest.importorskip("scipy")
@@ -8,6 +9,88 @@ import recovar.simulation.simulator as simulator
 from recovar import core
 
 pytestmark = pytest.mark.unit
+
+
+@pytest.mark.parametrize("dtype", [simulator.jnp.float32, simulator.jnp.float64])
+def test_normal_from_host_random_bits_matches_jax(dtype):
+    key = simulator.jax.random.PRNGKey(17)
+    shape = (7, 4, 4)
+    bits = simulator._make_host_random_bits(key, shape, dtype)
+
+    actual = np.asarray(simulator._normal_from_random_bits(simulator.jnp.asarray(bits), dtype))
+    expected = np.asarray(simulator.jax.random.normal(key, shape, dtype=dtype))
+
+    np.testing.assert_array_equal(actual, expected)
+
+
+def test_noise_rng_stream_is_independent_of_processing_batch_size():
+    key = simulator.jax.random.PRNGKey(0)
+    subkeys = []
+    for _ in range(2):
+        key, subkey = simulator.jax.random.split(key)
+        subkeys.append(subkey)
+
+    noise_image = np.ones((4, 4), dtype=np.float32)
+    expected = np.concatenate(
+        [
+            np.asarray(simulator.make_noise_batch(subkeys[0], noise_image, (5, 4, 4))),
+            np.asarray(simulator.make_noise_batch(subkeys[1], noise_image, (3, 4, 4))),
+        ],
+        axis=0,
+    )
+
+    pieces = []
+    for batch_st, batch_end in [(0, 3), (3, 6), (6, 8)]:
+        pieces.append(
+            np.asarray(
+                simulator.make_noise_batch_from_rng_stream(
+                    subkeys,
+                    noise_rng_batch_size=5,
+                    batch_st=batch_st,
+                    batch_end=batch_end,
+                    n_images=8,
+                    noise_image=noise_image,
+                    images_batch_shape=(batch_end - batch_st, 4, 4),
+                )
+            )
+        )
+
+    actual = np.concatenate(pieces, axis=0)
+    np.testing.assert_allclose(actual, expected, rtol=1e-6, atol=1e-6)
+
+
+def test_fixed_noise_transform_stream_is_exact_across_processing_batches():
+    key = simulator.jax.random.PRNGKey(29)
+    subkeys = []
+    for _ in range(2):
+        key, subkey = simulator.jax.random.split(key)
+        subkeys.append(subkey)
+
+    noise_image = np.ones((4, 4), dtype=np.float32)
+
+    def generate_batches(batch_ranges):
+        return np.concatenate(
+            [
+                np.asarray(
+                    simulator.make_noise_batch_from_rng_stream(
+                        subkeys,
+                        noise_rng_batch_size=5,
+                        batch_st=batch_st,
+                        batch_end=batch_end,
+                        n_images=8,
+                        noise_image=noise_image,
+                        images_batch_shape=(batch_end - batch_st, 4, 4),
+                        noise_transform_batch_size=2,
+                    )
+                )
+                for batch_st, batch_end in batch_ranges
+            ],
+            axis=0,
+        )
+
+    expected = generate_batches([(0, 8)])
+    actual = generate_batches([(0, 3), (3, 6), (6, 8)])
+    np.testing.assert_array_equal(actual, expected)
 
 
 def test_set_constant_ctf_sets_expected_columns():
@@ -29,6 +112,41 @@ def test_nonuniform_rotation_sampling_reproducible():
     r1 = simulator.nonuniform_rotation_sampling(8, grid_size=64, seed=123)
     r2 = simulator.nonuniform_rotation_sampling(8, grid_size=64, seed=123)
     np.testing.assert_allclose(r1, r2)
+
+
+def test_kent_sampling_scheme_uses_internal_fallback_without_sphstat(monkeypatch):
+    n_images = 32
+    ctf_params = np.zeros((n_images, int(core.CTFParamIndex.TILT_ANGLE) + 1), dtype=np.float32)
+    monkeypatch.setattr(
+        simulator,
+        "generate_simulated_params_from_real",
+        lambda n, _dataset_params_fn, _grid_size: (ctf_params[:n], None, None),
+    )
+
+    real_import = builtins.__import__
+
+    def _import_without_sphstat(name, *args, **kwargs):
+        if name == "sphstat":
+            raise ImportError("forced missing sphstat")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", _import_without_sphstat)
+
+    ctf1, rot1, trans1 = simulator.kent_sampling_scheme(n_images, grid_size=64, seed=123)
+    ctf2, rot2, trans2 = simulator.kent_sampling_scheme(n_images, grid_size=64, seed=123)
+
+    assert ctf1.shape == ctf_params.shape
+    assert rot1.shape == (n_images, 3, 3)
+    assert trans1.shape == (n_images, 2)
+    np.testing.assert_allclose(rot1, rot2)
+    np.testing.assert_allclose(trans1, trans2)
+    np.testing.assert_allclose(ctf1, ctf2)
+    np.testing.assert_allclose(
+        rot1 @ np.transpose(rot1, (0, 2, 1)),
+        np.broadcast_to(np.eye(3), rot1.shape),
+        atol=1e-6,
+        rtol=1e-6,
+    )
 
 
 def test_cryo_rotation_batch_properties_and_shapes():
@@ -96,7 +214,8 @@ def _make_fake_param_generator(n_cols=9):
     return _generator
 
 
-def test_generate_simulated_dataset_tilt_branch_wires_ctf_and_metadata(monkeypatch):
+@pytest.mark.parametrize("n_ctf_cols", [9, 11])
+def test_generate_simulated_dataset_tilt_branch_wires_ctf_and_metadata(monkeypatch, n_ctf_cols):
     volumes = np.ones((2, 4**3), dtype=np.complex64)
     voxel_size = 1.5
     n_images = 6
@@ -143,7 +262,7 @@ def test_generate_simulated_dataset_tilt_branch_wires_ctf_and_metadata(monkeypat
         noise_scale_std=0.0,
         contrast_std=0.0,
         put_extra_particles=False,
-        dataset_param_generator=_make_fake_param_generator(),
+        dataset_param_generator=_make_fake_param_generator(n_ctf_cols),
         n_tilts=n_tilts,
         dose_per_tilt=2.0,
         angle_per_tilt=5.0,
@@ -154,6 +273,9 @@ def test_generate_simulated_dataset_tilt_branch_wires_ctf_and_metadata(monkeypat
     assert main_image_stack.shape == (n_images, 4, 4)
     np.testing.assert_array_equal(tilt_groups, np.array([0, 0, 0, 1, 1, 1]))
     assert ctf_params.shape[1] == 11  # base 9 + dose + angle
+    # The real generators already return 11 columns; dose must land in DOSE, not be appended.
+    np.testing.assert_array_equal(ctf_params[:, core.CTFParamIndex.DOSE], ((np.arange(n_images) % n_tilts) + 0.5) * 2.0)
+    np.testing.assert_array_equal(ctf_params[:, core.CTFParamIndex.TILT_ANGLE], 0)
     np.testing.assert_array_equal(
         ctf_params[:, core.CTFParamIndex.BFACTOR],
         -4 * ((np.arange(n_images) % n_tilts) + 0.5) * 2.0,

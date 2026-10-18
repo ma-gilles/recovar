@@ -1,10 +1,9 @@
-from types import SimpleNamespace
-from pathlib import Path
 import json
+from types import SimpleNamespace
 
+import jax.numpy as jnp
 import numpy as np
 import pytest
-import jax.numpy as jnp
 
 pytest.importorskip("jax")
 
@@ -533,6 +532,7 @@ def test_make_big_test_dataset_uses_detected_state_count(monkeypatch, tmp_path):
     assert volume_distribution.shape == (3,)
     assert np.isclose(np.sum(volume_distribution), 1.0)
     assert captured["args"][3] == 25
+    assert captured["kwargs"]["noise_rng_batch_size"] == rtam.generated_dataset_noise_rng_batch_size(32, "cubic")
 
 
 def test_make_big_test_dataset_raises_when_no_input_volumes(monkeypatch, tmp_path):

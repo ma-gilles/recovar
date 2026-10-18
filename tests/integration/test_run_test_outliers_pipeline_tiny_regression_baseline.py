@@ -242,6 +242,13 @@ def test_run_test_outliers_pipeline_tiny_regression_uses_saved_baseline(tmp_path
     _write_volumes(vols_prefix, n_vols=_N_VOLS, grid=_GRID)
     baseline_json = tmp_path / "baseline" / "outlier_scores.json"
     env = gpu_subprocess_env()
+    # The custom CUDA backprojector uses atomic accumulation, so otherwise
+    # identical runs can straddle downstream clustering thresholds. This test
+    # gates outlier-quality repeatability; custom-CUDA and JAX-fallback routing
+    # are covered independently by test_run_test_dataset_e2e.py.
+    env["RECOVAR_DISABLE_CUDA"] = "1"
+    env.pop("RECOVAR_ENABLE_CUSTOM_CUDA", None)
+    env.pop("RECOVAR_CUDA_LIB", None)
 
     # Run 1: write baseline
     first_scores, first_report = _run_and_score(
