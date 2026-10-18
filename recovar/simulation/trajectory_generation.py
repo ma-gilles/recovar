@@ -20,6 +20,7 @@ Usage::
 
 import logging
 import os
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
@@ -334,6 +335,8 @@ def generate_trajectory_volumes(
     pdb_path=None,
     prefix_name="vol",
     output_prefix=None,
+    finufft_nthreads=1,
+    volume_workers=None,
 ):
     """Generate trajectory volumes from 5nrl using rigid-body subcomplex motions.
 
@@ -360,6 +363,15 @@ def generate_trajectory_volumes(
         Volume file prefix name (e.g. ``"vol"``).
     output_prefix : str or None
         Full prefix path override.
+    finufft_nthreads : int or None
+        FINUFFT thread count used to generate each spectrum.  The default of 1
+        avoids nondeterministic parallel spreading in generated regression
+        volumes.  Pass None to let FINUFFT choose its thread count.
+    volume_workers : int or None
+        Number of trajectory spectra to generate concurrently.  The default
+        uses up to four CPUs from the process affinity.  Each default FINUFFT
+        remains single-threaded, so parallel work is deterministic across
+        independent volumes.
 
     Returns
     -------
@@ -377,6 +389,19 @@ def generate_trajectory_volumes(
 
     if path_fn is None:
         path_fn = path_symmetric
+
+    if volume_workers is None:
+        try:
+            available_cpus = len(os.sched_getaffinity(0))
+        except (AttributeError, OSError):
+            available_cpus = os.cpu_count() or 1
+        volume_workers = min(4, available_cpus, max(1, n_volumes))
+    elif isinstance(volume_workers, (bool, np.bool_)) or not isinstance(volume_workers, (int, np.integer)):
+        raise ValueError(f"volume_workers must be a positive integer or None, got {volume_workers!r}")
+    elif volume_workers <= 0:
+        raise ValueError(f"volume_workers must be positive, got {volume_workers}")
+    else:
+        volume_workers = min(int(volume_workers), max(1, n_volumes))
 
     if output_prefix is None:
         vols_dir = Path(output_dir) / "generated_volumes"
@@ -396,7 +421,8 @@ def generate_trajectory_volumes(
 
     # Generate trajectory
     ts = np.linspace(0, max_rotation_degrees, n_volumes)
-    for idx, t in enumerate(ts):
+
+    def generate_spectrum(t):
         coords_list = path_fn(t, group_coords, fixed_pt)
         combined_coords = np.concatenate(coords_list)
 
@@ -404,14 +430,17 @@ def generate_trajectory_volumes(
         ag.setCoords(combined_coords)
         ag.setElements(all_types)
 
-        ft_mol = ssp.generate_molecule_spectrum_from_pdb_id(
+        return ssp.generate_molecule_spectrum_from_pdb_id(
             ag,
             voxel_size=voxel_size,
             grid_size=grid_size,
             force_symmetry=True,
             from_atom_group=True,
             do_center_atoms=False,
+            finufft_nthreads=finufft_nthreads,
         )
+
+    def write_volume(idx, t, ft_mol):
         ft_mol = ft_mol.reshape(volume_shape) * B_fac_scaling
         vol = ftu.get_idft3(ft_mol.reshape(volume_shape)).real
 
@@ -422,6 +451,14 @@ def generate_trajectory_volumes(
         )
         if idx % 10 == 0:
             logger.info("Generated volume %d/%d (t=%.1f deg)", idx + 1, n_volumes, t)
+
+    if volume_workers == 1:
+        for idx, t in enumerate(ts):
+            write_volume(idx, t, generate_spectrum(t))
+    else:
+        with ThreadPoolExecutor(max_workers=volume_workers) as executor:
+            for idx, (t, ft_mol) in enumerate(zip(ts, executor.map(generate_spectrum, ts), strict=True)):
+                write_volume(idx, t, ft_mol)
 
     logger.info("Generated %d trajectory volumes at %s", n_volumes, volume_prefix)
     return volume_prefix
