@@ -55,6 +55,12 @@ tests/baselines/
 2. **Old `~/recovar` code** (conda env) runs pipeline on that data
 3. **Current code** computes metrics on the old output
 
+**Cryo-ET exception.** The cryo-ET quality baselines (`run_test_all_metrics/long_generated/all_scores_cryo_et.json`,
+`run_test_outliers_pipeline/long_generated/all_scores_cryo_et.json`, `pipeline_with_indices/cryo_et_baseline.json`)
+come from cryoet-dev `1af04bd53` plus the simulator dose fix, not from `~/recovar`. The simulated tilt series carry
+per-tilt dose in the STAR file, and old `~/recovar` ignores it (it uses a fixed per-tilt dose model). See
+`run_test_outliers_pipeline/BASELINE_ORIGINS.md` for jobs and dates.
+
 ## How to Add Tests
 
 - **Unit tests** → `tests/unit/`. Mark `@pytest.mark.unit`. No GPU, no subprocesses.
