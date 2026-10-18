@@ -242,9 +242,6 @@ class TestPipelineWiring:
     """Verify pipeline resolves contrast grid with proper weights."""
 
     def test_resolve_ppca_contrast_grid_returns_weights(self):
-        import sys
-
-        sys.path.insert(0, "/scratch/gpfs/GILLES/mg6942/recovar_dev/recovar_wt_contrast_multimask")
         from recovar.commands.pipeline import _resolve_ppca_contrast_grid
 
         nodes, weights = _resolve_ppca_contrast_grid("marginalize")
