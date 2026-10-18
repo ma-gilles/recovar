@@ -335,7 +335,25 @@ def adjoint_slice_volume(
     half_volume=False,
     max_r=_AUTO,
 ):
-    """Adjoint slice extraction (backprojection).
+    """Adjoint slice extraction (backprojection): the reconstruction operator.
+
+    For orders 0 and 1 this is the backprojection of the full-spectrum images onto
+    the full volume; the half layouts only choose how it is stored.
+
+    * ``half_image=True``: the same volume as the full image built from the packed
+      one (``ftu.half_image_to_full_image``), for Hermitian images.
+    * ``half_volume=True``: that volume restricted to the stored ``kz >= 0`` voxels
+      (``ftu.full_volume_to_half_volume``).  ``kz < 0`` is dropped, not folded onto
+      ``kz > 0``, so ``ftu.half_volume_to_full_volume`` of the result is the
+      full-volume backprojection and a prior built on the full volume applies to it.
+
+    This is not the transpose of :func:`slice_volume` through the half layouts.  The
+    vjp of the CUDA projection (``cuda_ops._cuda_project_bwd``) scatters each packed
+    pixel once and folds ``kz < 0`` onto ``kz > 0`` (``hermitian_fold=True``), so for
+    Hermitian data interior ``kz`` carries twice the value returned here.  Order 3 is different
+    again: it is the exact vjp with respect to the original volume
+    (:func:`_vjp_adjoint_cubic`), the transpose for half layouts, and ``max_r`` is
+    not applied.
 
     Parameters
     ----------
@@ -345,7 +363,7 @@ def adjoint_slice_volume(
     half_image : if True, *slices* are rfft-packed half-spectrum images.
     half_volume : if True, output uses rfft-packed half-volume layout.
     volume : optional accumulator to add the result into.
-    max_r : sphere clipping radius.  Default uses
+    max_r : sphere clipping radius (orders 0 and 1).  Default uses
         ``image_shape[0]//2 - 1``.  Pass ``None`` to disable.
     """
     slices = _normalize_slices(slices, image_shape, half_image)
@@ -401,6 +419,11 @@ def adjoint_slice_volume(
 def _vjp_adjoint_cubic(slices, rotation_matrices, image_shape, volume_shape, half_image=False, half_volume=False):
     """VJP-based cubic backprojection: gradient of original volume through
     coefficient computation + slice.
+
+    A true vjp, so for half layouts it is the transpose, not the reconstruction
+    operator of orders 0 and 1: a half volume carries the Hermitian fold (interior
+    ``kz`` at twice the full-volume value) and a half image is not completed by its
+    Hermitian partner.  ``max_r`` is not applied.
     """
     slices = _normalize_slices(slices, image_shape, half_image)
     _slice_fn = _jax_slice_half_image if half_image else _jax_slice
@@ -485,7 +508,8 @@ def batch_adjoint_slice_volume(
         Real or complex.  Promoted to match *volumes* dtype (and vice versa).
     rotation_matrices : shape ``(n_images, 3, 3)`` — shared across batch.
     volumes : optional ``(batch, vol_flat_size)`` accumulators.
-    half_image, half_volume : same semantics as ``adjoint_slice_volume``.
+    half_image, half_volume : same semantics as ``adjoint_slice_volume``;
+        ``half_volume=True`` is the reconstruction convention (``kz < 0`` dropped).
     max_r : sphere clipping radius.  Default uses
         ``image_shape[0]//2 - 1``.  Pass ``None`` to disable.
     """
