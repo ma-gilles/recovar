@@ -547,15 +547,37 @@ class _PrefetchIterator:
 
     def __iter__(self):
         q = queue.Queue(maxsize=self._buffer_size)
+        stop_requested = threading.Event()
+
+        def _put_unless_stopped(item) -> bool:
+            # A consumer that stops early never drains the queue; without the
+            # stop check the producer would block on put() forever.
+            while not stop_requested.is_set():
+                try:
+                    q.put(item, timeout=0.05)
+                    return True
+                except queue.Full:
+                    continue
+            return False
 
         def _producer():
+            iterator = None
             try:
-                for item in self._iterable:
-                    q.put(item)
+                iterator = iter(self._iterable)
+                for item in iterator:
+                    if not _put_unless_stopped(item):
+                        break
             except Exception as exc:
-                q.put(exc)
+                _put_unless_stopped(exc)
             finally:
-                q.put(_SENTINEL)
+                if stop_requested.is_set() and iterator is not None:
+                    close = getattr(iterator, "close", None)
+                    if close is not None:
+                        try:
+                            close()
+                        except Exception:
+                            pass
+                _put_unless_stopped(_SENTINEL)
 
         thread = threading.Thread(target=_producer, daemon=True)
         thread.start()
@@ -568,6 +590,7 @@ class _PrefetchIterator:
                     raise item
                 yield item
         finally:
+            stop_requested.set()
             thread.join(timeout=5.0)
 
 

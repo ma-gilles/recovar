@@ -3,6 +3,7 @@ from types import SimpleNamespace
 import numpy as np
 import pandas as pd
 import pytest
+import threading
 from helpers import tiny_synthetic
 
 from recovar.core import fourier_transform_utils
@@ -1330,3 +1331,42 @@ def test_parse_particle_tilt_real_tiny_star_subset_with_duplicate_tilt_indices(t
     np.testing.assert_array_equal(p2t[0], np.array([1, 4], dtype=np.int32))
     np.testing.assert_array_equal(p2t[1], np.array([5, 5], dtype=np.int32))
     assert t2p[1] == 0 and t2p[4] == 0 and t2p[5] == 1
+
+
+def test_prefetch_iterator_stops_a_blocked_producer_when_consumer_closes():
+    producer_reached_blocked_item = threading.Event()
+    producer_stopped = threading.Event()
+
+    def values():
+        try:
+            yield 0
+            yield 1
+            producer_reached_blocked_item.set()
+            yield 2
+        finally:
+            producer_stopped.set()
+
+    iterator = iter(image_backends._PrefetchIterator(values(), buffer_size=1))
+    assert next(iterator) == 0
+    assert producer_reached_blocked_item.wait(timeout=1.0)
+
+    iterator.close()
+
+    assert producer_stopped.wait(timeout=1.0)
+
+
+def test_prefetch_iterator_preserves_complete_iteration():
+    values = list(range(20))
+
+    assert list(image_backends._PrefetchIterator(values, buffer_size=3)) == values
+
+
+def test_prefetch_iterator_preserves_producer_exceptions():
+    def values():
+        yield 0
+        raise RuntimeError("producer failed")
+
+    iterator = iter(image_backends._PrefetchIterator(values(), buffer_size=1))
+    assert next(iterator) == 0
+    with pytest.raises(RuntimeError, match="producer failed"):
+        next(iterator)
