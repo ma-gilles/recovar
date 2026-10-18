@@ -245,6 +245,7 @@ def build_custom_cuda(output_path: str | os.PathLike[str] | None = None, force: 
     import sys
 
     global _auto_build_attempted, _auto_build_error, _cuda_ok, _ffi_registered, _lib_handle, _loaded_lib_path
+    global _per_image_ffi_registered
 
     lib_path = pathlib.Path(output_path).expanduser().resolve() if output_path else _default_build_lib_path()
     stale = lib_path.exists() and _lib_is_stale(lib_path)
@@ -272,6 +273,7 @@ def build_custom_cuda(output_path: str | os.PathLike[str] | None = None, force: 
     _auto_build_error = None
     _cuda_ok = None
     _ffi_registered = False
+    _per_image_ffi_registered = False
     _lib_handle = None
     _loaded_lib_path = None
     return lib_path
@@ -364,6 +366,7 @@ _TARGET_BACKPROJECT = "cuda_backproject"
 _TARGET_PROJECT = "cuda_project"
 _TARGET_BATCH_BACKPROJECT = "cuda_batch_backproject"
 _TARGET_BATCH_PROJECT = "cuda_batch_project"
+_TARGET_PER_IMAGE_BP = "cuda_per_image_bp"
 
 
 _preflight_ok: bool | None = None  # None = not checked yet
@@ -592,6 +595,32 @@ def _ensure_ffi():
         jax.ffi.register_ffi_target(_TARGET_BATCH_PROJECT, jax.ffi.pycapsule(lib.BatchProject), platform="CUDA")
         _ffi_registered = True
         logger.debug("Registered CUDA FFI targets")
+
+
+_per_image_ffi_registered = False
+
+
+def _ensure_per_image_ffi():
+    """Register the per-image backprojection target on first use.
+
+    Kept separate from :func:`_ensure_ffi` so that a library built before this
+    kernel existed still serves the other kernels; only PPCA needs it.
+    """
+    global _per_image_ffi_registered
+    if _per_image_ffi_registered:
+        return
+    _ensure_ffi()
+    with _ffi_lock:
+        if _per_image_ffi_registered:
+            return
+        lib = _get_lib()
+        if not hasattr(lib, "PerImageBackproject"):
+            raise RuntimeError(
+                f"The CUDA library {_loaded_lib_path} has no PerImageBackproject kernel (used by PPCA). "
+                "Rebuild it with `recovar build_custom_cuda`."
+            )
+        jax.ffi.register_ffi_target(_TARGET_PER_IMAGE_BP, jax.ffi.pycapsule(lib.PerImageBackproject), platform="CUDA")
+        _per_image_ffi_registered = True
 
 
 _cuda_ok = None  # cached result: None = not checked, True/False = result
@@ -851,6 +880,52 @@ def batch_backproject(
         input_output_aliases={2: 0},
         vmap_method="sequential",
     )(images, rot6, volumes, **kw)
+
+
+@functools.partial(jax.jit, static_argnums=(3, 4, 5))
+def per_image_backproject(
+    volumes: jax.Array,
+    base_images: jax.Array,
+    rotation_matrices: jax.Array,
+    image_shape: Tuple[int, int] = (0, 0),
+    volume_shape: Tuple[int, int, int] = (0, 0, 0),
+    max_r: float | None = None,
+) -> jax.Array:
+    """Per-image trilinear backprojection of real full images into half volumes.
+
+    ``volumes`` has shape ``(half_vol, n_images)`` and image ``i`` scatters only
+    into column ``i``, so atomic adds from different images never collide.
+    Follow with a GEMM to reduce over images, e.g.
+    ``result @ second_moments_tri -> (half_vol, n_channels)``. Contributions at
+    kz < 0 are folded onto their Hermitian partners (the half-volume layout of
+    :func:`backproject`).
+    """
+    _ensure_per_image_ffi()
+    N0, N1, N2 = volume_shape
+    H, W = image_shape
+    ups = N0 // H
+    max_r2_x4 = -1 if max_r is None else int(4 * max_r * max_r)
+    base_images = base_images.astype(volumes.dtype)
+    rot6 = _rot_to_compact(rotation_matrices, volumes.dtype)
+    out_type = jax.ShapeDtypeStruct(volumes.shape, volumes.dtype)
+
+    return jax.ffi.ffi_call(
+        _TARGET_PER_IMAGE_BP,
+        out_type,
+        input_output_aliases={2: 0},
+        vmap_method="sequential",
+    )(
+        base_images,
+        rot6,
+        volumes,
+        image_h=H,
+        image_w=W,
+        vol_n0=N0,
+        vol_n1=N1,
+        vol_n2=N2,
+        upsampling=ups,
+        max_r2_x4=max_r2_x4,
+    )
 
 
 @functools.partial(jax.jit, static_argnums=(2, 3, 4, 5, 6, 7))
