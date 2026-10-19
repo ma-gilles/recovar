@@ -17,13 +17,21 @@ The simulator used to drop the per-tilt dose: it appended dose and tilt as CTF c
 (`rlnMicrographPreExposure=0`). With the fix, tilts carry 1.5-19.5 e/A^2, which makes the
 data harder. These cryo-ET baselines were regenerated on the dosed data from the control
 cryoet-dev `1af04bd53` + the dose fix (`bb37e9097`), H100, custom CUDA library:
-- `long_generated/all_scores_cryo_et.json` (this folder): per-metric median of four runs,
-  rounded to 4 decimals (Slurm jobs 15788276 and 15790249). Round-2 precision of the four
-  runs spans 0.256-0.262; round-1 precision spans 0.901-0.923.
 - `../run_test_all_metrics/long_generated/all_scores_cryo_et.json`: job 15788276; legacy
   alias keys (`constrasts_*`, `contrasts_*`, `pcs_relative_variance_*`) set to the values
   of the metrics they alias.
-- `../pipeline_with_indices/cryo_et_baseline.json`: job 15788276.
+
+The two outlier-pipeline cryo-ET baselines were then regenerated again with junk detection
+in round 1 only (78eafa9af), from the same control plus that commit (`bf539fd2d`):
+- `long_generated/all_scores_cryo_et.json` (this folder): per-metric median of four runs,
+  rounded to 4 decimals (Slurm job 15875161). Round-2 precision spans 0.723-0.768.
+- `../pipeline_with_indices/cryo_et_baseline.json`: per-metric median of four runs (Slurm
+  job 15875162). Round-2 particle precision spans 0.478-0.485.
+
+Before 78eafa9af, junk detection in round 2 put its cutoff at the largest bend of a smooth
+score curve and flagged anywhere from 10% to 80% of clusters run to run. The SPA outlier
+and indices baselines still come from old ~/recovar; the SPA tests pass against them with
+the change (job 15875163).
 
 Old ~/recovar cannot produce these: it ignores the STAR dose and applies its own fixed
 per-tilt dose model.
