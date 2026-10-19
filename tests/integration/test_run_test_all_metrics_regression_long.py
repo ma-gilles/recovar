@@ -118,7 +118,7 @@ def _assert_cryo_et_subsampling_consistency(particles_star: Path):
     assert set(half0.tolist()).issubset(allowed_image_values)
     assert half1.size == 0
 
-    # ntilts subsampling: at most one tilt kept per selected particle when ntilts=1.
+    # ntilts subsampling: only global acquisition rank zero is eligible.
     split_ntilts = halfsets.get_split_tilt_indices(
         particles_file=str(particles_star),
         tilt_ind_file=np.array([keep_a, keep_b], dtype=np.int32),
@@ -129,9 +129,8 @@ def _assert_cryo_et_subsampling_consistency(particles_star: Path):
         ],
     )
     kept = np.asarray(split_ntilts[0], dtype=np.int32)
-    for pidx in np.unique(np.array([keep_a, keep_b], dtype=np.int32)):
-        particle_tilts = np.asarray(particles_to_tilts[int(pidx)], dtype=np.int32)
-        assert np.intersect1d(kept, particle_tilts).size <= 1
+    tilt_ds = cryo_dataset.TiltSeriesDataset(str(particles_star), lazy=True, tilt_file_option="relion5")
+    assert np.all(tilt_ds.tilt_numbers[kept] < 1)
 
 
 def test_run_test_all_metrics_regression_against_baseline(tmp_path):

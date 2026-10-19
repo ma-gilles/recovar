@@ -152,6 +152,9 @@ def _run_pipeline(
         "--tilt-series",
         "--tilt-series-ctf",
         "relion5",
+        # The baseline was generated with the single radial noise model.
+        "--noise-model",
+        "radial",
         "--correct-contrast",
         "-o",
         str(pipeline_out),

@@ -156,7 +156,14 @@ def get_stencil(dim):
 
 @jax.jit
 def translate_single_image(image, translation, lattice):
-    phase_shift = jnp.exp(-2j * jnp.pi * (lattice @ translation))
+    # HIGHEST: a default-precision f32 matmul may run in TF32 on A100/H100,
+    # whose 10-bit mantissa puts visible errors on large k * t phases.
+    phase_arg = jnp.matmul(
+        lattice,
+        translation,
+        precision=jax.lax.Precision.HIGHEST,
+    )
+    phase_shift = jnp.exp(-2j * jnp.pi * phase_arg)
     return image * phase_shift
 
 

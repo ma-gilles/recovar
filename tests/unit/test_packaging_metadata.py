@@ -52,7 +52,7 @@ def test_all_extra_prefers_gpu_alias():
     pyproject = _load_toml(REPO_ROOT / "pyproject.toml")
     extras = pyproject["project"]["optional-dependencies"]
 
-    assert extras["all"] == ["recovar[gpu,interactive,gui,dev]"]
+    assert extras["all"] == ["recovar[gpu,interactive,gui,dev,plot]"]
 
 
 def test_pixi_declares_build_tools_for_optional_native_extensions():

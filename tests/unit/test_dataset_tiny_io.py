@@ -672,18 +672,15 @@ def test_get_split_tilt_indices_simulator_generated_with_ntilts_cap(sim_tiny_til
     )
     assert len(split) == 2
 
-    # Build reverse map and ensure each particle contributes at most one tilt in each half.
-    tilt_to_particle = {}
-    for p_idx, tilt_inds in enumerate(particles_to_tilts):
-        for t in tilt_inds:
-            tilt_to_particle[int(t)] = p_idx
-
+    tilt_ds = tilt_dataset.TiltSeriesDataset(
+        files["particles_star"],
+        datadir=str(Path(files["particles_star"]).parent),
+        lazy=True,
+        tilt_file_option="relion5",
+    )
     for half_imgs in split:
-        counts = {}
-        for t in np.asarray(half_imgs).astype(int):
-            p = tilt_to_particle[t]
-            counts[p] = counts.get(p, 0) + 1
-        assert all(v <= 1 for v in counts.values())
+        half_imgs = np.asarray(half_imgs, dtype=np.int32)
+        assert np.all(tilt_ds.tilt_numbers[half_imgs] < 1)
 
 
 def test_get_split_tilt_indices_simulator_with_zero_tilts_returns_empty_halves(sim_tiny_tilt_files):
@@ -1216,9 +1213,10 @@ def test_tiny_tilt_split_indices_accepts_in_memory_halfsets_and_arrays(tmp_path)
         datadir=str(tmp_path),
         ntilts=1,
     )
-    # ntilts=1 keeps one image per particle according to deterministic tilt ordering.
+    # Only row 0 has global acquisition rank zero. Particle g3 has no eligible
+    # image; row 2 must not be backfilled as that particle's local rank zero.
     np.testing.assert_array_equal(split[0], np.array([0], dtype=np.int32))
-    np.testing.assert_array_equal(split[1], np.array([2], dtype=np.int32))
+    np.testing.assert_array_equal(split[1], np.array([], dtype=np.int32))
 
 
 def test_simulator_tiny_tilt_split_indices_accepts_boolean_masks(sim_tiny_tilt_files):

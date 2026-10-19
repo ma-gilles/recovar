@@ -282,6 +282,9 @@ def _run_pipeline_with_particle_ind(
         "--tilt-series",
         "--tilt-series-ctf",
         "relion5",
+        # The baseline was generated with the single radial noise model.
+        "--noise-model",
+        "radial",
         "--particle-ind",
         str(particle_ind_path),
         "--correct-contrast",

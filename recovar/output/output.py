@@ -295,6 +295,7 @@ def build_params_dict(
     column_fscs,
     picked_frequencies,
     input_args,
+    extras=None,
 ):
     """Build the params dict saved as ``model/params.pkl``.
 
@@ -342,8 +343,10 @@ def build_params_dict(
         Frequency indices selected for covariance columns.
     input_args : Namespace
         The full command-line arguments used to run the pipeline.
+    extras : dict or None
+        Optional additional fields to merge into the params dict.
     """
-    return {
+    result = {
         'version': '0.7',
         'volume_shape': volume_shape,
         'voxel_size': voxel_size,
@@ -361,6 +364,17 @@ def build_params_dict(
         'ub_noise_var_by_var_est': np.asarray(ub_noise_var_by_var_est),
         'image_PS': np.asarray(noise_result['image_PS']),
         'masked_image_PS': np.asarray(noise_result['masked_image_PS']),
+        'noise_group_image_PS': (
+            None
+            if noise_result.get('noise_group_image_PS') is None
+            else np.asarray(noise_result['noise_group_image_PS'])
+        ),
+        'noise_group_masked_image_PS': (
+            None
+            if noise_result.get('noise_group_masked_image_PS') is None
+            else np.asarray(noise_result['noise_group_masked_image_PS'])
+        ),
+        'noise_group_metadata': noise_result.get('noise_group_metadata'),
         # Variance and covariance
         'variance_est': variance_est,
         'variance_fsc': variance_fsc,
@@ -371,6 +385,9 @@ def build_params_dict(
         # Input
         'input_args': input_args,
     }
+    if extras:
+        result.update(extras)
+    return result
 
 
 def build_embedding_dict(latent_coords, latent_coords_noreg,
@@ -413,6 +430,8 @@ def save_pipeline_results(
     particles_ind_split,
     ind_split,
     zs_full=None,
+    ppca_loadings=None,
+    ppca_iteration_data=None,
 ):
     """Save all pipeline results to disk.
 
@@ -432,6 +451,11 @@ def save_pipeline_results(
         Per-image halfset indices.
     zs_full : dict or None
         Full latent coordinates before complement-mask trimming (if applicable).
+    ppca_loadings : ndarray or None
+        Optional PPCA loading matrix ``W`` saved separately when the pipeline
+        uses the PPCA refinement path.
+    ppca_iteration_data : list[dict] or None
+        Optional per-iteration PPCA diagnostics.
     """
     paths.ensure_dirs()
 
@@ -445,6 +469,11 @@ def save_pipeline_results(
 
     if zs_full is not None:
         utils.pickle_dump(zs_full, paths.zs_with_complement)
+
+    if ppca_loadings is not None:
+        np.save(paths.ppca_loadings, np.asarray(ppca_loadings))
+    if ppca_iteration_data is not None:
+        utils.pickle_dump(ppca_iteration_data, paths.ppca_iteration_data)
 
     write_metadata_json(paths, result)
 
@@ -581,6 +610,11 @@ def write_metadata_json(paths, result):
             'mask': 'output/volumes/mask.mrc',
         },
     }
+
+    if os.path.isfile(paths.ppca_loadings):
+        metadata['files']['ppca_loadings'] = 'model/ppca_loadings.npy'
+    if os.path.isfile(paths.ppca_iteration_data):
+        metadata['files']['ppca_iteration_data'] = 'model/ppca_iteration_data.pkl'
 
     try:
         with open(paths.metadata, 'w') as f:
@@ -1006,6 +1040,14 @@ class PipelineOutput:
             return utils.load_mrc(self.paths.dilated_mask_volume)
         elif key == 'covariance_cols':
             return utils.pickle_load(self.paths.covariance_cols)
+        elif key in ('ppca_W', 'W'):
+            if not os.path.isfile(self.paths.ppca_loadings):
+                raise KeyError(f"key '{key}' not found in PipelineOutput")
+            return np.load(self.paths.ppca_loadings)
+        elif key == 'ppca_iteration_data':
+            if not os.path.isfile(self.paths.ppca_iteration_data):
+                raise KeyError("key 'ppca_iteration_data' not found in PipelineOutput")
+            return utils.pickle_load(self.paths.ppca_iteration_data)
 
         elif key in ('dataset', 'lazy_dataset'):
             ds = halfsets.load_halfset_dataset_from_args(
@@ -1041,6 +1083,10 @@ class PipelineOutput:
         keys = list(self.params.keys())
         keys += list(self._EMBEDDING_ENTRIES)
         keys += ['u', 'u_real', 'mean', 'volume_mask', 'dilated_volume_mask', 'covariance_cols', 'dataset', 'lazy_dataset', 'variance', 'variance20', 'focus_mask', 'image_snr', 'mean_halfmaps', 'halfsets', 'input_args', 'unsorted_embedding']
+        if os.path.isfile(self.paths.ppca_loadings):
+            keys += ['ppca_W', 'W']
+        if os.path.isfile(self.paths.ppca_iteration_data):
+            keys.append('ppca_iteration_data')
         return keys
 
 
@@ -1288,6 +1334,23 @@ def standard_pipeline_plots(po, zdim_key, output_folder):
     ax = plot_utils.plot_mean_fsc(po,None)
     plt.savefig(os.path.join(output_folder, 'mean_fsc.png'), bbox_inches='tight')
     plt.close()
+
+    # Covariance and noise diagnostics are part of every complete pipeline.
+    for plotter, filename, description in (
+        (plot_utils.plot_covariance_column_fscs, "covariance_column_fscs.png", "covariance-column FSC"),
+        (plot_utils.plot_noise_group_summary, "noise_power_by_tilt.png", "noise/power-by-tilt"),
+        (
+            plot_utils.plot_volume_variance_prior_summary,
+            "volume_variance_prior.png",
+            "volume variance/prior",
+        ),
+    ):
+        try:
+            figure, _ = plotter(po, os.path.join(output_folder, filename))
+            plt.close(figure)
+            logger.info("Saved %s plot to %s", description, os.path.join(output_folder, filename))
+        except (KeyError, ValueError, TypeError, AttributeError) as exc:
+            logger.warning("Could not generate %s plot: %s", description, exc)
 
 
 
