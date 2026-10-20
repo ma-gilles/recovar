@@ -116,6 +116,21 @@ static __device__ __forceinline__ int64_t volume_spatial_offset(
          + static_cast<int64_t>(i2);
 }
 
+/* One complex voxel's two float atomics as one 8-byte vector atomic on sm_90 (float2 atomicAdd), halving the
+ * L2 atomic operations of a complex scatter; each component receives the same addend either way. */
+template <typename T>
+static __device__ __forceinline__ void atomic_add_complex(T* vol, int64_t off, T re, T im)
+{
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 900
+    if constexpr (std::is_same_v<T, float>) {
+        atomicAdd(reinterpret_cast<float2*>(vol + off), make_float2(re, im));
+        return;
+    }
+#endif
+    atomicAdd(&vol[off], re);
+    atomicAdd(&vol[off + 1], im);
+}
+
 /* scatter_nearest: atomicAdd one value at the nearest voxel.
  *
  * HALF_VOL: Hermitian fold approach.  Voxels with kz >= 0 scatter
@@ -188,8 +203,7 @@ static __device__ __forceinline__ void scatter_nearest(
         } else {
             const int64_t off =
                 volume_spatial_offset(i0, i1, hkz, stride0, stride1) * 2;
-            atomicAdd(&vol[off],     val_re);
-            atomicAdd(&vol[off + 1], val_im);
+            atomic_add_complex<T>(vol, off, val_re, val_im);
         }
         return;
     }
@@ -208,8 +222,7 @@ static __device__ __forceinline__ void scatter_nearest(
     } else {
         const int64_t off =
             volume_spatial_offset(i0, i1, i2, stride0, stride1) * 2;
-        atomicAdd(&vol[off],     val_re);
-        atomicAdd(&vol[off + 1], val_im);
+        atomic_add_complex<T>(vol, off, val_re, val_im);
     }
 }
 
@@ -310,8 +323,7 @@ static __device__ __forceinline__ void scatter_trilinear(
                     } else {
                         const int64_t off =
                             volume_spatial_offset(sj0, sj1, hkz, stride0, stride1) * 2;
-                        atomicAdd(&vol[off],     sre);
-                        atomicAdd(&vol[off + 1], sim);
+                        atomic_add_complex<T>(vol, off, sre, sim);
                     }
                 }
             }
@@ -355,8 +367,7 @@ static __device__ __forceinline__ void scatter_trilinear(
                 } else {
                     const int64_t off =
                         volume_spatial_offset(j0, j1, j2, stride0, stride1) * 2;
-                    atomicAdd(&vol[off],     w * val_re);
-                    atomicAdd(&vol[off + 1], w * val_im);
+                    atomic_add_complex<T>(vol, off, w * val_re, w * val_im);
                 }
             }
         }
