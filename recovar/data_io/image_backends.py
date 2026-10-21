@@ -10,6 +10,7 @@ Those live in ``image_metadata.py``, ``halfsets.py``, and
 ``cryoem_dataset.py`` respectively.
 """
 
+import functools
 import logging
 import os
 import queue
@@ -163,6 +164,37 @@ def _centered_rfft2_jax_per_image(images):
         return jnp.fft.fftshift(transformed, axes=(-2,))
 
     return jax.lax.map(transform, images_jax)
+
+
+@functools.partial(jax.jit, static_argnums=1)
+def _centered_rfft2_jax_sub_batches(images, sub_batch):
+    """Run one cuFFT plan per ``sub_batch`` images: a ``lax.map`` over the full sub-batches, then one batch of
+    the remaining ``n % sub_batch``.
+
+    The result is :func:`_centered_rfft2_jax_per_image`'s only where cuFFT's batched plan of every size up to
+    ``sub_batch`` is bitwise the per-image one, which depends on the image shape and the device (on H100 and
+    A100, up to 15 images at 256x256 and 31 at 128x128). The caller establishes that before choosing
+    ``sub_batch``; ``sub_batch=1`` is the per-image transform.
+    """
+
+    images_jax = jnp.asarray(images, dtype=jnp.float32)
+    if images_jax.ndim == 2:
+        images_jax = images_jax[None, ...]
+    n_images, height, width = images_jax.shape
+    n_full = n_images // sub_batch * sub_batch
+
+    def transform(block):
+        shifted = jnp.fft.fftshift(block, axes=(-2, -1))
+        transformed = jnp.fft.rfft2(shifted, axes=(-2, -1))
+        return jnp.fft.fftshift(transformed, axes=(-2,))
+
+    parts = []
+    if n_full:
+        blocks = images_jax[:n_full].reshape(n_full // sub_batch, sub_batch, height, width)
+        parts.append(jax.lax.map(transform, blocks).reshape(n_full, height, width // 2 + 1))
+    if n_full < n_images:
+        parts.append(transform(images_jax[n_full:]))
+    return parts[0] if len(parts) == 1 else jnp.concatenate(parts, axis=0)
 
 
 class _SimpleSubset:
@@ -404,8 +436,18 @@ class ParticleImageDataset:
         relion_normalization_factors=None,
         relion_integer_shifts=None,
         relion_fft_per_image: bool = False,
+        relion_fft_sub_batch: int = 1,
     ) -> np.ndarray:
-        """Return preprocessed images directly in packed half-spectrum layout."""
+        """Return preprocessed images directly in packed half-spectrum layout.
+
+        ``relion_fft_per_image`` transforms each image with its own cuFFT plan, as RELION does;
+        ``relion_fft_sub_batch`` > 1 runs that transform ``relion_fft_sub_batch`` images per plan
+        (:func:`_centered_rfft2_jax_sub_batches`), for a caller that has shown the batched plan of
+        that size bitwise the per-image one for the image shape and device.
+        """
+
+        if int(relion_fft_sub_batch) < 1:
+            raise ValueError(f"relion_fft_sub_batch must be a positive integer, got {relion_fft_sub_batch}")
 
         if self.image_mask_mode == "relion_background_fill":
             if self.relion_fourier_backend == "relion_cuda":
@@ -456,11 +498,12 @@ class ParticleImageDataset:
                     native_lane_reduction=self.relion_native_lane_reduction,
                     native_atomic_reduction=native_atomic_reduction,
                 )
-                transformed = (
-                    _centered_rfft2_jax_per_image(preprocessed)
-                    if relion_fft_per_image
-                    else _centered_rfft2_jax(preprocessed)
-                )
+                if not relion_fft_per_image:
+                    transformed = _centered_rfft2_jax(preprocessed)
+                elif relion_fft_sub_batch > 1:
+                    transformed = _centered_rfft2_jax_sub_batches(preprocessed, int(relion_fft_sub_batch))
+                else:
+                    transformed = _centered_rfft2_jax_per_image(preprocessed)
                 return transformed.reshape((transformed.shape[0], -1)).astype(jnp.complex64)
             try:
                 images_np = np.asarray(images)

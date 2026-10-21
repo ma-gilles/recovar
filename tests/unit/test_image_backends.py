@@ -233,6 +233,46 @@ def test_relion_per_image_fft_is_batch_size_invariant(gpu_device):
     np.testing.assert_array_equal(np.asarray(per_image[0]), np.asarray(single[0]))
 
 
+@pytest.mark.parametrize("n_images,sub_batch", [(11, 4), (8, 4), (3, 4), (1, 1)])
+def test_relion_sub_batched_fft_keeps_image_order(n_images, sub_batch):
+    """Full sub-batches and the remainder come back in input order: image i is a centred impulse of height
+    i + 1, whose transform is exactly the constant i + 1 in any FFT."""
+    height, width = 8, 6
+    images = np.zeros((n_images, height, width), dtype=np.float32)
+    images[:, height // 2, width // 2] = np.arange(1, n_images + 1, dtype=np.float32)
+
+    result = np.asarray(image_backends._centered_rfft2_jax_sub_batches(images, sub_batch))
+
+    expected = np.broadcast_to(
+        np.arange(1, n_images + 1, dtype=np.complex64)[:, None, None], (n_images, height, width // 2 + 1)
+    )
+    np.testing.assert_array_equal(result, expected)
+
+
+@pytest.mark.gpu
+def test_relion_sub_batched_fft_is_per_image_where_its_batched_plans_are(gpu_device):
+    """Where cuFFT's batched plan of every size up to ``s`` is bitwise the per-image one, the sub-batch path
+    (``lax.map`` over full sub-batches of ``s`` plus one batch of the rest) is bitwise the per-image transform."""
+    images = np.random.default_rng(1723).standard_normal((37, 128, 128)).astype(np.float32)
+
+    def bits(values):
+        return np.asarray(values).view(np.uint32)
+
+    with image_backends.jax.default_device(gpu_device):
+        per_image = bits(image_backends._centered_rfft2_jax_per_image(images))
+        largest = 0
+        for size in range(1, 17):
+            if not np.array_equal(bits(image_backends._centered_rfft2_jax_batched(images[:size])), per_image[:size]):
+                break
+            largest = size
+        if largest < 2:
+            pytest.skip(f"cuFFT's batched plan of 2 images is not the per-image one at 128x128 on {gpu_device}")
+        sub_batch = 1 << (largest.bit_length() - 1)
+        sub_batched = bits(image_backends._centered_rfft2_jax_sub_batches(images, sub_batch))
+
+    np.testing.assert_array_equal(sub_batched, per_image)
+
+
 def test_particle_image_dataset_relion_cuda_routes_explicit_operands(monkeypatch):
     monkeypatch.setattr(image_backends.ImageLoader, "from_file", lambda *args, **kwargs: _DummySource(n=4, D=8))
     ds = image_backends.ParticleImageDataset("dummy.mrcs", lazy=True, invert_data=False)
@@ -330,6 +370,38 @@ def test_particle_image_dataset_relion_cuda_routes_per_image_fft(monkeypatch):
     )
 
     np.testing.assert_array_equal(np.asarray(result).reshape(images.shape).real, images)
+
+
+def test_particle_image_dataset_relion_cuda_routes_sub_batched_fft(monkeypatch):
+    monkeypatch.setattr(image_backends.ImageLoader, "from_file", lambda *args, **kwargs: _DummySource(n=4, D=8))
+    ds = image_backends.ParticleImageDataset("dummy.mrcs", lazy=True, invert_data=False)
+    ds.set_relion_image_mask(pixel_size=1.0, particle_diameter_ang=6.0, width_mask_edge_px=2.0)
+    ds.set_relion_fourier_backend("relion_cuda")
+    images, _p_idx, _t_idx = ds[2]
+    calls = []
+    monkeypatch.setattr(
+        image_backends, "_RELION_CUDA_PREPROCESSOR", lambda *args, **kwargs: (jnp.asarray(images), jnp.asarray(images))
+    )
+    monkeypatch.setattr(image_backends, "_centered_rfft2_jax", lambda _x: pytest.fail("batched FFT"))
+    monkeypatch.setattr(image_backends, "_centered_rfft2_jax_per_image", lambda _x: pytest.fail("per-image FFT"))
+
+    def sub_batches(values, sub_batch):
+        calls.append(sub_batch)
+        return values.astype(jnp.complex64)
+
+    monkeypatch.setattr(image_backends, "_centered_rfft2_jax_sub_batches", sub_batches)
+    operands = dict(
+        relion_normalization_factors=np.ones(1, dtype=np.float32),
+        relion_integer_shifts=np.zeros((1, 2), dtype=np.int32),
+        relion_fft_per_image=True,
+    )
+
+    result = ds.process_images_half(images, apply_image_mask=False, relion_fft_sub_batch=4, **operands)
+
+    assert calls == [4]
+    np.testing.assert_array_equal(np.asarray(result).reshape(images.shape).real, images)
+    with pytest.raises(ValueError, match="relion_fft_sub_batch"):
+        ds.process_images_half(images, apply_image_mask=False, relion_fft_sub_batch=0, **operands)
 
 
 def test_particle_image_dataset_routes_native_lane_softmask_diagnostic(monkeypatch):
