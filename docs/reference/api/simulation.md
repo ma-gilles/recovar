@@ -19,6 +19,15 @@ Synthetic heterogeneous dataset generation.
     options:
       members_order: source
 
+## solvent_contrast
+
+Optional Henderson-McMullan solvent-contrast correction for atomic-model
+volumes; see [the model and metadata](../../math/atomic_solvent_contrast.md).
+
+::: recovar.simulation.solvent_contrast
+    options:
+      members_order: source
+
 ## simulate_scattering_potential
 
 Compute atomic scattering potentials from PDB structures.

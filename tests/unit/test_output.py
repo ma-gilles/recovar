@@ -5,10 +5,44 @@ import pytest
 
 pytest.importorskip("jax")
 
-from recovar.output import output
-from recovar.output import plot_utils
+from recovar.output import output, plot_utils
 
 pytestmark = pytest.mark.unit
+
+
+def _minimal_params_dict(*, mean_prior=None):
+    noise = np.ones(1, dtype=np.float32)
+    return output.build_params_dict(
+        volume_shape=(1, 1, 1),
+        voxel_size=1.0,
+        s_rescaled=noise,
+        noise_var_from_hf=noise,
+        noise_var_from_het_residual=None,
+        noise_var_used=noise,
+        noise_result={
+            "radial_noise_var_outside_mask": noise,
+            "radial_ub_noise_var": noise,
+            "white_noise_var_outside_mask": np.float32(1.0),
+            "image_PS": noise,
+            "masked_image_PS": noise,
+        },
+        ub_noise_var_by_var_est=noise,
+        variance_est={"combined": noise},
+        variance_fsc=noise,
+        noise_p_variance_est=noise,
+        covariance_options={},
+        column_fscs=noise,
+        picked_frequencies=np.zeros(1, dtype=np.int32),
+        input_args={},
+        mean_prior=mean_prior,
+    )
+
+
+def test_build_params_dict_preserves_optional_mean_prior():
+    mean_prior = np.asarray([2.5], dtype=np.float32)
+
+    np.testing.assert_array_equal(_minimal_params_dict(mean_prior=mean_prior)["mean_prior"], mean_prior)
+    assert _minimal_params_dict()["mean_prior"] is None
 
 
 def test_get_resampled_distances_and_resample_trajectory():
@@ -208,8 +242,19 @@ def test_save_covar_output_volumes_negative_us_to_save_yields_no_eigenvectors(mo
 
 
 def test_save_covar_output_volumes_large_grid_clamps_batch_size_to_one(monkeypatch, tmp_path):
+    # ``save_covar_output_volumes`` now validates that ``u``'s leading
+    # dimension matches either the full-Fourier volume size
+    # ``N0*N1*N2`` or the packed half-Fourier size
+    # ``N0*N1*(N2//2+1)`` (ppca-contrast-multimask, May 2026).
+    # Pick grid_size=257 — just past the clamp threshold
+    # ``int(2**24 / grid**3) == 0`` — with a half-Fourier-sized
+    # zero-filled ``u`` so validation passes, and mock the
+    # half→full converter and ``batch_idft3`` so this remains a unit
+    # test even though the volume is "large".
+    grid_size = 257
+    half_vol_size = grid_size * grid_size * (grid_size // 2 + 1)  # 8,520,321
     mean = np.zeros(8, dtype=np.complex64)
-    u = np.random.randn(8, 2).astype(np.float32)
+    u = np.zeros((half_vol_size, 2), dtype=np.float32)
     s = {"rescaled": np.array([1.0, 0.5], dtype=np.float32)}
     volume_mask = np.ones((2, 2, 2), dtype=np.float32)
 
@@ -217,6 +262,13 @@ def test_save_covar_output_volumes_large_grid_clamps_batch_size_to_one(monkeypat
 
     monkeypatch.setattr(output, "save_volumes", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(output, "save_volume", lambda *_args, **_kwargs: None)
+    # Bypass the actual half→full conversion (would allocate a 17M×q array
+    # twice); the rest of the function still exercises the batch-size clamp.
+    monkeypatch.setattr(
+        output.fourier_transform_utils,
+        "half_volume_to_full_volume",
+        lambda u_T, _shape: np.zeros((u_T.shape[0], grid_size ** 3), dtype=u_T.dtype),
+    )
 
     def _fake_batch_idft3(arr, volume_shape, vol_batch_size):
         _ = arr, volume_shape
@@ -232,8 +284,9 @@ def test_save_covar_output_volumes_large_grid_clamps_batch_size_to_one(monkeypat
         u=u,
         s=s,
         mask=volume_mask,
-        # Very large grid would previously make int((2**24)/(grid_size**3)) == 0.
-        volume_shape=(1024, 1024, 1024),
+        # 257^3 ≈ 17M > 2**24, so ``int((2**24)/(grid_size**3)) == 0`` and
+        # the call should clamp ``vol_batch_size`` up to 1.
+        volume_shape=(grid_size, grid_size, grid_size),
         us_to_save=1,
         us_to_var=[1],
         voxel_size=1.0,

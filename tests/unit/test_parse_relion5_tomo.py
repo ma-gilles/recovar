@@ -1348,3 +1348,140 @@ class TestQuantitativeGeometry:
                     assert np.isfinite(u), f"Non-finite DefocusU: trial={trial}"
                     assert np.isfinite(v), f"Non-finite DefocusV: trial={trial}"
                     assert a == pytest.approx(dfa[i], abs=1e-10)
+
+
+# ---------------------------------------------------------------------------
+# Tests: depth-corrected defocus against RELION's formula
+# ---------------------------------------------------------------------------
+
+
+def _gl_rotation(axis, degrees):
+    """gravis ``t3Matrix::rotation(axis, angle)`` (GL rotation about a unit axis), 4x4."""
+    x, y, z = axis
+    c, s = np.cos(np.deg2rad(degrees)), np.sin(np.deg2rad(degrees))
+    out = np.eye(4)
+    out[:3, :3] = [
+        [x * x * (1 - c) + c, x * y * (1 - c) - z * s, x * z * (1 - c) + y * s],
+        [y * x * (1 - c) + z * s, y * y * (1 - c) + c, y * z * (1 - c) - x * s],
+        [x * z * (1 - c) - y * s, y * z * (1 - c) + x * s, z * z * (1 - c) + c],
+    ]
+    return out
+
+
+def _translation(v):
+    out = np.eye(4)
+    out[:3, 3] = v
+    return out
+
+
+def _relion_subtomogram_matrix(rot, tilt, psi):
+    """``Euler::anglesToMatrix3`` (jaz/math/Euler_angles_relion.h:38-48), angles in degrees."""
+    sp, cp = np.sin(np.deg2rad(rot)), np.cos(np.deg2rad(rot))
+    st, ct = np.sin(np.deg2rad(tilt)), np.cos(np.deg2rad(tilt))
+    sc, cc = np.sin(np.deg2rad(psi)), np.cos(np.deg2rad(psi))
+    return np.array(
+        [
+            [cc * ct * cp - sc * sp, cc * ct * sp + sc * cp, -cc * st],
+            [-sc * ct * cp - cc * sp, -sc * ct * sp + cc * cp, sc * st],
+            [st * cp, st * sp, ct],
+        ]
+    )
+
+
+def _relion_tilt_defocus(tilt, tomo_size, pixel_size, hand, slope, centered_angst, subtomo_angles, origin_angst):
+    """RELION 5's per-tilt ``DeltafU`` offset of a subtomogram particle, in Angstrom.
+
+    - Projection matrix ``s1 s2 r2 r1 r0 s0`` (``Tomogram::setProjectionMatrix``,
+      jaz/tomography/tomogram.cpp:17-63).
+    - Position in decentered pixels, shifted by ``A_subtomo origin`` (``ParticleSet::getPosition``
+      and ``getParticleCoordDecenteredPixel``, jaz/tomography/particle_set.cpp:355-368, 589-604),
+      evaluated once when the particles are read (``Experiment::read``, exp_model.cpp:1007-1020).
+    - ``dz = handedness * pixelSize * defocusSlope * (P pos - P centre).z`` (``Tomogram::getCtf`` and
+      ``getDepthOffset``, jaz/tomography/tomogram.cpp:267-289).
+    """
+    w0, h0, d0 = tomo_size
+    centre = np.array([w0 / 2.0, h0 / 2.0, d0 / 2.0])
+    s0 = _translation(-np.array([int(w0 / 2), int(h0 / 2), int(d0 / 2)], dtype=float))
+    s1 = _translation([tilt["x_shift"] / pixel_size, tilt["y_shift"] / pixel_size, 0.0])
+    s2 = _translation([64.0, 64.0, 0.0])
+    r0 = _gl_rotation((1.0, 0.0, 0.0), tilt["x_tilt"])
+    r1 = _gl_rotation((0.0, 1.0, 0.0), tilt["y_tilt"])
+    r2 = _gl_rotation((0.0, 0.0, 1.0), tilt["z_rot"])
+    projection = s1 @ s2 @ r2 @ r1 @ r0 @ s0
+    subtomo = _relion_subtomogram_matrix(*subtomo_angles)
+    position = np.asarray(centered_angst) / pixel_size + centre - subtomo @ np.asarray(origin_angst) / pixel_size
+    depth = (projection @ np.r_[position, 1.0])[2] - (projection @ np.r_[centre, 1.0])[2]
+    return hand * pixel_size * slope * depth
+
+
+def test_depth_defocus_matches_relion_with_origin_shift_slope_and_subtomogram_matrix(tmp_path):
+    """The per-tilt defocus follows RELION's getCtf, including the particle's origin shift and the defocus slope."""
+    n_tilts, pixel_size, hand, slope, tomo_size = 5, 1.5, -1.0, 1.3, (4096, 4096, 1000)
+    ts_dir = tmp_path / "tilt_series"
+    ts_dir.mkdir()
+    _make_tilt_series_star(str(ts_dir / "tomo_001.star"), n_tilts=n_tilts)
+    _write_text(
+        tmp_path / "tomograms.star",
+        f"""\
+        # version 50001
+
+        data_global
+
+        loop_
+        _rlnTomoName #1
+        _rlnTomoTiltSeriesStarFile #2
+        _rlnTomoTiltSeriesPixelSize #3
+        _rlnTomoHand #4
+        _rlnTomoSizeX #5
+        _rlnTomoSizeY #6
+        _rlnTomoSizeZ #7
+        _rlnTomoDefocusSlope #8
+        tomo_001 tilt_series/tomo_001.star {pixel_size} {hand:g} {tomo_size[0]} {tomo_size[1]} {tomo_size[2]} {slope}
+        """,
+    )
+    particles = [
+        # centered coordinate (A), origin (A), subtomogram angles (deg)
+        ((310.0, -120.0, 180.0), (4.5, -3.25, 6.0), (20.0, 35.0, -50.0)),
+        ((-420.0, 250.0, -90.0), (-2.0, 7.5, -5.5), (-110.0, 80.0, 15.0)),
+    ]
+    visible = "[" + ",".join(["1"] * n_tilts) + "]"
+    rows = [
+        f"tomo_001 {c[0]} {c[1]} {c[2]} {o[0]} {o[1]} {o[2]} 0.0 0.0 0.0 {a[0]} {a[1]} {a[2]} 1 tomo_001/{p + 1} "
+        f"Subtomograms/{p + 1}_stack2d.mrcs {p % 2 + 1} {visible}"
+        for p, (c, o, a) in enumerate(particles)
+    ]
+    columns = (
+        "_rlnTomoName _rlnCenteredCoordinateXAngst _rlnCenteredCoordinateYAngst _rlnCenteredCoordinateZAngst "
+        "_rlnOriginXAngst _rlnOriginYAngst _rlnOriginZAngst _rlnAngleRot _rlnAngleTilt _rlnAnglePsi "
+        "_rlnTomoSubtomogramRot _rlnTomoSubtomogramTilt _rlnTomoSubtomogramPsi _rlnOpticsGroup _rlnTomoParticleName "
+        "_rlnImageName _rlnRandomSubset _rlnTomoVisibleFrames"
+    ).split()
+    with open(tmp_path / "particles.star", "w") as f:
+        f.write(
+            "# version 50001\n\ndata_optics\n\nloop_\n_rlnVoltage #1\n_rlnSphericalAberration #2\n"
+            "_rlnAmplitudeContrast #3\n_rlnOpticsGroup #4\n_rlnOpticsGroupName #5\n_rlnImagePixelSize #6\n"
+            "_rlnImageSize #7\n_rlnImageDimensionality #8\n300.0 2.7 0.1 1 opticsGroup1 1.5 128 2\n\n"
+            "# version 50001\n\ndata_particles\n\nloop_\n"
+        )
+        f.write("".join(f"{c} #{i}\n" for i, c in enumerate(columns, 1)))
+        f.write("\n".join(rows) + "\n")
+
+    output = tmp_path / "particles_2d.star"
+    convert(str(tmp_path / "tomograms.star"), str(tmp_path / "particles.star"), str(output))
+    rows_2d, _ = read_star(str(output))
+
+    ts_rows, _ = read_star(str(ts_dir / "tomo_001.star"))
+    for p, (centered, origin, subtomo_angles) in enumerate(particles):
+        got = rows_2d[rows_2d["_rlnGroupName"] == f"tomo_001/{p + 1}"]
+        for _, row in got.iterrows():
+            tilt_row = ts_rows[ts_rows["_rlnMicrographName"] == row["_rlnMicrographName"]].iloc[0]
+            tilt = {
+                "x_tilt": float(tilt_row["_rlnTomoXTilt"]),
+                "y_tilt": float(tilt_row["_rlnTomoYTilt"]),
+                "z_rot": float(tilt_row["_rlnTomoZRot"]),
+                "x_shift": float(tilt_row["_rlnTomoXShiftAngst"]),
+                "y_shift": float(tilt_row["_rlnTomoYShiftAngst"]),
+            }
+            dz = _relion_tilt_defocus(tilt, tomo_size, pixel_size, hand, slope, centered, subtomo_angles, origin)
+            assert float(row["_rlnDefocusU"]) == pytest.approx(float(tilt_row["_rlnDefocusU"]) + dz, abs=1e-3)
+            assert float(row["_rlnDefocusV"]) == pytest.approx(float(tilt_row["_rlnDefocusV"]) + dz, abs=1e-3)
