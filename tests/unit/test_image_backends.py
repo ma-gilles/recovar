@@ -1330,3 +1330,52 @@ def test_parse_particle_tilt_real_tiny_star_subset_with_duplicate_tilt_indices(t
     np.testing.assert_array_equal(p2t[0], np.array([1, 4], dtype=np.int32))
     np.testing.assert_array_equal(p2t[1], np.array([5, 5], dtype=np.int32))
     assert t2p[1] == 0 and t2p[4] == 0 and t2p[5] == 1
+
+
+def test_prefetch_iterator_abandoned_consumer_releases_producer_and_items():
+    # A consumer that stops early (e.g. jaxopt run_iterator at maxiter) must not
+    # leave the producer thread blocked on a full queue holding batches alive.
+    import gc
+    import threading
+    import weakref
+
+    class Batch:
+        pass
+
+    made = []
+
+    def source():
+        while True:
+            b = Batch()
+            made.append(weakref.ref(b))
+            yield b
+
+    n_threads = threading.active_count()
+    it = iter(image_backends._PrefetchIterator(source(), buffer_size=2))
+    first = next(it)
+    assert isinstance(first, Batch)
+    del first
+    it.close()
+    del it
+    gc.collect()
+
+    for _ in range(50):  # producer polls its stop flag every 0.1 s
+        if threading.active_count() <= n_threads:
+            break
+        threading.Event().wait(0.1)
+    gc.collect()
+    assert threading.active_count() <= n_threads
+    assert all(r() is None for r in made)
+
+
+def test_prefetch_iterator_yields_all_items_and_propagates_errors():
+    assert list(image_backends._PrefetchIterator(range(7), buffer_size=2)) == list(range(7))
+
+    def failing():
+        yield 1
+        raise ValueError("boom")
+
+    it = iter(image_backends._PrefetchIterator(failing(), buffer_size=2))
+    assert next(it) == 1
+    with pytest.raises(ValueError, match="boom"):
+        next(it)
