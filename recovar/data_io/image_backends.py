@@ -547,15 +547,30 @@ class _PrefetchIterator:
 
     def __iter__(self):
         q = queue.Queue(maxsize=self._buffer_size)
+        stop = threading.Event()
+
+        def _put(item):
+            # Blocking put that gives up once the consumer has gone away.
+            while not stop.is_set():
+                try:
+                    q.put(item, timeout=0.1)
+                    return True
+                except queue.Full:
+                    pass
+            return False
 
         def _producer():
+            source = iter(self._iterable)
             try:
-                for item in self._iterable:
-                    q.put(item)
+                for item in source:
+                    if not _put(item):
+                        return
             except Exception as exc:
-                q.put(exc)
+                _put(exc)
             finally:
-                q.put(_SENTINEL)
+                _put(_SENTINEL)
+                if hasattr(source, "close"):
+                    source.close()
 
         thread = threading.Thread(target=_producer, daemon=True)
         thread.start()
@@ -568,6 +583,15 @@ class _PrefetchIterator:
                     raise item
                 yield item
         finally:
+            # An abandoned consumer (e.g. a solver stopping at maxiter) must not
+            # leave the producer blocked on a full queue: that thread would keep
+            # its queued and in-flight batches (device arrays) alive forever.
+            stop.set()
+            while True:
+                try:
+                    q.get_nowait()
+                except queue.Empty:
+                    break
             thread.join(timeout=5.0)
 
 
