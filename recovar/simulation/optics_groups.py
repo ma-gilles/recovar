@@ -151,3 +151,172 @@ def simulate_optics_groups(
         for row, image in zip(rows, images):
             row_images[row] = image
     return row_images, noise_variances
+
+
+def _block_seed(*parts):
+    """A 32-bit JAX seed derived from ``parts`` (one independent noise stream per block and call)."""
+    return int(np.random.SeedSequence([int(p) for p in parts]).generate_state(1)[0])
+
+
+def simulate_per_particle_volumes(
+    particle_volume_fn,
+    volume_grid_size,
+    optics_groups,
+    row_optics,
+    row_particle,
+    rots,
+    ctf_params,
+    row_contrast,
+    *,
+    ctf_evaluator,
+    voxel_size,
+    grid_size,
+    snr,
+    noise_model,
+    n_probe_particles,
+    seed,
+    disc_type,
+    premultiplied_ctf,
+    row_translations=None,
+    max_volume_bytes=2**31,
+):
+    """Simulate every row's image from its own particle's volume, as :func:`simulate_optics_groups` does for shared volumes.
+
+    ``particle_volume_fn(particle_indices)`` returns the volumes of those particles,
+    shape ``(len(particle_indices), volume_grid_size**3)``: flat, centred Fourier volumes
+    in recovar's frame (:func:`recovar.core.fourier_transform_utils.get_dft3` of a real
+    array whose axes 0, 1, 2 are RELION's reference x, y, z) at ``voxel_size``. Row ``r``
+    shows particle ``row_particle[r]``. Volumes are built in blocks of at most
+    ``max_volume_bytes`` and only for the particles a call needs, so no file or array
+    holds every particle's volume.
+
+    ``volume_grid_size`` may exceed the image box ``grid_size`` (same voxel size): each
+    image is then formed on the larger box (projection, CTF on the 2x padded image,
+    noise) and cropped to the central ``grid_size`` pixels. This lets content outside
+    the image box (e.g. a filament that continues past the box) project into tilted
+    images. White noise cropped this way keeps its per-pixel variance.
+
+    Noise follows :func:`simulate_optics_groups`: one per-pixel variance shared by every
+    group, ``noise_scale`` times it, calibrated so that the mean noise-free signal power
+    of the probe rows of the first group with rows over the noise power is ``snr``. The
+    probe rows are every row of ``n_probe_particles`` particles spread evenly over that
+    group (not the first rows, so the probe does not hinge on one filament). ``snr`` of
+    None or inf writes noise-free images. Every group's ``pixel_size`` and ``box_size``
+    must equal ``voxel_size`` and ``grid_size``.
+
+    Returns the per-row images (``(n_rows, grid_size, grid_size)``) and the per-pixel
+    noise variance of each group on the ``volume_grid_size`` grid (``None`` for a group
+    without rows), plus a dict with the calibration record.
+    """
+    for og in optics_groups:
+        if og["pixel_size"] != voxel_size or og["box_size"] != grid_size:
+            raise ValueError(
+                "per-particle volumes need every optics group on the reference grid "
+                f"(pixel_size {voxel_size}, box {grid_size}), got {og['pixel_size']}, {og['box_size']}"
+            )
+    volume_grid_size = int(volume_grid_size)
+    if volume_grid_size < grid_size or (volume_grid_size - grid_size) % 2:
+        raise ValueError(
+            f"volume_grid_size {volume_grid_size} must be >= grid_size {grid_size} with an even difference"
+        )
+    lo = (volume_grid_size - grid_size) // 2
+    row_optics = np.asarray(row_optics)
+    row_particle = np.asarray(row_particle)
+    noiseless = snr is None or np.isinf(snr)
+    particles_per_block = max(1, int(max_volume_bytes // (16 * volume_grid_size**3)))
+    batch_size = int(5 * utils.get_image_batch_size(volume_grid_size, utils.get_gpu_memory_total()))
+
+    def zero_volumes(particles):
+        return np.zeros((len(particles), volume_grid_size**3), dtype=np.complex128)
+
+    def simulate(rows, volume_fn, noise_variance, contrast, noise_scale, group_ctf_evaluator, seed_parts):
+        out = np.empty((rows.size, grid_size, grid_size), dtype=np.float32)  # simulate_data's image dtype
+        particles = np.unique(row_particle[rows])
+        for b, start in enumerate(range(0, particles.size, particles_per_block)):
+            block = particles[start : start + particles_per_block]
+            sel = np.nonzero(np.isin(row_particle[rows], block))[0]
+            block_rows = rows[sel]
+            volumes = volume_fn(block)
+            if tuple(volumes.shape) != (block.size, volume_grid_size**3):
+                raise ValueError(
+                    f"particle_volume_fn returned shape {tuple(volumes.shape)}, "
+                    f"expected {(block.size, volume_grid_size**3)}"
+                )
+            dataset = cryoem_dataset.CryoEMDataset(
+                None,
+                voxel_size,
+                cryoem_dataset.ImageMetadata(
+                    rots[block_rows],
+                    np.zeros((block_rows.size, 2)) if row_translations is None else row_translations[block_rows],
+                    ctf_params[block_rows],
+                ),
+                ctf_evaluator=group_ctf_evaluator,
+                grid_size=volume_grid_size,
+            )
+            images = simulator.simulate_data(
+                dataset,
+                volumes,
+                noise_variance,
+                batch_size,
+                np.searchsorted(block, row_particle[block_rows]),
+                contrast[sel],
+                noise_scale[sel],
+                seed=_block_seed(seed, *seed_parts, b),
+                disc_type=disc_type,
+                premultiplied_ctf=premultiplied_ctf,
+            )
+            out[sel] = np.asarray(images)[:, lo : lo + grid_size, lo : lo + grid_size]
+        return out
+
+    row_images = np.empty((row_optics.size, grid_size, grid_size), dtype=np.float32)
+    noise_variances = []
+    target_noise_power = None
+    calibration = {"noiseless": bool(noiseless), "probe_particles": None, "probe_signal_power": None}
+    for g, og in enumerate(optics_groups):
+        group_ctf_evaluator = ctf_evaluator[g] if isinstance(ctf_evaluator, (list, tuple)) else ctf_evaluator
+        rows = np.nonzero(row_optics == g)[0]
+        if rows.size == 0:
+            noise_variances.append(None)
+            continue
+        noise_shape = simulator.get_noise_model(noise_model, volume_grid_size)
+        if noiseless:
+            noise_variance = 0 * noise_shape
+        else:
+            if target_noise_power is None:
+                group_particles = np.unique(row_particle[rows])
+                probe_particles = group_particles[
+                    np.unique(np.linspace(0, group_particles.size - 1, n_probe_particles).round().astype(int))
+                ]
+                probe = rows[np.isin(row_particle[rows], probe_particles)]
+                ones = np.ones(probe.size)
+                signal_power = np.mean(
+                    simulate(probe, particle_volume_fn, 0 * noise_shape, ones, ones, group_ctf_evaluator, (g, 1)) ** 2
+                )
+                target_noise_power = signal_power / snr
+                calibration.update(probe_particles=probe_particles.tolist(), probe_signal_power=float(signal_power))
+            probe = rows[np.isin(row_particle[rows], np.unique(row_particle[rows])[:n_probe_particles])]
+            unit_noise_power = np.mean(
+                simulate(
+                    probe,
+                    zero_volumes,
+                    noise_shape,
+                    np.zeros(probe.size),
+                    np.ones(probe.size),
+                    group_ctf_evaluator,
+                    (g, 2),
+                )
+                ** 2
+            )
+            noise_variance = noise_shape * target_noise_power / unit_noise_power
+        noise_variances.append(np.asarray(noise_variance, dtype=np.float32))
+        row_images[rows] = simulate(
+            rows,
+            particle_volume_fn,
+            noise_variance,
+            row_contrast[rows],
+            og["noise_scale"] * np.ones(rows.size),
+            group_ctf_evaluator,
+            (g, 0),
+        )
+    calibration["target_noise_power"] = None if target_noise_power is None else float(target_noise_power)
+    return row_images, noise_variances, calibration
