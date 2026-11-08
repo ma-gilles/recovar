@@ -287,3 +287,30 @@ def test_to_relion30_alias():
     optics = pd.DataFrame({"_rlnOpticsGroup": ["1"], "_rlnVoltage": ["300"]})
     sf = StarFile(data=data, data_optics=optics)
     pd.testing.assert_frame_equal(sf.flatten_to_relion30(), sf.to_relion30())
+
+
+@pytest.mark.parametrize("name", ["rlnValue", "_rlnValue"])
+@pytest.mark.parametrize("stored", ["rlnValue", "_rlnValue"])
+def test_star_column_preserves_series_and_source_precision(name, stored):
+    from recovar.data_io.starfile import star_column
+
+    table = pd.DataFrame({stored: np.array([1.00000000001], dtype=np.float64)})
+    assert star_column(table, name) is table[stored]
+    assert star_column(table, name, required=True) is table[stored]
+
+
+@pytest.mark.parametrize("name", ["rlnValue", "_rlnValue"])
+def test_star_column_prefers_exact_spelling(name):
+    from recovar.data_io.starfile import star_column
+
+    table = pd.DataFrame({"rlnValue": [1], "_rlnValue": [2]})
+    assert star_column(table, name) is table[name]
+
+
+def test_star_column_missing_policy():
+    from recovar.data_io.starfile import star_column
+
+    table = pd.DataFrame({"other": [1]})
+    assert star_column(table, "rlnValue") is None
+    with pytest.raises(ValueError, match="^RELION source STAR column rlnValue is missing$"):
+        star_column(table, "rlnValue", required=True)
