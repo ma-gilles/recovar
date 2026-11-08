@@ -285,6 +285,28 @@ def test_new_api_adjoint_forward_model_on_gpu(gpu_device):
 
 
 @pytest.mark.gpu
+def test_forward_model_and_adjoint_roundtrip_on_gpu(gpu_device):
+    config = _make_config()
+    rng = np.random.default_rng(46)
+    volume = rng.standard_normal(config.volume_size).astype(np.float32)
+    rotation_matrices = np.eye(3, dtype=np.float32)[None, ...]
+    ctf_params = np.zeros((1, 9), dtype=np.float32)
+
+    with jax.default_device(gpu_device):
+        slices, f_adj = core_forward.forward_model_and_adjoint(
+            config,
+            jax.device_put(volume),
+            jax.device_put(ctf_params),
+            jax.device_put(rotation_matrices),
+            skip_ctf=True,
+        )
+        assert np.asarray(slices).shape == (1, config.image_size)
+        pulled = f_adj(jax.device_put(np.ones_like(np.asarray(slices))))[0]
+        assert np.asarray(pulled).shape == (config.volume_size,)
+        assert np.isfinite(np.asarray(pulled)).all()
+
+
+@pytest.mark.gpu
 def test_new_api_compute_AtAv_on_gpu(gpu_device):
     config = _make_config()
     volume = np.ones(config.volume_size, dtype=np.float32)
@@ -306,25 +328,3 @@ def test_new_api_compute_AtAv_on_gpu(gpu_device):
             )[0]
         )
     np.testing.assert_allclose(gpu_out, cpu_out, atol=1e-5, rtol=1e-5)
-
-
-@pytest.mark.gpu
-def test_forward_model_and_adjoint_roundtrip_on_gpu(gpu_device):
-    config = _make_config()
-    rng = np.random.default_rng(46)
-    volume = rng.standard_normal(config.volume_size).astype(np.float32)
-    rotation_matrices = np.eye(3, dtype=np.float32)[None, ...]
-    ctf_params = np.zeros((1, 9), dtype=np.float32)
-
-    with jax.default_device(gpu_device):
-        slices, f_adj = core_forward.forward_model_and_adjoint(
-            config,
-            jax.device_put(volume),
-            jax.device_put(ctf_params),
-            jax.device_put(rotation_matrices),
-            skip_ctf=True,
-        )
-        assert np.asarray(slices).shape == (1, config.image_size)
-        pulled = f_adj(jax.device_put(np.ones_like(np.asarray(slices))))[0]
-        assert np.asarray(pulled).shape == (config.volume_size,)
-        assert np.isfinite(np.asarray(pulled)).all()
