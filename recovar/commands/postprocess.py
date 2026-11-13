@@ -495,53 +495,6 @@ def _create_bfactor_plot_robust(
     plt.close()
 
 
-def _create_bfactor_plot(freq_shells, log_power, valid_mask, x_fit, y_fit, bfactor, log_p0, fit_method, plot_path):
-    """Create diagnostic plot for B-factor estimation (legacy)."""
-    import matplotlib.pyplot as plt
-
-    def bfactor_model(freq_sq, log_p0, bfactor):
-        return log_p0 - bfactor * freq_sq / 4
-
-    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
-
-    # Plot 1: All data points
-    axes[0].plot(freq_shells, log_power, "o", markersize=2, alpha=0.3, color="gray", label="All shells")
-    axes[0].plot(freq_shells[valid_mask], log_power[valid_mask], "o", markersize=4, color="red", label="Valid shells")
-    axes[0].set_xlabel("Spatial Frequency (1/Å)")
-    axes[0].set_ylabel("log(Power)")
-    axes[0].set_title("Power Spectrum vs Frequency")
-    axes[0].legend()
-    axes[0].grid(True, alpha=0.3)
-
-    # Plot 2: Fitting region
-    if len(x_fit) > 0:
-        axes[1].plot(x_fit, y_fit, "o", markersize=4, color="red", label="Fitting data")
-        if fit_method != "fallback":
-            y_pred = bfactor_model(x_fit, log_p0, bfactor)
-            axes[1].plot(x_fit, y_pred, "r-", lw=2, label=f"Fit: B={bfactor:.1f} Å²")
-        axes[1].set_xlabel("Frequency² (1/Å²)")
-        axes[1].set_ylabel("log(Power)")
-        axes[1].set_title(f"B-factor Fitting ({fit_method})")
-        axes[1].legend()
-        axes[1].grid(True, alpha=0.3)
-
-    # Plot 3: Resolution plot
-    valid_freq = freq_shells[valid_mask]
-    valid_power = log_power[valid_mask]
-    resolutions = 1.0 / valid_freq
-    axes[2].plot(resolutions, valid_power, "o", markersize=4, color="red", label="Valid shells")
-    axes[2].set_xlabel("Resolution (Å)")
-    axes[2].set_ylabel("log(Power)")
-    axes[2].set_title("Power Spectrum vs Resolution")
-    axes[2].legend()
-    axes[2].grid(True, alpha=0.3)
-    axes[2].invert_xaxis()
-
-    plt.tight_layout()
-    plt.savefig(plot_path, dpi=150, bbox_inches="tight")
-    plt.close()
-
-
 def estimate_bfactor_from_fsc_weighted_halfmaps(
     halfmap1, halfmap2, voxel_size, plot_prefix=None, fsc_mask=None, extra_fscs=None
 ):

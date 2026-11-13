@@ -20,6 +20,7 @@ pytestmark = pytest.mark.unit
 class TestRegistry:
     def test_all_commands_have_types(self):
         expected = {
+            "initial_model",
             "pipeline",
             "analyze",
             "compute_state",
@@ -42,6 +43,11 @@ class TestRegistry:
         assert jt.name == "Pipeline"
         assert jt.dir_name == "Pipeline"
         assert jt.produces_volumes is True
+
+        initial_model = get_job_type("initial_model")
+        assert initial_model.name == "InitialModel"
+        assert initial_model.needs_pipeline is False
+        assert initial_model.produces_volumes is True
 
     def test_get_job_type_unknown(self):
         assert get_job_type("nonexistent") is None

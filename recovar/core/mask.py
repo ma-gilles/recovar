@@ -42,19 +42,19 @@ def masking_options(
     """Build volume mask and dilated mask from a pipeline mask specification.
 
     Args:
-        volume_mask_option: One of: path to ``.mrc``, ``"from_halfmaps"``,
+        volume_mask_option (str): One of: path to ``.mrc``, ``"from_halfmaps"``,
             ``"sphere"``, ``"none"``.
-        means: Object with ``.corrected0reg`` / ``.corrected1reg`` attributes
+        means (recovar.reconstruction.homogeneous.MeanEstimate): Object with ``.corrected0reg`` / ``.corrected1reg`` attributes
             (used for ``from_halfmaps``).
-        volume_shape: 3-tuple giving the grid dimensions.
-        dtype_real: Output dtype.
-        mask_dilation_iter: Extra dilation iterations for the input mask.
-        keep_input_mask: If True, use the MRC mask as-is (no softening).
-        dilated_mask_dilations_iter: Dilation iterations for the dilated mask.
+        volume_shape (tuple[int, int, int]): 3-tuple giving the grid dimensions.
+        dtype_real (numpy.typing.DTypeLike): Output dtype.
+        mask_dilation_iter (int): Extra dilation iterations for the input mask.
+        keep_input_mask (bool): If True, use the MRC mask as-is (no softening).
+        dilated_mask_dilations_iter (int | None): Dilation iterations for the dilated mask.
             Defaults to ``ceil(6 * N / 128)`` where N is the grid size.
 
     Returns:
-        ``(volume_mask, dilated_volume_mask)`` as float arrays in [0, 1].
+        masks (tuple[numpy.ndarray, numpy.ndarray]): ``(volume_mask, dilated_volume_mask)`` as float arrays in [0, 1].
     """
     if dilated_mask_dilations_iter is None:
         dilated_mask_dilations_iter = int(np.ceil(6 * volume_shape[0] / 128))
@@ -146,27 +146,27 @@ def make_mask(volume, *, threshold="auto", lowpass_sigma=None, extend=None, soft
     reconstruction loaded from MRC).
 
     Args:
-        volume: 3-D real-space array (e.g. averaged half-maps, or a single
+        volume (numpy.ndarray | jax.Array): 3-D real-space array (e.g. averaged half-maps, or a single
             reconstruction).
-        threshold: How to binarize.
+        threshold (str | float): How to binarize.
 
             * ``"auto"`` (default): Otsu's method on voxels inside the radial
               mask.
             * A ``float``: fixed density threshold (like RELION's
               ``--ini_threshold``, default 0.02 in postprocessing).
-        lowpass_sigma: Gaussian sigma in **voxels** for low-pass smoothing
+        lowpass_sigma (float | None): Gaussian sigma in **voxels** for low-pass smoothing
             before thresholding.  ``None`` = auto (``max(2, N // 64)``).
             Set to ``0`` to disable.
-        extend: Extension (dilation) of the binary mask in **voxels**.
+        extend (float | None): Extension (dilation) of the binary mask in **voxels**.
             ``None`` = auto (``ceil(6 * N / 128)``).
             (RELION postprocessing default: 3 pixels.)
-        soft_edge: Width of the cosine soft edge in **voxels**.
+        soft_edge (float): Width of the cosine soft edge in **voxels**.
             (RELION postprocessing default: 6 pixels.)
-        cleanup: If ``True``, fill holes and keep only the largest connected
+        cleanup (bool): If ``True``, fill holes and keep only the largest connected
             component after thresholding (RELION does not do this).
 
     Returns:
-        Soft mask as a float32 array in [0, 1].
+        mask (numpy.ndarray): Soft mask as a float32 array in [0, 1].
 
     Example::
 
@@ -256,14 +256,15 @@ def make_mask_from_half_maps(halfmap1, halfmap2, smax=3, method="auto", **kwargs
     ``method="local_correlation"``.
 
     Args:
-        halfmap1, halfmap2: Real-space half-map volumes (same shape).
-        smax: Kernel radius in pixels (only for ``method="local_correlation"``).
-        method: ``"auto"`` or ``"local_correlation"``.
-        **kwargs: Forwarded to :func:`make_mask` (``threshold``,
+        halfmap1 (numpy.ndarray | jax.Array): First real-space half-map volume.
+        halfmap2 (numpy.ndarray | jax.Array): Second real-space half-map volume, with the same shape.
+        smax (float): Kernel radius in pixels (only for ``method="local_correlation"``).
+        method (str): ``"auto"`` or ``"local_correlation"``.
+        **kwargs (object): Forwarded to :func:`make_mask` (``threshold``,
             ``lowpass_sigma``, ``extend``, ``soft_edge``, ``cleanup``).
 
     Returns:
-        Soft mask as a float array in [0, 1].
+        mask (numpy.ndarray): Soft mask as a float array in [0, 1].
     """
     if method == "local_correlation":
         soft_edge = kwargs.get("soft_edge", 2)
@@ -297,13 +298,13 @@ def make_mask_from_gt(gt_map, smax=3, iter=10, from_ft=True):
     """Generate a mask from a ground-truth volume.
 
     Args:
-        gt_map: Ground-truth volume (Fourier or real space).
-        smax: Kernel radius for thresholding.
-        iter: Dilation iterations.
-        from_ft: If True, ``gt_map`` is in Fourier space.
+        gt_map (numpy.ndarray | jax.Array): Ground-truth volume (Fourier or real space).
+        smax (float): Retained for compatibility; currently unused.
+        iter (int): Dilation iterations.
+        from_ft (bool): If True, ``gt_map`` is in Fourier space.
 
     Returns:
-        Soft mask as a float array in [0, 1].
+        mask (numpy.ndarray): Soft mask as a float array in [0, 1].
     """
     vol_shape = utils.guess_vol_shape_from_vol_size(gt_map.size)
     if from_ft:
@@ -324,19 +325,19 @@ def make_union_gt_mask(gt_volumes_real, volume_shape, smax=3, iter=1, dilation_i
     The union is dilated and softened to produce the final mask.
 
     Args:
-        gt_volumes_real: Either a list of 3-D arrays or a 2-D array of shape
+        gt_volumes_real (list[numpy.ndarray] | numpy.ndarray): Either a list of 3-D arrays or a 2-D array of shape
             ``(n_vols, n_voxels)`` (reshaped internally to 3-D).
-        volume_shape: Tuple giving the 3-D grid dimensions.
-        smax: Gaussian kernel radius for ``make_mask_from_gt``.
-        iter: Dilation iterations inside ``make_mask_from_gt``.
-        dilation_iters: Additional dilation iterations applied to the union
+        volume_shape (tuple[int, int, int]): Tuple giving the 3-D grid dimensions.
+        smax (float): Compatibility argument forwarded to ``make_mask_from_gt``; unused there.
+        iter (int): Dilation iterations inside ``make_mask_from_gt``.
+        dilation_iters (int | None): Additional dilation iterations applied to the union
             mask.  Defaults to ``ceil(6 * volume_shape[0] / 128)`` (pipeline
             convention).
-        kern_rad: Kernel radius for ``soften_volume_mask``.
+        kern_rad (float): Kernel radius for ``soften_volume_mask``.
 
     Returns:
-        Tuple ``(soft_mask, binary_mask)`` where *soft_mask* is a float array
-        in [0, 1] and *binary_mask* is the pre-softening boolean array.
+        masks (tuple[numpy.ndarray, numpy.ndarray]): Tuple ``(soft_mask, binary_mask)`` where *soft_mask* is a float array
+            in [0, 1] and *binary_mask* is the pre-softening boolean array.
     """
     if dilation_iters is None:
         dilation_iters = int(np.ceil(6 * volume_shape[0] / 128))
@@ -374,11 +375,11 @@ def soften_volume_mask(binary_volume_mask, kern_rad=3):
     boundary get a raised-cosine transition; voxels further out get 0.
 
     Args:
-        binary_volume_mask: Binary mask (values near 0 or 1).
-        kern_rad: Width of the cosine transition in voxels.
+        binary_volume_mask (numpy.ndarray | jax.Array): Binary mask (values near 0 or 1).
+        kern_rad (float): Width of the cosine transition in voxels.
 
     Returns:
-        Soft mask as float32 array in [0, 1].
+        mask (numpy.ndarray): Soft mask as float32 array in [0, 1].
     """
     distance_to_mask = distance_transform_edt(binary_volume_mask < 0.9)
     mask = np.zeros_like(binary_volume_mask)
@@ -399,11 +400,11 @@ def get_radial_mask(shape, radius=None):
     """Binary spherical mask.
 
     Args:
-        shape: Volume or image shape tuple.
-        radius: Mask radius in voxels. Defaults to ``shape[0] // 2 - 1``.
+        shape (tuple[int, ...]): Volume or image shape tuple.
+        radius (float | None): Mask radius in voxels. Defaults to ``shape[0] // 2 - 1``.
 
     Returns:
-        Boolean array with True inside the sphere.
+        mask (jax.Array): Boolean array with True inside the sphere.
     """
     radius = shape[0] // 2 - 1 if radius is None else radius
     volume_coords = fourier_transform_utils.get_k_coordinate_of_each_pixel(shape, voxel_size=1, scaled=False).reshape(
@@ -412,29 +413,41 @@ def get_radial_mask(shape, radius=None):
     return jnp.linalg.norm(volume_coords, axis=-1) < radius + 1e-7
 
 
-def raised_cosine_mask(volume_shape, radius, radius_p, offset):
+def raised_cosine_mask(volume_shape, radius, radius_p, offset, *, dtype=None):
     """3D raised-cosine mask with adjustable center.
 
     Value is 1 for ``r < radius``, cosine-tapered for ``radius <= r < radius_p``,
     and 0 beyond.
 
     Args:
-        volume_shape: 3-tuple of grid dimensions.
-        radius: Inner radius (full value).
-        radius_p: Outer radius (zero value).
-        offset: 3-element center offset.
+        volume_shape (tuple[int, int, int]): 3-tuple of grid dimensions.
+        radius (float): Inner radius (full value).
+        radius_p (float): Outer radius (zero value).
+        offset (numpy.ndarray | jax.Array): 3-element center offset.
 
     Returns:
-        Mask array of shape ``volume_shape``.
+        mask (jax.Array): Mask array of shape ``volume_shape``. ``dtype`` defaults to the
+            historical float32 coordinate precision; callers reproducing an
+            RFLOAT-double RELION path may request float64 explicitly.
     """
     grid = fourier_transform_utils.get_k_coordinate_of_each_pixel_3d(volume_shape, voxel_size=1, scaled=False)
+    if dtype is not None:
+        grid = grid.astype(dtype)
+    offset = jnp.asarray(offset, dtype=grid.dtype)
+    radius = jnp.asarray(radius, dtype=grid.dtype)
+    radius_p = jnp.asarray(radius_p, dtype=grid.dtype)
     grid -= offset
     distances = jnp.linalg.norm(grid, axis=-1)
 
-    mask = jnp.where(distances < radius, 1, 0)
+    zero = jnp.asarray(0.0, dtype=grid.dtype)
+    one = jnp.asarray(1.0, dtype=grid.dtype)
+    half = jnp.asarray(0.5, dtype=grid.dtype)
+    mask = jnp.where(distances < radius, one, zero)
     mask = jnp.where(
         (distances >= radius) & (distances < radius_p),
-        0.5 - 0.5 * jnp.cos(np.pi * (radius_p - distances) / (radius_p - radius)),
+        half
+        - half
+        * jnp.cos(jnp.asarray(np.pi, dtype=grid.dtype) * (radius_p - distances) / (radius_p - radius)),
         mask,
     )
     return mask.reshape(volume_shape)
@@ -447,49 +460,62 @@ def soft_mask_outside_map(vol, radius=-1, cosine_width=3, Mnoise=None):
     mask with the mean background value (or ``Mnoise`` if provided).
 
     Args:
-        vol: Input volume (JAX or numpy array).
-        radius: Mask radius in voxels. Defaults to half the box size.
-        cosine_width: Width of the cosine transition band.
-        Mnoise: Optional replacement value for masked-out regions.
+        vol (numpy.ndarray | jax.Array): Input volume (JAX or numpy array).
+        radius (float): Mask radius in voxels. Defaults to half the box size.
+        cosine_width (float): Width of the cosine transition band.
+        Mnoise (numpy.ndarray | jax.Array | float | None): Optional replacement value for masked-out regions.
 
     Returns:
-        ``(masked_vol, mask)`` tuple.
+        volume_and_mask (tuple[jax.Array, jax.Array]): ``(masked_vol, mask)`` tuple.
     """
     vol = jnp.asarray(vol)
     if radius < 0:
         radius = np.max(np.array(vol.shape) // 2)
 
+    # RELION evaluates the solvent-mask geometry in RFLOAT.  Keep the mask
+    # arithmetic at the real precision of the input volume instead of
+    # inheriting the float32 dtype of the shared Fourier-coordinate helper.
+    # This matters for the reconstruction path, where ``vol`` is float64.
+    real_dtype = vol.real.dtype
+    radius = jnp.asarray(radius, dtype=real_dtype)
+    cosine_width = jnp.asarray(cosine_width, dtype=real_dtype)
     radius_p = radius + cosine_width
     shape = vol.shape
 
-    volume_coords = fourier_transform_utils.get_k_coordinate_of_each_pixel(shape, voxel_size=1, scaled=False).reshape(
-        list(shape) + [len(list(shape))]
+    volume_coords = (
+        fourier_transform_utils.get_k_coordinate_of_each_pixel(shape, voxel_size=1, scaled=False)
+        .astype(real_dtype)
+        .reshape(list(shape) + [len(list(shape))])
     )
     r = jnp.linalg.norm(volume_coords, axis=-1)
 
-    mask1 = r <= radius
-    mask2 = (r > radius) & (r <= radius_p)
+    mask1 = r < radius
+    mask2 = (r >= radius) & (r <= radius_p)
     mask3 = r > radius_p
-    raised_cos = 0.5 + 0.5 * jnp.cos(jnp.pi * (radius_p - r) / cosine_width)
+    half = jnp.asarray(0.5, dtype=real_dtype)
+    raised_cos = half + half * jnp.cos(jnp.asarray(np.pi, dtype=real_dtype) * (radius_p - r) / cosine_width)
 
     mask = jnp.zeros_like(vol).real
     mask = jnp.where(mask1, 1, mask)
     mask = jnp.where(mask2, 1 - raised_cos, mask)
+    background_weight = jnp.zeros_like(mask)
+    background_weight = jnp.where(mask3, 1, background_weight)
+    background_weight = jnp.where(mask2, raised_cos, background_weight)
 
     if Mnoise is None:
-        sum_bg = jnp.sum((vol * mask) * (mask3 + mask2))
-        mask_sum = jnp.sum(mask * (mask3 + mask2))
+        sum_bg = jnp.sum(vol * background_weight)
+        mask_sum = jnp.sum(background_weight)
         avg_bg = sum_bg / mask_sum
     else:
+        Mnoise = jnp.asarray(Mnoise)
         avg_bg = None
 
     if Mnoise is None:
-        vol = jnp.where(mask3, avg_bg, vol)
+        add = avg_bg
     else:
-        vol = jnp.where(mask3, Mnoise, vol)
+        add = Mnoise
 
-    add = Mnoise if Mnoise is not None else avg_bg
-    vol = mask * vol + (1 - mask) * add
+    vol = mask * vol + background_weight * add
     return vol, mask
 
 
@@ -502,12 +528,12 @@ def window_mask(D, in_rad, out_rad):
     """2D circular window mask with linear taper (normalised coordinates).
 
     Args:
-        D: Image size in pixels (must be even).
-        in_rad: Inner radius in normalised coordinates (1.0 = edge).
-        out_rad: Outer radius in normalised coordinates.
+        D (int): Image size in pixels (must be even).
+        in_rad (float): Inner radius in normalised coordinates (1.0 = edge).
+        out_rad (float): Outer radius in normalised coordinates.
 
     Returns:
-        Float32 mask of shape ``(D, D)`` with values in [0, 1].
+        mask (numpy.ndarray): Float32 mask of shape ``(D, D)`` with values in [0, 1].
     """
     if D % 2 != 0:
         raise ValueError(f"D must be even, got {D}")
@@ -527,12 +553,12 @@ def smooth_circular_mask(image_size, radius, thickness):
     and follow a cosine taper in between.
 
     Args:
-        image_size: Image size in pixels.
-        radius: Inner radius in pixels.
-        thickness: Width of the cosine transition in pixels.
+        image_size (int): Image size in pixels.
+        radius (float): Inner radius in pixels.
+        thickness (float): Width of the cosine transition in pixels.
 
     Returns:
-        Float mask of shape ``(image_size, image_size)``.
+        mask (numpy.ndarray): Float mask of shape ``(image_size, image_size)``.
     """
     half = image_size // 2
     coords = np.arange(-half, image_size - half, dtype=float)
@@ -543,6 +569,121 @@ def smooth_circular_mask(image_size, radius, thickness):
     mask[r < radius] = 1.0
     mask[band] = 0.5 + 0.5 * np.cos(np.pi * (r[band] - radius) / thickness)
     return mask
+
+
+def relion_soft_image_mask(image_size, pixel_size, particle_diameter_ang, width_mask_edge_px):
+    """RELION-style 2D soft circular mask for experimental-image scoring.
+
+    RELION applies ``softMaskOutsideMap`` in real space with:
+
+    - radius = ``particle_diameter_ang / (2 * pixel_size)``
+    - cosine width = ``width_mask_edge_px``
+
+    A negative radius is RELION's sentinel for ``image_size / 2``. Positive
+    radii are used as-is rather than clamped to the half-box radius.
+
+    This helper mirrors that convention and returns a mask in image-space
+    pixels, ready to multiply against centered particle images before the DFT.
+    """
+    if image_size <= 0:
+        raise ValueError(f"image_size must be positive, got {image_size}")
+    if pixel_size <= 0:
+        raise ValueError(f"pixel_size must be positive, got {pixel_size}")
+    if width_mask_edge_px < 0:
+        raise ValueError(f"width_mask_edge_px must be non-negative, got {width_mask_edge_px}")
+
+    radius_px = float(particle_diameter_ang) / (2.0 * float(pixel_size))
+    # RELION's softMaskOutsideMap uses half the box only for its negative-radius
+    # sentinel. Positive radii are not clamped, even when they exceed half the
+    # box and therefore mask only the corners.
+    if radius_px < 0.0:
+        radius_px = image_size / 2.0
+    thickness_px = float(width_mask_edge_px)
+
+    if thickness_px == 0.0:
+        thickness_px = 1e-6
+
+    return smooth_circular_mask(
+        image_size=image_size,
+        radius=radius_px,
+        thickness=thickness_px,
+    ).astype(np.float32)
+
+
+def apply_relion_soft_image_mask(images, image_mask, relion_normalize=False):
+    """Apply RELION's softMaskOutsideMap background-fill semantics.
+
+    ``relion_soft_image_mask`` returns only the raised-cosine mask shape
+    ``m(r)``. RELION's scoring path does **not** simply multiply the image by
+    that mask. Instead, with ``Mnoise == NULL`` it computes a weighted average
+    background value over the exterior and cosine edge and blends toward that
+    value:
+
+    ``out = m * image + (1 - m) * avg_bg``
+
+    where ``avg_bg`` is computed with weights ``1 - m``.
+
+    When ``relion_normalize=True``, additionally apply RELION's full
+    ``normalize.cpp`` flow before blending:
+
+      1. Compute ``bg_mean`` and ``bg_std`` from background pixels (weighted
+         by ``1 - m``).
+      2. Standardize: ``image = (image - bg_mean) / bg_std``.
+      3. Apply the soft-mask blend (with the new ``avg_bg`` ≈ 0 of the
+         standardized image).
+
+    This matches RELION's iter-1 E-step preprocessing exactly. The
+    `image_backends.process_images` path enables this when
+    ``image_mask_mode == "relion_normalize_fill"``.
+
+    Parameters
+    ----------
+    images : np.ndarray
+        Real-space image or image batch with shape ``(H, W)`` or
+        ``(N, H, W)``.
+    image_mask : np.ndarray
+        Raised-cosine mask from :func:`relion_soft_image_mask`.
+    relion_normalize : bool
+        Apply RELION's pre-mask bg-subtract + bg-std normalize. Default
+        False to preserve existing call-site behaviour.
+    """
+    image_mask_arr = jnp.asarray(image_mask)
+    images_arr = jnp.asarray(images)
+
+    if image_mask_arr.ndim != 2:
+        raise ValueError(f"image_mask must be 2D, got shape {image_mask_arr.shape}")
+    if images_arr.ndim not in (2, 3):
+        raise ValueError(f"images must be 2D or 3D, got shape {images_arr.shape}")
+    if images_arr.shape[-2:] != image_mask_arr.shape:
+        raise ValueError(
+            f"image_mask shape {image_mask_arr.shape} must match trailing image shape {images_arr.shape[-2:]}"
+        )
+
+    squeeze = images_arr.ndim == 2
+    images_3d = images_arr[None, ...] if squeeze else images_arr
+
+    mask64 = image_mask_arr.astype(jnp.float64)
+    bg_weights = 1.0 - mask64
+    bg_weight_sum = jnp.sum(bg_weights, dtype=jnp.float64)
+    safe_bg_weight_sum = jnp.where(bg_weight_sum > 0.0, bg_weight_sum, 1.0)
+    images64 = images_3d.astype(jnp.float64)
+
+    if relion_normalize:
+        # RELION normalize.cpp: subtract weighted bg-mean, divide by bg-std.
+        bg_mean = jnp.tensordot(images64, bg_weights, axes=((-2, -1), (0, 1))) / safe_bg_weight_sum
+        diff = images64 - bg_mean[:, None, None]
+        bg_var = jnp.tensordot(diff * diff, bg_weights, axes=((-2, -1), (0, 1))) / safe_bg_weight_sum
+        bg_std = jnp.sqrt(jnp.maximum(bg_var, 1e-30))
+        images64 = diff / bg_std[:, None, None]
+
+    avg_bg = jnp.tensordot(images64, bg_weights, axes=((-2, -1), (0, 1))) / safe_bg_weight_sum
+    result = images64 * mask64[None, :, :] + avg_bg[:, None, None] * bg_weights[None, :, :]
+
+    result = result.astype(images_arr.dtype)
+    if squeeze:
+        result = result[0]
+
+    return np.asarray(result) if isinstance(images, np.ndarray) else result
 
 
 # ---------------------------------------------------------------------------
@@ -564,11 +705,11 @@ def make_soft_edged_kernel(r1, shape):
     Adapted from EMDA (https://gitlab.com/ccpem/emda).
 
     Args:
-        r1: Kernel radius in pixels.
-        shape: Volume shape for coordinate generation.
+        r1 (float): Kernel radius in pixels.
+        shape (tuple[int, int, int]): Volume shape for coordinate generation.
 
     Returns:
-        Normalised soft-edged kernel.
+        kernel (jax.Array): Normalised soft-edged kernel.
     """
     if r1 < 3:
         boxsize = 5

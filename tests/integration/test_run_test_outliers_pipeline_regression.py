@@ -69,6 +69,7 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 import pytest
 
+from recovar.commands.run_test_all_metrics import generated_dataset_noise_rng_batch_size
 from conftest import gpu_subprocess_env
 from helpers.metrics_regression import compare_metric, metric_direction, log_comparison_table
 from helpers.perf_regression import (
@@ -178,6 +179,7 @@ def _run_outliers_pipeline(
     accept_cpu: bool = False,
     reuse_dataset: bool = False,
     noise_level: float = 0.1,
+    noise_rng_batch_size: Optional[int] = None,
 ) -> Path:
     """
     Generate a test dataset and run pipeline_with_outliers; return the
@@ -222,6 +224,8 @@ def _run_outliers_pipeline(
         ]
         if volumes_prefix is not None:
             make_cmd += ["--volume-input", str(volumes_prefix)]
+        if noise_rng_batch_size is not None:
+            make_cmd += ["--noise-rng-batch-size", str(noise_rng_batch_size)]
         if extra_args:
             make_cmd.extend(shlex.split(extra_args))
         run_tracked_subprocess(make_cmd, check=True, env=env)
@@ -540,6 +544,7 @@ def test_outliers_pipeline_regression_against_baseline(tmp_path):
         accept_cpu=False,
         reuse_dataset=reuse,
         noise_level=noise_level,
+        noise_rng_batch_size=generated_dataset_noise_rng_batch_size(grid_size, "linear_interp"),
     )
     perf_stages = {"pipeline_with_outliers": stage_perf(snap_before, perf_snapshot())}
 
@@ -642,6 +647,8 @@ def test_outliers_pipeline_cryo_et_regression_against_baseline(tmp_path):
             "42",
             "--noise-level",
             str(noise_level),
+            "--noise-rng-batch-size",
+            str(generated_dataset_noise_rng_batch_size(grid_size, "linear_interp")),
         ]
         if volumes_prefix is not None:
             make_cmd += ["--volume-input", str(volumes_prefix)]

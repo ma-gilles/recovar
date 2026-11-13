@@ -347,3 +347,24 @@ class TestAutoDispatch:
     def test_auto_parse_unsupported_raises(self):
         with pytest.raises(ValueError, match="Cannot auto-extract"):
             metadata_parsing.auto_parse_poses("particles.mrcs", 64)
+
+
+def test_parse_poses_from_star_absent_angles_zero_like_relion(tmp_path):
+    """relion_refine reads a STAR without angle or origin columns as zeros (exp_model.cpp:1104-1144).
+
+    The default still rejects such a STAR; ``absent_angles_zero`` is the relion_refine reading.
+    """
+    star_path, _, _, _, _, grid_size = _make_test_star(n=4)
+    from recovar.data_io.starfile import read_star
+
+    particles, optics = read_star(star_path)
+    particles = particles.drop(
+        columns=[c for c in particles.columns if c.lstrip("_").startswith(("rlnAngle", "rlnOrigin"))]
+    )
+    stripped = tmp_path / "no_poses.star"
+    write_star(str(stripped), particles, optics)
+    with pytest.raises(ValueError, match="_rlnAngleRot"):
+        metadata_parsing.parse_poses_from_star(str(stripped), grid_size)
+    rots, trans = metadata_parsing.parse_poses_from_star(str(stripped), grid_size, absent_angles_zero=True)
+    assert_allclose(rots, np.broadcast_to(np.eye(3), (4, 3, 3)), atol=0)
+    assert_allclose(trans, 0.0, atol=0)

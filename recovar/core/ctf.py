@@ -13,7 +13,6 @@ from typing import Callable
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-import numpy as np
 
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 
@@ -152,7 +151,7 @@ def as_ctf_evaluator(fn_or_evaluator):
 
 
 @jax.jit
-def evaluate_ctf(freqs, ctf_params):
+def evaluate_ctf(freqs, ctf_params, gamma_offset=None):
     """Evaluate the Contrast Transfer Function for a batch of images.
 
     Broadcasts per-image parameters over a shared frequency grid in a
@@ -166,6 +165,9 @@ def evaluate_ctf(freqs, ctf_params):
         Packed CTF parameters per image.  Layout: ``[DFU, DFV, DFANG,
         VOLT, CS, W, PHASE_SHIFT, BFACTOR, CONTRAST, ...]`` — see
         :class:`CTFParamIndex`.
+    gamma_offset : array ``(n_pixels,)`` or None
+        Phase added to the CTF's ``gamma`` at every pixel (RELION's even Zernike
+        aberrations, ``CTF::getCTF``'s ``gammaOffset``); None adds nothing.
 
     Returns
     -------
@@ -182,7 +184,7 @@ def evaluate_ctf(freqs, ctf_params):
     bfactor = ctf_params[:, CTFParamIndex.BFACTOR, None]
     contrast = ctf_params[:, CTFParamIndex.CONTRAST, None]
 
-    lam = 12.2642598 / jnp.sqrt(volt * (1.0 + volt * 9.78475598e-7))
+    lam = 12.2643247 / jnp.sqrt(volt * (1.0 + volt * 0.978466e-6))
 
     # Shared frequency grid — (n_pixels,)
     x = freqs[:, 0]
@@ -193,6 +195,8 @@ def evaluate_ctf(freqs, ctf_params):
     # (n_images, 1) * (n_pixels,) → (n_images, n_pixels)
     df = 0.5 * (dfu + dfv + (dfu - dfv) * jnp.cos(2 * (ang - dfang)))
     gamma = 2 * jnp.pi * (-0.5 * df * lam * s2 + 0.25 * cs * lam**3 * s2**2) - phase_shift
+    if gamma_offset is not None:
+        gamma = gamma + jnp.asarray(gamma_offset)[None, :]
     ctf = (1 - w**2) ** 0.5 * jnp.sin(gamma) - w * jnp.cos(gamma)
     ctf = ctf * jnp.exp(-bfactor / 4 * s2)
     return ctf * contrast
@@ -225,10 +229,21 @@ def _dose_filter_from_freqs(freqs, cumulative_dose, tilt_angles, voltage):
 
 
 def get_dose_filters(Apix, image_shape, cumulative_dose, tilt_angles, voltage, *, half_image=False):
+    real_dtype = jnp.result_type(cumulative_dose, tilt_angles, voltage, jnp.float32)
     if half_image:
-        freqs = fourier_transform_utils.get_k_coordinate_of_each_pixel_half(image_shape, Apix, scaled=True)
+        freqs = fourier_transform_utils.get_k_coordinate_of_each_pixel_half(
+            image_shape,
+            Apix,
+            scaled=True,
+            dtype=real_dtype,
+        )
     else:
-        freqs = fourier_transform_utils.get_k_coordinate_of_each_pixel(image_shape, Apix, scaled=True)
+        freqs = fourier_transform_utils.get_k_coordinate_of_each_pixel(
+            image_shape,
+            Apix,
+            scaled=True,
+            dtype=real_dtype,
+        )
     return _dose_filter_from_freqs(freqs, cumulative_dose, tilt_angles, voltage)
 
 
@@ -247,10 +262,22 @@ def get_dose_filters_from_tilt_number(
 
 def _compute_spa_ctf(CTF_params, image_shape, voxel_size, *, half_image=False):
     """Standard single-particle CTF evaluation on a frequency grid."""
+    CTF_params = jnp.asarray(CTF_params)
+    real_dtype = jnp.result_type(CTF_params, jnp.float32)
     if half_image:
-        psi = fourier_transform_utils.get_k_coordinate_of_each_pixel_half(image_shape, voxel_size, scaled=True)
+        psi = fourier_transform_utils.get_k_coordinate_of_each_pixel_half(
+            image_shape,
+            voxel_size,
+            scaled=True,
+            dtype=real_dtype,
+        )
     else:
-        psi = fourier_transform_utils.get_k_coordinate_of_each_pixel(image_shape, voxel_size, scaled=True)
+        psi = fourier_transform_utils.get_k_coordinate_of_each_pixel(
+            image_shape,
+            voxel_size,
+            scaled=True,
+            dtype=real_dtype,
+        )
     return evaluate_ctf(psi, CTF_params)
 
 

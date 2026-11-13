@@ -42,6 +42,15 @@ def run_pipeline_with_outlier_removal():
     parser.add_argument(
         "--use-junk-detection", action="store_true", help="Use junk particle detection in addition to outlier detection"
     )
+    parser.add_argument(
+        "--junk-detection-every-round",
+        action="store_true",
+        help=(
+            "Repeat junk-particle detection after round 1. By default junk "
+            "detection runs only in the first round, while anomaly and contrast "
+            "detection may continue in later rounds."
+        ),
+    )
     parser.add_argument("--no-plots", action="store_true", help="Skip plotting and visualization in outlier detection")
 
     # Contrast-based outlier detection arguments
@@ -113,6 +122,13 @@ def run_pipeline_with_outlier_removal():
     with job_context(args, "pipeline_with_outliers") as ctx:
         args.outdir = ctx.output_dir
         _run_pipeline_with_outlier_removal_impl(args)
+
+
+def _use_junk_detection_for_round(args, round_number):
+    return bool(
+        args.use_junk_detection
+        and (round_number == 1 or getattr(args, "junk_detection_every_round", False))
+    )
 
 
 def _run_pipeline_with_outlier_removal_impl(args):
@@ -253,11 +269,17 @@ def _run_pipeline_with_outlier_removal_impl(args):
             )
 
         # Junk detection
-        if args.use_junk_detection:
+        if _use_junk_detection_for_round(args, round_number):
             outlier_argv.extend(["--use-junk-detection", "--junk-threshold", str(args.junk_threshold)])
             # Only add particles-per-cluster if explicitly provided
             if hasattr(args, "particles_per_cluster") and args.particles_per_cluster is not None:
                 outlier_argv.extend(["--particles-per-cluster", str(args.particles_per_cluster)])
+        elif args.use_junk_detection:
+            logger.info(
+                "Skipping junk detection in round %s; use "
+                "--junk-detection-every-round to restore repeated junk detection",
+                round_number,
+            )
 
         # Temporarily replace sys.argv and run outlier detection.
         # Always restore argv to avoid leaking command-line state to subsequent calls.

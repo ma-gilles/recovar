@@ -17,7 +17,7 @@ import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar import utils
 from recovar.commands import compute_state, pipeline
 from recovar.output import metrics, output, plot_utils
-from recovar.simulation import simulator, synthetic_dataset
+from recovar.simulation import simulator, solvent_contrast, synthetic_dataset
 
 LOWER_IS_BETTER_TOKENS = (
     "error",
@@ -185,7 +185,10 @@ def make_big_test_dataset(
     n_tilts=-1,
     premultiplied_ctf=False,
     noise_increase_per_tilt=None,
+    **atomic_volume_kwargs,
 ):
+    """Simulate the metrics dataset; ``atomic_volume_kwargs`` are the
+    ``generate_synthetic_dataset`` atomic-volume transform options."""
     output_folder = os.path.join(output_dir, "test_dataset")
     output.mkdir_safe(output_folder)
 
@@ -242,6 +245,7 @@ def make_big_test_dataset(
         premultiplied_ctf=premultiplied_ctf,
         noise_increase_per_tilt=noise_increase_per_tilt,
         noise_rng_batch_size=noise_rng_batch_size,
+        **atomic_volume_kwargs,
     )
 
     logging.info("Finished generating dataset %s", output_folder)
@@ -777,6 +781,7 @@ def main():
         help="Skip dataset generation if test_dataset/ already exists in output-dir. "
         "Useful for regression tests that reuse a saved dataset.",
     )
+    solvent_contrast.add_cli_arguments(parser)
 
     args = parser.parse_args()
     if args.grid_size <= 0:
@@ -882,6 +887,7 @@ def main():
             n_tilts=args.tomo_tilts,
             premultiplied_ctf=args.premultiplied_ctf,
             noise_increase_per_tilt=args.noise_increase_per_tilt,
+            **solvent_contrast.kwargs_from_cli_args(args),
         )
     perf["dataset_generation"] = _stage_perf(_snap_before_dataset, _perf_snapshot())
 

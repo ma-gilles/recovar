@@ -28,3 +28,7 @@ def main():
         sys.exit(1)
 
     print(lib_path)
+
+
+if __name__ == "__main__":
+    main()

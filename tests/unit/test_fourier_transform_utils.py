@@ -38,6 +38,27 @@ def test_get_1d_frequency_grid_even_odd_and_scaled():
     )
 
 
+def test_frequency_grid_float64_is_constructed_directly_in_float64():
+    voxel_size = np.float64("1.234567890123")
+    grid64 = fourier_transform_utils.get_1d_frequency_grid(
+        8,
+        voxel_size=voxel_size,
+        scaled=True,
+        dtype=np.float64,
+    )
+    grid32 = fourier_transform_utils.get_1d_frequency_grid(
+        8,
+        voxel_size=voxel_size,
+        scaled=True,
+        dtype=np.float32,
+    )
+    expected = np.arange(-4, 4, dtype=np.float64) / (np.float64(8) * voxel_size)
+
+    assert grid64.dtype == np.float64
+    np.testing.assert_array_equal(np.asarray(grid64), expected)
+    assert np.any(np.asarray(grid64) != np.asarray(grid32, dtype=np.float64))
+
+
 def test_get_1d_frequency_grid_singleton():
     grid = fourier_transform_utils.get_1d_frequency_grid(1, scaled=False)
     np.testing.assert_array_equal(grid, np.array([0.0], dtype=np.float32))
@@ -123,6 +144,43 @@ def test_get_k_coordinate_of_each_pixel_shapes():
     assert coords_3d.shape == (24, 3)
     assert coords_2d.dtype == np.float32
     assert coords_3d.dtype == np.float32
+
+
+@pytest.mark.parametrize("image_shape", [(4, 4), (5, 5), (4, 6), (6, 4), (127, 127), (128, 128)])
+def test_host_half_coordinates_are_byte_exact_and_cached(image_shape):
+    expected = np.asarray(
+        fourier_transform_utils.get_k_coordinate_of_each_pixel_half(
+            image_shape,
+            voxel_size=1,
+            scaled=False,
+        ),
+    )
+    actual = fourier_transform_utils.get_k_coordinate_of_each_pixel_half_np(
+        image_shape,
+        voxel_size=1,
+        scaled=False,
+    )
+
+    np.testing.assert_array_equal(actual, expected)
+    assert actual.dtype == np.float32
+    assert not actual.flags.writeable
+    assert (
+        fourier_transform_utils.get_k_coordinate_of_each_pixel_half_np(
+            image_shape,
+            voxel_size=2,
+            scaled=False,
+        )
+        is actual
+    )
+
+
+def test_host_half_coordinates_reject_scaled_arithmetic():
+    with pytest.raises(ValueError, match="require scaled=False"):
+        fourier_transform_utils.get_k_coordinate_of_each_pixel_half_np(
+            (8, 8),
+            voxel_size=1,
+            scaled=True,
+        )
 
 
 def test_get_k_coordinate_of_each_pixel_real_shapes():

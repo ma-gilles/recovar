@@ -7,8 +7,8 @@ from scipy.ndimage import binary_dilation, distance_transform_edt
 pytest.importorskip("jax")
 import jax.numpy as jnp
 
-import recovar.core.mask as mask
 import recovar.core.fourier_transform_utils as fourier_transform_utils
+import recovar.core.mask as mask
 import recovar.utils as utils
 
 pytestmark = pytest.mark.unit
@@ -193,6 +193,48 @@ class TestSmoothCircularMask:
         assert center >= edge
 
 
+class TestRelionSoftImageMask:
+    def test_matches_smooth_circular_mask_parameterization(self):
+        image_size = 128
+        pixel_size = 4.25
+        particle_diameter_ang = 200.0
+        width_mask_edge_px = 5.0
+
+        result = mask.relion_soft_image_mask(
+            image_size=image_size,
+            pixel_size=pixel_size,
+            particle_diameter_ang=particle_diameter_ang,
+            width_mask_edge_px=width_mask_edge_px,
+        )
+        expected = mask.smooth_circular_mask(
+            image_size=image_size,
+            radius=particle_diameter_ang / (2.0 * pixel_size),
+            thickness=width_mask_edge_px,
+        )
+        np.testing.assert_allclose(result, expected)
+
+    def test_radius_tracks_relion_particle_diameter(self):
+        image_size = 128
+        pixel_size = 4.25
+        particle_diameter_ang = 200.0
+        width_mask_edge_px = 5.0
+
+        result = mask.relion_soft_image_mask(
+            image_size=image_size,
+            pixel_size=pixel_size,
+            particle_diameter_ang=particle_diameter_ang,
+            width_mask_edge_px=width_mask_edge_px,
+        )
+
+        half = image_size // 2
+        radius_px = particle_diameter_ang / (2.0 * pixel_size)
+        inside = int(np.floor(radius_px)) - 1
+        outside = int(np.ceil(radius_px + width_mask_edge_px)) + 1
+
+        assert result[half, half + inside] == pytest.approx(1.0, abs=1e-6)
+        assert result[half, half + outside] == pytest.approx(0.0, abs=1e-6)
+
+
 # ---------------------------------------------------------------------------
 # window_mask
 # ---------------------------------------------------------------------------
@@ -319,6 +361,26 @@ class TestRaisedCosineMask:
         assert float(jnp.min(m)) >= -1e-6
         assert float(jnp.max(m)) <= 1.0 + 1e-6
 
+    def test_explicit_float64_preserves_relion_rfloat_precision(self):
+        vol_shape = (12, 12, 12)
+        result = mask.raised_cosine_mask(
+            vol_shape,
+            radius=3.25,
+            radius_p=5.25,
+            offset=np.zeros(3),
+            dtype=jnp.float64,
+        )
+        assert result.dtype == jnp.float64
+
+        coords = np.arange(-6, 6, dtype=np.float64)
+        z, y, x = np.meshgrid(coords, coords, coords, indexing="ij")
+        radius = np.sqrt(z * z + y * y + x * x)
+        expected = np.zeros(vol_shape, dtype=np.float64)
+        expected[radius < 3.25] = 1.0
+        edge = (radius >= 3.25) & (radius < 5.25)
+        expected[edge] = 0.5 - 0.5 * np.cos(np.pi * (5.25 - radius[edge]) / 2.0)
+        np.testing.assert_allclose(np.asarray(result), expected, rtol=2e-15, atol=2e-15)
+
 
 # ---------------------------------------------------------------------------
 # soft_mask_outside_map
@@ -337,6 +399,89 @@ class TestSoftMaskOutsideMap:
         result, m = mask.soft_mask_outside_map(vol, radius=4, cosine_width=2)
         assert float(jnp.min(m)) >= 0.0
         assert float(jnp.max(m)) <= 1.0 + 1e-5
+
+    def test_matches_relion_background_weighting(self):
+        shape = (9, 9, 9)
+        radius = 2.5
+        cosine_width = 2.0
+        vol = np.arange(np.prod(shape), dtype=np.float32).reshape(shape)
+
+        coords = np.asarray(
+            fourier_transform_utils.get_k_coordinate_of_each_pixel(shape, voxel_size=1, scaled=False)
+        ).reshape(shape + (3,))
+        r = np.linalg.norm(coords, axis=-1)
+        radius_p = radius + cosine_width
+        raised_cos = 0.5 + 0.5 * np.cos(np.pi * (radius_p - r) / cosine_width)
+        protein_weight = np.zeros(shape, dtype=np.float32)
+        protein_weight = np.where(r < radius, 1.0, protein_weight)
+        protein_weight = np.where((r >= radius) & (r <= radius_p), 1.0 - raised_cos, protein_weight)
+        background_weight = np.zeros(shape, dtype=np.float32)
+        background_weight = np.where(r > radius_p, 1.0, background_weight)
+        background_weight = np.where((r >= radius) & (r <= radius_p), raised_cos, background_weight)
+        avg_bg = np.sum(vol * background_weight) / np.sum(background_weight)
+        expected = protein_weight * vol + background_weight * avg_bg
+
+        result, returned_mask = mask.soft_mask_outside_map(jnp.asarray(vol), radius=radius, cosine_width=cosine_width)
+
+        np.testing.assert_allclose(np.asarray(result), expected, rtol=1e-6, atol=1e-5)
+        np.testing.assert_allclose(np.asarray(returned_mask), protein_weight, rtol=1e-6, atol=1e-6)
+
+    def test_float64_transition_matches_relion_double_arithmetic(self):
+        shape = (16, 16, 16)
+        radius = 5.0
+        cosine_width = 3.0
+        vol = jnp.ones(shape, dtype=jnp.float64)
+
+        _, returned_mask = mask.soft_mask_outside_map(
+            vol,
+            radius=radius,
+            cosine_width=cosine_width,
+            Mnoise=jnp.zeros(shape, dtype=jnp.float64),
+        )
+
+        # Offset (5, 2, 0) lies in the cosine transition.  RELION's deployed
+        # double-RFLOAT build evaluates both the radius and cosine in float64.
+        transition_radius = np.sqrt(np.float64(29.0))
+        raised_cos = np.float64(0.5) + np.float64(0.5) * np.cos(
+            np.float64(np.pi) * (np.float64(radius + cosine_width) - transition_radius) / np.float64(cosine_width)
+        )
+        expected = np.float64(1.0) - raised_cos
+        actual = np.asarray(returned_mask)[10, 13, 8]
+
+        assert returned_mask.dtype == jnp.float64
+        np.testing.assert_allclose(actual, expected, rtol=0.0, atol=np.finfo(np.float64).eps)
+
+        float32_radius = np.sqrt(np.float32(29.0), dtype=np.float32)
+        old_float32_value = np.float32(1.0) - (
+            np.float32(0.5)
+            + np.float32(0.5)
+            * np.cos(
+                np.float32(np.pi)
+                * (np.float32(radius + cosine_width) - float32_radius)
+                / np.float32(cosine_width)
+            )
+        )
+        assert abs(actual - np.float64(old_float32_value)) > 1e-9
+
+    def test_raised_cosine_mask_matches_relion_solvent_flatten_mask(self):
+        shape = (9, 9, 9)
+        radius = 2.5
+        width = 2.0
+        coords = np.asarray(
+            fourier_transform_utils.get_k_coordinate_of_each_pixel_3d(shape, voxel_size=1, scaled=False)
+        ).reshape(shape + (3,))
+        r = np.linalg.norm(coords, axis=-1)
+        expected = np.zeros(shape, dtype=np.float32)
+        expected = np.where(r < radius, 1.0, expected)
+        expected = np.where(
+            (r >= radius) & (r <= radius + width),
+            0.5 - 0.5 * np.cos(np.pi * (radius + width - r) / width),
+            expected,
+        )
+
+        result = mask.raised_cosine_mask(shape, radius=radius, radius_p=radius + width, offset=jnp.zeros(3))
+
+        np.testing.assert_allclose(np.asarray(result), expected, rtol=1e-6, atol=1e-6)
 
 
 # ---------------------------------------------------------------------------

@@ -1,128 +1,132 @@
-# RECOVAR Development Guide
+# RECOVAR development contract
 
-RECOVAR analyzes conformational heterogeneity in cryo-EM/cryo-ET datasets using regularized covariance estimation and kernel regression. GPU-accelerated via JAX, with optional custom CUDA kernels.
+RECOVAR estimates conformational heterogeneity from cryo-EM and cryo-ET data.
+Engineering priorities are correctness, GPU performance, then clarity.
 
-## Engineering Priorities (in order)
-1. **Correctness** — new code must match or improve on baseline quality metrics. Add or run tests to verify.
-2. **Performance** — optimize for GPU (speed, memory). Batch sizing, half-spectrum layouts, CUDA FFI.
-3. **Clarity** — simple, readable code. Small targeted diffs. No drive-by formatting.
+## Agent collaboration
 
-## Architecture
+- Treat requests for implementation as authorization to complete the work.
+  Resolve routine choices from context and continue independent work while
+  material questions remain open. Prepare a reviewable result before requesting
+  any still-required approval for publication or an external action.
+- Explicit user instructions take precedence over skill guidance. Apply scoped
+  repository requirements to the affected workflow. If an instruction blocks
+  progress, cite its file and exact rule, explaining the unresolved decision.
+- Incorporate corrections and answer side questions while retaining the active
+  objective, completed work and running jobs. Use a concise handoff when moving
+  to a fresh thread; link evidence instead of repeating experiment histories.
+- Delegate only when authorized; for EM, follow relax's `relax/SUBAGENTS.md`.
+  Preserve the user's Terra/Astra workload choices and exclusive source ownership.
+- Report outcomes and limitations in plain, concise prose. Use tables for
+  comparisons and keep required evidence in linked artifacts.
+- Complete the checks required for the affected scope. Repeat or broaden them
+  only for changed behavior, failures, unresolved concerns or required qualification.
+  Documentation/instruction edits use mirror and link checks; numerical fixes
+  still require focused regressions and the applicable scientific ladder.
 
-```
-recovar/
-  core/            # Cryo-EM primitives: ForwardModelConfig (Equinox), CTF, slicing, geometry
-  data_io/         # Dataset loading: CryoEMDataset, ImageSource, metadata parsing
-  heterogeneity/   # Science: covariance estimation, PCA, embedding, kernel regression volumes
-  reconstruction/  # Mean reconstruction, noise estimation, regularization
-  output/          # Results serialization, metrics (FSC, locres, PCS), plotting
-  commands/        # CLI entry points: pipeline.py is the main one
-  cuda/            # CUDA backprojection kernel (XLA FFI, explicit opt-in build)
-  simulation/      # Synthetic data generation for testing
-  em/              # EM algorithm (E-step, M-step, heterogeneous state)
-  gui_v2/          # Web GUI: FastAPI backend + React/TypeScript frontend
-  utils/           # Helpers, NVTX profiling, multi-GPU
-```
+See [the agent workflow](docs/development/agent_workflow.md) for session-specific
+model/delegation evidence and compact task handoffs.
 
-**Data flow**: `CryoEMDataset` → batch iterator → mean reconstruction → covariance estimation → PCA → embedding → kernel regression volumes → output
+## Start and resume
 
-**Key types**: `ForwardModelConfig` (static Equinox struct, triggers JIT recompilation if changed), `CryoEMDataset` (single entry point for all data), `ModelState` (mean, mask, basis, eigenvalues)
+1. Establish the task, checkout, branch and current evidence before editing.
+   User instructions and authorization persist across turns. Do not ask again
+   for work already covered by the task.
+2. Read the applicable scoped guides below. Historical experiment notes are
+   evidence for their recorded source; their old next actions are not current
+   instructions. Use the [codebase map](docs/development/codebase.md) to locate
+   the workflow entry point and the modules that own its state and kernels.
+3. Print `git rev-parse HEAD`, `git status --short --branch`,
+   `git diff HEAD --stat`, and `git diff HEAD | sha256sum` before validation.
+   Record untracked files used by a run. A worktree name is not provenance.
+4. Choose one concrete change and its smallest useful check. Preserve unrelated
+   work. Keep control checkouts and queued/running candidates immutable.
 
-## Build & Setup
+Metrics are tracked in standing artifacts, not only in run reports: the EMPIAR
+real-data scorecard, the synthetic fixed-suite scorecards, the pinned completion
+baselines and the per-run parity ledgers. Read the value your change touches
+before running, and write the new value back after. relax's `relax/CLAUDE.md`
+lists each artifact with the command that regenerates or checks it, and records
+two setup traps that make the parity tier look red for reasons that are not
+numerical. End-to-end runs are what fill the real-data rows; short tests do not
+substitute for them.
 
-**Primary (pixi)** — hermetic env with pinned deps:
-```bash
-pixi install
-pixi run install-recovar       # editable install, no deps
-pixi run smoke-import-recovar   # verify import works
-```
+| Affected area | Read before working |
+| --- | --- |
+| Python source and numerical conventions | [recovar/CLAUDE.md](recovar/CLAUDE.md) |
+| Tests, tolerances and baselines | [tests/CLAUDE.md](tests/CLAUDE.md) |
+| EM, RELION parity and PPCA refinement | the [relax](https://github.com/ma-gilles/relax) repository (`relax/AGENTS.md`), which holds the EM code |
+| CUDA and FFI | [recovar/cuda/CLAUDE.md](recovar/cuda/CLAUDE.md) |
+| GUI | [recovar/gui_v2/CLAUDE.md](recovar/gui_v2/CLAUDE.md) |
+| Documentation | [docs/CLAUDE.md](docs/CLAUDE.md) |
 
-**Alternative (pip)** — for end users:
-```bash
-pip install "recovar[gpu]"
-```
+## Context and work packages
 
-The fast-marching C++ extension is optional and builds automatically when a compiler is available. RECOVAR no longer needs a separate `scikit-fmm` install.
+Use [the agent workflow](docs/development/agent_workflow.md): compact file handoffs,
+on-demand history, scripted evidence and one publication per cohesive batch.
+Model selection and delegation are session choices, not scientific requirements.
+Cost control must not reduce the scientific goal or gates.
 
-RECOVAR's custom CUDA kernels are optional and do not auto-build at runtime. `recovar[gpu]` installs the CUDA-enabled JAX wheels, but you still need a local CUDA toolkit/compiler (`nvcc`) for RECOVAR's custom CUDA extension. Build it explicitly with `recovar build_custom_cuda` or `PYTHON="$(pixi run which python)" make -C recovar/cuda clean all`. The Makefile uses the running Python to locate JAX FFI headers — always build/test through pixi or the correct Python.
+## Implement and review
 
-## Testing
+- Prefer small functions with explicit inputs, units, layouts and ownership.
+  Use simple containers when they clarify state; avoid forwarding layers.
+- Separate correctness repairs, performance changes and structural cleanup.
+  Preserve numerical casts, reduction order, JIT boundaries, memory lifetime,
+  serialized formats and scientific defaults during cleanup. Preserve non-EM
+  public APIs. EM APIs may change when this simplifies the implementation;
+  migrate affected callers, tests and documentation in the same change.
+- Remove private dead code only after checking callers, dynamic registration,
+  CLI entry points, tests, notebooks and serialized/imported names. Keep
+  independent numerical references independent of production code.
+- For shared-helper extraction, trace imports through dependent modules as
+  well as direct call sites. Collect the applicable test inventory before a
+  broad run; testing only the edited modules can miss a retired re-export.
+- Validate assumptions early. Do not hide errors with fallback results, skipped
+  checks or fabricated success. Resolve TODOs with evidence before removing them.
+- Keep math documentation linked to implementing functions, and docstrings
+  linked back to the documented formulation. Update both when behavior changes.
+- Never widen a scientific tolerance or change `tests/baselines/` without an
+  explicit user instruction. Missing measurements are not passing comparisons.
+- Keep diffs focused. Do not reformat unrelated code or commit large datasets,
+  checkpoints, binaries, generated run outputs or credentials.
 
-See `tests/CLAUDE.md` for full testing rules (critical — read before modifying tests).
+## Environment and validation
 
-| Tier | Command | Time | GPU | Purpose |
-|------|---------|------|-----|---------|
-| Fast | `pixi run test-fast` | ~30s | No | Unit tests, safe on login node |
-| Smoke | `pytest --run-integration tests/integration/test_pipeline_smoke.py` | ~2 min | No | Pipeline sanity |
-| Full | `pixi run test-full` | ~2h | Yes | All tests — **submit via Slurm** |
-| Long | `pytest --long-test` | 6-12h | Yes | Quality regression — **Slurm only** |
-| Parallel | `./scripts/run_tests_parallel.sh long-test` | ~2-3h | Yes | Long tests in parallel Slurm jobs |
+Use the checkout's frozen pixi environment. Before Python imports, select CPU
+or assigned GPU visibility and remove Python/conda contamination. Verify
+RECOVAR imports from this checkout and JAX from its `.pixi/envs/default`.
+Explicitly build and identify custom CUDA libraries before GPU qualification;
+the current runtime loader can build missing libraries automatically.
 
-## Branching & Commits
+Follow [CONTRIBUTING.md](CONTRIBUTING.md) for exact setup, validation and PR
+requirements, [Della development](docs/development/della.md) for cluster resources
+and paper-data paths, and [benchmark contracts](docs/development/benchmarks.md)
+for reusable accuracy and performance evidence. Use Slurm for integration,
+multi-iteration, long or contention-sensitive GPU work. Reserve local GPUs for
+short checks following the user's device policy.
 
-- `dev` is the active development branch. `main` is the old public release — do not target it.
-- Never commit directly to `dev`. Create feature branches like `claude/<short-task-name>` off `dev`, then push the branch for PR into `dev`.
-- Small targeted diffs. Do not commit large artifacts (checkpoints, datasets, binaries).
-- Never force-push unless explicitly asked.
+For EM-only work, use the scoped EM validation ladder. Shared pipeline or
+repository-wide cleanup requires the applicable SPA/ET and downstream checks
+as well. Existing authorization for that scope covers its necessary validation;
+a genuinely new scientific objective requires a separate decision.
 
-## Before Pushing / Creating a PR — MANDATORY
+## Branches and delivery
 
-1. Rebase on `dev`: `git fetch origin && git rebase origin/dev`
-2. Run the **full long-test suite** via parallel Slurm submission:
-   ```bash
-   ./scripts/run_tests_parallel.sh long-test
-   ```
-   This includes unit, smoke, downstream, SPA metrics regression,
-   ET metrics regression, outlier regression, PDB trajectory, indices,
-   stress tests, and isolated-function tests. **All must pass.**
-3. Wait for the summary job to complete. Check the summary log.
-4. If any test fails → **do not push**. Fix and resubmit.
-5. Only push and create PR after **all tests pass including long-test**.
+Work on a feature branch (`codex/<task>` for Codex), never directly on `dev`.
+Target `dev`, not the old public `main`. Preserve an explicitly pinned control.
+Branches are fine for isolation, but they are temporary: once a branch is merged, delete it
+(local and remote); if it is abandoned, record why in the task handoff and delete it. Do not
+leave finished or dead branches behind. Keep only `main`/`dev`/`dev2`, active work and
+branches the user explicitly asked to keep.
+Rebasing an implementation creates a new candidate that needs fresh validation.
+Never force-push unless explicitly asked. Before pushing or opening a PR, follow
+all applicable checks and table requirements in CONTRIBUTING.md and scoped guides.
 
-## PR Description — MANDATORY Format
+Report the change, its reason, exact checks and job IDs, outcomes and unresolved
+limitations, reproduction commands, artifact paths, `git status --short --branch`
+and `git diff HEAD --stat`. Distinguish executed, quality-accepted and
+performance-qualified results. Do not claim completion with required jobs pending.
 
-Every PR description **must** include quality and performance comparison
-tables extracted from the long-test results. Run:
-```bash
-pixi run python scripts/extract_regression_tables.py
-```
-after long-test completes, and paste the output into the PR body.
-
-### Quality Baselines Table
-
-Compare current scores against `tests/baselines/` JSON files. Include
-both SPA and cryo-ET metrics. Higher `svd_relative_variance` is better,
-lower errors are better.
-
-```
-### Quality Comparison (current vs baseline)
-| Metric | Baseline | Current | % Change | Status |
-|--------|----------|---------|----------|--------|
-| spa_pcs_relative_variance_4 | 0.9234 | 0.9240 | +0.06% ↑ | OK |
-| spa_locres_90pct | 9.18 | 9.18 | 0.0% | OK |
-| et_pcs_relative_variance_4 | 0.6326 | 0.6330 | +0.06% ↑ | OK |
-| outlier_recall_round_1 | 0.992 | 0.992 | 0.0% | OK |
-```
-
-### Performance Baselines Table
-
-Compare pipeline/compute_state wall time and GPU memory against
-`tests/baselines/.../perf_baseline_*.json`. Lower time is better,
-lower memory is better. Flag regressions > 10%.
-
-```
-### Performance Comparison (current vs baseline, H100)
-| Stage | Baseline (s) | Current (s) | % Change | Status |
-|-------|-------------|-------------|----------|--------|
-| spa_pipeline | 555.8 | 540.2 | -2.8% ↓ | OK |
-| et_pipeline | 1886.7 | 1850.0 | -1.9% ↓ | OK |
-| spa_compute_state | 193.0 | 152.0 | -21.2% ↓ | IMPROVED |
-| et_compute_state | 145.9 | 140.0 | -4.0% ↓ | OK |
-| spa_peak_gpu_gb | 40.4 | 40.4 | 0.0% | OK |
-```
-
-Use ↑ for increases, ↓ for decreases. Mark regressions > 10% as **REGRESSED**.
-
-## End of Task
-
-Provide: summary of changes, files modified, test commands run (with Slurm job IDs if relevant), how to reproduce, `git status` and `git diff --stat`.
+This file and root `CLAUDE.md` must remain byte-for-byte identical. Check with
+`python scripts/check_agent_guides.py` after editing. The EM guides now live in relax.

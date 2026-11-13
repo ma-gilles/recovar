@@ -15,7 +15,6 @@ from typing import Literal, Optional
 
 import numpy as np
 
-import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar.data_io import image_backends
 from recovar.data_io._index_utils import DatasetIndexLayout, normalize_indices
 
@@ -90,6 +89,7 @@ class ImageSourceInfo:
     strip_prefix: Optional[str] = None
     downsample_D: Optional[int] = None
     invert_data: bool = False
+    dtype: type = np.complex64
 
 
 class ImageSource:
@@ -179,12 +179,24 @@ class ImageSource:
     def __getitem__(self, index):
         raise NotImplementedError
 
+    def host_images(self, image_indices):
+        """Return raw host images for many local image indices in one call.
+
+        `iter_batches` collates every item into a JAX array, so a caller that wants
+        host NumPy pays a device round trip plus a per-item concatenate. The exact
+        local EM engine rebuilds its raw-image cache that way once per iteration,
+        which costs about 270 s of a 6673 s K=1 100k/256 run. Sources that can
+        serve host memory directly override this; the default keeps the old
+        behaviour so no source is required to implement it.
+        """
+
+        raise NotImplementedError
+
     def process_images(self, images, apply_image_mask=False):
         raise NotImplementedError
 
-    def process_images_half(self, images, apply_image_mask=False):
-        processed = self.process_images(images, apply_image_mask=apply_image_mask)
-        return fourier_transform_utils.full_image_to_half_image(processed, self.image_shape)
+    def process_images_half(self, images, apply_image_mask=False, **kwargs):
+        raise NotImplementedError("ImageSource subclasses must implement native process_images_half")
 
     def iter_batches(
         self,
@@ -277,14 +289,20 @@ class BackendImageSource(ImageSource):
     def __getitem__(self, index):
         return self.backend[index]
 
+    def host_images(self, image_indices):
+        """Serve raw host images straight from the backend, without JAX."""
+
+        image_indices = _normalize_indices(image_indices, self.n_images, name="image_indices")
+        images, _, _ = self.backend[image_indices]
+        return np.asarray(images)
+
     def process_images(self, images, apply_image_mask=False):
         return self.backend.process_images(images, apply_image_mask=apply_image_mask)
 
-    def process_images_half(self, images, apply_image_mask=False):
-        if hasattr(self.backend, "process_images_half"):
-            return self.backend.process_images_half(images, apply_image_mask=apply_image_mask)
-        processed = self.backend.process_images(images, apply_image_mask=apply_image_mask)
-        return fourier_transform_utils.full_image_to_half_image(processed, self.image_shape)
+    def process_images_half(self, images, apply_image_mask=False, **kwargs):
+        if not hasattr(self.backend, "process_images_half"):
+            raise ValueError("Image backend must implement native process_images_half")
+        return self.backend.process_images_half(images, apply_image_mask=apply_image_mask, **kwargs)
 
     def iter_batches(
         self,
@@ -390,11 +408,17 @@ class SubsetImageSource(ImageSource):
             return self.parent[self._parent_local_group_indices[int(index)]]
         return self.parent[self._parent_local_image_indices[int(index)]]
 
+    def host_images(self, image_indices):
+        """Map subset-local indices onto the parent and serve them in one call."""
+
+        image_indices = _normalize_indices(image_indices, self.n_images, name="image_indices")
+        return self.parent.host_images(self._parent_local_image_indices[image_indices])
+
     def process_images(self, images, apply_image_mask=False):
         return self.parent.process_images(images, apply_image_mask=apply_image_mask)
 
-    def process_images_half(self, images, apply_image_mask=False):
-        return self.parent.process_images_half(images, apply_image_mask=apply_image_mask)
+    def process_images_half(self, images, apply_image_mask=False, **kwargs):
+        return self.parent.process_images_half(images, apply_image_mask=apply_image_mask, **kwargs)
 
     def _remap_parent_images(self, parent_local_image_indices):
         parent_original_image_indices = self.parent.index_layout.original_image_indices_for_local(
@@ -495,6 +519,7 @@ def create_image_source(
     strip_prefix=None,
     downsample_D=None,
     sort_with_Bfac=False,
+    dtype=np.complex64,
 ):
     if tilt_series:
         tilt_file_option = "relion5" if tilt_series_ctf == "relion5" else "warp"
@@ -507,6 +532,7 @@ def create_image_source(
             tilt_file_option=tilt_file_option,
             strip_prefix=strip_prefix,
             sort_with_Bfac=sort_with_Bfac,
+            dtype=dtype,
         )
     else:
         backend = image_backends.ParticleImageDataset(
@@ -518,6 +544,7 @@ def create_image_source(
             invert_data=uninvert_data,
             strip_prefix=strip_prefix,
             downsample_D=downsample_D,
+            dtype=dtype,
         )
 
     info = ImageSourceInfo(
@@ -532,5 +559,6 @@ def create_image_source(
         strip_prefix=strip_prefix,
         downsample_D=downsample_D,
         invert_data=bool(uninvert_data),
+        dtype=np.dtype(dtype).type,
     )
     return BackendImageSource(backend, info=info)

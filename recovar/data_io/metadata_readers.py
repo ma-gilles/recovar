@@ -21,6 +21,43 @@ from recovar.utils import R_from_relion
 logger = logging.getLogger(__name__)
 
 
+def _validated_image_dimensions(values):
+    dimensions = np.asarray(values, dtype=np.float64)
+    if not np.all(np.isfinite(dimensions) & (dimensions > 0) & (dimensions == np.floor(dimensions))):
+        raise ValueError("Image dimensions must be finite positive integers")
+    return dimensions
+
+
+def pixel_sizes_at_grid(source_pixel_sizes, source_image_sizes, target_size):
+    """Resolve loaded-grid Angstroms/pixel before computational dtype casts.
+
+    Promote serialized geometry before multiplying; a float32 source retains
+    its serialized value, while float64 source geometry avoids a float32 detour.
+    Rescale each row once, without modifying source arrays or assuming row0.
+    """
+    pixels = np.asarray(source_pixel_sizes, dtype=np.float64)
+    if not np.all(np.isfinite(pixels) & (pixels > 0)):
+        raise ValueError("Source pixel sizes must be finite and positive")
+    source_size = _validated_image_dimensions(source_image_sizes)
+    target = _validated_image_dimensions(target_size)
+    if target.ndim != 0:
+        raise ValueError("Target image dimension must be a scalar")
+    loaded_pixels = source_size * pixels / target
+    if not np.all(np.isfinite(loaded_pixels) & (loaded_pixels > 0)):
+        raise ValueError("Loaded pixel sizes must be finite and positive")
+    return loaded_pixels
+
+
+def _star_image_sizes(sf, target_size):
+    # Inspect the original column before StarFile.resolution's integer cast.
+    sizes = sf.get_optics_values("_rlnImageSize", dtype=np.float64)
+    if sizes is None:
+        sizes = sf.resolution  # Existing MRC-header fallback for old STAR files.
+    if sizes is None:
+        sizes = np.full(len(sf), target_size, dtype=np.float64)
+    return _validated_image_dimensions(sizes)
+
+
 # ---------------------------------------------------------------------------
 # STAR file parsing
 # ---------------------------------------------------------------------------
@@ -29,6 +66,8 @@ logger = logging.getLogger(__name__)
 def parse_poses_from_star(
     star_path: str,
     D: int,
+    *,
+    absent_angles_zero: bool = False,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Extract rotation matrices and translations from a RELION .star file.
 
@@ -49,6 +88,12 @@ def parse_poses_from_star(
     tilt_col = sf.get_optics_values("_rlnAngleTilt", dtype=np.float64)
     psi_col = sf.get_optics_values("_rlnAnglePsi", dtype=np.float64)
 
+    if absent_angles_zero:
+        # relion_refine sets each absent angle label to 0 (Experiment::read,
+        # exp_model.cpp:1104-1136).
+        rot_col, tilt_col, psi_col = (
+            np.zeros(n, dtype=np.float64) if col is None else col for col in (rot_col, tilt_col, psi_col)
+        )
     if rot_col is None or tilt_col is None or psi_col is None:
         raise ValueError(
             "STAR file must contain _rlnAngleRot, _rlnAngleTilt, _rlnAnglePsi "
@@ -66,12 +111,11 @@ def parse_poses_from_star(
 
     if tx is not None and ty is not None:
         # Convert Angstroms → fractional via pixel size
-        apix = sf.apix  # per-particle pixel sizes
+        apix = sf.source_pixel_sizes_angstrom
         if apix is None:
             raise ValueError(
                 "STAR file has _rlnOriginXAngst but no _rlnImagePixelSize. Cannot convert translations to pixel units."
             )
-        apix = apix.astype(np.float64)
         trans_pixels = np.stack([tx / apix, ty / apix], axis=1)  # (N, 2)
     else:
         # Try RELION 3.0 pixel-unit columns
@@ -84,11 +128,8 @@ def parse_poses_from_star(
             trans_pixels = np.zeros((n, 2), dtype=np.float64)
 
     # Pixel → fractional (same convention as cryoDRGN pkl files)
-    resolution = sf.resolution  # per-particle image sizes
-    if resolution is not None:
-        trans_fractional = trans_pixels / resolution.astype(np.float64).reshape(-1, 1)
-    else:
-        trans_fractional = trans_pixels / float(D)
+    resolution = _star_image_sizes(sf, D)
+    trans_fractional = trans_pixels / resolution.reshape(-1, 1)
 
     return rotations, trans_fractional
 
@@ -102,12 +143,12 @@ def parse_ctf_from_star(
     Args:
         star_path: Path to .star file.
         D: Target image dimension in pixels. Pixel size is adjusted
-           for the ratio ``original_D / D``.
+            for the ratio ``original_D / D``.
 
     Returns:
-        ``(N, 8)`` array with columns
-        ``[Apix, DFU, DFV, DFANG, VOLT, CS, W, PHASE_SHIFT]``.
-        This matches the output format of ``load_utils.load_ctf_params``.
+        ctf (numpy.ndarray): ``(N, 8)`` array with columns
+            ``[Apix, DFU, DFV, DFANG, VOLT, CS, W, PHASE_SHIFT]``.
+            This matches the output format of ``load_utils.load_ctf_params``.
     """
     sf = StarFile.load(star_path)
     n = len(sf)
@@ -137,24 +178,9 @@ def parse_ctf_from_star(
         phase = np.zeros(n, dtype=np.float64)
 
     # Pixel size adjustment
-    orig_apix = sf.apix
-    orig_D = sf.resolution
-    if orig_apix is not None and orig_D is not None:
-        orig_apix = orig_apix.astype(np.float64)
-        orig_D = orig_D.astype(np.float64)
-        new_apix = orig_D * orig_apix / float(D)
-    elif orig_apix is not None:
-        # Have Apix (e.g. from RELION 3.0 Magnification/DetectorPixelSize)
-        # but no _rlnImageSize.  Assume the STAR pixel size describes the
-        # images at their native resolution; if images are later downsampled,
-        # the pipeline adjusts Apix separately.
-        orig_apix = orig_apix.astype(np.float64)
-        new_apix = orig_apix
-        logger.info(
-            "No _rlnImageSize in STAR; using Apix=%.4f from "
-            "Magnification/DetectorPixelSize (assuming native resolution).",
-            orig_apix[0],
-        )
+    orig_apix = sf.source_pixel_sizes_angstrom
+    if orig_apix is not None:
+        new_apix = pixel_sizes_at_grid(orig_apix, _star_image_sizes(sf, D), D)
     else:
         logger.warning(
             "Could not determine pixel size from STAR file. "
@@ -309,7 +335,7 @@ def parse_ctf_from_cs(
     else:
         orig_D = np.full(n, float(D), dtype=np.float64)
 
-    new_apix = orig_D * orig_apix / float(D)
+    new_apix = pixel_sizes_at_grid(orig_apix, orig_D, D)
 
     ctf = np.column_stack([new_apix, dfu, dfv, dfang, volt, cs, w, phase])
 
@@ -336,11 +362,16 @@ def can_extract_poses(filepath: str) -> bool:
 def auto_parse_poses(
     filepath: str,
     D: int,
+    *,
+    absent_angles_zero: bool = False,
 ) -> Tuple[np.ndarray, np.ndarray]:
-    """Auto-extract poses from STAR or CS file based on extension."""
+    """Auto-extract poses from STAR or CS file based on extension.
+
+    ``absent_angles_zero`` applies to STAR files only (see ``parse_poses_from_star``).
+    """
     lower = filepath.lower()
     if lower.endswith(".star"):
-        return parse_poses_from_star(filepath, D)
+        return parse_poses_from_star(filepath, D, absent_angles_zero=absent_angles_zero)
     elif lower.endswith(".cs"):
         return parse_poses_from_cs(filepath, D)
     else:

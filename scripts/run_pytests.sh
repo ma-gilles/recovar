@@ -13,7 +13,7 @@ set -euo pipefail
 #                  outliers, pipeline with --ind/--particle-ind (6-12 h on GPU).
 #                  All data generated synthetically — no external files needed.
 #                  Baselines auto-saved in tests/baselines/ on first run.
-#   full-long    - full suite + long metrics regressions (legacy mode)
+#   full-long    - full suite + long metrics regressions
 #   real-regression - full suite + strict real-dataset quality gates (requires volumes dir)
 #   long-metrics - opt-in very long run_test_all_metrics regression (1h+)
 #
