@@ -29,10 +29,8 @@ import functools
 
 import jax
 import jax.numpy as jnp
-import numpy as np
 
 import recovar.core.fourier_transform_utils as ftu
-
 
 # ---------------------------------------------------------------------------
 # Coordinate generation
@@ -55,6 +53,19 @@ def _pixel_frequencies(image_shape, half_image=False):
         return ftu.get_k_coordinate_of_each_pixel_half(image_shape, voxel_size=1, scaled=False)
     else:
         return ftu.get_k_coordinate_of_each_pixel(image_shape, voxel_size=1, scaled=False)
+
+
+def _volume_upsampling(image_shape, volume_shape, max_r=None):
+    """Fourier oversampling of the volume grid relative to the image grid.
+
+    An image Fourier pixel ``k`` lands at volume grid coordinate ``ups * k``.
+    Same rule as the CUDA kernels (``recovar.cuda_backproject._ffi_kwargs``):
+    ``volume_shape[0] // image_shape[0]``. ``max_r`` stays in image pixels
+    (``slicing._cuda_max_r`` converts it to grid units for the CUDA entry
+    points); unused here, kept for the dev2 signature.
+    """
+    del max_r
+    return int(volume_shape[0]) // int(image_shape[0])
 
 
 def _rotate_plane_coords(k2d, rotation_matrix):
@@ -277,7 +288,7 @@ def _nearest_gather_half(half_vol, g0, g1, g2, N0, N1, N2):
 # ---------------------------------------------------------------------------
 
 
-def _project_one_image(vol, rotation_matrix, pixel_freqs, center, N0, N1, N2, order, half_volume, max_r2):
+def _project_one_image(vol, rotation_matrix, pixel_freqs, center, N0, N1, N2, order, half_volume, max_r2, ups=1):
     """Project one image from a volume using one rotation matrix.
 
     Args:
@@ -285,10 +296,11 @@ def _project_one_image(vol, rotation_matrix, pixel_freqs, center, N0, N1, N2, or
         rotation_matrix: ``(3, 3)``
         pixel_freqs: ``(n_pixels, 2)`` with ``(k0, k1)``
         center: ``(3,)`` volume center = ``[N0//2, N1//2, N2//2]``
-        max_r2: squared max radius for clipping (or -1 for no clip)
+        max_r2: squared max radius for clipping in image pixels (or None)
+        ups: volume grid points per image Fourier pixel (``_volume_upsampling``)
     """
-    # Rotate 2D plane coords to 3D
-    rk = _rotate_plane_coords(pixel_freqs, rotation_matrix)  # (n_pix, 3)
+    # Rotate 2D plane coords to 3D, in volume grid units
+    rk = _rotate_plane_coords(pixel_freqs, rotation_matrix) * ups  # (n_pix, 3)
     rk0, rk1, rk2 = rk[:, 0], rk[:, 1], rk[:, 2]
 
     # Radius clipping — use pre-rotation 2D norm (exact for integer freqs).
@@ -339,7 +351,7 @@ def project(vol, rotations, image_shape, volume_shape, order=1, half_volume=Fals
         order: 0 (nearest) or 1 (trilinear)
         half_volume: if True, vol is kz ≥ 0 half-volume
         half_image: if True, output is rfft-packed ``(n, H*(W//2+1))``
-        max_r: optional spherical frequency cutoff (in grid units)
+        max_r: optional spherical frequency cutoff (in image pixels; scaled by the volume upsampling like CUDA)
 
     Returns:
         Images: ``(n_images, n_pixels)`` complex
@@ -358,6 +370,7 @@ def project(vol, rotations, image_shape, volume_shape, order=1, half_volume=Fals
     pixel_freqs = _pixel_frequencies(image_shape, half_image=half_image)
     center = jnp.array([N0 // 2, N1 // 2, N2 // 2], dtype=jnp.float32)
     max_r2 = float(max_r * max_r) if max_r is not None else None
+    ups = _volume_upsampling(image_shape, volume_shape, max_r)
 
     # vmap over images
     def _proj_one(rot):
@@ -372,6 +385,7 @@ def project(vol, rotations, image_shape, volume_shape, order=1, half_volume=Fals
             order,
             half_volume,
             max_r2,
+            ups,
         )
 
     return jax.vmap(_proj_one)(rotations)
@@ -540,14 +554,15 @@ def _scatter_nearest_half(n_voxels_half, g0, g1, g2, vals, N0, N1, N2):
 
 
 def _backproject_one_image(
-    pixel_freqs, rotation_matrix, img_vals, center, N0, N1, N2, order, half_volume, max_r2, n_voxels_out
+    pixel_freqs, rotation_matrix, img_vals, center, N0, N1, N2, order, half_volume, max_r2, n_voxels_out, ups=1
 ):
     """Backproject one image into a volume.
 
     Matches RELION's ``cuda_kernel_backproject3D``: for each pixel, compute
     rotated coordinates and scatter the pixel value to the volume.
+    ``ups`` scales image frequencies to volume grid units (``_volume_upsampling``).
     """
-    rk = _rotate_plane_coords(pixel_freqs, rotation_matrix)
+    rk = _rotate_plane_coords(pixel_freqs, rotation_matrix) * ups
     rk0, rk1, rk2 = rk[:, 0], rk[:, 1], rk[:, 2]
 
     # Radius clipping — use pre-rotation 2D norm (exact for integer freqs).
@@ -614,6 +629,7 @@ def backproject(imgs, rotations, image_shape, volume_shape, order=1, half_volume
     pixel_freqs = _pixel_frequencies(image_shape, half_image=half_image)
     center = jnp.array([N0 // 2, N1 // 2, N2 // 2], dtype=jnp.float32)
     max_r2 = float(max_r * max_r) if max_r is not None else None
+    ups = _volume_upsampling(image_shape, volume_shape, max_r)
 
     # Pre-compute image-independent data for half_image conjugate scatter.
     # These arrays depend only on image_shape, not on the rotation or pixel
@@ -656,6 +672,7 @@ def backproject(imgs, rotations, image_shape, volume_shape, order=1, half_volume
             half_volume,
             max_r2,
             n_voxels,
+            ups,
         )
 
         if half_image:
@@ -663,7 +680,7 @@ def backproject(imgs, rotations, image_shape, volume_shape, order=1, half_volume
             conj_vals = jnp.where(is_boundary_full, jnp.zeros_like(conj_vals), conj_vals)
 
             # Rotate conjugate frequencies (computed once, used for both radius clip and scatter)
-            conj_rk = _rotate_plane_coords(conj_freqs, rot)
+            conj_rk = _rotate_plane_coords(conj_freqs, rot) * ups
 
             if max_r2 is not None:
                 # Use pre-rotation 2D norm to match the primary scatter's
