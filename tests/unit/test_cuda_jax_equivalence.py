@@ -915,17 +915,11 @@ def test_real_backproject_cuda_vs_jax(half_vol, half_img, gpu_device):
 # ── Non-square images (rectangular) ─────────────────────────────────
 
 
-@pytest.mark.skip(
-    reason=(
-        "Rectangular images (H!=W) have a known pixel-ordering mismatch: "
-        "CUDA uses (H,W) row-major but JAX meshgrid('xy') produces (W,H) layout. "
-        "These coincide only when H==W. The pipeline always uses square images."
-    ),
-)
-def test_rectangular_images_cuda_vs_jax(gpu_device):
+@pytest.mark.parametrize("half_image", [False, True])
+def test_rectangular_images_cuda_vs_jax(gpu_device, half_image):
     """CUDA must handle non-square image shapes correctly."""
     _skip_if_no_cuda()
-    from recovar.core.slicing import _jax_slice
+    from recovar.core.slicing import _jax_slice, _jax_slice_half_image
     from recovar.cuda_backproject import project
 
     # Non-square: 32x64
@@ -943,8 +937,9 @@ def test_rectangular_images_cuda_vs_jax(gpu_device):
         vol_gpu = jax.device_put(vol)
         rots_gpu = jax.device_put(rots)
 
-        cuda_out = project(vol_gpu, rots_gpu, image_shape, volume_shape, order=1)
-        jax_out = _jax_slice(vol_gpu, rots_gpu, image_shape, volume_shape, 1)
+        cuda_out = project(vol_gpu, rots_gpu, image_shape, volume_shape, order=1, half_image=half_image)
+        reference = _jax_slice_half_image if half_image else _jax_slice
+        jax_out = reference(vol_gpu, rots_gpu, image_shape, volume_shape, 1)
 
     np.testing.assert_allclose(
         np.asarray(cuda_out),

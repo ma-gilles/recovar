@@ -30,7 +30,11 @@ def get_1d_frequency_grid_rfft(n, voxel_size=1, scaled=False):
 
 
 def get_k_coordinate_of_each_pixel(image_shape, voxel_size, scaled=True):
+    """Return (column, row) Fourier coordinates in row-major image order."""
     one_d_grids = [get_1d_frequency_grid(sh, voxel_size, scaled) for sh in image_shape]
+    if len(image_shape) == 2:
+        # meshgrid's first input is x (columns), while image shapes are (rows, columns).
+        one_d_grids.reverse()
     grids = jnp.meshgrid(*one_d_grids, indexing="xy")
     return jnp.stack([g.ravel() for g in grids], axis=-1)
 
