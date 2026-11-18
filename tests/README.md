@@ -123,6 +123,19 @@ subsequent run.
 | `test_pipeline_spa_with_ind_regression` | SPA with `--ind` (80% subset): quality vs baseline | ~1–2 h |
 | `test_pipeline_cryo_et_with_particle_ind_regression` | cryo-ET with `--particle-ind`: particle quality vs baseline | ~2–3 h |
 
+The eight isolated pipeline-function tests generate a small 5NRL trajectory
+from the bundled atom coordinates. They can also run independently on CPU
+from the checkout.
+
+```bash
+JAX_PLATFORMS=cpu pixi run python -m pytest --long-test tests/integration/test_pipeline_functions_isolated.py
+```
+
+The tests use pytest's temporary directory for the generated particles and
+per-test `isolated_metrics.json` files. To replay the historical 128³ benchmark,
+set both `FUNCTION_TEST_DATASET_DIR` and `FUNCTION_BASELINE_DIR` to the matching
+archived dataset and saved intermediates.
+
 **Env vars (all optional):**
 
 | Var | Default | Meaning |
