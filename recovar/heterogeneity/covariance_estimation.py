@@ -744,6 +744,11 @@ def compute_variance(
     disc_type="",
     noise_ind_subset=None,
 ):
+    """Estimate half-set Fourier variance using a prior in packed-FFT coordinates.
+
+    Returned volumes use the full centered layout. The LHS records the
+    packed-coordinate precision used for shell regularization.
+    """
     st = time.time()
 
     # Run variance kernel for each half-set.
@@ -752,6 +757,11 @@ def compute_variance(
     #   signal  — residual^2·CTF^2 accumulator (Wiener numerator)
     #   noise_w — noise-normalisation denominator
     #   noise_s — |residuals|^2 accumulator (noise-normalisation numerator)
+    volume_shape = dataset.volume_shape
+    last_size = volume_shape[-1]
+    packed_indices = jnp.abs(jnp.arange(last_size, dtype=jnp.int32) - last_size // 2)
+    packed_weights = linalg.half_spectrum_last_axis_weights(last_size, dtype=dataset.dtype_real)[packed_indices]
+
     ctf_w, signal, noise_w, noise_s = [], [], [], []
     halfset_datasets = dataset.materialize_halfset_datasets()
     subset_original = None
@@ -776,8 +786,13 @@ def compute_variance(
             volume_mask=volume_mask,
             disc_type=disc_type,
         )
-        ctf_w.append(relion_functions.adjust_regularization_relion_style(fw, halfset_dataset.volume_shape))
-        signal.append(sig)
+        # The variance prior uses normal equations in packed real-FFT
+        # coordinates. Each interior coefficient represents two Fourier terms.
+        # Apply that multiplicity to both sides before estimating the prior.
+        packed_lhs = (fw.reshape(volume_shape) * packed_weights).reshape(-1)
+        packed_rhs = (sig.reshape(volume_shape) * packed_weights).reshape(-1)
+        ctf_w.append(relion_functions.adjust_regularization_relion_style(packed_lhs, volume_shape))
+        signal.append(packed_rhs)
         noise_w.append(nw)
         noise_s.append(ns)
 

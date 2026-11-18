@@ -687,6 +687,10 @@ def test_compute_variance_orchestration_with_stubbed_kernels(monkeypatch):
     assert lhs.shape == (vol_size,)
     assert noise_p_variance_est.shape == (vol_size,)
     np.testing.assert_allclose(variance["corrected0"], np.ones(vol_size, dtype=np.float32) * 0.4, atol=1e-6, rtol=1e-6)
+    expected_lhs = np.broadcast_to([15, 30, 15, 30], vol_shape).reshape(-1)
+    np.testing.assert_allclose(lhs, expected_lhs)
+    np.testing.assert_allclose(variance["combined"], 0.4)
+    np.testing.assert_allclose(noise_p_variance_est, 0.5)
 
 
 def test_compute_h_b_runs_on_tiny_image_dataset():
