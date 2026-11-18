@@ -86,7 +86,12 @@ def _run(cmd, **kwargs):
     return result
 
 
-def _make_dataset(output_dir: Path, tilt_series: bool = False, premultiplied_ctf: bool = False) -> Path:
+def _make_dataset(
+    output_dir: Path,
+    tilt_series: bool = False,
+    premultiplied_ctf: bool = False,
+    dose_per_tilt: float | None = None,
+) -> Path:
     cmd = [
         sys.executable,
         "-m",
@@ -103,6 +108,8 @@ def _make_dataset(output_dir: Path, tilt_series: bool = False, premultiplied_ctf
     ]
     if tilt_series:
         cmd += ["--tilt-series", "--n-tilts", str(_N_TILTS)]
+        if dose_per_tilt is not None:
+            cmd += ["--dose-per-tilt", str(dose_per_tilt)]
     if premultiplied_ctf:
         cmd += ["--premultiplied-ctf"]
     _run(cmd)
@@ -352,6 +359,7 @@ def _run_and_collect_metrics(
     noise_model: str | None = None,
     mode_override: str | None = None,
     pipeline_tilt_series: bool = False,
+    dose_per_tilt: float | None = None,
 ) -> dict:
     """Generate dataset, run pipeline + NEW compute_state, return metrics.
 
@@ -368,6 +376,7 @@ def _run_and_collect_metrics(
         out_base / "data",
         tilt_series=tilt_series,
         premultiplied_ctf=premultiplied_ctf,
+        dose_per_tilt=dose_per_tilt,
     )
     perf_stages["make_dataset"] = stage_perf(snap0, perf_snapshot())
 
@@ -446,8 +455,9 @@ def test_compute_state_regression_spa(tmp_path):
 
 
 def test_compute_state_regression_et(tmp_path):
-    """Check compute_state quality against committed baseline (ET)."""
-    current = _run_and_collect_metrics(tmp_path, tilt_series=True, pipeline_tilt_series=True)
+    """Check compute_state against the undosed ET reference."""
+    # The reference predates cumulative-dose weighting in the simulator.
+    current = _run_and_collect_metrics(tmp_path, tilt_series=True, pipeline_tilt_series=True, dose_per_tilt=0)
     baseline = _load_baseline("et")
 
     checked, failures = log_comparison_table(

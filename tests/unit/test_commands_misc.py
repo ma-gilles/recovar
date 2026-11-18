@@ -93,12 +93,14 @@ def test_make_test_dataset_tilt_series_respects_explicit_n_tilts_and_volume_inpu
         n_images=320,
         tilt_series=True,
         n_tilts=5,
+        dose_per_tilt=0,
         volume_input=str(tmp_path / "vol"),
     )
 
     assert calls["args"][2] == str(tmp_path / "vol")
     assert calls["kwargs"]["grid_size"] == 32
     assert calls["kwargs"]["n_tilts"] == 5
+    assert calls["kwargs"]["dose_per_tilt"] == 0
 
 
 def test_make_test_dataset_main_parses_and_forwards(monkeypatch, tmp_path):
@@ -136,6 +138,7 @@ def test_make_test_dataset_main_parses_and_forwards(monkeypatch, tmp_path):
     assert captured["kwargs"]["grid_size"] is None
     assert captured["kwargs"]["volume_input"] is None
     assert captured["kwargs"]["n_tilts"] is None
+    assert captured["kwargs"]["dose_per_tilt"] == 3
 
 
 def test_make_test_dataset_main_parses_grid_volume_and_n_tilts(monkeypatch, tmp_path):
@@ -159,6 +162,8 @@ def test_make_test_dataset_main_parses_grid_volume_and_n_tilts(monkeypatch, tmp_
             "--tilt-series",
             "--n-tilts",
             "9",
+            "--dose-per-tilt",
+            "0",
         ],
     )
 
@@ -166,6 +171,7 @@ def test_make_test_dataset_main_parses_grid_volume_and_n_tilts(monkeypatch, tmp_
     assert captured["kwargs"]["grid_size"] == 40
     assert captured["kwargs"]["volume_input"] == str(tmp_path / "vol")
     assert captured["kwargs"]["n_tilts"] == 9
+    assert captured["kwargs"]["dose_per_tilt"] == 0
 
 
 def test_compute_trajectory_add_args_parses_ind_list():
