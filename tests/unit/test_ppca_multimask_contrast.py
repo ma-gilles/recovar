@@ -1,3 +1,5 @@
+# Dependency-gated imports follow pytest.importorskip.
+# ruff: noqa: E402
 """Tests for multi-mask PCG M-step and Gauss-Legendre contrast quadrature."""
 
 import numpy as np

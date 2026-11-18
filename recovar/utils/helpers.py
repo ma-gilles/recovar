@@ -4,12 +4,13 @@ import functools
 import logging
 import os
 import pickle
+from collections import namedtuple
 from dataclasses import dataclass
 
 import jax
 import jax.numpy as jnp
-import mrcfile
 import more_itertools
+import mrcfile
 import numpy as np
 import pandas as pd
 import psutil
@@ -368,8 +369,6 @@ def get_column_batch_size(grid_size, gpu_memory):
     batch_size = max(min_batch_size, min(max_batch_size, batch_size))
     return int(batch_size)
 
-
-from collections import namedtuple
 
 BatchSizes = namedtuple("BatchSizes", ["image", "volume", "column"])
 

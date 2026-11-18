@@ -8,14 +8,14 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
-from recovar.utils.nvtx_shim import nvtx
 
 import recovar.core.forward as core_forward
 import recovar.core.fourier_transform_utils as fourier_transform_utils
-from recovar import core, utils, jax_config
+from recovar import core, jax_config, utils
 from recovar.core.configs import ForwardModelConfig, ModelState
 from recovar.heterogeneity import covariance_core
 from recovar.reconstruction import regularization
+from recovar.utils.nvtx_shim import nvtx
 
 logger = logging.getLogger(__name__)
 
@@ -373,8 +373,8 @@ def fit_noise_model_to_images(
         Otherwise: Single noise variance and initial estimate
     """
     # Import optimization libraries
-    from jaxopt import ScipyBoundedMinimize, OptaxSolver
     import optax
+    from jaxopt import OptaxSolver, ScipyBoundedMinimize
 
     # Special handling for tilt series data
     if isinstance(experiment_dataset.noise, VariableRadialNoiseModel) and not tilt_dose_inner:
@@ -506,7 +506,7 @@ def fit_noise_model_to_images(
 
         for k in [15, 10, 5]:
 
-            def loss_function_partial(noise_subset, data, k=k):
+            def loss_function_subset(noise_subset, data, k=k):
                 noise_v_updated = optimized_noise_variance.at[:k].set(noise_subset)
                 return loss_fn_batch(noise_v_updated, data)
 
@@ -514,7 +514,7 @@ def fit_noise_model_to_images(
             upper_bounds = jnp.ones(k) * jnp.inf
             bounds = (lower_bounds, upper_bounds)
 
-            solver = OptaxSolver(opt=opt, fun=loss_function_partial, maxiter=maxiter, tol=1e-5)
+            solver = OptaxSolver(opt=opt, fun=loss_function_subset, maxiter=maxiter, tol=1e-5)
 
             # run the streaming optimiser; run_iterator returns (params, state)
             optimized_noise_variance_k, state = solver.run_iterator(
@@ -1394,7 +1394,7 @@ def _average_residual_square_explicit(
     else:
         image_mask = jnp.ones_like(batch).real
 
-    if model.basis.shape[-1] == 0:
+    if model.basis is None or model.basis.shape[-1] == 0:
         predicted_vols = (
             contrasts.reshape((contrasts.shape[0], *np.ones(model.mean_estimate.ndim, dtype=int)))
             * model.mean_estimate[None]

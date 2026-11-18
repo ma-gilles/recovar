@@ -9,8 +9,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from recovar.heterogeneity import covariance_estimation
-from recovar.reconstruction import relion_functions
-from recovar.reconstruction import regularization
+from recovar.reconstruction import regularization, relion_functions
 from recovar.utils import batch_make_radial_image, make_radial_image
 
 logger = logging.getLogger(__name__)

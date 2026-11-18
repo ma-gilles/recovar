@@ -100,7 +100,8 @@ for check in "${checks[@]}"; do
     typecheck)
       echo
       echo "==> Mypy"
-      python -m mypy --config-file pyproject.toml "${files[@]}"
+      MYPYPATH="$repo_root/tests${MYPYPATH:+:$MYPYPATH}" \
+        python -m mypy --explicit-package-bases --config-file pyproject.toml "${files[@]}"
       ;;
     *)
       echo "Unknown check: $check" >&2

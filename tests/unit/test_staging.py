@@ -5,11 +5,9 @@ import time
 
 import mrcfile
 import numpy as np
-import pytest
 
 from recovar.data_io import staging
 from recovar.data_io.staging import _cache_key, get_cache_dir, stage_mrc
-
 
 # ---------------------------------------------------------------------------
 # Helpers

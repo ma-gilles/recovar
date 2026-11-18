@@ -6,10 +6,14 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-
-from helpers.metrics_regression import compare_metric, metric_direction, metric_tolerance, log_comparison_table
-from helpers.perf_regression import perf_snapshot, stage_perf, build_perf_record, check_perf_regression, run_tracked_subprocess
-
+from helpers.metrics_regression import log_comparison_table
+from helpers.perf_regression import (
+    build_perf_record,
+    check_perf_regression,
+    perf_snapshot,
+    run_tracked_subprocess,
+    stage_perf,
+)
 
 pytestmark = [pytest.mark.integration, pytest.mark.slow, pytest.mark.gpu, pytest.mark.io, pytest.mark.long_test]
 
@@ -170,6 +174,7 @@ def test_run_test_all_metrics_regression_against_baseline(tmp_path):
     perf_record = build_perf_record(perf_stages)
     # Save current perf record for extract_regression_tables.py
     import json as _json
+
     _perf_out = output_dir / "current_perf_record_spa.json"
     _perf_out.parent.mkdir(parents=True, exist_ok=True)
     _perf_out.write_text(_json.dumps(perf_record, indent=2))
@@ -236,6 +241,7 @@ def test_run_test_all_metrics_cryo_et_subsampling_regression_against_baseline(tm
     perf_record = build_perf_record(perf_stages)
     # Save current perf record for extract_regression_tables.py
     import json as _json
+
     _perf_out = output_dir / "current_perf_record_cryo_et.json"
     _perf_out.parent.mkdir(parents=True, exist_ok=True)
     _perf_out.write_text(_json.dumps(perf_record, indent=2))

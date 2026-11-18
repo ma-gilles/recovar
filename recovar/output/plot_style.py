@@ -17,7 +17,6 @@ import os
 
 import matplotlib
 import matplotlib.pyplot as plt
-import numpy as np
 
 logger = logging.getLogger(__name__)
 
@@ -25,31 +24,39 @@ logger = logging.getLogger(__name__)
 # Standard dimensions
 # ---------------------------------------------------------------------------
 
-FIGSIZE_SMALL = (6, 5)         # Single panel
-FIGSIZE_MEDIUM = (10, 8)       # 2x2 grid or moderate detail
-FIGSIZE_LARGE = (16, 12)       # Summary panels (4-6 subplots)
-FIGSIZE_WIDE = (14, 6)         # Side-by-side comparison
+FIGSIZE_SMALL = (6, 5)  # Single panel
+FIGSIZE_MEDIUM = (10, 8)  # 2x2 grid or moderate detail
+FIGSIZE_LARGE = (16, 12)  # Summary panels (4-6 subplots)
+FIGSIZE_WIDE = (14, 6)  # Side-by-side comparison
 
-DPI = 150                      # Default save DPI
+DPI = 150  # Default save DPI
 
 # ---------------------------------------------------------------------------
 # Colors
 # ---------------------------------------------------------------------------
 
 COLORS = {
-    "primary": "#2563eb",       # Blue — main data
-    "secondary": "#dc2626",     # Red — comparisons, thresholds
-    "accent": "#059669",        # Green — good/pass
-    "warning": "#d97706",       # Orange — caution
-    "muted": "#6b7280",         # Gray — reference lines
-    "dark": "#1f2937",          # Near-black — text/axes
-    "light": "#f3f4f6",         # Light gray — backgrounds
+    "primary": "#2563eb",  # Blue — main data
+    "secondary": "#dc2626",  # Red — comparisons, thresholds
+    "accent": "#059669",  # Green — good/pass
+    "warning": "#d97706",  # Orange — caution
+    "muted": "#6b7280",  # Gray — reference lines
+    "dark": "#1f2937",  # Near-black — text/axes
+    "light": "#f3f4f6",  # Light gray — backgrounds
 }
 
 # Categorical palette for clusters/trajectories (color-blind friendly)
 CATEGORICAL = [
-    "#2563eb", "#dc2626", "#059669", "#d97706", "#7c3aed",
-    "#db2777", "#0891b2", "#65a30d", "#c2410c", "#4f46e5",
+    "#2563eb",
+    "#dc2626",
+    "#059669",
+    "#d97706",
+    "#7c3aed",
+    "#db2777",
+    "#0891b2",
+    "#65a30d",
+    "#c2410c",
+    "#4f46e5",
 ]
 
 # ---------------------------------------------------------------------------
@@ -66,32 +73,35 @@ FONTSIZE_ANNOTATION = 9
 # Style application
 # ---------------------------------------------------------------------------
 
+
 def apply_style():
     """Set matplotlib defaults for consistent recovar plots.
 
     Call once at the start of any plotting code. Safe to call multiple times.
     """
-    matplotlib.rcParams.update({
-        "figure.dpi": DPI,
-        "savefig.dpi": DPI,
-        "savefig.bbox_inches": "tight",
-        "savefig.pad_inches": 0.1,
-        "font.size": FONTSIZE_TICK,
-        "axes.titlesize": FONTSIZE_TITLE,
-        "axes.labelsize": FONTSIZE_LABEL,
-        "xtick.labelsize": FONTSIZE_TICK,
-        "ytick.labelsize": FONTSIZE_TICK,
-        "legend.fontsize": FONTSIZE_ANNOTATION,
-        "axes.grid": False,
-        "axes.spines.top": False,
-        "axes.spines.right": False,
-        "figure.facecolor": "white",
-        "axes.facecolor": "white",
-        "axes.edgecolor": COLORS["dark"],
-        "text.color": COLORS["dark"],
-        "xtick.color": COLORS["dark"],
-        "ytick.color": COLORS["dark"],
-    })
+    matplotlib.rcParams.update(
+        {
+            "figure.dpi": DPI,
+            "savefig.dpi": DPI,
+            "savefig.bbox": "tight",
+            "savefig.pad_inches": 0.1,
+            "font.size": FONTSIZE_TICK,
+            "axes.titlesize": FONTSIZE_TITLE,
+            "axes.labelsize": FONTSIZE_LABEL,
+            "xtick.labelsize": FONTSIZE_TICK,
+            "ytick.labelsize": FONTSIZE_TICK,
+            "legend.fontsize": FONTSIZE_ANNOTATION,
+            "axes.grid": False,
+            "axes.spines.top": False,
+            "axes.spines.right": False,
+            "figure.facecolor": "white",
+            "axes.facecolor": "white",
+            "axes.edgecolor": COLORS["dark"],
+            "text.color": COLORS["dark"],
+            "xtick.color": COLORS["dark"],
+            "ytick.color": COLORS["dark"],
+        }
+    )
 
 
 def safe_savefig(fig, path, close=True, **kwargs):
@@ -146,8 +156,7 @@ def volume_slices(vol, title="", cmap="gray"):
     """
     fig, axes = plt.subplots(1, 3, figsize=(12, 4))
     mid = vol.shape[0] // 2
-    for ax, sl, label in zip(axes, [vol[mid], vol[:, mid], vol[:, :, mid]],
-                              ["XY", "XZ", "YZ"]):
+    for ax, sl, label in zip(axes, [vol[mid], vol[:, mid], vol[:, :, mid]], ["XY", "XZ", "YZ"]):
         ax.imshow(sl, cmap=cmap, origin="lower")
         ax.set_title(label, fontsize=FONTSIZE_SUBTITLE)
         ax.axis("off")

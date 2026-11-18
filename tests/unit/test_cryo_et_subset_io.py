@@ -37,7 +37,10 @@ import pytest
 pytest.importorskip("jax")
 
 from helpers import tiny_synthetic
-from recovar.data_io import cryoem_dataset as recovar_dataset, halfsets, image_backends as cryo_dataset
+
+from recovar.data_io import cryoem_dataset as recovar_dataset
+from recovar.data_io import halfsets
+from recovar.data_io import image_backends as cryo_dataset
 
 pytestmark = pytest.mark.unit
 

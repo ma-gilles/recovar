@@ -2,14 +2,13 @@
 
 import os
 import tempfile
+import threading
 
 import numpy as np
 import pytest
-import threading
 
+from recovar.simulation.pdb_utils import AtomGroup
 from recovar.simulation.trajectory_generation import (
-    CHAIN_GROUPS_5NRL,
-    HINGE_INDEX_5NRL,
     compute_bfactor_scaling,
     generate_conformation_2D,
     generate_trajectory_volumes,
@@ -20,7 +19,6 @@ from recovar.simulation.trajectory_generation import (
     split_atom_group_by_chains,
     stitched_path,
 )
-from recovar.simulation.pdb_utils import AtomGroup
 
 pytestmark = pytest.mark.unit
 

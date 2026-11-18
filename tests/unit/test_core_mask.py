@@ -7,8 +7,8 @@ from scipy.ndimage import binary_dilation, distance_transform_edt
 pytest.importorskip("jax")
 import jax.numpy as jnp
 
-import recovar.core.mask as mask
 import recovar.core.fourier_transform_utils as fourier_transform_utils
+import recovar.core.mask as mask
 import recovar.utils as utils
 
 pytestmark = pytest.mark.unit
@@ -469,7 +469,7 @@ class TestMakeMask:
         rng = np.random.RandomState(seed)
         vol = np.zeros(shape, dtype=np.float32)
         s = signal_range
-        vol[s[0]:s[1], s[0]:s[1], s[0]:s[1]] = 5.0
+        vol[s[0] : s[1], s[0] : s[1], s[0] : s[1]] = 5.0
         return vol + rng.randn(*shape).astype(np.float32) * noise
 
     def test_output_shape_and_range(self):
@@ -535,6 +535,7 @@ class TestMakeMask:
 
     def test_mask_is_connected_with_cleanup(self):
         from scipy.ndimage import label as scipy_label
+
         vol = self._make_test_volume()
         result = mask.make_mask(vol, cleanup=True)
         binary = result > 0.5
@@ -638,9 +639,7 @@ def test_keep_input_mask_dilated_not_all_ones(tmp_path):
     mrc_path = tmp_path / "soft_mask.mrc"
     utils.write_mrc(str(mrc_path), soft, voxel_size=1.0)
 
-    volume_mask, dilated_volume_mask = mask.masking_options(
-        str(mrc_path), None, (N, N, N), np.float32, 0, True, None
-    )
+    volume_mask, dilated_volume_mask = mask.masking_options(str(mrc_path), None, (N, N, N), np.float32, 0, True, None)
 
     foreground = float(np.mean(np.asarray(dilated_volume_mask) > 0.5))
     assert foreground < 0.5, (

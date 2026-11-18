@@ -6,7 +6,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from recovar.data_io import image_backends as cryo_dataset, cryoem_dataset as dataset, halfsets, starfile
+from recovar.data_io import halfsets, starfile
+from recovar.data_io import image_backends as cryo_dataset
 from recovar.data_io._index_utils import TiltSeriesOriginalIndexMap
 
 pytestmark = pytest.mark.unit

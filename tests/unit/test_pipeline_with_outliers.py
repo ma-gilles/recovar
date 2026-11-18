@@ -98,16 +98,11 @@ def _make_args(tmp_path, *, tilt_series=False):
         (3, True, True),
     ],
 )
-def test_pipeline_with_outliers_junk_detection_round_schedule(
-    tmp_path, round_number, every_round, expected
-):
+def test_pipeline_with_outliers_junk_detection_round_schedule(tmp_path, round_number, every_round, expected):
     args = _make_args(tmp_path)
     args.use_junk_detection = True
     args.junk_detection_every_round = every_round
-    assert (
-        pipeline_with_outliers._use_junk_detection_for_round(args, round_number)
-        is expected
-    )
+    assert pipeline_with_outliers._use_junk_detection_for_round(args, round_number) is expected
 
 
 def test_pipeline_with_outliers_junk_detection_disabled_for_all_rounds(tmp_path):

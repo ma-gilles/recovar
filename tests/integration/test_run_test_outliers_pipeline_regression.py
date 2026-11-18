@@ -58,25 +58,23 @@ For cryo-ET the same keys exist at the particle level:
 from __future__ import annotations
 
 import json
-import math
 import os
 import pickle
 import shlex
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Optional
 
 import numpy as np
 import pytest
-
 from conftest import gpu_subprocess_env
-from helpers.metrics_regression import compare_metric, metric_direction, log_comparison_table
+from helpers.metrics_regression import log_comparison_table
 from helpers.perf_regression import (
-    perf_snapshot,
-    stage_perf,
     build_perf_record,
     check_perf_regression,
+    perf_snapshot,
     run_tracked_subprocess,
+    stage_perf,
 )
 
 pytestmark = [pytest.mark.integration, pytest.mark.slow]
@@ -227,9 +225,9 @@ def _run_outliers_pipeline(
         run_tracked_subprocess(make_cmd, check=True, env=env)
 
     # -- compute GT union mask from synthetic volumes ------------------------
-    from recovar.simulation import synthetic_dataset
-    from recovar.output import metrics as gt_metrics
     from recovar import utils as recovar_utils
+    from recovar.output import metrics as gt_metrics
+    from recovar.simulation import synthetic_dataset
 
     sim_info_path = dataset_dir / "simulation_info.pkl"
     gt_thing = synthetic_dataset.load_heterogeneous_reconstruction(str(sim_info_path))
@@ -648,9 +646,9 @@ def test_outliers_pipeline_cryo_et_regression_against_baseline(tmp_path):
         run_tracked_subprocess(make_cmd, check=True, env=env)
 
     # Compute GT union mask from synthetic volumes
-    from recovar.simulation import synthetic_dataset
-    from recovar.output import metrics as gt_metrics
     from recovar import utils as recovar_utils
+    from recovar.output import metrics as gt_metrics
+    from recovar.simulation import synthetic_dataset
 
     sim_info_path = dataset_dir / "simulation_info.pkl"
     assert sim_info_path.exists()

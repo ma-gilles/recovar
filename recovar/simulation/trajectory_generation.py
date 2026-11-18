@@ -378,11 +378,11 @@ def generate_trajectory_volumes(
     str
         Volume prefix path (e.g. ``<dir>/vol`` for files vol0000.mrc, ...).
     """
+    import recovar.core.fourier_transform_utils as ftu
+    from recovar import utils
+    from recovar.output import output as output_module
     from recovar.simulation import simulate_scattering_potential as ssp
     from recovar.simulation.pdb_utils import AtomGroup
-    from recovar.output import output as output_module
-    from recovar import utils
-    import recovar.core.fourier_transform_utils as ftu
 
     if voxel_size is None:
         voxel_size = 4.25 * 128 / grid_size

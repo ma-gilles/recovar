@@ -256,6 +256,8 @@ class TiltSeriesDataset(ParticleImageDataset):
         star = starfile.StarFile.load(starfile_path)
         logger.info("STAR file parsed in %.2fs", time.time() - start_time)
 
+        if star.df is None:
+            raise ValueError(f"No data table found in {starfile_path}")
         canonical_groups = self._get_canonical_groups(star.df)
         tilt_numbers = self._compute_tilt_numbers(star.df, canonical_groups, tilt_file_option)
 
@@ -293,7 +295,7 @@ class TiltSeriesDataset(ParticleImageDataset):
         self.dose_per_tilt = dose_per_tilt
         self.tilt_angles = None
 
-        group_counts = Counter(star.df["_rlnGroupName"])
+        group_counts: Counter = Counter(star.df["_rlnGroupName"])
         logger.info("Loaded %d tilts for %d particles", self.N, self.num_particles)
         logger.info("Tilts per particle: %s", set(group_counts.values()))
         logger.info("Dataset loaded in %.2fs", time.time() - start_time)
@@ -382,6 +384,8 @@ class TiltSeriesDataset(ParticleImageDataset):
     def parse_particle_tilt(cls, starfile_path: str, indices: Optional[np.ndarray] = None):
         star = starfile.StarFile.load(starfile_path)
         df = star.df
+        if df is None:
+            raise ValueError(f"No data table found in {starfile_path}")
 
         if "_rlnGroupName" not in df.columns:
             raise ValueError("STAR data is missing required column: _rlnGroupName")
@@ -405,6 +409,8 @@ class TiltSeriesDataset(ParticleImageDataset):
     def parse_micrograph_tilt_mapping(cls, starfile_path: str):
         star = starfile.StarFile.load(starfile_path)
         df = star.df
+        if df is None:
+            raise ValueError(f"No data table found in {starfile_path}")
 
         # STAR labels are represented canonically with their leading underscore.
         # RECOVAR-native files use _rlnTiltName; RELION 5 uses
@@ -734,9 +740,7 @@ class _ImageCountBatchLoader:
         self.pad_to_batch = pad_to_batch
 
         effective_num_tilts = getattr(dataset, "num_tilts", None)
-        particle_tilts_list, effective_num_tilts, tilt_numbers = _resolve_particle_tilts(
-            dataset, effective_num_tilts
-        )
+        particle_tilts_list, effective_num_tilts, tilt_numbers = _resolve_particle_tilts(dataset, effective_num_tilts)
 
         if particle_tilts_list is None:
             particle_groups = getattr(dataset, "particle_groups", None)
@@ -748,12 +752,12 @@ class _ImageCountBatchLoader:
                 )
             particle_tilts_list = list(particle_groups.values())[: len(dataset)]
 
-        self.tilts_counts = []
+        tilt_counts = []
         for particle_tilts in particle_tilts_list:
             n_actual = _selected_tilt_count(particle_tilts, effective_num_tilts, tilt_numbers)
-            self.tilts_counts.append(n_actual)
+            tilt_counts.append(n_actual)
 
-        self.tilts_counts = np.asarray(self.tilts_counts, dtype=np.int32)
+        self.tilts_counts = np.asarray(tilt_counts, dtype=np.int32)
         self.total_images = int(np.sum(self.tilts_counts, dtype=np.int64))
         self._n_batches = self._compute_n_batches(self.tilts_counts, self.batch_size)
 

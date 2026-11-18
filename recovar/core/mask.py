@@ -256,7 +256,8 @@ def make_mask_from_half_maps(halfmap1, halfmap2, smax=3, method="auto", **kwargs
     ``method="local_correlation"``.
 
     Args:
-        halfmap1, halfmap2: Real-space half-map volumes (same shape).
+        halfmap1: First real-space half-map volume.
+        halfmap2: Second half-map volume with the same shape.
         smax: Kernel radius in pixels (only for ``method="local_correlation"``).
         method: ``"auto"`` or ``"local_correlation"``.
         **kwargs: Forwarded to :func:`make_mask` (``threshold``,

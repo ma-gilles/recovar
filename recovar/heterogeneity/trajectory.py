@@ -2,9 +2,9 @@
 
 import logging
 
+import matplotlib.pyplot as plt
 import numpy as np
 import scipy.ndimage
-import matplotlib.pyplot as plt
 
 from recovar.heterogeneity import fast_marching, latent_density
 

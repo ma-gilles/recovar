@@ -125,10 +125,7 @@ def run_pipeline_with_outlier_removal():
 
 
 def _use_junk_detection_for_round(args, round_number):
-    return bool(
-        args.use_junk_detection
-        and (round_number == 1 or getattr(args, "junk_detection_every_round", False))
-    )
+    return bool(args.use_junk_detection and (round_number == 1 or getattr(args, "junk_detection_every_round", False)))
 
 
 def _run_pipeline_with_outlier_removal_impl(args):

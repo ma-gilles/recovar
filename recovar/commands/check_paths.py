@@ -13,6 +13,7 @@ import argparse
 import logging
 import os
 import sys
+
 import numpy as np
 
 logger = logging.getLogger(__name__)

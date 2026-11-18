@@ -19,10 +19,8 @@ import sys
 import textwrap
 from pathlib import Path
 
-
 import numpy as np
 import pytest
-
 from helpers.metrics_regression import log_comparison_table
 from helpers.perf_regression import (
     build_perf_record,
@@ -120,9 +118,9 @@ def _run_pipeline(
     noise_model: str | None = None,
     tilt_series: bool = False,
 ) -> Path:
-    from recovar.simulation import synthetic_dataset
-    from recovar.output import metrics
     from recovar import utils
+    from recovar.output import metrics
+    from recovar.simulation import synthetic_dataset
 
     sim_info_path = str(dataset_dir / "simulation_info.pkl")
     gt = synthetic_dataset.load_heterogeneous_reconstruction(sim_info_path)
@@ -169,18 +167,18 @@ def _run_pipeline(
 def _select_latent_points(
     pipeline_output_dir: Path, dataset_dir: Path, tilt_series: bool = False
 ) -> tuple[np.ndarray, list[int]]:
-    from recovar.output import output
     from recovar.commands.run_test_all_metrics import (
-        select_state_target_latent_points,
         load_unsorted_embedding_component,
+        select_state_target_latent_points,
     )
+    from recovar.output import output
 
     sim_info_path = str(dataset_dir / "simulation_info.pkl")
     with open(sim_info_path, "rb") as f:
         sim_info = pickle.load(f)
 
     po = output.PipelineOutput(str(pipeline_output_dir))
-    embedding_cache = {}
+    embedding_cache: dict = {}
     unsorted_zs = load_unsorted_embedding_component(po, "latent_coords", _ZDIM, cache=embedding_cache)
 
     n_zs = unsorted_zs.shape[0]
@@ -278,10 +276,10 @@ def _run_old_compute_state(converted_pipeline_dir: Path, latent_points: np.ndarr
     return state_out
 
 
-def _extract_volumes_real_space(state_dir: Path, n_vols: int, style: str = "new") -> list[np.ndarray]:
+def _extract_volumes_real_space(state_dir: Path, n_vols: int, style: str = "new") -> list[np.ndarray | None]:
     from recovar import utils
 
-    vols = []
+    vols: list[np.ndarray | None] = []
     for i in range(n_vols):
         if style == "new":
             vol_path = state_dir / f"state{i:03d}.mrc"
@@ -444,7 +442,7 @@ def test_compute_state_regression_spa(tmp_path):
     print(f"BASELINE: {json.dumps(baseline, indent=2, default=float)}")
 
     if checked > 0:
-        assert not failures, f"compute_state SPA regressed vs baseline:\n" + "\n".join(failures)
+        assert not failures, "compute_state SPA regressed vs baseline:\n" + "\n".join(failures)
 
 
 def test_compute_state_regression_et(tmp_path):
@@ -464,7 +462,7 @@ def test_compute_state_regression_et(tmp_path):
     print(f"BASELINE: {json.dumps(baseline, indent=2, default=float)}")
 
     if checked > 0:
-        assert not failures, f"compute_state ET regressed vs baseline:\n" + "\n".join(failures)
+        assert not failures, "compute_state ET regressed vs baseline:\n" + "\n".join(failures)
 
 
 def test_compute_state_regression_et_premultiplied_radial_per_tilt(tmp_path):
@@ -501,4 +499,4 @@ def test_compute_state_regression_et_premultiplied_radial_per_tilt(tmp_path):
     print(f"BASELINE: {json.dumps(baseline, indent=2, default=float)}")
 
     if checked > 0:
-        assert not failures, f"compute_state ET premultiplied regressed vs baseline:\n" + "\n".join(failures)
+        assert not failures, "compute_state ET premultiplied regressed vs baseline:\n" + "\n".join(failures)

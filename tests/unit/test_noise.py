@@ -1,8 +1,11 @@
+import jax
+import jax.numpy as jnp
 import numpy as np
 import pytest
 
 pytest.importorskip("jax")
 
+import recovar.core.fourier_transform_utils as fourier_transform_utils
 import recovar.reconstruction.noise as noise
 
 pytestmark = pytest.mark.unit
@@ -100,6 +103,7 @@ def test_variable_radial_noise_model_via_dataset_1d_broadcast():
     """Test the fix: set_variable_radial_noise_model with 1D input
     broadcasts to 2D so VariableRadialNoiseModel.get() doesn't crash."""
     import jax.numpy as jnp
+
     from recovar import core
 
     # Simulate a CryoEMDataset-like object with CTF_params that have
@@ -221,9 +225,6 @@ def test_to_batched_pixel_noise_normalizes_common_shapes():
 # GPU tests – verify CPU/GPU numerical equivalence
 # ---------------------------------------------------------------------------
 
-import jax
-import jax.numpy as jnp
-
 
 @pytest.mark.gpu
 def test_make_radial_noise_gpu(gpu_device):
@@ -306,8 +307,6 @@ def test_get_masked_noise_variance_gpu(gpu_device):
 # ---------------------------------------------------------------------------
 # Half-image noise equivalence tests
 # ---------------------------------------------------------------------------
-
-import recovar.core.fourier_transform_utils as fourier_transform_utils
 
 
 def test_make_radial_noise_half_matches_full_extraction():

@@ -6,8 +6,7 @@ import pytest
 
 pytest.importorskip("jax")
 
-from recovar.output import output
-from recovar.output import plot_utils
+from recovar.output import output, plot_utils
 
 pytestmark = pytest.mark.unit
 

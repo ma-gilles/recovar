@@ -8,10 +8,7 @@ import logging
 
 import equinox as eqx
 import jax
-import jax.numpy as jnp
 from jax import vjp
-
-logger = logging.getLogger(__name__)
 
 from recovar.core.configs import ForwardModelConfig
 from recovar.core.geometry import translate_images
@@ -19,6 +16,8 @@ from recovar.core.slicing import (
     adjoint_slice_volume,
     slice_volume,
 )
+
+logger = logging.getLogger(__name__)
 
 
 @eqx.filter_jit
@@ -64,7 +63,10 @@ def forward_model_and_adjoint(
     skip_ctf: bool = False,
 ):
     """Forward model plus its VJP (adjoint) closure."""
-    f = lambda v: forward_model(config, v, ctf_params, rotation_matrices, skip_ctf)
+
+    def f(v):
+        return forward_model(config, v, ctf_params, rotation_matrices, skip_ctf)
+
     slices, f_adj = vjp(f, volume)
     return slices, f_adj
 
@@ -76,7 +78,7 @@ def adjoint_forward_model(
     ctf_params: jax.Array,
     rotation_matrices: jax.Array,
     skip_ctf: bool = False,
-    volume: jax.Array = None,
+    volume: jax.Array | None = None,
     half_image: bool = False,
     half_volume: bool = False,
 ) -> jax.Array:
@@ -119,7 +121,10 @@ def compute_AtAv(
     skip_ctf: bool = False,
 ) -> jax.Array:
     """Compute A^T (A v / noise_variance) for normal equations."""
-    f = lambda v: forward_model(config, v, ctf_params, rotation_matrices, skip_ctf)
+
+    def f(v):
+        return forward_model(config, v, ctf_params, rotation_matrices, skip_ctf)
+
     y, u = vjp(f, volume)
     return u(y / noise_variance)
 

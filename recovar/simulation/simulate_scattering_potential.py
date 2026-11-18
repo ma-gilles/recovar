@@ -9,8 +9,15 @@ Created on Thu Sep 30 16:04:24 2021
 import json
 import logging
 import os
+from collections import defaultdict
 
 import finufft
+import numpy as np
+
+import recovar.core.fourier_transform_utils as fourier_transform_utils
+from recovar.simulation.pdb_utils import AtomGroup as _AtomGroup
+from recovar.simulation.pdb_utils import parse_pdb as _parse_pdb
+from recovar.simulation.pdb_utils import write_pdb as _write_pdb
 
 logger = logging.getLogger(__name__)
 
@@ -21,8 +28,6 @@ try:
     _HAS_PRODY = True
 except ImportError:
     _HAS_PRODY = False
-
-from recovar.simulation.pdb_utils import AtomGroup as _AtomGroup, parse_pdb as _parse_pdb, write_pdb as _write_pdb
 
 
 def _parsePDB(path_or_id):
@@ -46,10 +51,6 @@ def _newAtomGroup():
         return _prody.AtomGroup()
     return _AtomGroup()
 
-
-import numpy as np
-from collections import defaultdict
-import recovar.core.fourier_transform_utils as fourier_transform_utils
 
 FINUFFT_EPS = 1e-8
 
@@ -319,7 +320,10 @@ def generate_volume_from_atom_positions_and_types(
     output_shape = freq_coords.shape[0] if use_freq_coords else 3 * [grid_size]
     density = np.zeros(output_shape, dtype=out_complex_dtype)
     for atom_name in atoms_grouped_by_elements:
-        atom_shape_fn = lambda x: five_gaussian_atom_shape(x, atom_coeffs[atom_name])
+
+        def atom_shape_fn(x):
+            return five_gaussian_atom_shape(x, atom_coeffs[atom_name])
+
         if use_freq_coords:
             xx = generate_spectrum_of_molecule_from_atom_coords_at_freq_coords(
                 atoms_grouped_by_elements[atom_name],

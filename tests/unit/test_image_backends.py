@@ -1,9 +1,9 @@
+import threading
 from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
 import pytest
-import threading
 from helpers import tiny_synthetic
 
 from recovar.core import fourier_transform_utils
@@ -584,9 +584,7 @@ def test_tiltseries_dataset_num_tilts_does_not_backfill_missing_global_tilts(mon
     monkeypatch.setattr(image_backends.ImageLoader, "from_file", lambda *args, **kwargs: _Source())
     monkeypatch.setattr(image_backends.starfile.StarFile, "load", lambda _p: SimpleNamespace(df=df))
 
-    ds = image_backends.TiltSeriesDataset(
-        "dummy.star", num_tilts=2, random_tilts=False, tilt_file_option="relion5"
-    )
+    ds = image_backends.TiltSeriesDataset("dummy.star", num_tilts=2, random_tilts=False, tilt_file_option="relion5")
 
     np.testing.assert_array_equal(ds.tilt_numbers, np.array([0, 1, 2, 1, 2, 3], dtype=np.int32))
     np.testing.assert_array_equal(ds[0][2], np.array([0, 1], dtype=np.int32))

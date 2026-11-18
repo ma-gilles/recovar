@@ -41,14 +41,19 @@ import pickle
 import shlex
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, Optional
 
 import numpy as np
 import pytest
-
 from conftest import gpu_subprocess_env
-from helpers.metrics_regression import compare_metric, metric_direction, log_comparison_table
-from helpers.perf_regression import perf_snapshot, stage_perf, build_perf_record, check_perf_regression, run_tracked_subprocess
+from helpers.metrics_regression import log_comparison_table
+from helpers.perf_regression import (
+    build_perf_record,
+    check_perf_regression,
+    perf_snapshot,
+    run_tracked_subprocess,
+    stage_perf,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -500,9 +505,9 @@ def test_pipeline_spa_with_ind_regression(tmp_path):
         pickle.dump(ind, f)
 
     # Compute GT union mask from synthetic volumes
-    from recovar.simulation import synthetic_dataset
-    from recovar.output import metrics as gt_metrics
     from recovar import utils as recovar_utils
+    from recovar.output import metrics as gt_metrics
+    from recovar.simulation import synthetic_dataset
 
     sim_info_path = dataset_dir / "simulation_info.pkl"
     assert sim_info_path.exists(), f"simulation_info.pkl missing: {sim_info_path}"
@@ -623,9 +628,9 @@ def test_pipeline_cryo_et_with_particle_ind_regression(tmp_path):
         sim_info = pickle.load(f)
 
     # Compute GT union mask from synthetic volumes
-    from recovar.simulation import synthetic_dataset
-    from recovar.output import metrics as gt_metrics
     from recovar import utils as recovar_utils
+    from recovar.output import metrics as gt_metrics
+    from recovar.simulation import synthetic_dataset
 
     gt_thing = synthetic_dataset.load_heterogeneous_reconstruction(str(sim_info_path))
     volume_shape = (grid_size, grid_size, grid_size)

@@ -12,14 +12,28 @@ from __future__ import annotations
 import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from typing import TypedDict
 
 
-def parse_junit_xml(path: Path) -> dict:
+class TestSummary(TypedDict):
+    name: str
+    skipped: int
+    tests: int
+    fail: int
+    time: float
+    status: str
+
+
+def parse_junit_xml(path: Path) -> TestSummary:
     """Extract top-level stats from a JUnit XML file."""
+    empty: TestSummary = {"name": path.stem, "tests": 0, "skipped": 0, "fail": 0, "time": 0.0, "status": "MISSING"}
+    if not path.is_file():
+        return empty
     try:
         tree = ET.parse(path)
     except ET.ParseError:
-        return {"name": path.stem, "tests": 0, "fail": 0, "error": 0, "time": 0.0, "status": "PARSE_ERROR"}
+        empty["status"] = "PARSE_ERROR"
+        return empty
 
     root = tree.getroot()
     # Handle both <testsuites> and <testsuite> as root
@@ -59,17 +73,11 @@ def main() -> None:
         print("Usage: summarize_test_results.py <junit_xml> [<junit_xml> ...]", file=sys.stderr)
         sys.exit(2)
 
-    results = []
-    for arg in sys.argv[1:]:
-        p = Path(arg)
-        if not p.exists():
-            results.append({"name": p.stem, "tests": 0, "fail": 0, "time": 0.0, "status": "MISSING"})
-        else:
-            results.append(parse_junit_xml(p))
+    results = [parse_junit_xml(Path(arg)) for arg in sys.argv[1:]]
 
     total_tests = sum(r["tests"] for r in results)
     total_fail = sum(r["fail"] for r in results)
-    total_skipped = sum(r.get("skipped", 0) for r in results)
+    total_skipped = sum(r["skipped"] for r in results)
     total_time = sum(r["time"] for r in results)
     all_pass = all(r["status"] == "PASS" for r in results)
 
@@ -84,7 +92,7 @@ def main() -> None:
         else:
             group = name
         print(
-            f"  {group:20s} {r['status']:5s}  tests={r['tests']:4d}  fail={r['fail']:2d}  skip={r.get('skipped', 0):3d}  time={r['time']:.1f}s"
+            f"  {group:20s} {r['status']:5s}  tests={r['tests']:4d}  fail={r['fail']:2d}  skip={r['skipped']:3d}  time={r['time']:.1f}s"
         )
 
     overall = "PASS" if all_pass else "FAIL"

@@ -177,8 +177,11 @@ def get_pose_ctf_generator(option):
     elif option == "dataset1":
         return get_params_generator(load_first_dataset_params)
     elif option == "nonuniform":
-        f = lambda x, y=0, z=0: random_sampling_scheme(x, y, z, uniform=False)
-        return f
+
+        def nonuniform(x, y=0, z=0):
+            return random_sampling_scheme(x, y, z, uniform=False)
+
+        return nonuniform
     elif option == "kent":
         return kent_sampling_scheme
     elif isinstance(option, list):

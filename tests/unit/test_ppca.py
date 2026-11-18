@@ -1,3 +1,5 @@
+# Dependency-gated imports follow pytest.importorskip.
+# ruff: noqa: E402
 from types import SimpleNamespace
 
 import numpy as np

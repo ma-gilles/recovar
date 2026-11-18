@@ -1,3 +1,5 @@
+# Dependency-gated imports follow pytest.importorskip.
+# ruff: noqa: E402
 """End-to-end test: multi-mask PPCA on CryoBench Ribosembly data.
 
 Uses real Ribosembly volumes (4 states, downsampled to 64³) to build an

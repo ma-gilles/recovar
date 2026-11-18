@@ -45,6 +45,9 @@ plugins:
         python:
           options:
             docstring_style: google
+            docstring_options:
+              # The API reference also covers unannotated scientific helpers.
+              warn_missing_types: false
             show_source: false
             show_root_heading: true
             members_order: source

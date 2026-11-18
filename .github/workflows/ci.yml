@@ -87,4 +87,4 @@ jobs:
         run: pip install mkdocs-material mkdocstrings[python]
 
       - name: Build docs (strict)
-        run: mkdocs build --strict 2>&1 || echo "::warning::mkdocs build had warnings"
+        run: mkdocs build --strict

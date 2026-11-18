@@ -15,6 +15,7 @@ import subprocess
 import threading
 import time
 import warnings
+from collections.abc import Mapping
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +74,7 @@ def get_hardware_info():
     }
 
 
-def _parse_visible_gpu_indices(env: dict | None = None) -> list[int] | None:
+def _parse_visible_gpu_indices(env: Mapping[str, str] | None = None) -> list[int] | None:
     env = os.environ if env is None else env
     raw = env.get("CUDA_VISIBLE_DEVICES") or env.get("NVIDIA_VISIBLE_DEVICES")
     if not raw:
@@ -92,7 +93,7 @@ def _parse_visible_gpu_indices(env: dict | None = None) -> list[int] | None:
     return visible
 
 
-def _read_nvidia_smi_gpu_bytes(env: dict | None = None) -> int:
+def _read_nvidia_smi_gpu_bytes(env: Mapping[str, str] | None = None) -> int:
     """Return max visible-GPU memory in bytes from ``nvidia-smi``."""
     try:
         result = subprocess.run(
@@ -166,7 +167,7 @@ def run_tracked_subprocess(*popenargs, poll_interval_s: float = 0.2, **kwargs):
         peak_holder["bytes"] = max(peak_holder["bytes"], _read_nvidia_smi_gpu_bytes(env))
         _record_tracked_gpu_peak_bytes(peak_holder["bytes"])
 
-    result.gpu_peak_bytes = peak_holder["bytes"]
+    setattr(result, "gpu_peak_bytes", peak_holder["bytes"])
     return result
 
 

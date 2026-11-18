@@ -1,3 +1,5 @@
+# Dependency-gated imports follow pytest.importorskip.
+# ruff: noqa: E402
 import logging
 from types import SimpleNamespace
 

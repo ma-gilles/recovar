@@ -10,7 +10,7 @@ interchangeably.
 from __future__ import annotations
 
 import logging
-from typing import Optional, Tuple
+from typing import Tuple
 
 import numpy as np
 from scipy.spatial.transform import Rotation as SciPyRot
@@ -45,9 +45,9 @@ def parse_poses_from_star(
     n = len(sf)
 
     # --- Euler angles → rotation matrices ---
-    rot_col = sf.get_optics_values("_rlnAngleRot", dtype=np.float64)
-    tilt_col = sf.get_optics_values("_rlnAngleTilt", dtype=np.float64)
-    psi_col = sf.get_optics_values("_rlnAnglePsi", dtype=np.float64)
+    rot_col = sf.get_optics_values("_rlnAngleRot", dtype=np.dtype(np.float64))
+    tilt_col = sf.get_optics_values("_rlnAngleTilt", dtype=np.dtype(np.float64))
+    psi_col = sf.get_optics_values("_rlnAnglePsi", dtype=np.dtype(np.float64))
 
     if rot_col is None or tilt_col is None or psi_col is None:
         raise ValueError(
@@ -61,8 +61,8 @@ def parse_poses_from_star(
     # --- Translations ---
     # RELION 3.1: _rlnOriginXAngst / _rlnOriginYAngst (Angstroms)
     # RELION 3.0: _rlnOriginX / _rlnOriginY (pixels)
-    tx = sf.get_optics_values("_rlnOriginXAngst", dtype=np.float64)
-    ty = sf.get_optics_values("_rlnOriginYAngst", dtype=np.float64)
+    tx = sf.get_optics_values("_rlnOriginXAngst", dtype=np.dtype(np.float64))
+    ty = sf.get_optics_values("_rlnOriginYAngst", dtype=np.dtype(np.float64))
 
     if tx is not None and ty is not None:
         # Convert Angstroms → fractional via pixel size
@@ -75,8 +75,8 @@ def parse_poses_from_star(
         trans_pixels = np.stack([tx / apix, ty / apix], axis=1)  # (N, 2)
     else:
         # Try RELION 3.0 pixel-unit columns
-        tx = sf.get_optics_values("_rlnOriginX", dtype=np.float64)
-        ty = sf.get_optics_values("_rlnOriginY", dtype=np.float64)
+        tx = sf.get_optics_values("_rlnOriginX", dtype=np.dtype(np.float64))
+        ty = sf.get_optics_values("_rlnOriginY", dtype=np.dtype(np.float64))
         if tx is not None and ty is not None:
             trans_pixels = np.stack([tx, ty], axis=1)
         else:
@@ -102,7 +102,7 @@ def parse_ctf_from_star(
     Args:
         star_path: Path to .star file.
         D: Target image dimension in pixels. Pixel size is adjusted
-           for the ratio ``original_D / D``.
+            for the ratio ``original_D / D``.
 
     Returns:
         ``(N, 8)`` array with columns
@@ -112,27 +112,21 @@ def parse_ctf_from_star(
     sf = StarFile.load(star_path)
     n = len(sf)
 
-    # Required fields
-    dfu = sf.get_optics_values("_rlnDefocusU", dtype=np.float64)
-    dfv = sf.get_optics_values("_rlnDefocusV", dtype=np.float64)
-    dfang = sf.get_optics_values("_rlnDefocusAngle", dtype=np.float64)
-    volt = sf.get_optics_values("_rlnVoltage", dtype=np.float64)
-    cs = sf.get_optics_values("_rlnSphericalAberration", dtype=np.float64)
-    w = sf.get_optics_values("_rlnAmplitudeContrast", dtype=np.float64)
-
-    for name, val in [
-        ("_rlnDefocusU", dfu),
-        ("_rlnDefocusV", dfv),
-        ("_rlnDefocusAngle", dfang),
-        ("_rlnVoltage", volt),
-        ("_rlnSphericalAberration", cs),
-        ("_rlnAmplitudeContrast", w),
-    ]:
-        if val is None:
+    def required_ctf_field(name: str) -> np.ndarray:
+        values = sf.get_optics_values(name, dtype=np.dtype(np.float64))
+        if values is None:
             raise ValueError(f"STAR file missing required CTF field {name}. Provide a --ctf pkl file instead.")
+        return values
+
+    dfu = required_ctf_field("_rlnDefocusU")
+    dfv = required_ctf_field("_rlnDefocusV")
+    dfang = required_ctf_field("_rlnDefocusAngle")
+    volt = required_ctf_field("_rlnVoltage")
+    cs = required_ctf_field("_rlnSphericalAberration")
+    w = required_ctf_field("_rlnAmplitudeContrast")
 
     # Optional: phase shift (default 0)
-    phase = sf.get_optics_values("_rlnPhaseShift", dtype=np.float64)
+    phase = sf.get_optics_values("_rlnPhaseShift", dtype=np.dtype(np.float64))
     if phase is None:
         phase = np.zeros(n, dtype=np.float64)
 

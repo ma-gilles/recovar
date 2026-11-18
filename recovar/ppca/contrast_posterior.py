@@ -151,8 +151,8 @@ def make_contrast_quadrature(
         # Map from [-1, 1] to [c_min, c_max]
         half_len = 0.5 * (c_max - c_min)
         mid = 0.5 * (c_min + c_max)
-        out_nodes = mid + half_len * ref_nodes
-        out_weights = half_len * ref_weights
+        out_nodes: np.ndarray = mid + half_len * ref_nodes
+        out_weights: np.ndarray = half_len * ref_weights
         return jnp.array(out_nodes, dtype=jnp.float32), jnp.array(out_weights, dtype=jnp.float32)
 
     elif rule == "trapezoid":
