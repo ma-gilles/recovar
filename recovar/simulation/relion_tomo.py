@@ -284,6 +284,13 @@ def generate_relion5_tomo_dataset(
     solvent_contrast_a=None,
     solvent_contrast_B=None,
     atomic_bfactor=None,
+    particle_coordinates=None,
+    particle_tomograms=None,
+    particle_random_subset=None,
+    extra_particle_columns=None,
+    particle_volume_fn=None,
+    particle_volume_grid_size=None,
+    max_volume_bytes=2**31,
 ):
     """Write a simulated RELION 5 subtomogram (2D-stack) project to ``output_folder``.
 
@@ -342,6 +349,26 @@ def generate_relion5_tomo_dataset(
         on by default; pass ``atomic_solvent_correction=False`` for experimental
         or already-corrected maps. Each optics group gets the operator on its own
         grid, and the record is stored in ``simulation_info`` for ground-truth loading.
+    particle_coordinates : array of shape (n_particles, 3) or None
+        Centred 3D coordinates in A (``rlnCenteredCoordinate{X,Y,Z}Angst``). None draws
+        them uniformly in the tomogram. The other random draws do not depend on it.
+    particle_tomograms : array of shape (n_particles,) or None
+        Tomogram index of each particle; None spreads particles round-robin.
+    particle_random_subset : array of shape (n_particles,) or None
+        ``rlnRandomSubset`` (1 or 2) of each particle, e.g. one half per filament; None
+        draws a balanced random split.
+    extra_particle_columns : dict or None
+        Extra particle-table columns (``{"_rlnHelicalTubeID": values, ...}``), written as given.
+    particle_volume_fn : callable or None
+        ``particle_volume_fn(particle_indices) -> (B, M**3)`` flat centred Fourier volumes in
+        recovar's frame on the ``(voxel_size, M)`` grid, ``M = particle_volume_grid_size``
+        (default ``grid_size``): each particle is imaged from its own volume
+        (:func:`optics_groups.simulate_per_particle_volumes`) instead of a volume of
+        ``volumes_path_root`` chosen by ``volume_distribution``. ``volumes_path_root`` is then
+        unused, the volumes are taken as given (``atomic_solvent_correction`` must be False)
+        and every optics setting must use ``voxel_size`` and ``grid_size``. ``snr`` None or inf
+        writes noise-free images on this path, and the noise probe spreads over 8 particles.
+        Volumes are built in blocks of at most ``max_volume_bytes``.
 
     Returns
     -------
@@ -364,16 +391,25 @@ def generate_relion5_tomo_dataset(
     solvent_record = solvent_contrast.record_from_options(
         atomic_solvent_correction, voxel_size, grid_size, solvent_contrast_a, solvent_contrast_B, atomic_bfactor
     )
-    volumes = simulator.load_volumes_from_folder(
-        volumes_path_root, grid_size, trailing_zero_format_in_vol_name, normalize=False
-    )
-    scale_vol = 1 / np.mean(np.linalg.norm(volumes, axis=-1))
-    volumes = volumes * scale_vol
-    if solvent_record["enabled"]:
-        volumes = solvent_contrast.apply_record(volumes, solvent_record)
-    volume_distribution = (
-        np.ones(volumes.shape[0]) / volumes.shape[0] if volume_distribution is None else volume_distribution
-    )
+    if particle_volume_fn is None:
+        volumes = simulator.load_volumes_from_folder(
+            volumes_path_root, grid_size, trailing_zero_format_in_vol_name, normalize=False
+        )
+        scale_vol = 1 / np.mean(np.linalg.norm(volumes, axis=-1))
+        volumes = volumes * scale_vol
+        if solvent_record["enabled"]:
+            volumes = solvent_contrast.apply_record(volumes, solvent_record)
+        volume_distribution = (
+            np.ones(volumes.shape[0]) / volumes.shape[0] if volume_distribution is None else volume_distribution
+        )
+    else:
+        if solvent_record["enabled"]:
+            raise ValueError("particle_volume_fn volumes are used as given; pass atomic_solvent_correction=False")
+        for setting in settings:
+            if setting["pixel_size"] != voxel_size or setting["box_size"] != grid_size:
+                raise ValueError("particle_volume_fn needs every optics setting on (voxel_size, grid_size)")
+        volumes, scale_vol = None, 1.0
+        particle_volume_grid_size = grid_size if particle_volume_grid_size is None else int(particle_volume_grid_size)
 
     # ---- Tomograms and tilt series ----
     tilt_angles, acquisition_index = dose_symmetric_tilt_scheme(max_tilt, tilt_step)
@@ -430,10 +466,18 @@ def generate_relion5_tomo_dataset(
 
     # ---- Particles ----
     particle_tomo = np.arange(n_particles) % n_tomograms
+    if particle_tomograms is not None:
+        particle_tomo = np.asarray(particle_tomograms, dtype=int)
+        if particle_tomo.shape != (n_particles,) or particle_tomo.min() < 0 or particle_tomo.max() >= n_tomograms:
+            raise ValueError(f"particle_tomograms must be ({n_particles},) indices below {n_tomograms}")
     particle_index = np.array([np.sum(particle_tomo[:p] == particle_tomo[p]) + 1 for p in range(n_particles)])
     half_extent = 0.4 * np.asarray(tomogram_size, dtype=float) * voxel_size
     half_extent[2] = 0.3 * tomogram_size[2] * voxel_size
     coords = rng.uniform(-half_extent, half_extent, size=(n_particles, 3))
+    if particle_coordinates is not None:
+        coords = np.asarray(particle_coordinates, dtype=np.float64)
+        if coords.shape != (n_particles, 3) or not np.all(np.isfinite(coords)):
+            raise ValueError(f"particle_coordinates must be finite with shape ({n_particles}, 3), got {coords.shape}")
     if particle_eulers is None:
         eulers = Rotation.random(n_particles, random_state=seed).as_euler("ZYZ", degrees=True)
     else:
@@ -468,6 +512,13 @@ def generate_relion5_tomo_dataset(
             "_rlnTomoVisibleFrames": [_visible_frames_string(v) for v in visible],
         }
     )
+    if particle_random_subset is not None:
+        subsets = np.asarray(particle_random_subset, dtype=int)
+        if subsets.shape != (n_particles,) or not np.all(np.isin(subsets, (1, 2))):
+            raise ValueError(f"particle_random_subset must be ({n_particles},) values in {{1, 2}}")
+        particles_df["_rlnRandomSubset"] = subsets
+    for column, values in (extra_particle_columns or {}).items():
+        particles_df[column] = values
     optics_df = pd.DataFrame(
         {
             "_rlnOpticsGroup": np.arange(len(optics_groups)) + 1,
@@ -516,7 +567,10 @@ def generate_relion5_tomo_dataset(
 
     row_particle = pd.Index(particle_names).get_indexer(flat_df["_rlnGroupName"].values)
     row_slice = np.array([int(name.split("@")[0]) - 1 for name in flat_df["_rlnImageName"].values])
-    particle_volume = rng.choice(volumes.shape[0], size=n_particles, p=volume_distribution)
+    if particle_volume_fn is None:
+        particle_volume = rng.choice(volumes.shape[0], size=n_particles, p=volume_distribution)
+    else:
+        particle_volume = np.arange(n_particles)
     particle_contrast = 1 + rng.normal(0, contrast_std, n_particles)
     row_optics = optics_df["_rlnOpticsGroup"].searchsorted(flat_df["_rlnOpticsGroup"].values.astype(int))
     row_settings = group_settings[row_optics]
@@ -537,32 +591,59 @@ def generate_relion5_tomo_dataset(
             mag3[:2, :2] = mag
             rows = row_settings == setting
             row_projection_rots[rows] = np.einsum("ij,njk->nik", mag3.T, row_projection_rots[rows])
-    row_images, setting_noise_variances = optics_groups_sim.simulate_optics_groups(
-        volumes,
-        settings,
-        row_settings,
-        row_projection_rots.astype(np.asarray(rots).dtype),
-        ctf_params,
-        particle_volume[row_particle],
-        particle_contrast[row_particle],
-        ctf_evaluator=[
-            functools.partial(relion_tomo_ctf, mag_matrix=mag, even_zernike=even)
-            for mag, even, _odd in setting_aberrations
-        ],
-        volumes_path_root=volumes_path_root,
-        trailing_zero_format_in_vol_name=trailing_zero_format_in_vol_name,
-        voxel_size=voxel_size,
-        grid_size=grid_size,
-        scale_vol=scale_vol,
-        solvent_record=solvent_record,
-        snr=snr,
-        noise_model=noise_model,
-        n_probe=8 * n_tilts,
-        seed=seed,
-        disc_type=disc_type,
-        premultiplied_ctf=premultiplied_ctf,
-        row_translations=row_translations,
-    )
+    if particle_volume_fn is not None:
+        row_images, setting_noise_variances, noise_calibration = optics_groups_sim.simulate_per_particle_volumes(
+            particle_volume_fn,
+            particle_volume_grid_size,
+            settings,
+            row_settings,
+            row_particle,
+            row_projection_rots.astype(np.asarray(rots).dtype),
+            ctf_params,
+            particle_contrast[row_particle],
+            ctf_evaluator=[
+                functools.partial(relion_tomo_ctf, mag_matrix=mag, even_zernike=even)
+                for mag, even, _odd in setting_aberrations
+            ],
+            voxel_size=voxel_size,
+            grid_size=grid_size,
+            snr=snr,
+            noise_model=noise_model,
+            n_probe_particles=8,
+            seed=seed,
+            disc_type=disc_type,
+            premultiplied_ctf=premultiplied_ctf,
+            row_translations=row_translations,
+            max_volume_bytes=max_volume_bytes,
+        )
+        row_images = list(row_images)
+    else:
+        row_images, setting_noise_variances = optics_groups_sim.simulate_optics_groups(
+            volumes,
+            settings,
+            row_settings,
+            row_projection_rots.astype(np.asarray(rots).dtype),
+            ctf_params,
+            particle_volume[row_particle],
+            particle_contrast[row_particle],
+            ctf_evaluator=[
+                functools.partial(relion_tomo_ctf, mag_matrix=mag, even_zernike=even)
+                for mag, even, _odd in setting_aberrations
+            ],
+            volumes_path_root=volumes_path_root,
+            trailing_zero_format_in_vol_name=trailing_zero_format_in_vol_name,
+            voxel_size=voxel_size,
+            grid_size=grid_size,
+            scale_vol=scale_vol,
+            solvent_record=solvent_record,
+            snr=snr,
+            noise_model=noise_model,
+            n_probe=8 * n_tilts,
+            seed=seed,
+            disc_type=disc_type,
+            premultiplied_ctf=premultiplied_ctf,
+            row_translations=row_translations,
+        )
 
     if premultiplied_ctf:
         # simulate_data multiplies by recovar's CTF, which is minus RELION's (CTF::getCTF returns
@@ -637,6 +718,11 @@ def generate_relion5_tomo_dataset(
         "flat_rows_bg_mean": row_bg_mean,
         "flat_rows_bg_std": row_bg_std,
     }
+    if particle_volume_fn is not None:
+        # Each particle is its own volume; image_assignment is then the particle index.
+        simulation_info["per_particle_volumes"] = True
+        simulation_info["particle_volume_grid_size"] = particle_volume_grid_size
+        simulation_info["noise_calibration"] = noise_calibration
     utils.pickle_dump(simulation_info, os.path.join(output_folder, "simulation_info.pkl"))
     logger.info("Wrote %d particles x %d tilts (%d images) to %s", n_particles, n_tilts, len(flat_df), output_folder)
     return {
