@@ -76,13 +76,6 @@ _DEFAULT_PIPELINE_IND_ET_BASELINE_JSON = (
 # ---------------------------------------------------------------------------
 
 
-def _require_env(name: str) -> str:
-    val = os.environ.get(name)
-    if not val:
-        pytest.skip(f"set {name} to run this long regression test")
-    return val
-
-
 def _resolve_output_dir(tmp_path: Path, name: str) -> Path:
     base = os.environ.get("LONG_METRICS_OUTPUT_BASE")
     out = Path(base) / "pytest_pipeline_ind" / name if base else tmp_path / name

@@ -124,13 +124,6 @@ _DEFAULT_OUTLIERS_ET_BASELINE_JSON = (
 # ---------------------------------------------------------------------------
 
 
-def _require_env(name: str) -> str:
-    val = os.environ.get(name)
-    if not val:
-        pytest.skip(f"set {name} to run this long regression test")
-    return val
-
-
 def _load_json(path: Path) -> dict:
     with open(path) as f:
         return json.load(f)
