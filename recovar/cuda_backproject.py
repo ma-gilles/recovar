@@ -931,9 +931,8 @@ def per_image_backproject(
     ``volumes`` has shape ``(half_vol, n_images)`` and image ``i`` scatters only
     into column ``i``, so atomic adds from different images never collide.
     Follow with a GEMM to reduce over images, e.g.
-    ``result @ second_moments_tri -> (half_vol, n_channels)``. Contributions at
-    kz < 0 are folded onto their Hermitian partners (the half-volume layout of
-    :func:`backproject`).
+    ``result @ second_moments_tri -> (half_vol, n_channels)``. The stored frequencies
+    follow the half-volume reconstruction crop of :func:`backproject`.
     """
     _ensure_per_image_ffi()
     N0, N1, N2 = volume_shape

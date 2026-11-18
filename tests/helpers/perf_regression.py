@@ -16,8 +16,6 @@ import threading
 import time
 import warnings
 
-import numpy as np
-
 logger = logging.getLogger(__name__)
 
 # Regression thresholds — warn if exceeded (same hardware assumed)
@@ -364,10 +362,7 @@ def compare_perf(
 def check_perf_regression(current: dict, baseline_path: str, test_name: str = ""):
     """Compare perf against committed baseline and warn on regression.
 
-    If no baseline exists for the current hardware, the current perf is
-    saved alongside any existing entries for other hardware (which are
-    never deleted).  To force-overwrite all entries, set
-    PERF_OVERWRITE_BASELINE=1.
+    Set PERF_OVERWRITE_BASELINE=1 to explicitly write a baseline.
     """
     cur_gpu = current.get("hardware", {}).get("gpu_name", "unknown")
 
@@ -392,9 +387,7 @@ def check_perf_regression(current: dict, baseline_path: str, test_name: str = ""
     print("\n".join(lines))
 
     if baseline is None:
-        # No baseline for this hardware — add it (preserves other entries)
-        save_perf_baseline(current, baseline_path)
-        print(f"  No baseline for {cur_gpu} — saved as new baseline entry")
+        print(f"  No baseline for {cur_gpu} — comparison unavailable")
         return
 
     warns = compare_perf(current, baseline)

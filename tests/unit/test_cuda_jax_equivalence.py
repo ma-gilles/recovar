@@ -359,15 +359,15 @@ def _crandn(rng, shape):
 @pytest.mark.parametrize("order,half_vol,half_img", _ALL_COMBOS)
 @pytest.mark.parametrize("upsampling", [1, 2])
 @pytest.mark.parametrize("N", [8, 7])
-def test_cuda_project_vjp_is_exact_transpose(order, half_vol, half_img, upsampling, N, gpu_device):
+@pytest.mark.parametrize("clip", [True, False])
+def test_cuda_project_vjp_is_exact_transpose(order, half_vol, half_img, upsampling, N, gpu_device, clip):
     """The custom backward is the exact vjp of ``cuda_project`` for any complex volume and cotangent.
 
     ``cuda_project`` is real-linear, so its vjp ``u`` of a cotangent ``g`` satisfies
     ``Re sum(u * dv) == Re sum(g * project(dv))`` for every complex ``dv``: no Hermitian symmetry is assumed, unlike
     the adjoint test above and the finite-difference tests below. In particular a half-image backward must not scatter
     the Hermitian partner of a packed pixel (that is the transpose of the full-image operator).
-    Float64, default clipping radius ``N // 2 - 1`` (at larger radii the even-box Nyquist plane of a non-Hermitian
-    half volume is read differently by the forward and backward kernels, so the identity needs Hermitian volumes there).
+    Float64, with and without the default clipping radius ``N // 2 - 1``.
     """
     import recovar.core.fourier_transform_utils as ftu
     from recovar.core.cuda_ops import cuda_project
@@ -376,7 +376,7 @@ def test_cuda_project_vjp_is_exact_transpose(order, half_vol, half_img, upsampli
     n_images = 6
     image_shape = (N, N)
     volume_shape = (upsampling * N,) * 3
-    max_r = N // 2 - 1
+    max_r = N // 2 - 1 if clip else None
     vol_shape = ftu.volume_shape_to_half_volume_shape(volume_shape) if half_vol else volume_shape
     n_pixels = N * (N // 2 + 1) if half_img else N * N
 
@@ -998,19 +998,13 @@ def _relative_error(actual, expected):
 @pytest.mark.parametrize("half_img", [False, True])
 @pytest.mark.parametrize("N,upsampling", [(8, 1), (8, 2), (7, 1)])
 def test_half_volume_backproject_is_restriction_of_full_volume_backproject(
-    N, upsampling, half_img, order, max_r_kind, gpu_device, request
+    N, upsampling, half_img, order, max_r_kind, gpu_device
 ):
     """The default half-volume result keeps the stored ``kz >= 0`` voxels of the full-volume backprojection.
 
     Arbitrary complex images, so this is a statement about the operator, not about Hermitian data. It fails if a
     ``kz < 0`` voxel is folded into the half volume. Float64.
     """
-    if N % 2 and max_r_kind == "none":
-        # Separate, pre-existing bug: the half-volume kernels take the full z size as 2 * (N // 2), so for odd N
-        # they treat kz = -(N // 2) as a self-conjugate Nyquist plane.  The default max_r never reaches it.
-        request.applymarker(
-            pytest.mark.xfail(strict=True, reason="odd-N half-volume kernels treat kz = -(N // 2) as Nyquist")
-        )
     _skip_if_no_cuda()
     import recovar.core.fourier_transform_utils as ftu
 
@@ -1111,3 +1105,36 @@ def test_hermitian_fold_requires_a_half_volume(gpu_device):
                 half_volume=False,
                 hermitian_fold=True,
             )
+
+
+@pytest.mark.parametrize("n", [15, 16])
+def test_per_image_backproject_matches_full_volume_crop(n, gpu_device):
+    """PPCA's CTF-squared accumulator uses the reconstruction crop per image."""
+    from recovar.core.fourier_transform_utils import full_volume_to_half_volume
+    from recovar.cuda_backproject import backproject, per_image_backproject
+
+    rng = np.random.default_rng(18)
+    image_shape = (n, n)
+    volume_shape = (n, n, n)
+    n_images = 3
+    with jax.default_device(gpu_device):
+        images = jnp.asarray(rng.uniform(size=(n_images, n * n)), dtype=jnp.float32)
+        rotations = jnp.asarray(_random_rotations(n_images, rng))
+        actual = per_image_backproject(
+            jnp.zeros((n * n * (n // 2 + 1), n_images), dtype=jnp.float32),
+            images,
+            rotations,
+            image_shape,
+            volume_shape,
+        )
+        expected = []
+        for i in range(n_images):
+            full = backproject(
+                jnp.zeros(n**3, dtype=jnp.float32),
+                images[i : i + 1],
+                rotations[i : i + 1],
+                image_shape,
+                volume_shape,
+            )
+            expected.append(full_volume_to_half_volume(full, volume_shape))
+        np.testing.assert_allclose(actual, jnp.stack(expected, axis=1), rtol=2e-6, atol=2e-6)

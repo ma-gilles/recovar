@@ -14,8 +14,14 @@ _CONFTEST = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(_CONFTEST)
 
 
-def test_gpu_subprocess_env_preserves_assigned_visible_devices(monkeypatch):
-    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "3")
+@pytest.fixture(autouse=True)
+def _no_native_build(monkeypatch):
+    monkeypatch.setattr(_CONFTEST, "_resolve_custom_cuda_test_lib", lambda *, require=False: None)
+
+
+@pytest.mark.parametrize("visible_devices", ["3", ""])
+def test_gpu_subprocess_env_preserves_assigned_visible_devices(monkeypatch, visible_devices):
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", visible_devices)
 
     called = {"count": 0}
 
@@ -27,7 +33,7 @@ def test_gpu_subprocess_env_preserves_assigned_visible_devices(monkeypatch):
 
     env = _CONFTEST.gpu_subprocess_env()
 
-    assert env["CUDA_VISIBLE_DEVICES"] == "3"
+    assert env["CUDA_VISIBLE_DEVICES"] == visible_devices
     assert called["count"] == 0
 
 
@@ -76,6 +82,8 @@ def test_gpu_subprocess_env_enables_custom_cuda_when_test_lib_available(monkeypa
 def test_gpu_subprocess_env_respects_explicit_cuda_disable(monkeypatch):
     monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0")
     monkeypatch.setenv("RECOVAR_DISABLE_CUDA", "1")
+    monkeypatch.setenv("RECOVAR_CUDA_LIB", "/unused/libcuda_backproject.so")
+    monkeypatch.setenv("RECOVAR_ENABLE_CUSTOM_CUDA", "1")
 
     def _forbidden_resolve(*, require=False):
         raise AssertionError("custom CUDA should not be resolved when RECOVAR_DISABLE_CUDA=1")

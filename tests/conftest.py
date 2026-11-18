@@ -76,13 +76,15 @@ def gpu_subprocess_env():
     env["JAX_PLATFORMS"] = "cuda,cpu"
     env["JAX_PLATFORM_NAME"] = "gpu"
     env["PYTHONNOUSERSITE"] = "1"
-    assigned_visible_devices = env.get("CUDA_VISIBLE_DEVICES")
-    if not assigned_visible_devices:
+    if "CUDA_VISIBLE_DEVICES" not in env:
         gpu_idx = _pick_most_free_gpu_index()
         if gpu_idx is not None:
             env["CUDA_VISIBLE_DEVICES"] = str(gpu_idx)
 
-    if not _env_flag("RECOVAR_DISABLE_CUDA"):
+    if _env_flag("RECOVAR_DISABLE_CUDA"):
+        env.pop("RECOVAR_CUDA_LIB", None)
+        env.pop("RECOVAR_ENABLE_CUSTOM_CUDA", None)
+    else:
         lib_path = _resolve_custom_cuda_test_lib(require=_env_flag(_REQUIRE_CUSTOM_CUDA_FOR_TESTS_ENV))
         if lib_path is not None:
             env["RECOVAR_CUDA_LIB"] = str(lib_path)
