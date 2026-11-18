@@ -810,7 +810,9 @@ def test_run_test_dataset_custom_synthetic_size_forwarded(monkeypatch, tmp_path)
 
     run_test_dataset.main()
 
-    assert any("make_test_dataset" in cmd and "--image-size 128" in cmd and "--n-images 2000" in cmd for cmd in commands)
+    assert any(
+        "make_test_dataset" in cmd and "--image-size 128" in cmd and "--n-images 2000" in cmd for cmd in commands
+    )
     particles = str(tmp_path / "test_dataset" / "particles.128.mrcs")
     assert any(f"pipeline {particles} " in cmd for cmd in commands)
 
