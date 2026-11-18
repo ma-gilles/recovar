@@ -4,7 +4,9 @@ import argparse
 import logging
 import os
 import sys
+import tempfile
 import time
+from contextlib import ExitStack
 
 import numpy as np
 
@@ -15,6 +17,7 @@ from recovar.data_io import halfsets
 from recovar.heterogeneity import covariance_estimation, embedding, principal_components
 from recovar.output import output
 from recovar.output.output_paths import ResultPaths
+from recovar.ppca import downsample as ppca_downsample
 from recovar.ppca import ppca as ppca_module
 from recovar.ppca import prior_estimation as ppca_prior_estimation
 from recovar.reconstruction import homogeneous, noise
@@ -28,6 +31,18 @@ _NOISE_UB_WORKING_FRACTION = 0.15
 _NOISE_UB_MIN_WORKING_GB = 1.0
 _NOISE_UB_MAX_WORKING_GB = 12.0
 _RADIAL_PER_TILT_NOISE_MODELS = ("radial_per_tilt", "radial-per-tilt")
+
+
+def _parse_ppca_downsample_resolution(value):
+    if value in ("auto", "off"):
+        return value
+    try:
+        resolution = float(value)
+    except ValueError:
+        resolution = 0
+    if not np.isfinite(resolution) or resolution <= 0:
+        raise argparse.ArgumentTypeError("expected a positive resolution in Å, 'auto', or 'off'")
+    return resolution
 
 
 def add_args(parser: argparse.ArgumentParser):
@@ -371,6 +386,14 @@ def add_args(parser: argparse.ArgumentParser):
         type=int,
         default=10,
         help="Single latent dimension to use when --use-ppca is enabled.",
+    )
+    adv.add_argument(
+        "--ppca-downsample-resolution",
+        type=_parse_ppca_downsample_resolution,
+        default="auto",
+        metavar="ANGSTROMS|auto|off",
+        help="Resolution for the PPCA fitting grid. 'auto' (default) uses the solvent-masked mean half-map "
+        "FSC at 0.143. Use 'off' to fit at the pipeline box size.",
     )
     adv.add_argument(
         "--ppca-use-gridding-correction",
@@ -1054,7 +1077,6 @@ def _as_pipeline_basis_dtype(arr):
 def _run_ppca_refinement(
     dataset,
     means,
-    focus_mask,
     dilated_volume_mask,
     options,
     args,
@@ -1063,6 +1085,8 @@ def _run_ppca_refinement(
     covariance_options,
     focus_masks,
     zdim_for_rest,
+    *,
+    solvent_mask,
 ):
     """Run PPCA EM and return pipeline-compatible arrays.
 
@@ -1085,10 +1109,8 @@ def _run_ppca_refinement(
         raise ValueError("PPCA pipeline mode does not support --tilt-series yet")
 
     # Multi-mask support: build masks array and PC assignment
-    ppca_masks = None
     ppca_pc_mask_assignment = None
     if len(focus_masks) > 1:
-        ppca_masks = np.array([np.asarray(m, dtype=np.float32) for m in focus_masks])
         pcs_per_mask_str = getattr(args, "ppca_pcs_per_mask", None)
         if pcs_per_mask_str is not None:
             pcs_per_mask = [int(x) for x in pcs_per_mask_str.split(",")]
@@ -1108,14 +1130,32 @@ def _run_ppca_refinement(
 
     contrast_mode = _resolve_ppca_contrast_mode(args)
     contrast_grid, contrast_weights = _resolve_ppca_contrast_grid(contrast_mode)
-    W_init = _make_ppca_initial_loading(dataset.volume_size, basis_size, volume_shape=dataset.volume_shape)
-    prior_info = ppca_prior_estimation.estimate_hybrid_shell_prior_from_data(
-        dataset,
-        means.combined,
-        basis_size,
-        dataset.volume_shape,
-        batch_size,
-    )
+
+    resolution_option = getattr(args, "ppca_downsample_resolution", "auto")
+    target_resolution = None
+    if resolution_option == "auto":
+        if getattr(args, "mask", None) != "none":
+            target_resolution = ppca_downsample.masked_mean_resolution(
+                means.corrected0, means.corrected1, solvent_mask, dataset.volume_shape, dataset.voxel_size
+            )
+            if target_resolution is None:
+                logger.info("PPCA: solvent-masked mean FSC has no measurable 0.143 crossing. Keeping the pipeline box.")
+        else:
+            logger.info("PPCA: --mask none supplies no solvent mask. Keeping the pipeline box.")
+    elif resolution_option != "off":
+        target_resolution = resolution_option
+    source_size = dataset.grid_size
+    target_size = ppca_downsample.fitting_box_size(source_size, dataset.voxel_size, target_resolution)
+    fitting_voxel_size = float(dataset.voxel_size) * source_size / target_size
+    if target_resolution is not None:
+        logger.info(
+            "PPCA: requested fitting resolution %.3f Å (%s), box %d → %d, voxel size %.3f Å",
+            target_resolution,
+            "solvent-masked mean FSC" if resolution_option == "auto" else "explicit target",
+            source_size,
+            target_size,
+            fitting_voxel_size,
+        )
 
     em_iter = int(getattr(args, "ppca_em_iters", 20))
 
@@ -1141,45 +1181,58 @@ def _run_ppca_refinement(
     refitb_inner_iters = int(getattr(args, "ppca_refitb_inner_iters", 3))
     refitb_kappa = float(getattr(args, "ppca_refitb_kappa", 0.0))
 
-    rebakes_basis = projcov_every > 0 or refitb_every > 0
-
     ppca_update_noise = bool(getattr(args, "ppca_update_noise", False))
 
-    (
-        U_ppca,
-        S_ppca,
-        W_ppca,
-        expected_zs,
-        second_moment_zs,
-        iteration_data,
-        posterior_info,
-    ) = ppca_module.EM(
-        dataset,
-        means.combined,
-        W_init,
-        prior_info["W_prior"],
-        EM_iter=em_iter,
-        disc_type_mean="cubic",
-        disc_type="linear_interp",
-        disc_type_u=covariance_options["disc_type_u"],
-        return_iteration_data=True,
-        return_posterior_info=True,
-        volume_mask=np.asarray(focus_mask, dtype=np.float32),
-        dilated_volume_mask=dilated_volume_mask,
-        contrast_mode=contrast_mode,
-        contrast_grid=contrast_grid,
-        contrast_weights=contrast_weights,
-        projcov_every=projcov_every,
-        projcov_start=projcov_start,
-        refitb_every=refitb_every,
-        refitb_start=refitb_start,
-        refitb_inner_iters=refitb_inner_iters,
-        refitb_kappa=refitb_kappa,
-        gpu_memory_to_use=gpu_memory,
-        masks=ppca_masks,
-        pc_mask_assignment=ppca_pc_mask_assignment,
-        update_noise=ppca_update_noise,
-    )
+    with ExitStack() as temporary_files:
+        fit_dataset = dataset
+        fit_mean = means.combined
+        fit_masks = focus_masks
+        fit_dilated_mask = dilated_volume_mask
+        if target_size < source_size:
+            directory = temporary_files.enter_context(tempfile.TemporaryDirectory(prefix="ppca-", dir=args.outdir))
+            fit_dataset = ppca_downsample.make_fitting_dataset(dataset, target_size, directory, batch_size, gpu_memory)
+            fit_mean, (*fit_masks, fit_dilated_mask) = ppca_downsample.crop_mean_and_masks(
+                fit_mean, [*focus_masks, dilated_volume_mask], dataset.volume_shape, target_size
+            )
+
+        W_init = _make_ppca_initial_loading(fit_dataset.volume_size, basis_size, volume_shape=fit_dataset.volume_shape)
+        prior_info = ppca_prior_estimation.estimate_hybrid_shell_prior_from_data(
+            fit_dataset, fit_mean, basis_size, fit_dataset.volume_shape, batch_size
+        )
+        U_ppca, S_ppca, W_ppca, expected_zs, second_moment_zs, iteration_data, posterior_info = ppca_module.EM(
+            fit_dataset,
+            fit_mean,
+            W_init,
+            prior_info["W_prior"],
+            EM_iter=em_iter,
+            disc_type_mean="cubic",
+            disc_type="linear_interp",
+            disc_type_u=covariance_options["disc_type_u"],
+            return_iteration_data=True,
+            return_posterior_info=True,
+            volume_mask=np.asarray(fit_masks[-1], dtype=np.float32),
+            dilated_volume_mask=fit_dilated_mask,
+            contrast_mode=contrast_mode,
+            contrast_grid=contrast_grid,
+            contrast_weights=contrast_weights,
+            projcov_every=projcov_every,
+            projcov_start=projcov_start,
+            refitb_every=refitb_every,
+            refitb_start=refitb_start,
+            refitb_inner_iters=refitb_inner_iters,
+            refitb_kappa=refitb_kappa,
+            gpu_memory_to_use=gpu_memory,
+            masks=np.asarray(fit_masks, dtype=np.float32) if len(fit_masks) > 1 else None,
+            pc_mask_assignment=ppca_pc_mask_assignment,
+            update_noise=ppca_update_noise,
+        )
+
+    if target_size < source_size:
+        coefficient_scale = (source_size / target_size) ** 2
+        U_ppca = ppca_downsample.pad_half_spectra(U_ppca, target_size, source_size)
+        W_ppca = ppca_downsample.pad_half_spectra(W_ppca, target_size, source_size)
+        W_ppca *= coefficient_scale
+        S_ppca = S_ppca * coefficient_scale**2
 
     half_vol_size = int(np.prod(fourier_transform_utils.volume_shape_to_half_volume_shape(dataset.volume_shape)))
     U_full = U_ppca
@@ -1240,7 +1293,7 @@ def _run_ppca_refinement(
             u,
             s,
             dataset,
-            np.asarray(focus_mask, dtype=np.float32),
+            np.asarray(focus_masks[-1], dtype=np.float32),
             options,
             gpu_memory,
             focus_masks,
@@ -1274,6 +1327,13 @@ def _run_ppca_refinement(
         "basis_size": basis_size,
         "contrast_mode": contrast_mode,
         "prior_mode": "hybrid_shell",
+        "downsample": {
+            "requested": resolution_option,
+            "target_resolution_angstrom": target_resolution,
+            "pipeline_box_size": source_size,
+            "fitting_box_size": target_size,
+            "fitting_voxel_size_angstrom": fitting_voxel_size,
+        },
         "embedding_source": embedding_source,
         "latent_coords": latent_coords,
         "latent_coords_noreg": latent_coords_noreg,
@@ -1755,7 +1815,6 @@ def standard_recovar_pipeline(args):
             ppca_result = _run_ppca_refinement(
                 ds,
                 means,
-                focus_masks[-1],
                 dilated_volume_mask,
                 options,
                 args,
@@ -1764,6 +1823,7 @@ def standard_recovar_pipeline(args):
                 covariance_options,
                 focus_masks,
                 zdim_for_rest,
+                solvent_mask=volume_mask,
             )
             u = {"rescaled": ppca_result["u_rescaled"], "real": None}
             s = {"rescaled": ppca_result["s_rescaled"], "real": None}
@@ -1782,6 +1842,7 @@ def standard_recovar_pipeline(args):
                 "basis_size": int(ppca_result["basis_size"]),
                 "contrast_mode": ppca_result["contrast_mode"],
                 "prior_mode": ppca_result["prior_mode"],
+                "downsample": ppca_result["downsample"],
                 "em_iters": int(args.ppca_em_iters),
                 "ppca_projcov_every": int(getattr(args, "ppca_projcov_every", 0)),
                 "ppca_projcov_start": int(getattr(args, "ppca_projcov_start", 0)),

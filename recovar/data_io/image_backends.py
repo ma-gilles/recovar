@@ -91,19 +91,23 @@ class ParticleImageDataset:
         strip_prefix: Optional[str] = None,
         downsample_D: Optional[int] = None,
         device=None,
+        *,
+        image_loader: Optional[ImageLoader] = None,
         **kwargs,
     ):
         if padding != 0:
             raise NotImplementedError("Padding not yet supported")
 
-        self.source = ImageLoader.from_file(
-            image_file,
-            lazy=lazy,
-            datadir=datadir or "",
-            indices=ind,
-            max_threads=max_threads,
-            strip_prefix=strip_prefix,
-        )
+        if image_loader is None:
+            image_loader = ImageLoader.from_file(
+                image_file,
+                lazy=lazy,
+                datadir=datadir or "",
+                indices=ind,
+                max_threads=max_threads,
+                strip_prefix=strip_prefix,
+            )
+        self.source = image_loader
 
         if downsample_D is not None:
             from recovar.data_io.image_loader import DownsamplingImageLoader

@@ -64,6 +64,22 @@ def test_pipeline_registers_use_ppca():
     assert "--ppca-projected-covariance" in actions
 
 
+@pytest.mark.parametrize("option, expected", [(None, "auto"), ("off", "off"), ("8.5", 8.5)])
+def test_ppca_downsample_resolution_cli(option, expected):
+    parser = _parser_with_pipeline_args()
+    cmd = ["particles.star", "--mask", "sphere", "--use-ppca"]
+    if option is not None:
+        cmd.extend(["--ppca-downsample-resolution", option])
+    assert parser.parse_args(cmd).ppca_downsample_resolution == expected
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "inf", "nan", "invalid"])
+def test_ppca_downsample_rejects_invalid_resolution(value):
+    parser = _parser_with_pipeline_args()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["particles.star", "--mask", "sphere", "--ppca-downsample-resolution", value])
+
+
 def test_pipeline_zdim_default_is_list():
     """Default zdim must be a list (multiple resolutions are trained)."""
     parser = _parser_with_pipeline_args()
@@ -320,7 +336,7 @@ def test_rescale_ppca_posteriors_matches_covariance_space_formula():
 
 
 def test_run_ppca_refinement_uses_hybrid_shell_prior(monkeypatch):
-    fake_dataset = SimpleNamespace(volume_shape=(2, 2, 2), volume_size=8)
+    fake_dataset = SimpleNamespace(volume_shape=(2, 2, 2), volume_size=8, grid_size=2, voxel_size=1.0)
     means = SimpleNamespace(combined=np.zeros(8, dtype=np.complex64))
     options = SimpleNamespace(zs_dim_to_test=[4])
     args = SimpleNamespace(
@@ -331,6 +347,7 @@ def test_run_ppca_refinement_uses_hybrid_shell_prior(monkeypatch):
         use_complement_mask=False,
         ppca_use_gridding_correction=True,
         ppca_projected_covariance=False,
+        ppca_downsample_resolution="off",
         tilt_series=False,
     )
 
@@ -394,7 +411,6 @@ def test_run_ppca_refinement_uses_hybrid_shell_prior(monkeypatch):
     out = pipeline_cmd._run_ppca_refinement(
         fake_dataset,
         means,
-        np.ones((2, 2, 2), dtype=np.float32),
         np.ones((2, 2, 2), dtype=np.float32),  # dilated_volume_mask
         options,
         args,
@@ -407,6 +423,7 @@ def test_run_ppca_refinement_uses_hybrid_shell_prior(monkeypatch):
         },
         focus_masks=[np.ones((2, 2, 2), dtype=np.float32)],
         zdim_for_rest=20,
+        solvent_mask=np.ones((2, 2, 2), dtype=np.float32),
     )
 
     assert prior_calls["args"][0] is fake_dataset

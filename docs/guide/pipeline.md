@@ -80,7 +80,8 @@ Instructions below are tabbed for the **CLI** and the **GUI**. [How to launch th
     | Flag | Default | Description |
     |------|---------|-------------|
     | `--downsample D` | 256 | Downsample images to box size D before processing (pre-downsamples to disk). Skipped automatically if images are already at or below this size |
-    | `--no-downsample` | — | Disable the default downsampling and run at the original box size |
+    | `--no-downsample` | — | Skip image downsampling before mean reconstruction |
+    | `--ppca-downsample-resolution ANGSTROMS` | `auto` | With `--use-ppca`, fit PPCA at the solvent-masked mean half-map FSC at 0.143. Pass a target in Å, such as `8`, or pass `off` to fit at the pipeline box size |
     | `--poses` | Auto | Poses file (`.pkl`). Auto-extracted from `.star`/`.cs` |
     | `--ctf` | Auto | CTF file (`.pkl`). Auto-extracted from `.star`/`.cs` |
     | `--focus-mask` | None | Focus mask for targeted heterogeneity |
@@ -90,6 +91,8 @@ Instructions below are tabbed for the **CLI** and the **GUI**. [How to launch th
     | `--correct-contrast` | False | Estimate and correct amplitude scaling |
     | `--lazy` | False | Lazy loading for large datasets |
     | `--multi-gpu` | False | Multi-GPU parallelization (experimental) |
+
+    RECOVAR picks an even fitting box that retains the requested frequency when the input sampling permits. If there is no solvent mask or measurable FSC crossing, `auto` uses the pipeline box size. PPCA components are exported on the pipeline grid and the fitting box and voxel size are recorded in `ppca_info.downsample`.
 
 ## Execution settings
 
