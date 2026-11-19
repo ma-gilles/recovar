@@ -117,9 +117,12 @@ subsequent run.
 | Test | What it checks | Approx time |
 |---|---|---|
 | `test_run_test_all_metrics_regression_against_baseline` | SPA: FSC, embedding, contrast metrics vs baseline | ~1–2 h |
+| `test_ppca_pipeline_full_resolution` | 50,000 SPA particles at 128 pixels, comparing covariance with 20-iteration rank-10 PPCA at full resolution and 12 Å | GPU dependent |
 | `test_run_test_all_metrics_cryo_et_subsampling_regression_against_baseline` | cryo-ET: same metrics + tilt subsampling consistency | ~2–3 h |
 | `test_outliers_pipeline_regression_against_baseline` | SPA outliers: precision/recall/F1 vs baseline | ~1–2 h |
 | `test_outliers_pipeline_cryo_et_regression_against_baseline` | cryo-ET outliers: particle-level metrics vs baseline | ~2–3 h |
+
+The long PPCA test writes `ppca_metrics.json` with embedding, contrast, and wall-time measurements. Set `LONG_PPCA_DATASET` to a previously generated standard SPA `test_dataset` directory to reuse its particles, poses, CTF, simulation metadata, and solvent mask. Otherwise the test generates the fixture with the same command as the SPA regression.
 | `test_pipeline_spa_with_ind_regression` | SPA with `--ind` (80% subset): quality vs baseline | ~1–2 h |
 | `test_pipeline_cryo_et_with_particle_ind_regression` | cryo-ET with `--particle-ind`: particle quality vs baseline | ~2–3 h |
 

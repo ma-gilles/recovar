@@ -68,7 +68,7 @@ G_ARGS+=("tests/integration/test_downstream_commands_gpu.py tests/integration/te
 G_NAMES+=(ppca-metrics)
 G_MEM+=(64G)
 G_TIME+=(00:45:00)
-G_ARGS+=("tests/integration/test_ppca_pipeline_metrics.py --run-integration --run-gpu --run-slow -v")
+G_ARGS+=("tests/integration/test_ppca_pipeline_metrics.py::test_ppca_pipeline_metrics --run-integration --run-gpu --run-slow -v")
 
 G_NAMES+=(memory-matrix-fast)
 G_MEM+=(64G)
@@ -84,6 +84,12 @@ if [[ "$MODE" == "long-test" ]]; then
     G_MEM+=(140G)
     G_TIME+=(01:30:00)
     G_ARGS+=("tests/integration/test_run_test_all_metrics_regression_long.py::test_run_test_all_metrics_regression_against_baseline --long-test -v")
+
+    # PPCA and covariance on the same full-size SPA fixture.
+    G_NAMES+=(ppca-spa-long)
+    G_MEM+=(128G)
+    G_TIME+=(01:30:00)
+    G_ARGS+=("tests/integration/test_ppca_pipeline_metrics.py::test_ppca_pipeline_full_resolution --long-test -v")
 
     # Full metrics regression — cryo-ET
     G_NAMES+=(metrics-et)
