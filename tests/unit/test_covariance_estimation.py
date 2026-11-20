@@ -687,6 +687,10 @@ def test_compute_variance_orchestration_with_stubbed_kernels(monkeypatch):
     assert lhs.shape == (vol_size,)
     assert noise_p_variance_est.shape == (vol_size,)
     np.testing.assert_allclose(variance["corrected0"], np.ones(vol_size, dtype=np.float32) * 0.4, atol=1e-6, rtol=1e-6)
+    expected_lhs = np.broadcast_to([15, 30, 15, 30], vol_shape).reshape(-1)
+    np.testing.assert_allclose(lhs, expected_lhs)
+    np.testing.assert_allclose(variance["combined"], 0.4)
+    np.testing.assert_allclose(noise_p_variance_est, 0.5)
 
 
 def test_compute_h_b_runs_on_tiny_image_dataset():
@@ -1682,6 +1686,7 @@ def test_reduce_covariance_inner_uses_half_volume_for_half_volume_model(monkeypa
     assert seen["mean_half_volume"] is True
     assert seen["basis_half_volume"] is True
 
+
 def test_solve_projected_covariance_system_raises_on_nonfinite_output(monkeypatch):
     def fake_solve(lhs, rhs, assume_a="pos"):
         return jnp.full(rhs.shape, jnp.nan, dtype=rhs.dtype)
@@ -1809,9 +1814,9 @@ def test_prepare_model_half_volumes_keeps_cubic_coefficients_full():
     ).reshape(-1)
     expected_basis = np.stack(
         [
-            np.asarray(fourier_transform_utils.half_volume_to_full_volume(vec.reshape(half_shape), cryo.volume_shape)).reshape(
-                -1
-            )
+            np.asarray(
+                fourier_transform_utils.half_volume_to_full_volume(vec.reshape(half_shape), cryo.volume_shape)
+            ).reshape(-1)
             for vec in basis_half
         ],
         axis=0,
@@ -1827,9 +1832,9 @@ def test_prepare_model_half_volumes_preserves_linear_full_layout():
     cryo = make_tiny_cryo_dataset_with_images(grid_size=6, n_images=6, seed=0)
     rng = np.random.default_rng(0)
     mean = (rng.standard_normal(cryo.volume_size) + 1j * rng.standard_normal(cryo.volume_size)).astype(np.complex64)
-    basis = (
-        rng.standard_normal((4, cryo.volume_size)) + 1j * rng.standard_normal((4, cryo.volume_size))
-    ).astype(np.complex64)
+    basis = (rng.standard_normal((4, cryo.volume_size)) + 1j * rng.standard_normal((4, cryo.volume_size))).astype(
+        np.complex64
+    )
 
     mean_out, basis_out = cov_est._prepare_model_half_volumes(
         cryo.volume_shape,

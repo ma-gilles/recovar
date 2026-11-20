@@ -15,8 +15,7 @@ import subprocess
 import threading
 import time
 import warnings
-
-import numpy as np
+from collections.abc import Mapping
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +74,7 @@ def get_hardware_info():
     }
 
 
-def _parse_visible_gpu_indices(env: dict | None = None) -> list[int] | None:
+def _parse_visible_gpu_indices(env: Mapping[str, str] | None = None) -> list[int] | None:
     env = os.environ if env is None else env
     raw = env.get("CUDA_VISIBLE_DEVICES") or env.get("NVIDIA_VISIBLE_DEVICES")
     if not raw:
@@ -94,7 +93,7 @@ def _parse_visible_gpu_indices(env: dict | None = None) -> list[int] | None:
     return visible
 
 
-def _read_nvidia_smi_gpu_bytes(env: dict | None = None) -> int:
+def _read_nvidia_smi_gpu_bytes(env: Mapping[str, str] | None = None) -> int:
     """Return max visible-GPU memory in bytes from ``nvidia-smi``."""
     try:
         result = subprocess.run(
@@ -168,7 +167,7 @@ def run_tracked_subprocess(*popenargs, poll_interval_s: float = 0.2, **kwargs):
         peak_holder["bytes"] = max(peak_holder["bytes"], _read_nvidia_smi_gpu_bytes(env))
         _record_tracked_gpu_peak_bytes(peak_holder["bytes"])
 
-    result.gpu_peak_bytes = peak_holder["bytes"]
+    setattr(result, "gpu_peak_bytes", peak_holder["bytes"])
     return result
 
 
@@ -364,10 +363,7 @@ def compare_perf(
 def check_perf_regression(current: dict, baseline_path: str, test_name: str = ""):
     """Compare perf against committed baseline and warn on regression.
 
-    If no baseline exists for the current hardware, the current perf is
-    saved alongside any existing entries for other hardware (which are
-    never deleted).  To force-overwrite all entries, set
-    PERF_OVERWRITE_BASELINE=1.
+    Set PERF_OVERWRITE_BASELINE=1 to explicitly write a baseline.
     """
     cur_gpu = current.get("hardware", {}).get("gpu_name", "unknown")
 
@@ -392,9 +388,7 @@ def check_perf_regression(current: dict, baseline_path: str, test_name: str = ""
     print("\n".join(lines))
 
     if baseline is None:
-        # No baseline for this hardware — add it (preserves other entries)
-        save_perf_baseline(current, baseline_path)
-        print(f"  No baseline for {cur_gpu} — saved as new baseline entry")
+        print(f"  No baseline for {cur_gpu} — comparison unavailable")
         return
 
     warns = compare_perf(current, baseline)

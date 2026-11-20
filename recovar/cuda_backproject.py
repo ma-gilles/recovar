@@ -245,6 +245,7 @@ def build_custom_cuda(output_path: str | os.PathLike[str] | None = None, force: 
     import sys
 
     global _auto_build_attempted, _auto_build_error, _cuda_ok, _ffi_registered, _lib_handle, _loaded_lib_path
+    global _per_image_ffi_registered
 
     lib_path = pathlib.Path(output_path).expanduser().resolve() if output_path else _default_build_lib_path()
     stale = lib_path.exists() and _lib_is_stale(lib_path)
@@ -272,6 +273,7 @@ def build_custom_cuda(output_path: str | os.PathLike[str] | None = None, force: 
     _auto_build_error = None
     _cuda_ok = None
     _ffi_registered = False
+    _per_image_ffi_registered = False
     _lib_handle = None
     _loaded_lib_path = None
     return lib_path
@@ -364,6 +366,7 @@ _TARGET_BACKPROJECT = "cuda_backproject"
 _TARGET_PROJECT = "cuda_project"
 _TARGET_BATCH_BACKPROJECT = "cuda_batch_backproject"
 _TARGET_BATCH_PROJECT = "cuda_batch_project"
+_TARGET_PER_IMAGE_BP = "cuda_per_image_bp"
 
 
 _preflight_ok: bool | None = None  # None = not checked yet
@@ -594,6 +597,32 @@ def _ensure_ffi():
         logger.debug("Registered CUDA FFI targets")
 
 
+_per_image_ffi_registered = False
+
+
+def _ensure_per_image_ffi():
+    """Register the per-image backprojection target on first use.
+
+    Kept separate from :func:`_ensure_ffi` so that a library built before this
+    kernel existed still serves the other kernels; only PPCA needs it.
+    """
+    global _per_image_ffi_registered
+    if _per_image_ffi_registered:
+        return
+    _ensure_ffi()
+    with _ffi_lock:
+        if _per_image_ffi_registered:
+            return
+        lib = _get_lib()
+        if not hasattr(lib, "PerImageBackproject"):
+            raise RuntimeError(
+                f"The CUDA library {_loaded_lib_path} has no PerImageBackproject kernel (used by PPCA). "
+                "Rebuild it with `recovar build_custom_cuda`."
+            )
+        jax.ffi.register_ffi_target(_TARGET_PER_IMAGE_BP, jax.ffi.pycapsule(lib.PerImageBackproject), platform="CUDA")
+        _per_image_ffi_registered = True
+
+
 _cuda_ok = None  # cached result: None = not checked, True/False = result
 
 
@@ -714,7 +743,27 @@ def _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image, max_r
     )
 
 
-@functools.partial(jax.jit, static_argnums=(3, 4, 5, 6, 7, 8))
+# ``half_volume`` attribute value that selects the Hermitian fold (see ``_half_volume_attr``).
+_HALF_VOLUME_FOLD = 2
+
+
+def _half_volume_attr(half_volume: bool, hermitian_fold: bool) -> np.int64:
+    """Encode the half-volume convention in the ``half_volume`` FFI attribute.
+
+    0 is a full volume.  1 is a packed half volume in the *reconstruction*
+    convention: the full-volume backprojection restricted to the stored ``kz >= 0``
+    voxels, so ``half_volume_to_full_volume`` of it is the full-volume
+    backprojection (for Hermitian data).  2 is a packed half volume in the
+    *transpose* convention: the exact adjoint of ``half_volume_to_full_volume``,
+    where each ``kz < 0`` voxel is folded onto its Hermitian partner, so interior
+    ``kz`` carries twice the full-volume value for Hermitian data.
+    """
+    if hermitian_fold and not half_volume:
+        raise ValueError("hermitian_fold applies to a half volume only (half_volume=True)")
+    return np.int64(_HALF_VOLUME_FOLD if hermitian_fold else int(half_volume))
+
+
+@functools.partial(jax.jit, static_argnums=(3, 4, 5, 6, 7, 8, 9))
 def backproject(
     volume: jax.Array,
     images: jax.Array,
@@ -725,6 +774,7 @@ def backproject(
     half_volume: bool = False,
     half_image: bool = False,
     max_r: float | None = None,
+    hermitian_fold: bool = False,
 ) -> jax.Array:
     """Back-project *images* into *volume* (accumulate in-place via aliasing).
 
@@ -741,10 +791,22 @@ def backproject(
     volume_shape : (N0, N1, N2)   — full dimensions even when half_volume=True.
     order : 0 (nearest) or 1 (trilinear).
     half_volume : if True, volume is rfft-packed ``(N0*N1*(N2//2+1),)``.
+        The result is the full-volume backprojection restricted to the stored
+        ``kz >= 0`` voxels (the reconstruction convention), so it carries the
+        same values as the full volume and ``half_volume_to_full_volume`` of it
+        is the full-volume backprojection for Hermitian data.
     half_image : if True, images are rfft-packed ``(n, H*(W//2+1))``.
         Hermitian conjugates are scattered automatically.
     max_r : if not None, skip pixels whose rotated frequency radius
         exceeds this value (RELION-style sphere clipping).
+    hermitian_fold : with ``half_volume=True``, return the exact transpose of
+        ``half_volume_to_full_volume`` instead: each ``kz < 0`` voxel is folded
+        onto its Hermitian partner, so interior ``kz`` carries ``F(k) + conj(F(-k))``,
+        twice the full-volume value for Hermitian data.  This is what the vjp of
+        a half-volume projection needs (``core.cuda_ops``); reconstruction wants
+        the default.  Use it with ``half_image=False``: with ``half_image=True``
+        the kernel also scatters each interior pixel's Hermitian partner, which
+        a transpose must not do.
 
     Returns
     -------
@@ -753,6 +815,7 @@ def backproject(
     _ensure_ffi()
     _validate_inputs(volume_shape, image_shape, order, half_volume, half_image)
     kw, ih, iw_eff = _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image, max_r)
+    kw["half_volume"] = _half_volume_attr(half_volume, hermitian_fold)
     rot6 = _rot_to_compact(rotation_matrices, _volume_real_dtype(volume))
     out_type = jax.ShapeDtypeStruct(volume.shape, volume.dtype)
 
@@ -831,7 +894,8 @@ def batch_backproject(
     rotation_matrices : real, shape ``(n_images, 3, 3)``
         Shared across all volumes in the batch.
     image_shape, volume_shape, order, half_volume, half_image :
-        Same semantics as ``backproject()``.
+        Same semantics as ``backproject()``; ``half_volume=True`` is the
+        reconstruction convention (no Hermitian fold).
     max_r : if not None, skip pixels whose rotated frequency radius
         exceeds this value (RELION-style sphere clipping).
 
@@ -851,6 +915,51 @@ def batch_backproject(
         input_output_aliases={2: 0},
         vmap_method="sequential",
     )(images, rot6, volumes, **kw)
+
+
+@functools.partial(jax.jit, static_argnums=(3, 4, 5))
+def per_image_backproject(
+    volumes: jax.Array,
+    base_images: jax.Array,
+    rotation_matrices: jax.Array,
+    image_shape: Tuple[int, int] = (0, 0),
+    volume_shape: Tuple[int, int, int] = (0, 0, 0),
+    max_r: float | None = None,
+) -> jax.Array:
+    """Per-image trilinear backprojection of real full images into half volumes.
+
+    ``volumes`` has shape ``(half_vol, n_images)`` and image ``i`` scatters only
+    into column ``i``, so atomic adds from different images never collide.
+    Follow with a GEMM to reduce over images, e.g.
+    ``result @ second_moments_tri -> (half_vol, n_channels)``. The stored frequencies
+    follow the half-volume reconstruction crop of :func:`backproject`.
+    """
+    _ensure_per_image_ffi()
+    N0, N1, N2 = volume_shape
+    H, W = image_shape
+    ups = N0 // H
+    max_r2_x4 = -1 if max_r is None else int(4 * max_r * max_r)
+    base_images = base_images.astype(volumes.dtype)
+    rot6 = _rot_to_compact(rotation_matrices, volumes.dtype)
+    out_type = jax.ShapeDtypeStruct(volumes.shape, volumes.dtype)
+
+    return jax.ffi.ffi_call(
+        _TARGET_PER_IMAGE_BP,
+        out_type,
+        input_output_aliases={2: 0},
+        vmap_method="sequential",
+    )(
+        base_images,
+        rot6,
+        volumes,
+        image_h=H,
+        image_w=W,
+        vol_n0=N0,
+        vol_n1=N1,
+        vol_n2=N2,
+        upsampling=ups,
+        max_r2_x4=max_r2_x4,
+    )
 
 
 @functools.partial(jax.jit, static_argnums=(2, 3, 4, 5, 6, 7))

@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [dev, "claude/**"]
+    branches: [main, dev, "claude/**", "codex/**"]
   pull_request:
-    branches: [dev]
+    branches: [main, dev]
 
 jobs:
   lint:
@@ -61,20 +61,17 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install dependencies
-        run: |
-          pip install --upgrade pip setuptools wheel
-          pip install "numpy<2.3.0" scipy matplotlib pandas scikit-learn pytest pytest-cov
+      - name: Install RECOVAR and test dependencies
+        run: pip install -e '.[dev,gui]'
 
-      - name: Install recovar (no deps, editable)
-        run: pip install -e . --no-deps --no-build-isolation --ignore-installed
-
-      - name: Run unit tests with coverage
+      - name: Run CPU unit tests with coverage
+        env:
+          CUDA_VISIBLE_DEVICES: ""
+          JAX_PLATFORMS: cpu
+          PYTHONNOUSERSITE: "1"
         run: |
           python -m pytest tests/unit/ -x \
-            --ignore=tests/unit/test_gui_app.py \
-            --cov=recovar --cov-report=term-missing:skip-covered \
-            --tb=short 2>&1 | tail -50
+            --cov=recovar --cov-report=term-missing:skip-covered --tb=short
 
   docs:
     name: Docs build
@@ -90,4 +87,4 @@ jobs:
         run: pip install mkdocs-material mkdocstrings[python]
 
       - name: Build docs (strict)
-        run: mkdocs build --strict 2>&1 || echo "::warning::mkdocs build had warnings"
+        run: mkdocs build --strict

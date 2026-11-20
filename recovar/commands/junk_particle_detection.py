@@ -34,7 +34,6 @@ import mrcfile
 import numpy as np
 import pandas as pd
 import seaborn as sns
-import umap
 from sklearn.cluster import KMeans
 
 import recovar.core.fourier_transform_utils as fourier_transform_utils
@@ -1296,6 +1295,8 @@ def plot_umap_visualization(
     os.makedirs(os.path.join(output_folder, "data"), exist_ok=True)
 
     logger.info("Computing UMAP embedding for visualization...")
+
+    import umap
 
     # Compute UMAP embedding
     n_components = min(zs.shape[1], 2)

@@ -1,58 +1,39 @@
-"""Isolated regression tests for each pipeline function.
+"""Isolated checks for eight covariance pipeline stages.
 
-Each test exercises a single pipeline function (mean, noise, variance,
-covariance columns, projected covariance, principal components, embedding
-with/without contrast) in isolation, feeding standardized inputs from the
-~/recovar baseline pipeline output.
+The default case generates a deterministic 5NRL trajectory and particles in
+pytest's temporary directory. Each stage receives known inputs derived from
+the synthetic ground truth, so a failure in one stage cannot supply bad
+inputs to the remaining tests.
 
-This catches regressions at the function level — if a specific pipeline
-step degrades, the test pinpoints exactly which function is responsible,
-rather than only showing an end-to-end metric drop.
-
-Baseline data:
-    Pre-computed by scripts/generate_function_baselines.py using the published
-    recovar (ma-gilles/recovar.git).  Intermediates are stored at
-    FUNCTION_BASELINE_DIR and per-function scores in
-    tests/baselines/pipeline_functions_isolated/pdb_5nrl/per_function_scores.json.
-
-Environment variables:
-    FUNCTION_BASELINE_DIR : str
-        Directory with baseline intermediates (.npy files).
-    FUNCTION_BASELINE_SCORES : str
-        Path to per-function baseline scores JSON.
-    FUNCTION_TEST_TOL_FRAC : float
-        Tolerated relative degradation (default 0.10 = 10%).
-    FUNCTION_TEST_DATASET_DIR : str
-        Path to the shared test dataset.
+Set both FUNCTION_TEST_DATASET_DIR and FUNCTION_BASELINE_DIR to run the
+historical 128-cube experiment with its saved intermediates. In that mode,
+FUNCTION_BASELINE_SCORES and FUNCTION_TEST_TOL_FRAC keep their original
+meaning. Generated cases use truth-based checks and write per-test scores
+next to the temporary data.
 """
 
 import json
 import os
 import pickle
-import sys
 from pathlib import Path
 
 import numpy as np
 import pytest
-
-from helpers.metrics_regression import compare_metric, metric_direction, log_comparison_table
-from helpers.perf_regression import perf_snapshot, stage_perf, build_perf_record, check_perf_regression
+from helpers.metrics_regression import log_comparison_table, metric_direction
+from helpers.perf_regression import build_perf_record, check_perf_regression, perf_snapshot, stage_perf
 
 pytestmark = [
     pytest.mark.integration,
     pytest.mark.slow,
-    pytest.mark.gpu,
     pytest.mark.io,
     pytest.mark.long_test,
 ]
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
-_DEFAULT_FUNCTION_BASELINE_DIR = None  # must be set via FUNCTION_BASELINE_DIR env var
 _DEFAULT_FUNCTION_BASELINE_SCORES = (
     _REPO_ROOT / "tests" / "baselines" / "pipeline_functions_isolated" / "pdb_5nrl" / "per_function_scores.json"
 )
-_DEFAULT_DATASET_DIR = None  # must be set via FUNCTION_TEST_DATASET_DIR env var
 
 
 # ---------------------------------------------------------------------------
@@ -60,8 +41,15 @@ _DEFAULT_DATASET_DIR = None  # must be set via FUNCTION_TEST_DATASET_DIR env var
 # ---------------------------------------------------------------------------
 
 
-def _env_or_default(var, default):
-    return os.environ.get(var, str(default))
+@pytest.fixture(scope="module")
+def archive():
+    dataset = os.environ.get("FUNCTION_TEST_DATASET_DIR")
+    baseline = os.environ.get("FUNCTION_BASELINE_DIR")
+    if dataset is None and baseline is None:
+        return None
+    if not dataset or not baseline:
+        pytest.fail("Set both FUNCTION_TEST_DATASET_DIR and FUNCTION_BASELINE_DIR for the historical run")
+    return Path(dataset), Path(baseline)
 
 
 @pytest.fixture(scope="module")
@@ -70,46 +58,73 @@ def tol_frac():
 
 
 @pytest.fixture(scope="module")
-def baseline_dir():
-    d = _env_or_default("FUNCTION_BASELINE_DIR", _DEFAULT_FUNCTION_BASELINE_DIR)
-    p = Path(d)
-    if not p.exists():
-        pytest.skip(f"Baseline dir not found: {p}")
-    return p
+def baseline_scores(archive):
+    if archive is None:
+        return None
+    path = Path(os.environ.get("FUNCTION_BASELINE_SCORES", str(_DEFAULT_FUNCTION_BASELINE_SCORES)))
+    return json.loads(path.read_text())
 
 
 @pytest.fixture(scope="module")
-def baseline_scores():
-    p = Path(_env_or_default("FUNCTION_BASELINE_SCORES", _DEFAULT_FUNCTION_BASELINE_SCORES))
-    if not p.exists():
-        pytest.skip(f"Baseline scores not found: {p}")
-    with open(p) as f:
-        return json.load(f)
+def dataset_dir(archive, tmp_path_factory):
+    if archive is not None:
+        dataset, _ = archive
+        if not dataset.is_dir():
+            pytest.fail(f"Archived dataset not found: {dataset}")
+        return dataset
+
+    from recovar.commands.run_test_all_metrics import make_big_test_dataset
+    from recovar.simulation.trajectory_generation import generate_trajectory_volumes
+
+    output_dir = tmp_path_factory.mktemp("isolated_5nrl")
+    grid_size = 32
+    prefix = generate_trajectory_volumes(
+        output_dir, grid_size=grid_size, n_volumes=12, max_rotation_degrees=20, volume_workers=2
+    )
+    make_big_test_dataset(prefix, str(output_dir), grid_size=grid_size, n_images=2048, noise_level=0.025)
+    return output_dir / "test_dataset"
 
 
 @pytest.fixture(scope="module")
-def dataset_dir():
-    d = _env_or_default("FUNCTION_TEST_DATASET_DIR", _DEFAULT_DATASET_DIR)
-    p = Path(d)
-    if not p.exists():
-        pytest.skip(f"Dataset dir not found: {p}")
-    return p
+def intermediates(archive, gt_data):
+    if archive is not None:
+        _, baseline = archive
+        intdir = baseline / "intermediates"
+        paths = sorted(intdir.glob("*.npy"))
+        if not paths:
+            pytest.fail(f"No archived intermediate arrays found under {intdir}")
+        return {path.stem: np.load(path, allow_pickle=False) for path in paths}
+
+    from scipy.ndimage import binary_dilation
+
+    from recovar.core.mask import soften_volume_mask
+    from recovar.heterogeneity.covariance_core import get_picked_frequencies
+    from recovar.output.metrics import make_union_gt_mask_from_hvd
+
+    gt = gt_data["gt"]
+    shape = gt.volume_shape
+    volume_mask, binary_mask = make_union_gt_mask_from_hvd(gt, shape)
+    dilated_volume_mask = soften_volume_mask(binary_dilation(binary_mask, iterations=2))
+    mean = np.asarray(gt_data["gt_mean"], dtype=np.complex64)
+    # Shell-independent prior scale from the known mean power. The low-frequency
+    # column policy does not use the LHS to choose columns.
+    mean_prior = np.full(mean.shape, np.mean(np.abs(mean) ** 2), dtype=np.float32)
+    return {
+        "mean_combined": mean,
+        "mean_prior": mean_prior,
+        "means_lhs": np.ones(mean.shape, dtype=np.float32),
+        "noise_var_used": gt_data["gt_noise"].astype(np.float32),
+        "volume_mask": np.asarray(volume_mask, dtype=np.float32),
+        "dilated_volume_mask": np.asarray(dilated_volume_mask, dtype=np.float32),
+        "picked_frequencies": np.asarray(get_picked_frequencies(shape, radius=3, use_half=True)),
+        "variance_combined": gt_data["gt_fourier_variance"].astype(np.float32),
+        "u_rescaled": gt_data["u_gt_fourier"].astype(np.complex64),
+        "s_rescaled": (gt_data["s_gt_fourier"] ** 2).astype(np.float32),
+    }
 
 
 @pytest.fixture(scope="module")
-def intermediates(baseline_dir):
-    """Load all baseline intermediate numpy arrays."""
-    intdir = baseline_dir / "intermediates"
-    if not intdir.exists():
-        pytest.skip(f"Intermediates dir not found: {intdir}")
-    data = {}
-    for f in intdir.glob("*.npy"):
-        data[f.stem] = np.load(str(f))
-    return data
-
-
-@pytest.fixture(scope="module")
-def gt_data(dataset_dir):
+def gt_data(dataset_dir, archive):
     """Load ground truth from simulation_info.pkl."""
     from recovar.simulation import synthetic_dataset
 
@@ -121,7 +136,9 @@ def gt_data(dataset_dir):
     cov_sqrt_fourier = gt.get_covariance_square_root(contrasted=False)  # (vol_size, n_pcs)
     gt_fourier_variance = np.sum(np.abs(cov_sqrt_fourier) ** 2, axis=-1)  # (vol_size,)
 
-    u_gt, s_gt, _ = gt.get_vol_svd(contrasted=False, real_space=True, random_svd_pcs=200)
+    u_gt, s_gt, _ = gt.get_vol_svd(
+        contrasted=False, real_space=True, random_svd_pcs=200 if archive is not None else None
+    )
     u_gt_fourier, s_gt_fourier, _ = gt.get_vol_svd(contrasted=False, real_space=False)
 
     with open(sim_path, "rb") as f:
@@ -145,12 +162,12 @@ def gt_data(dataset_dir):
     }
 
 
-@pytest.fixture(scope="module")
-def cryos(dataset_dir, intermediates):
+@pytest.fixture
+def cryos(dataset_dir, intermediates, gt_data):
     """Create CryoEMDataset with halfset_indices from the shared dataset."""
     from recovar.data_io import halfsets
 
-    grid_size = 128  # known for this dataset
+    grid_size = gt_data["grid_size"]
     particles_file = str(dataset_dir / f"particles.{grid_size}.mrcs")
     poses_file = str(dataset_dir / "poses.pkl")
     ctf_file = str(dataset_dir / "ctf.pkl")
@@ -162,7 +179,7 @@ def cryos(dataset_dir, intermediates):
         ind_split = [ind0, ind1]
     else:
         # Fall back to random split
-        n_images = 50000  # known for this dataset
+        n_images = gt_data["pa"].size
         rng = np.random.RandomState(0)
         perm = rng.permutation(n_images)
         ind_split = [perm[: n_images // 2], perm[n_images // 2 :]]
@@ -183,23 +200,51 @@ def cryos(dataset_dir, intermediates):
     return ds
 
 
-def _check_metric(key, current_val, baseline_scores, tol_frac):
-    """Compare a single metric against baseline. Returns (ok, msg)."""
-    if key not in baseline_scores:
-        return True, f"no baseline for {key}"
-    base = baseline_scores[key]
-    direction = metric_direction(key)
-    if direction == "ignore":
-        return True, "ignored"
-    ok, msg = compare_metric(float(current_val), float(base), direction, tol_frac)
-    return ok, f"{key}: current={current_val:.6f} baseline={base:.6f} ({msg})"
+def _assert_metrics(results, baseline_scores, tol_frac, tmp_path, minimums=None, maximums=None):
+    if baseline_scores is not None:
+        directions = metric_direction
+        expected = set(results)
+    else:
+        minimums = minimums or {}
+        maximums = maximums or {}
+        assert minimums.keys().isdisjoint(maximums), "conflicting metric directions"
+        baseline_scores = minimums | maximums
 
+        def directions(key):
+            return "higher" if key in minimums else "lower"
 
-def _assert_metrics(results: dict, baseline_scores: dict, tol_frac: float, title: str = "Pipeline Functions Isolated"):
-    """Assert all metrics in results pass against baseline."""
-    checked, failures = log_comparison_table(results, baseline_scores, tol_frac, title=title)
-    assert checked > 0, "no metrics compared"
+        tol_frac = 0.0
+        expected = set(baseline_scores)
+
+    assert expected <= results.keys(), f"missing scores: {expected - results.keys()}"
+    assert expected <= baseline_scores.keys(), f"missing references: {expected - baseline_scores.keys()}"
+    assert results and all(np.isfinite(v) for v in results.values()), results
+    (tmp_path / "isolated_metrics.json").write_text(json.dumps(results, indent=2, allow_nan=False))
+    checked, failures = log_comparison_table(results, baseline_scores, tol_frac, direction_fn=directions)
+    assert checked, "no metrics compared"
     assert not failures, "regressions:\n" + "\n".join(failures)
+
+
+def _covariance_options(portable):
+    from recovar.heterogeneity.covariance_estimation import get_default_covariance_computation_options
+
+    options = get_default_covariance_computation_options()
+    if portable:
+        options.update(
+            column_sampling_scheme="low_freqs",
+            column_radius=3,
+            n_pcs_to_compute=12,
+            randomized_sketch_size=16,
+            column_batch_size=16,
+        )
+    return options
+
+
+def _check_perf(baseline_scores, name, before):
+    if baseline_scores is not None:
+        path = _DEFAULT_FUNCTION_BASELINE_SCORES.with_name("perf_baseline.json")
+        record = build_perf_record({name: stage_perf(before, perf_snapshot())})
+        check_perf_regression(record, str(path), f"test_{name}")
 
 
 # ---------------------------------------------------------------------------
@@ -207,17 +252,17 @@ def _assert_metrics(results: dict, baseline_scores: dict, tol_frac: float, title
 # ---------------------------------------------------------------------------
 
 
-def test_compute_mean(cryos, gt_data, intermediates, baseline_scores, tol_frac):
+def test_compute_mean(cryos, gt_data, intermediates, baseline_scores, tol_frac, tmp_path):
     """Test mean reconstruction in isolation.
 
     Uses raw images from the dataset. Compares FSC vs GT mean.
     """
-    from recovar.reconstruction import homogeneous, noise
     from recovar.output import plot_utils
+    from recovar.reconstruction import homogeneous, noise
 
     snap_before = perf_snapshot()
 
-    batch_size = 512
+    batch_size = 128 if baseline_scores is None else 512
     volume_shape = cryos.volume_shape
 
     # Initial noise from half-maps
@@ -237,14 +282,15 @@ def test_compute_mean(cryos, gt_data, intermediates, baseline_scores, tol_frac):
     )
 
     results = {"mean_fsc": float(mean_fsc_score)}
-    _assert_metrics(results, baseline_scores, tol_frac)
-
-    perf_stages = {"compute_mean": stage_perf(snap_before, perf_snapshot())}
-    perf_record = build_perf_record(perf_stages)
-    perf_baseline_path = str(
-        _REPO_ROOT / "tests" / "baselines" / "pipeline_functions_isolated" / "pdb_5nrl" / "perf_baseline.json"
+    _assert_metrics(
+        results,
+        baseline_scores,
+        tol_frac,
+        tmp_path,
+        minimums={"mean_fsc": 6 / (gt_data["grid_size"] * gt_data["voxel_size"])},
     )
-    check_perf_regression(perf_record, perf_baseline_path, "test_compute_mean")
+
+    _check_perf(baseline_scores, "compute_mean", snap_before)
 
 
 # ---------------------------------------------------------------------------
@@ -252,7 +298,7 @@ def test_compute_mean(cryos, gt_data, intermediates, baseline_scores, tol_frac):
 # ---------------------------------------------------------------------------
 
 
-def test_estimate_noise(cryos, gt_data, intermediates, baseline_scores, tol_frac):
+def test_estimate_noise(cryos, gt_data, intermediates, baseline_scores, tol_frac, tmp_path):
     """Test noise estimation in isolation.
 
     Uses ~/recovar's mean and mask as standardized inputs to decouple
@@ -262,7 +308,7 @@ def test_estimate_noise(cryos, gt_data, intermediates, baseline_scores, tol_frac
 
     from recovar.reconstruction import noise
 
-    batch_size = 512
+    batch_size = 128 if baseline_scores is None else 512
     mean_combined = intermediates["mean_combined"]
     dilated_volume_mask = intermediates["dilated_volume_mask"]
     gt_noise = gt_data["gt_noise"]
@@ -288,14 +334,24 @@ def test_estimate_noise(cryos, gt_data, intermediates, baseline_scores, tol_frac
         "noise_mean_relative_error": float(np.mean(rel_err)),
         "noise_median_relative_error": float(np.median(rel_err)),
     }
-    _assert_metrics(results, baseline_scores, tol_frac)
+    if baseline_scores is None:
+        from recovar.core import fourier_transform_utils
 
-    perf_stages = {"estimate_noise": stage_perf(snap_before, perf_snapshot())}
-    perf_record = build_perf_record(perf_stages)
-    perf_baseline_path = str(
-        _REPO_ROOT / "tests" / "baselines" / "pipeline_functions_isolated" / "pdb_5nrl" / "perf_baseline.json"
+        radii = np.asarray(fourier_transform_utils.get_grid_of_radial_distances(cryos.image_shape))
+        n_pixels = np.bincount(radii.ravel(), minlength=n_shells)[:n_shells]
+        # Integrate error across observed Fourier pixels. A single, masked DC
+        # pixel contributes less to the noise model than an entire high shell.
+        results["noise_pixel_mean_relative_error"] = float(np.average(rel_err, weights=n_pixels))
+    _assert_metrics(
+        results,
+        baseline_scores,
+        tol_frac,
+        tmp_path,
+        minimums={"noise_correlation": 0.90},
+        maximums={"noise_pixel_mean_relative_error": 0.15, "noise_median_relative_error": 0.15},
     )
-    check_perf_regression(perf_record, perf_baseline_path, "test_estimate_noise")
+
+    _check_perf(baseline_scores, "estimate_noise", snap_before)
 
 
 # ---------------------------------------------------------------------------
@@ -303,7 +359,7 @@ def test_estimate_noise(cryos, gt_data, intermediates, baseline_scores, tol_frac
 # ---------------------------------------------------------------------------
 
 
-def test_compute_variance(cryos, gt_data, intermediates, baseline_scores, tol_frac):
+def test_compute_variance(cryos, gt_data, intermediates, baseline_scores, tol_frac, tmp_path):
     """Test variance estimation in isolation.
 
     Uses ~/recovar's mean and noise as standardized inputs.
@@ -319,12 +375,12 @@ def test_compute_variance(cryos, gt_data, intermediates, baseline_scores, tol_fr
     """
     snap_before = perf_snapshot()
 
-    from recovar.heterogeneity import covariance_estimation
-    from recovar.reconstruction import noise
-    from recovar.output import plot_utils
     from recovar import utils
+    from recovar.heterogeneity import covariance_estimation
+    from recovar.output import plot_utils
+    from recovar.reconstruction import noise
 
-    batch_size = 512
+    batch_size = 128 if baseline_scores is None else 512
     volume_shape = cryos.volume_shape
     mean_combined = intermediates["mean_combined"]
     noise_var_used = intermediates["noise_var_used"]
@@ -358,14 +414,15 @@ def test_compute_variance(cryos, gt_data, intermediates, baseline_scores, tol_fr
     print(f"  variance_fourier_fsc = {fourier_var_fsc:.6f}")
 
     results = {"variance_fourier_fsc": float(fourier_var_fsc)}
-    _assert_metrics(results, baseline_scores, tol_frac)
-
-    perf_stages = {"compute_variance": stage_perf(snap_before, perf_snapshot())}
-    perf_record = build_perf_record(perf_stages)
-    perf_baseline_path = str(
-        _REPO_ROOT / "tests" / "baselines" / "pipeline_functions_isolated" / "pdb_5nrl" / "perf_baseline.json"
+    _assert_metrics(
+        results,
+        baseline_scores,
+        tol_frac,
+        tmp_path,
+        minimums={"variance_fourier_fsc": 2 / (gt_data["grid_size"] * gt_data["voxel_size"])},
     )
-    check_perf_regression(perf_record, perf_baseline_path, "test_compute_variance")
+
+    _check_perf(baseline_scores, "compute_variance", snap_before)
 
 
 # ---------------------------------------------------------------------------
@@ -373,7 +430,7 @@ def test_compute_variance(cryos, gt_data, intermediates, baseline_scores, tol_fr
 # ---------------------------------------------------------------------------
 
 
-def test_covariance_columns(cryos, gt_data, intermediates, baseline_scores, tol_frac):
+def test_covariance_columns(cryos, gt_data, intermediates, baseline_scores, tol_frac, tmp_path):
     """Test covariance column computation in isolation.
 
     Uses ~/recovar's mean, noise, and mask. Uses the same picked_frequencies
@@ -381,12 +438,12 @@ def test_covariance_columns(cryos, gt_data, intermediates, baseline_scores, tol_
     """
     snap_before = perf_snapshot()
 
-    from recovar.heterogeneity import covariance_estimation, principal_components
-    from recovar.reconstruction import noise
+    from recovar.heterogeneity import covariance_estimation
     from recovar.output import plot_utils
+    from recovar.reconstruction import noise
 
-    batch_size = 512
-    gpu_memory = 40.0
+    batch_size = 128 if baseline_scores is None else 512
+    gpu_memory = 0.25 if baseline_scores is None else 40.0
     volume_shape = cryos.volume_shape
 
     # Standardized inputs from baseline
@@ -414,7 +471,7 @@ def test_covariance_columns(cryos, gt_data, intermediates, baseline_scores, tol_
     noise.update_noise_variance(noise_var_used, cryos)
     valid_idx = cryos.get_valid_frequency_indices()
 
-    covariance_options = covariance_estimation.get_default_covariance_computation_options()
+    covariance_options = _covariance_options(baseline_scores is None)
 
     cov_cols, _, col_fscs = covariance_estimation.compute_regularized_covariance_columns_in_batch(
         cryos,
@@ -428,11 +485,26 @@ def test_covariance_columns(cryos, gt_data, intermediates, baseline_scores, tol_
         picked_frequencies,
     )
 
-    # Compare against GT covariance columns
-    gt_cov_cols = gt_data["gt"].get_covariance_columns(picked_frequencies, contrasted=False)
+    # The isolated estimator sees the simulated per-image contrast variation.
+    # The historical scores used the structural covariance as their reference.
+    gt_cov_cols = gt_data["gt"].get_covariance_columns(picked_frequencies, contrasted=baseline_scores is None)
     est_cov_cols = cov_cols.get("est_mask", cov_cols.get("est"))
 
-    if est_cov_cols is not None and gt_cov_cols is not None:
+    assert est_cov_cols is not None and gt_cov_cols is not None
+    assert est_cov_cols.shape == gt_cov_cols.shape
+    if baseline_scores is None:
+        # Compare whole column matrices, including low and high spatial frequencies.
+        correlation = np.vdot(gt_cov_cols, est_cov_cols).real / (
+            np.linalg.norm(gt_cov_cols) * np.linalg.norm(est_cov_cols)
+        )
+        _assert_metrics(
+            {"column_correlation": float(correlation)},
+            baseline_scores,
+            tol_frac,
+            tmp_path,
+            minimums={"column_correlation": 0.5},
+        )
+    else:
         col_fsc_scores = []
         n_cols = min(est_cov_cols.shape[1], gt_cov_cols.shape[1])
         for i in range(n_cols):
@@ -444,14 +516,9 @@ def test_covariance_columns(cryos, gt_data, intermediates, baseline_scores, tol_
             "covariance_columns_mean_fsc": float(np.mean(col_fsc_scores)),
             "covariance_columns_median_fsc": float(np.median(col_fsc_scores)),
         }
-        _assert_metrics(results, baseline_scores, tol_frac)
+        _assert_metrics(results, baseline_scores, tol_frac, tmp_path)
 
-    perf_stages = {"covariance_columns": stage_perf(snap_before, perf_snapshot())}
-    perf_record = build_perf_record(perf_stages)
-    perf_baseline_path = str(
-        _REPO_ROOT / "tests" / "baselines" / "pipeline_functions_isolated" / "pdb_5nrl" / "perf_baseline.json"
-    )
-    check_perf_regression(perf_record, perf_baseline_path, "test_covariance_columns")
+    _check_perf(baseline_scores, "covariance_columns", snap_before)
 
 
 # ---------------------------------------------------------------------------
@@ -459,7 +526,7 @@ def test_covariance_columns(cryos, gt_data, intermediates, baseline_scores, tol_
 # ---------------------------------------------------------------------------
 
 
-def test_projected_covariance(cryos, gt_data, intermediates, baseline_scores, tol_frac):
+def test_projected_covariance(cryos, gt_data, intermediates, baseline_scores, tol_frac, tmp_path):
     """Test projected covariance in isolation with GT eigenvectors as basis.
 
     Uses ~/recovar's mean and mask. GT eigenvectors (Fourier) are used as
@@ -478,7 +545,7 @@ def test_projected_covariance(cryos, gt_data, intermediates, baseline_scores, to
     from recovar.heterogeneity import covariance_estimation
     from recovar.reconstruction import noise
 
-    batch_size = 512
+    batch_size = 128 if baseline_scores is None else 512
     mean_combined = intermediates["mean_combined"]
     noise_var_used = intermediates["noise_var_used"]
     volume_mask = intermediates["volume_mask"]
@@ -486,47 +553,47 @@ def test_projected_covariance(cryos, gt_data, intermediates, baseline_scores, to
     noise.update_noise_variance(noise_var_used, cryos)
 
     # GT eigenvectors in Fourier space as basis — (vol_size, n_pcs)
-    n_gt_pcs = min(10, gt_data["u_gt_fourier"].shape[1])
+    n_gt_pcs = min(4 if baseline_scores is None else 10, gt_data["u_gt_fourier"].shape[1])
     gt_basis = gt_data["u_gt_fourier"][:, :n_gt_pcs]  # (vol_size, n_pcs)
 
     proj_cov = covariance_estimation.compute_projected_covariance(
-        cryos, mean_combined, gt_basis, volume_mask, batch_size, disc_type="linear_interp", disc_type_u="linear_interp"
+        cryos,
+        mean_combined,
+        gt_basis,
+        volume_mask,
+        batch_size,
+        disc_type="cubic" if baseline_scores is None else "linear_interp",
+        disc_type_u="cubic" if baseline_scores is None else "linear_interp",
     )
 
-    # Compare against baseline's projected covariance (same GT basis, old code)
-    baseline_proj_cov = intermediates.get("projected_covariance_gt_basis")
-    if baseline_proj_cov is not None:
-        frob_err = float(np.linalg.norm(proj_cov - baseline_proj_cov) / (np.linalg.norm(baseline_proj_cov) + 1e-12))
-
-        # Also compare against GT theoretical projected covariance = diag(s^2)
-        gt_proj_cov = np.diag(gt_data["s_gt_fourier"][:n_gt_pcs] ** 2)
-        frob_err_vs_gt = float(np.linalg.norm(proj_cov - gt_proj_cov) / (np.linalg.norm(gt_proj_cov) + 1e-12))
-
-        # Off-diagonal norm (GT is diagonal, so off-diagonal = noise leakage)
-        off_diag_norm = float(np.linalg.norm(proj_cov - np.diag(np.diag(proj_cov))))
-        off_diag_rel = off_diag_norm / (np.linalg.norm(proj_cov) + 1e-12)
-
-        print(f"  proj_cov_frobenius_error_vs_old = {frob_err:.6f}")
-        print(f"  proj_cov_frobenius_error_vs_gt = {frob_err_vs_gt:.6f}")
-        print(f"  proj_cov_off_diagonal_relative = {off_diag_rel:.6f}")
-        print(f"  proj_cov diagonal: {np.diag(proj_cov)}")
-        print(f"  GT diag(s^2):      {np.diag(gt_proj_cov)}")
-
-        results = {
-            "projected_covariance_relative_frobenius_error": frob_err,
-            "proj_cov_frobenius_error_vs_gt": frob_err_vs_gt,
-            "proj_cov_off_diagonal_relative_error": off_diag_rel,
-        }
-        _assert_metrics(results, baseline_scores, tol_frac)
+    if baseline_scores is None:
+        # The projected-covariance call does not correct per-image contrast.
+        coefficients = gt_basis.conj().T @ gt_data["gt"].get_covariance_square_root(contrasted=True)
+        gt_proj_cov = (coefficients @ coefficients.conj().T).real
     else:
-        pytest.skip("No baseline projected covariance available")
-
-    perf_stages = {"projected_covariance": stage_perf(snap_before, perf_snapshot())}
-    perf_record = build_perf_record(perf_stages)
-    perf_baseline_path = str(
-        _REPO_ROOT / "tests" / "baselines" / "pipeline_functions_isolated" / "pdb_5nrl" / "perf_baseline.json"
+        gt_proj_cov = np.diag(gt_data["s_gt_fourier"][:n_gt_pcs] ** 2)
+    proj_cov = np.asarray(proj_cov)
+    assert proj_cov.shape == gt_proj_cov.shape
+    results = {
+        "proj_cov_frobenius_error_vs_gt": float(np.linalg.norm(proj_cov - gt_proj_cov) / np.linalg.norm(gt_proj_cov)),
+        "proj_cov_off_diagonal_relative_error": float(
+            np.linalg.norm(proj_cov - np.diag(np.diag(proj_cov))) / np.linalg.norm(proj_cov)
+        ),
+    }
+    if baseline_scores is not None:
+        baseline_proj_cov = intermediates["projected_covariance_gt_basis"]
+        results["projected_covariance_relative_frobenius_error"] = float(
+            np.linalg.norm(proj_cov - baseline_proj_cov) / np.linalg.norm(baseline_proj_cov)
+        )
+    _assert_metrics(
+        results,
+        baseline_scores,
+        tol_frac,
+        tmp_path,
+        maximums={"proj_cov_frobenius_error_vs_gt": 0.5, "proj_cov_off_diagonal_relative_error": 0.25},
     )
-    check_perf_regression(perf_record, perf_baseline_path, "test_projected_covariance")
+
+    _check_perf(baseline_scores, "projected_covariance", snap_before)
 
 
 # ---------------------------------------------------------------------------
@@ -534,20 +601,20 @@ def test_projected_covariance(cryos, gt_data, intermediates, baseline_scores, to
 # ---------------------------------------------------------------------------
 
 
-def test_principal_components(cryos, gt_data, intermediates, baseline_scores, tol_frac):
+def test_principal_components(cryos, gt_data, intermediates, baseline_scores, tol_frac, tmp_path):
     """Test full principal component estimation in isolation.
 
     Uses ~/recovar's mean, noise, mask, and variance as standardized inputs.
     """
     snap_before = perf_snapshot()
 
-    from recovar.heterogeneity import principal_components, covariance_estimation
-    from recovar.reconstruction import noise
-    from recovar.output import metrics
     from recovar.core import linalg
+    from recovar.heterogeneity import principal_components
+    from recovar.output import metrics
+    from recovar.reconstruction import noise
 
-    batch_size = 512
-    gpu_memory = 40.0
+    batch_size = 128 if baseline_scores is None else 512
+    gpu_memory = 0.25 if baseline_scores is None else 40.0
     volume_shape = cryos.volume_shape
     volume_size = int(np.prod(volume_shape))
     vol_norm = np.sqrt(volume_size)
@@ -585,7 +652,7 @@ def test_principal_components(cryos, gt_data, intermediates, baseline_scores, to
         keep_intermediate=False,
         ignore_zero_frequency=True,
     )
-    covariance_options = covariance_estimation.get_default_covariance_computation_options()
+    covariance_options = _covariance_options(baseline_scores is None)
 
     u, s, _, _, _ = principal_components.estimate_principal_components(
         cryos,
@@ -614,15 +681,15 @@ def test_principal_components(cryos, gt_data, intermediates, baseline_scores, to
             results[f"pcs_relative_variance_{k}"] = float(rel_var[k])
 
     print("  PCS relative variance:", {k: f"{v:.6f}" for k, v in results.items() if k.startswith("pcs_")})
-    assert results, "No PCS metrics computed"
-    _assert_metrics(results, baseline_scores, tol_frac)
-
-    perf_stages = {"principal_components": stage_perf(snap_before, perf_snapshot())}
-    perf_record = build_perf_record(perf_stages)
-    perf_baseline_path = str(
-        _REPO_ROOT / "tests" / "baselines" / "pipeline_functions_isolated" / "pdb_5nrl" / "perf_baseline.json"
+    _assert_metrics(
+        results,
+        baseline_scores,
+        tol_frac,
+        tmp_path,
+        minimums={f"pcs_relative_variance_{k}": 0.5 for k in (2, 4, 5, 10)},
     )
-    check_perf_regression(perf_record, perf_baseline_path, "test_principal_components")
+
+    _check_perf(baseline_scores, "principal_components", snap_before)
 
 
 # ---------------------------------------------------------------------------
@@ -630,7 +697,7 @@ def test_principal_components(cryos, gt_data, intermediates, baseline_scores, to
 # ---------------------------------------------------------------------------
 
 
-def test_embedding_with_contrast(cryos, gt_data, intermediates, baseline_scores, tol_frac):
+def test_embedding_with_contrast(cryos, gt_data, intermediates, baseline_scores, tol_frac, tmp_path):
     """Test per-image embedding with contrast correction.
 
     Uses ~/recovar's mean, eigenvectors, and eigenvalues as standardized
@@ -639,10 +706,10 @@ def test_embedding_with_contrast(cryos, gt_data, intermediates, baseline_scores,
     snap_before = perf_snapshot()
 
     from recovar.heterogeneity import embedding
-    from recovar.reconstruction import noise
     from recovar.output import metrics
+    from recovar.reconstruction import noise
 
-    gpu_memory = 40.0
+    gpu_memory = 0.25 if baseline_scores is None else 40.0
     mean_combined = intermediates["mean_combined"]
     noise_var_used = intermediates["noise_var_used"]
     volume_mask = intermediates["volume_mask"]
@@ -651,7 +718,14 @@ def test_embedding_with_contrast(cryos, gt_data, intermediates, baseline_scores,
 
     noise.update_noise_variance(noise_var_used, cryos)
 
+    image_ids = cryos.original_image_indices_from_local()
+    labels = gt_data["pa"][image_ids]
+    true_contrasts = gt_data["gt_contrasts"][image_ids]
+    rng = np.random.default_rng(0)
+    shuffled_labels = rng.permutation(labels)
+    null_contrast_error = float(np.mean(np.abs(true_contrasts - 1)))
     results = {}
+    limits = {}
     for zdim in [4, 10]:
         zs, _, est_contrasts, _ = embedding.get_per_image_embedding(
             mean_combined,
@@ -667,20 +741,19 @@ def test_embedding_with_contrast(cryos, gt_data, intermediates, baseline_scores,
             ignore_zero_frequency=True,
         )
 
-        _, avg_var = metrics.variance_of_zs(zs, gt_data["pa"])
+        _, avg_var = metrics.variance_of_zs(zs, labels)
         results[f"embedding_squared_error_{zdim}"] = float(avg_var)
 
-        contrast_mae = float(np.mean(np.abs(gt_data["gt_contrasts"] - est_contrasts.ravel())))
+        contrast_mae = float(np.mean(np.abs(true_contrasts - est_contrasts.ravel())))
         results[f"contrasts_{zdim}"] = contrast_mae
 
-    _assert_metrics(results, baseline_scores, tol_frac)
+        _, null_embedding_error = metrics.variance_of_zs(zs, shuffled_labels)
+        limits[f"embedding_squared_error_{zdim}"] = float(null_embedding_error)
+        limits[f"contrasts_{zdim}"] = null_contrast_error
 
-    perf_stages = {"embedding_with_contrast": stage_perf(snap_before, perf_snapshot())}
-    perf_record = build_perf_record(perf_stages)
-    perf_baseline_path = str(
-        _REPO_ROOT / "tests" / "baselines" / "pipeline_functions_isolated" / "pdb_5nrl" / "perf_baseline.json"
-    )
-    check_perf_regression(perf_record, perf_baseline_path, "test_embedding_with_contrast")
+    _assert_metrics(results, baseline_scores, tol_frac, tmp_path, maximums=limits)
+
+    _check_perf(baseline_scores, "embedding_with_contrast", snap_before)
 
 
 # ---------------------------------------------------------------------------
@@ -688,7 +761,7 @@ def test_embedding_with_contrast(cryos, gt_data, intermediates, baseline_scores,
 # ---------------------------------------------------------------------------
 
 
-def test_embedding_without_contrast(cryos, gt_data, intermediates, baseline_scores, tol_frac):
+def test_embedding_without_contrast(cryos, gt_data, intermediates, baseline_scores, tol_frac, tmp_path):
     """Test per-image embedding without eigenvalue regularization.
 
     Same as test 7 but s → inf (unregularized least-squares).
@@ -696,10 +769,10 @@ def test_embedding_without_contrast(cryos, gt_data, intermediates, baseline_scor
     snap_before = perf_snapshot()
 
     from recovar.heterogeneity import embedding
-    from recovar.reconstruction import noise
     from recovar.output import metrics
+    from recovar.reconstruction import noise
 
-    gpu_memory = 40.0
+    gpu_memory = 0.25 if baseline_scores is None else 40.0
     mean_combined = intermediates["mean_combined"]
     noise_var_used = intermediates["noise_var_used"]
     volume_mask = intermediates["volume_mask"]
@@ -708,12 +781,19 @@ def test_embedding_without_contrast(cryos, gt_data, intermediates, baseline_scor
 
     noise.update_noise_variance(noise_var_used, cryos)
 
+    image_ids = cryos.original_image_indices_from_local()
+    labels = gt_data["pa"][image_ids]
+    true_contrasts = gt_data["gt_contrasts"][image_ids]
+    rng = np.random.default_rng(0)
+    shuffled_labels = rng.permutation(labels)
+    null_contrast_error = float(np.mean(np.abs(true_contrasts - 1)))
     results = {}
+    limits = {}
     for zdim in [4, 10]:
         zs_noreg, _, est_contrasts_noreg, _ = embedding.get_per_image_embedding(
             mean_combined,
             u_rescaled,
-            s_rescaled * 0 + np.inf,
+            np.full_like(s_rescaled, np.inf),
             zdim,
             cryos,
             volume_mask,
@@ -724,17 +804,16 @@ def test_embedding_without_contrast(cryos, gt_data, intermediates, baseline_scor
             ignore_zero_frequency=True,
         )
 
-        _, avg_var = metrics.variance_of_zs(zs_noreg, gt_data["pa"])
+        _, avg_var = metrics.variance_of_zs(zs_noreg, labels)
         results[f"embedding_squared_error_{zdim}_noreg"] = float(avg_var)
 
-        contrast_mae = float(np.mean(np.abs(gt_data["gt_contrasts"] - est_contrasts_noreg.ravel())))
+        contrast_mae = float(np.mean(np.abs(true_contrasts - est_contrasts_noreg.ravel())))
         results[f"contrasts_{zdim}_noreg"] = contrast_mae
 
-    _assert_metrics(results, baseline_scores, tol_frac)
+        _, null_embedding_error = metrics.variance_of_zs(zs_noreg, shuffled_labels)
+        limits[f"embedding_squared_error_{zdim}_noreg"] = float(null_embedding_error)
+        limits[f"contrasts_{zdim}_noreg"] = null_contrast_error
 
-    perf_stages = {"embedding_without_contrast": stage_perf(snap_before, perf_snapshot())}
-    perf_record = build_perf_record(perf_stages)
-    perf_baseline_path = str(
-        _REPO_ROOT / "tests" / "baselines" / "pipeline_functions_isolated" / "pdb_5nrl" / "perf_baseline.json"
-    )
-    check_perf_regression(perf_record, perf_baseline_path, "test_embedding_without_contrast")
+    _assert_metrics(results, baseline_scores, tol_frac, tmp_path, maximums=limits)
+
+    _check_perf(baseline_scores, "embedding_without_contrast", snap_before)

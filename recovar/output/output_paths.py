@@ -7,7 +7,6 @@ Both the saving side (pipeline.py, analyze.py) and the loading side
 
 import os
 
-
 # ---------------------------------------------------------------------------
 # Subdirectory names
 # ---------------------------------------------------------------------------
@@ -25,10 +24,12 @@ PLOTS_DIR = os.path.join(OUTPUT_DIR, "plots")
 PARAMS_FILE = "params.pkl"
 EMBEDDINGS_FILE = "embeddings.pkl"
 COVARIANCE_COLS_FILE = "covariance_cols.pkl"
+PPCA_LOADINGS_FILE = "ppca_loadings.npy"
 HALFSETS_FILE = "halfsets.pkl"
 PARTICLES_HALFSETS_FILE = "particles_halfsets.pkl"
 ZS_WITH_COMPLEMENT_FILE = "zs_with_complement.pkl"
 METADATA_FILE = "metadata.json"
+PPCA_ITERATION_DATA_FILE = "ppca_iteration_data.pkl"
 
 
 # ---------------------------------------------------------------------------
@@ -58,6 +59,7 @@ def variance_filename(n_eigs):
 # ---------------------------------------------------------------------------
 # ResultPaths class
 # ---------------------------------------------------------------------------
+
 
 class ResultPaths:
     """Single source of truth for all output file paths.
@@ -114,6 +116,10 @@ class ResultPaths:
         return os.path.join(self.model_dir, COVARIANCE_COLS_FILE)
 
     @property
+    def ppca_loadings(self):
+        return os.path.join(self.model_dir, PPCA_LOADINGS_FILE)
+
+    @property
     def halfsets(self):
         return os.path.join(self.model_dir, HALFSETS_FILE)
 
@@ -128,6 +134,10 @@ class ResultPaths:
     @property
     def metadata(self):
         return os.path.join(self.model_dir, METADATA_FILE)
+
+    @property
+    def ppca_iteration_data(self):
+        return os.path.join(self.model_dir, PPCA_ITERATION_DATA_FILE)
 
     # --- Volume files ---
 
@@ -183,8 +193,7 @@ class ResultPaths:
 
     def ensure_dirs(self):
         """Create all standard output directories."""
-        for d in (self.root, self.model_dir, self.output_dir,
-                  self.volumes_dir, self.plots_dir):
+        for d in (self.root, self.model_dir, self.output_dir, self.volumes_dir, self.plots_dir):
             os.makedirs(d, exist_ok=True)
 
     def ensure_model_dir(self):
@@ -199,6 +208,7 @@ class ResultPaths:
 # ---------------------------------------------------------------------------
 # Analysis output naming (downstream: kmeans, trajectories)
 # ---------------------------------------------------------------------------
+
 
 class AnalysisPaths:
     """Path helpers for downstream analysis outputs (kmeans, trajectories).
@@ -249,6 +259,7 @@ class AnalysisPaths:
 # ---------------------------------------------------------------------------
 # Per-volume output paths (used by heterogeneity_volume.py)
 # ---------------------------------------------------------------------------
+
 
 class VolumeOutputPaths:
     """Path abstraction for a single reconstructed volume's output files.

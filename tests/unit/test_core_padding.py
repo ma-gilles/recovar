@@ -66,6 +66,14 @@ class TestPadUnpadVolumeSpatial:
         unpadded = padding.unpad_volume_spatial_domain(padded, pad)
         np.testing.assert_allclose(unpadded, vol, atol=1e-6)
 
+    def test_roundtrip_odd_padding(self):
+        rng = np.random.RandomState(0)
+        vol = jnp.array(rng.randn(8, 8, 8).astype(np.float32))
+        padded = padding.pad_volume_spatial_domain(vol, 3)
+        assert padded.shape == (11, 11, 11)
+        unpadded = padding.unpad_volume_spatial_domain(padded, 3)
+        np.testing.assert_allclose(unpadded, vol, atol=1e-6)
+
     def test_padded_shape(self):
         vol = jnp.zeros((6, 6, 6))
         padded = padding.pad_volume_spatial_domain(vol, 2)

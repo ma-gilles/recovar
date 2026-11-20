@@ -29,7 +29,6 @@ import pickle
 import subprocess
 import sys
 from pathlib import Path
-from typing import Optional
 
 import mrcfile
 import numpy as np
@@ -135,8 +134,8 @@ def _run_outliers_pipeline(
     subprocess.run(make_cmd, check=True, env=env)
 
     # Compute GT union mask from the volume MRC files
-    from recovar.core import mask as mask_mod
     from recovar import utils as recovar_utils
+    from recovar.core import mask as mask_mod
 
     vol_files = sorted(volumes_prefix.parent.glob(f"{volumes_prefix.name}*.mrc"))
     vols = [recovar_utils.load_mrc(str(f)) for f in vol_files]
@@ -151,7 +150,8 @@ def _run_outliers_pipeline(
     # Run pipeline_with_outliers
     if n_tilts > 0:
         particles = str(dataset_dir / "particles.star")
-        pipe_extra = ["--tilt-series", "--tilt-series-ctf", "relion5"]
+        # The baseline was generated with the single radial noise model.
+        pipe_extra = ["--tilt-series", "--tilt-series-ctf", "relion5", "--noise-model", "radial"]
     else:
         particles = str(dataset_dir / f"particles.{grid}.mrcs")
         pipe_extra = []
@@ -194,8 +194,8 @@ def _run_outliers_pipeline(
 
 
 def _compute_metrics(pipeline_out: Path, sim_info_path: Path, k_rounds: int) -> dict:
-    with open(sim_info_path, "rb") as f:
-        sim_info = pickle.load(f)
+    with open(sim_info_path, "rb") as sim_stream:
+        sim_info = pickle.load(sim_stream)
 
     assign = np.asarray(sim_info["image_assignment"])
     n_total = int(assign.size)
@@ -290,8 +290,8 @@ def test_run_test_outliers_pipeline_tiny_integration_spa(tmp_path):
 
     sim_info_path = tmp_path / "run_spa" / "test_dataset" / "simulation_info.pkl"
     assert sim_info_path.exists()
-    with open(sim_info_path, "rb") as f:
-        sim_info = pickle.load(f)
+    with open(sim_info_path, "rb") as sim_stream:
+        sim_info = pickle.load(sim_stream)
     n_total = int(np.asarray(sim_info["image_assignment"]).size)
 
     _check_files_and_partition(pipeline_out, n_total=n_total, k_rounds=_K_ROUNDS)
@@ -331,8 +331,8 @@ def test_run_test_outliers_pipeline_tiny_integration_cryo_et(tmp_path):
 
     sim_info_path = tmp_path / "run_et" / "test_dataset" / "simulation_info.pkl"
     assert sim_info_path.exists()
-    with open(sim_info_path, "rb") as f:
-        sim_info = pickle.load(f)
+    with open(sim_info_path, "rb") as sim_stream:
+        sim_info = pickle.load(sim_stream)
     n_total = int(np.asarray(sim_info["image_assignment"]).size)
 
     _check_files_and_partition(pipeline_out, n_total=n_total, k_rounds=_K_ROUNDS)

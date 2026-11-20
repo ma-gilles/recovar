@@ -53,6 +53,7 @@ jobs:
         env:
           CIBW_BUILD: "cp311-*"
           CIBW_SKIP: "*-musllinux*"
+          CIBW_ARCHS_LINUX: native
 
       - name: Install smoke-test dependencies
         shell: bash

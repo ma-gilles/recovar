@@ -181,3 +181,38 @@ def test_generate_volume_from_atom_positions_and_types_uses_complex128_for_float
         freq_coords=freq_coords,
     )
     assert density.dtype == np.complex128
+
+
+def test_grid_nufft_forwards_explicit_thread_count(monkeypatch):
+    calls = []
+
+    def fake_nufft3d1(x, y, z, weights, n_modes, **kwargs):
+        del x, y, z, weights
+        calls.append(kwargs)
+        return np.zeros(n_modes, dtype=np.complex128)
+
+    monkeypatch.setattr(ssp.finufft, "nufft3d1", fake_nufft3d1)
+    atom_coords = np.zeros((1, 3), dtype=np.float64)
+    weights = np.ones(1, dtype=np.complex128)
+
+    ssp.get_fourier_transform_of_molecules_on_k_grid(
+        atom_coords,
+        weights,
+        voxel_size=1.0,
+        grid_size=4,
+        finufft_nthreads=1,
+    )
+
+    assert calls == [{"isign": -1, "eps": ssp.FINUFFT_EPS, "nthreads": 1}]
+
+
+@pytest.mark.parametrize("nthreads", [0, -1, 1.5, True])
+def test_grid_nufft_rejects_invalid_thread_count(nthreads):
+    with pytest.raises(ValueError, match="finufft_nthreads"):
+        ssp.get_fourier_transform_of_molecules_on_k_grid(
+            np.zeros((1, 3), dtype=np.float64),
+            np.ones(1, dtype=np.complex128),
+            voxel_size=1.0,
+            grid_size=4,
+            finufft_nthreads=nthreads,
+        )

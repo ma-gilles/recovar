@@ -6,10 +6,14 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-
-from helpers.metrics_regression import compare_metric, metric_direction, metric_tolerance, log_comparison_table
-from helpers.perf_regression import perf_snapshot, stage_perf, build_perf_record, check_perf_regression, run_tracked_subprocess
-
+from helpers.metrics_regression import log_comparison_table
+from helpers.perf_regression import (
+    build_perf_record,
+    check_perf_regression,
+    perf_snapshot,
+    run_tracked_subprocess,
+    stage_perf,
+)
 
 pytestmark = [pytest.mark.integration, pytest.mark.slow, pytest.mark.gpu, pytest.mark.io, pytest.mark.long_test]
 
@@ -118,7 +122,7 @@ def _assert_cryo_et_subsampling_consistency(particles_star: Path):
     assert set(half0.tolist()).issubset(allowed_image_values)
     assert half1.size == 0
 
-    # ntilts subsampling: at most one tilt kept per selected particle when ntilts=1.
+    # ntilts subsampling: only global acquisition rank zero is eligible.
     split_ntilts = halfsets.get_split_tilt_indices(
         particles_file=str(particles_star),
         tilt_ind_file=np.array([keep_a, keep_b], dtype=np.int32),
@@ -129,9 +133,8 @@ def _assert_cryo_et_subsampling_consistency(particles_star: Path):
         ],
     )
     kept = np.asarray(split_ntilts[0], dtype=np.int32)
-    for pidx in np.unique(np.array([keep_a, keep_b], dtype=np.int32)):
-        particle_tilts = np.asarray(particles_to_tilts[int(pidx)], dtype=np.int32)
-        assert np.intersect1d(kept, particle_tilts).size <= 1
+    tilt_ds = cryo_dataset.TiltSeriesDataset(str(particles_star), lazy=True, tilt_file_option="relion5")
+    assert np.all(tilt_ds.tilt_numbers[kept] < 1)
 
 
 def test_run_test_all_metrics_regression_against_baseline(tmp_path):
@@ -171,6 +174,7 @@ def test_run_test_all_metrics_regression_against_baseline(tmp_path):
     perf_record = build_perf_record(perf_stages)
     # Save current perf record for extract_regression_tables.py
     import json as _json
+
     _perf_out = output_dir / "current_perf_record_spa.json"
     _perf_out.parent.mkdir(parents=True, exist_ok=True)
     _perf_out.write_text(_json.dumps(perf_record, indent=2))
@@ -237,6 +241,7 @@ def test_run_test_all_metrics_cryo_et_subsampling_regression_against_baseline(tm
     perf_record = build_perf_record(perf_stages)
     # Save current perf record for extract_regression_tables.py
     import json as _json
+
     _perf_out = output_dir / "current_perf_record_cryo_et.json"
     _perf_out.parent.mkdir(parents=True, exist_ok=True)
     _perf_out.write_text(_json.dumps(perf_record, indent=2))

@@ -31,7 +31,6 @@ Expected runtime: ~30-60 min on one GPU (3 pipeline runs).
 
 from __future__ import annotations
 
-import json
 import os
 import pickle
 import subprocess
@@ -85,8 +84,8 @@ def _create_outlier_volume(path: str, grid: int):
 
 def _make_gt_mask(volumes_prefix: Path, grid: int) -> str:
     """Compute GT union mask from volumes and return path."""
-    from recovar.core import mask as mask_mod
     from recovar import utils as recovar_utils
+    from recovar.core import mask as mask_mod
 
     vol_files = sorted(volumes_prefix.parent.glob(f"{volumes_prefix.name}*.mrc"))
     vols = [recovar_utils.load_mrc(str(f)) for f in vol_files]
@@ -152,6 +151,9 @@ def _run_pipeline(
         "--tilt-series",
         "--tilt-series-ctf",
         "relion5",
+        # The baseline was generated with the single radial noise model.
+        "--noise-model",
+        "radial",
         "--correct-contrast",
         "-o",
         str(pipeline_out),

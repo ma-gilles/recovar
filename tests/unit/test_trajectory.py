@@ -201,3 +201,15 @@ def test_compute_high_dimensional_path_base_case_low_dim_only():
     assert path.ndim == 2 and path.shape[1] == 2
     assert path.shape[0] > 10
     assert np.all(np.isfinite(path))
+
+
+def test_compute_travel_time_clips_out_of_bounds_start(caplog):
+    density = np.ones((16, 16), dtype=np.float64)
+    bounds = [(-1.0, 1.0), (-1.0, 1.0)]
+
+    with caplog.at_level("WARNING"):
+        tt = trajectory.compute_travel_time(density, np.array([-1.2, 18.7]), bounds)
+
+    assert np.isfinite(tt).all()
+    assert tt[0, 15] == 0.0
+    assert "Clipped trajectory start index" in caplog.text

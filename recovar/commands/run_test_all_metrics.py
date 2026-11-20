@@ -777,6 +777,9 @@ def main():
         help="Skip dataset generation if test_dataset/ already exists in output-dir. "
         "Useful for regression tests that reuse a saved dataset.",
     )
+    parser.add_argument(
+        "--dataset-only", action="store_true", help="Prepare the regression particles and mask, then exit."
+    )
 
     args = parser.parse_args()
     if args.grid_size <= 0:
@@ -919,6 +922,8 @@ def main():
         gt_mask_mrc_path,
         100 * gt_union_binary_mask.sum() / gt_union_binary_mask.size,
     )
+    if args.dataset_only:
+        return
 
     # Run pipeline plugin
     cmd = [

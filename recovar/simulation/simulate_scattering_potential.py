@@ -9,8 +9,15 @@ Created on Thu Sep 30 16:04:24 2021
 import json
 import logging
 import os
+from collections import defaultdict
 
 import finufft
+import numpy as np
+
+import recovar.core.fourier_transform_utils as fourier_transform_utils
+from recovar.simulation.pdb_utils import AtomGroup as _AtomGroup
+from recovar.simulation.pdb_utils import parse_pdb as _parse_pdb
+from recovar.simulation.pdb_utils import write_pdb as _write_pdb
 
 logger = logging.getLogger(__name__)
 
@@ -21,8 +28,6 @@ try:
     _HAS_PRODY = True
 except ImportError:
     _HAS_PRODY = False
-
-from recovar.simulation.pdb_utils import AtomGroup as _AtomGroup, parse_pdb as _parse_pdb, write_pdb as _write_pdb
 
 
 def _parsePDB(path_or_id):
@@ -46,10 +51,6 @@ def _newAtomGroup():
         return _prody.AtomGroup()
     return _AtomGroup()
 
-
-import numpy as np
-from collections import defaultdict
-import recovar.core.fourier_transform_utils as fourier_transform_utils
 
 FINUFFT_EPS = 1e-8
 
@@ -86,7 +87,13 @@ def generate_bag_of_atom_projection(grid_size, radius, voxel_size, N_atoms, atom
 
 
 def get_fourier_transform_of_molecules_on_k_grid(
-    atom_coords, weights, voxel_size, grid_size, eps=FINUFFT_EPS, jax_backend=False
+    atom_coords,
+    weights,
+    voxel_size,
+    grid_size,
+    eps=FINUFFT_EPS,
+    jax_backend=False,
+    finufft_nthreads=None,
 ):
     normalized_atom_coords = (atom_coords) / grid_size * (2 * np.pi) / voxel_size
 
@@ -104,6 +111,13 @@ def get_fourier_transform_of_molecules_on_k_grid(
             eps=eps,
         )
     else:
+        finufft_options = {}
+        if finufft_nthreads is not None:
+            if isinstance(finufft_nthreads, (bool, np.bool_)) or not isinstance(finufft_nthreads, (int, np.integer)):
+                raise ValueError(f"finufft_nthreads must be a positive integer or None, got {finufft_nthreads!r}")
+            if finufft_nthreads <= 0:
+                raise ValueError(f"finufft_nthreads must be positive, got {finufft_nthreads}")
+            finufft_options["nthreads"] = int(finufft_nthreads)
         ft = finufft.nufft3d1(
             normalized_atom_coords[:, 0],
             normalized_atom_coords[:, 1],
@@ -112,6 +126,7 @@ def get_fourier_transform_of_molecules_on_k_grid(
             (grid_size, grid_size, grid_size),
             isign=-1,
             eps=eps,
+            **finufft_options,
         )
     return ft
 
@@ -202,11 +217,16 @@ def generate_synthetic_spectrum_of_molecule(radius, grid_size, voxel_size=1, ato
 
 
 def generate_spectrum_of_molecule_from_atom_coords(
-    atom_coords, voxel_size, grid_size, atom_shape_fn, jax_backend=False
+    atom_coords, voxel_size, grid_size, atom_shape_fn, jax_backend=False, finufft_nthreads=None
 ):
     weights = np.ones(atom_coords.shape[0], dtype=atom_coords.dtype).astype(complex)
     fourier_transform = get_fourier_transform_of_molecules_on_k_grid(
-        atom_coords, weights, voxel_size, grid_size, jax_backend=jax_backend
+        atom_coords,
+        weights,
+        voxel_size,
+        grid_size,
+        jax_backend=jax_backend,
+        finufft_nthreads=finufft_nthreads,
     )
 
     k_coords = fourier_transform_utils.get_k_coordinate_of_each_pixel(
@@ -257,7 +277,13 @@ def generate_potential_at_freqs_from_atoms(atoms, voxel_size, freq_coords):
 
 
 def generate_volume_from_atom_positions_and_types(
-    atom_coords, atom_types, voxel_size, grid_size=None, freq_coords=None, jax_backend=False
+    atom_coords,
+    atom_types,
+    voxel_size,
+    grid_size=None,
+    freq_coords=None,
+    jax_backend=False,
+    finufft_nthreads=None,
 ):
     use_freq_coords = freq_coords is not None
     atom_coords = np.asarray(atom_coords)
@@ -294,7 +320,10 @@ def generate_volume_from_atom_positions_and_types(
     output_shape = freq_coords.shape[0] if use_freq_coords else 3 * [grid_size]
     density = np.zeros(output_shape, dtype=out_complex_dtype)
     for atom_name in atoms_grouped_by_elements:
-        atom_shape_fn = lambda x: five_gaussian_atom_shape(x, atom_coeffs[atom_name])
+
+        def atom_shape_fn(x):
+            return five_gaussian_atom_shape(x, atom_coeffs[atom_name])
+
         if use_freq_coords:
             xx = generate_spectrum_of_molecule_from_atom_coords_at_freq_coords(
                 atoms_grouped_by_elements[atom_name],
@@ -311,6 +340,7 @@ def generate_volume_from_atom_positions_and_types(
                 grid_size=grid_size,
                 atom_shape_fn=atom_shape_fn,
                 jax_backend=jax_backend,
+                finufft_nthreads=finufft_nthreads,
             )
             density = density + xx.astype(out_complex_dtype, copy=False)
 
@@ -323,7 +353,9 @@ def one_fn(x):
     return np.ones_like(x[:, 0])
 
 
-def generate_volume_from_atoms(atoms, voxel_size=None, grid_size=None, freq_coords=None, jax_backend=False):
+def generate_volume_from_atoms(
+    atoms, voxel_size=None, grid_size=None, freq_coords=None, jax_backend=False, finufft_nthreads=None
+):
 
     atom_coords = atoms.getCoords()
     if freq_coords is not None:
@@ -337,6 +369,7 @@ def generate_volume_from_atoms(atoms, voxel_size=None, grid_size=None, freq_coor
         grid_size=grid_size,
         freq_coords=freq_coords,
         jax_backend=jax_backend,
+        finufft_nthreads=finufft_nthreads,
     )
 
 
@@ -451,7 +484,14 @@ def center_atoms(atoms):
 
 
 def generate_molecule_spectrum_from_pdb_id(
-    molecule, voxel_size, grid_size, force_symmetry=True, verbosity="none", from_atom_group=False, do_center_atoms=None
+    molecule,
+    voxel_size,
+    grid_size,
+    force_symmetry=True,
+    verbosity="none",
+    from_atom_group=False,
+    do_center_atoms=None,
+    finufft_nthreads=None,
 ):
 
     do_center_atoms = not from_atom_group if do_center_atoms is None else do_center_atoms
@@ -464,7 +504,12 @@ def generate_molecule_spectrum_from_pdb_id(
     if do_center_atoms:
         atoms = center_atoms(atoms)
 
-    ft_mol = generate_volume_from_atoms(atoms, grid_size=grid_size, voxel_size=voxel_size)
+    ft_mol = generate_volume_from_atoms(
+        atoms,
+        grid_size=grid_size,
+        voxel_size=voxel_size,
+        finufft_nthreads=finufft_nthreads,
+    )
 
     if (grid_size % 2) == 0 and force_symmetry:
         ft_mol[0] *= 0

@@ -8,14 +8,14 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
-from recovar.utils.nvtx_shim import nvtx
 
 import recovar.core.forward as core_forward
 import recovar.core.fourier_transform_utils as fourier_transform_utils
-from recovar import core, utils, jax_config
+from recovar import core, jax_config, utils
 from recovar.core.configs import ForwardModelConfig, ModelState
 from recovar.heterogeneity import covariance_core
 from recovar.reconstruction import regularization
+from recovar.utils.nvtx_shim import nvtx
 
 logger = logging.getLogger(__name__)
 
@@ -373,8 +373,8 @@ def fit_noise_model_to_images(
         Otherwise: Single noise variance and initial estimate
     """
     # Import optimization libraries
-    from jaxopt import ScipyBoundedMinimize, OptaxSolver
     import optax
+    from jaxopt import OptaxSolver, ScipyBoundedMinimize
 
     # Special handling for tilt series data
     if isinstance(experiment_dataset.noise, VariableRadialNoiseModel) and not tilt_dose_inner:
@@ -506,7 +506,7 @@ def fit_noise_model_to_images(
 
         for k in [15, 10, 5]:
 
-            def loss_function_partial(noise_subset, data, k=k):
+            def loss_function_subset(noise_subset, data, k=k):
                 noise_v_updated = optimized_noise_variance.at[:k].set(noise_subset)
                 return loss_fn_batch(noise_v_updated, data)
 
@@ -514,7 +514,7 @@ def fit_noise_model_to_images(
             upper_bounds = jnp.ones(k) * jnp.inf
             bounds = (lower_bounds, upper_bounds)
 
-            solver = OptaxSolver(opt=opt, fun=loss_function_partial, maxiter=maxiter, tol=1e-5)
+            solver = OptaxSolver(opt=opt, fun=loss_function_subset, maxiter=maxiter, tol=1e-5)
 
             # run the streaming optimiser; run_iterator returns (params, state)
             optimized_noise_variance_k, state = solver.run_iterator(
@@ -620,6 +620,33 @@ def update_noise_variance(noise_variance, dataset):
     dataset.set_noise(noise_variance)
 
 
+def _cap_noise_with_valid_upper_bound(noise_variance, upper_bound):
+    """Apply only finite, strictly positive noise upper bounds.
+
+    A zero returned by the signal-plus-noise estimator means that the shell
+    had no usable support; it is not a physical zero-noise estimate.  Treating
+    it as a real bound makes later whitening divide by zero, producing NaNs in
+    covariance embeddings and PPCA sufficient statistics.
+    """
+    noise_variance = np.asarray(noise_variance)
+    upper_bound = np.asarray(upper_bound)
+    valid_bound = np.isfinite(upper_bound) & (upper_bound > 0)
+    return np.where(valid_bound & (noise_variance > upper_bound), upper_bound, noise_variance)
+
+
+def _observed_shell_percentile(signal_p_noise, q):
+    """Percentile of the signal-plus-noise power over the voxels that have data.
+
+    ``signal_p_noise`` is a mean of ``|image - CTF * mean|^2``, so it is positive
+    wherever an image contributed and exactly 0 in voxels no image reached (a
+    per-tilt subset can leave many). Counting those empty voxels would pull the
+    percentile to 0, or just above it when slightly fewer than q% are empty.
+    Returns 0, an unsupported bound, when the shell has no data.
+    """
+    observed = signal_p_noise[signal_p_noise > 0]
+    return np.percentile(observed, q) if observed.size else 0.0
+
+
 def upper_bound_noise_by_signal_p_noise_dispatched(noise_var_used, dataset, means, batch_size, dilated_volume_mask):
 
     if isinstance(dataset.noise, VariableRadialNoiseModel):
@@ -673,8 +700,7 @@ def upper_bound_noise_by_signal_p_noise(
 
         for k in range(n_shell_to_ub):
             if np.sum(rad_grid == k) > 0:
-                ub_noise_var_by_var_est[k] = np.percentile(noise_p_variance_est[rad_grid == k], 5)
-                ub_noise_var_by_var_est[k] = np.max([0, ub_noise_var_by_var_est[k]])
+                ub_noise_var_by_var_est[k] = _observed_shell_percentile(noise_p_variance_est[rad_grid == k], 5)
                 variance_est_low_res_5_pc[k] = np.percentile(variance_est["combined"][rad_grid == k], 5)
                 variance_est_low_res_median[k] = np.median(variance_est["combined"][rad_grid == k])
 
@@ -695,10 +721,9 @@ def upper_bound_noise_by_signal_p_noise(
 
             # This is a bit of a hack. We are using the variance estimate to bound the noise variance
             # This is not correct, but it is better than nothing
-        noise_var_used[:n_shell_to_ub] = np.where(
-            noise_var_used[:n_shell_to_ub] > ub_noise_var_by_var_est,
-            ub_noise_var_by_var_est,
+        noise_var_used[:n_shell_to_ub] = _cap_noise_with_valid_upper_bound(
             noise_var_used[:n_shell_to_ub],
+            ub_noise_var_by_var_est,
         )
 
         noise_var_used = noise_var_used.astype(dataset.dtype_real)
@@ -1069,15 +1094,53 @@ def estimate_radial_noise_upper_bound_from_inside_mask_v2(experiment_dataset, me
 
 
 # Assume noise constant across images and within frequency bands. Estimate the noise by the outside of the mask, and report some statistics
-def estimate_radial_noise_statistic_from_outside_mask(experiment_dataset, volume_mask, batch_size):
+def _average_profiles_by_noise_group(profiles, experiment_dataset):
+    """Average per-image radial profiles using the dataset noise groups.
+
+    A radial-per-tilt model indexes profiles by the sorted unique dose values
+    stored in ``VariableRadialNoiseModel.dose_indices``.  Reusing those exact
+    indices keeps diagnostic power spectra aligned with the noise rows used by
+    the forward model.  Ordinary SPA/radial datasets have one group.
+    """
+
+    profiles = np.asarray(profiles)
+    if isinstance(experiment_dataset.noise, VariableRadialNoiseModel):
+        group_indices = np.asarray(experiment_dataset.noise.dose_indices, dtype=np.int32)
+        n_groups = int(np.max(group_indices)) + 1
+    else:
+        group_indices = np.zeros(experiment_dataset.n_images, dtype=np.int32)
+        n_groups = 1
+
+    grouped = []
+    for group_idx in range(n_groups):
+        selected = profiles[group_indices == group_idx]
+        if selected.size == 0:
+            raise ValueError(f"noise group {group_idx} contains no image power spectra")
+        grouped.append(mean_fn(selected, axis=0))
+    return np.asarray(grouped, dtype=experiment_dataset.dtype_real)
+
+
+def estimate_radial_noise_statistic_from_outside_mask(
+    experiment_dataset,
+    volume_mask,
+    batch_size,
+    *,
+    return_grouped=False,
+):
     masked_image_PS, image_PS = estimate_noise_variance_from_outside_mask(
         experiment_dataset, volume_mask, batch_size, disc_type="linear_interp"
     )
-    return (
+    summary = (
         mean_fn(masked_image_PS, axis=0),
         np.std(masked_image_PS, axis=0),
         mean_fn(image_PS, axis=0),
         np.std(image_PS, axis=0),
+    )
+    if not return_grouped:
+        return summary
+    return summary + (
+        _average_profiles_by_noise_group(masked_image_PS, experiment_dataset),
+        _average_profiles_by_noise_group(image_PS, experiment_dataset),
     )
 
 
@@ -1331,7 +1394,7 @@ def _average_residual_square_explicit(
     else:
         image_mask = jnp.ones_like(batch).real
 
-    if model.basis.shape[-1] == 0:
+    if model.basis is None or model.basis.shape[-1] == 0:
         predicted_vols = (
             contrasts.reshape((contrasts.shape[0], *np.ones(model.mean_estimate.ndim, dtype=int)))
             * model.mean_estimate[None]

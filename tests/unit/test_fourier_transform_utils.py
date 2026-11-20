@@ -1,3 +1,5 @@
+import jax
+import jax.numpy as jnp
 import numpy as np
 import pytest
 
@@ -123,6 +125,12 @@ def test_get_k_coordinate_of_each_pixel_shapes():
     assert coords_3d.shape == (24, 3)
     assert coords_2d.dtype == np.float32
     assert coords_3d.dtype == np.float32
+
+
+def test_rectangular_frequency_coordinates_follow_image_pixel_order():
+    coords = fourier_transform_utils.get_k_coordinate_of_each_pixel((2, 3), voxel_size=1, scaled=False)
+    expected = [[-1, -1], [0, -1], [1, -1], [-1, 0], [0, 0], [1, 0]]
+    np.testing.assert_array_equal(coords, expected)
 
 
 def test_get_k_coordinate_of_each_pixel_real_shapes():
@@ -596,9 +604,6 @@ def test_idft3_real_rejects_bad_volume_shape_rank():
 # ---------------------------------------------------------------------------
 # GPU tests – verify CPU/GPU numerical equivalence
 # ---------------------------------------------------------------------------
-
-import jax
-import jax.numpy as jnp
 
 
 @pytest.mark.gpu

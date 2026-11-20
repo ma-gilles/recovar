@@ -3,7 +3,6 @@ import logging
 import os
 
 import numpy as np
-import recovar.jax_config
 
 from recovar.output import output
 from recovar.simulation import simulator
@@ -28,6 +27,7 @@ def make_test_dataset(
     volume_input=None,
     n_tilts=None,
     premultiplied_ctf=False,
+    dose_per_tilt=3,
 ):
     """Generate a synthetic test dataset used by integration tests and examples.
 
@@ -36,6 +36,7 @@ def make_test_dataset(
     - ``grid_size``: alias of ``image_size`` (takes precedence when provided)
     - ``volume_input``: volume prefix root (default: bundled assets)
     - ``n_tilts``: number of tilts for ``tilt_series=True`` (default: 27)
+    - ``dose_per_tilt``: exposure increment in electrons per square ångström (default: 3)
     """
     if seed is not None:
         np.random.seed(seed)
@@ -58,6 +59,8 @@ def make_test_dataset(
     volume_distribution = np.array([1 / 4, 1 / 4, 1 / 2]) if volume_input is None else None
 
     if tilt_series:
+        if not np.isfinite(dose_per_tilt) or dose_per_tilt < 0:
+            raise ValueError("dose_per_tilt must be finite and nonnegative")
         n_tilts = 27 if n_tilts is None else int(n_tilts)
         n_particles = max(1, n_images // max(n_tilts, 1))
         logger.info("Generating tilt series with %d particles and %d tilts per particle", n_particles, n_tilts)
@@ -83,7 +86,7 @@ def make_test_dataset(
             create_nested_structure=create_nested_structure,
             nested_prefix=nested_prefix,
             n_tilts=n_tilts,
-            dose_per_tilt=3,
+            dose_per_tilt=dose_per_tilt,
             angle_per_tilt=3,
             percent_tilt_series_outliers=percent_tilt_series_outliers,
             premultiplied_ctf=premultiplied_ctf,
@@ -162,6 +165,9 @@ def main():
         help="Percentage of tilt outliers in tilt series dataset",
     )
     parser.add_argument("--seed", type=int, default=None, help="Random seed for reproducible dataset generation")
+    parser.add_argument(
+        "--dose-per-tilt", type=float, default=3.0, help="Exposure increment in electrons per square ångström"
+    )
     parser.add_argument("--premultiplied-ctf", action="store_true", help="Generate dataset with premultiplied CTF")
 
     args = parser.parse_args()
@@ -182,6 +188,7 @@ def main():
         volume_input=args.volume_input,
         n_tilts=args.n_tilts,
         premultiplied_ctf=args.premultiplied_ctf,
+        dose_per_tilt=args.dose_per_tilt,
     )
 
 

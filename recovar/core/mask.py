@@ -256,7 +256,8 @@ def make_mask_from_half_maps(halfmap1, halfmap2, smax=3, method="auto", **kwargs
     ``method="local_correlation"``.
 
     Args:
-        halfmap1, halfmap2: Real-space half-map volumes (same shape).
+        halfmap1: First real-space half-map volume.
+        halfmap2: Second half-map volume with the same shape.
         smax: Kernel radius in pixels (only for ``method="local_correlation"``).
         method: ``"auto"`` or ``"local_correlation"``.
         **kwargs: Forwarded to :func:`make_mask` (``threshold``,
@@ -477,8 +478,12 @@ def soft_mask_outside_map(vol, radius=-1, cosine_width=3, Mnoise=None):
     mask = jnp.where(mask2, 1 - raised_cos, mask)
 
     if Mnoise is None:
-        sum_bg = jnp.sum((vol * mask) * (mask3 + mask2))
-        mask_sum = jnp.sum(mask * (mask3 + mask2))
+        # RELION softMaskOutsideMap: the background average weights each voxel
+        # by raisedcos (= 1 - mask), i.e. 1 outside radius_p and the cosine
+        # weight in the edge band.
+        background_weight = 1 - mask
+        sum_bg = jnp.sum(vol * background_weight)
+        mask_sum = jnp.sum(background_weight)
         avg_bg = sum_bg / mask_sum
     else:
         avg_bg = None

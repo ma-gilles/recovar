@@ -110,7 +110,7 @@ gui = [
     "fastapi>=0.111",
     "uvicorn[standard]>=0.30",
     "python-multipart>=0.0.9",
-    "sqlalchemy>=2.0",
+    "sqlalchemy[asyncio]>=2.0",
     "aiosqlite>=0.19",        # async SQLite driver for SQLAlchemy's sqlite+aiosqlite engine (db.py)
     "aiofiles>=23.0",
     "tomli_w>=1.0",
@@ -123,6 +123,10 @@ dev = [
     "mypy>=1.20.0",
     "ruff>=0.8.0",
     "pre-commit>=3.0",
+    # Packaging tests build artifacts without an isolated build environment.
+    "setuptools>=61.0",
+    "setuptools_scm>=6.2",
+    "wheel",
 ]
 # Everything (pinned)
 all = [

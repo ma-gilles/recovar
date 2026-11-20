@@ -7,8 +7,8 @@ from scipy.ndimage import binary_dilation, distance_transform_edt
 pytest.importorskip("jax")
 import jax.numpy as jnp
 
-import recovar.core.mask as mask
 import recovar.core.fourier_transform_utils as fourier_transform_utils
+import recovar.core.mask as mask
 import recovar.utils as utils
 
 pytestmark = pytest.mark.unit
@@ -338,6 +338,32 @@ class TestSoftMaskOutsideMap:
         assert float(jnp.min(m)) >= 0.0
         assert float(jnp.max(m)) <= 1.0 + 1e-5
 
+    def test_matches_relion_background_weighting(self):
+        shape = (9, 9, 9)
+        radius = 2.5
+        cosine_width = 2.0
+        vol = np.arange(np.prod(shape), dtype=np.float32).reshape(shape)
+
+        coords = np.asarray(
+            fourier_transform_utils.get_k_coordinate_of_each_pixel(shape, voxel_size=1, scaled=False)
+        ).reshape(shape + (3,))
+        r = np.linalg.norm(coords, axis=-1)
+        radius_p = radius + cosine_width
+        raised_cos = 0.5 + 0.5 * np.cos(np.pi * (radius_p - r) / cosine_width)
+        protein_weight = np.zeros(shape, dtype=np.float32)
+        protein_weight = np.where(r < radius, 1.0, protein_weight)
+        protein_weight = np.where((r >= radius) & (r <= radius_p), 1.0 - raised_cos, protein_weight)
+        background_weight = np.zeros(shape, dtype=np.float32)
+        background_weight = np.where(r > radius_p, 1.0, background_weight)
+        background_weight = np.where((r >= radius) & (r <= radius_p), raised_cos, background_weight)
+        avg_bg = np.sum(vol * background_weight) / np.sum(background_weight)
+        expected = protein_weight * vol + background_weight * avg_bg
+
+        result, returned_mask = mask.soft_mask_outside_map(jnp.asarray(vol), radius=radius, cosine_width=cosine_width)
+
+        np.testing.assert_allclose(np.asarray(result), expected, rtol=1e-6, atol=1e-5)
+        np.testing.assert_allclose(np.asarray(returned_mask), protein_weight, rtol=1e-6, atol=1e-6)
+
 
 # ---------------------------------------------------------------------------
 # Reference equivalence
@@ -443,7 +469,7 @@ class TestMakeMask:
         rng = np.random.RandomState(seed)
         vol = np.zeros(shape, dtype=np.float32)
         s = signal_range
-        vol[s[0]:s[1], s[0]:s[1], s[0]:s[1]] = 5.0
+        vol[s[0] : s[1], s[0] : s[1], s[0] : s[1]] = 5.0
         return vol + rng.randn(*shape).astype(np.float32) * noise
 
     def test_output_shape_and_range(self):
@@ -509,6 +535,7 @@ class TestMakeMask:
 
     def test_mask_is_connected_with_cleanup(self):
         from scipy.ndimage import label as scipy_label
+
         vol = self._make_test_volume()
         result = mask.make_mask(vol, cleanup=True)
         binary = result > 0.5
@@ -612,9 +639,7 @@ def test_keep_input_mask_dilated_not_all_ones(tmp_path):
     mrc_path = tmp_path / "soft_mask.mrc"
     utils.write_mrc(str(mrc_path), soft, voxel_size=1.0)
 
-    volume_mask, dilated_volume_mask = mask.masking_options(
-        str(mrc_path), None, (N, N, N), np.float32, 0, True, None
-    )
+    volume_mask, dilated_volume_mask = mask.masking_options(str(mrc_path), None, (N, N, N), np.float32, 0, True, None)
 
     foreground = float(np.mean(np.asarray(dilated_volume_mask) > 0.5))
     assert foreground < 0.5, (

@@ -13,12 +13,10 @@ import numpy as np
 import pytest
 
 pytest.importorskip("jax")
-import jax
 import jax.numpy as jnp
 
-import recovar.core as core
-import recovar.core.slicing as slicing
 import recovar.core.fourier_transform_utils as ftu
+import recovar.core.slicing as slicing
 
 pytestmark = pytest.mark.unit
 
@@ -256,10 +254,11 @@ class TestHalfFullEquivalence:
     def test_backproject_all_four_combos_self_consistent(self, N):
         """Backproject all 4 combos should produce volumes that re-project consistently.
 
-        Half_vol backproject has 2x weight on interior kz (CONJ_MODE),
-        so direct voxel comparison doesn't work. Instead verify that
-        the full-vol+full-img and full-vol+half-img backproject paths
-        produce the same full volume.
+        Verifies that the full-vol+full-img and full-vol+half-img backproject
+        paths produce the same full volume.  The half-volume layouts hold the
+        same values restricted to kz >= 0 (the reconstruction convention); they
+        are checked in tests/unit/test_cuda_jax_equivalence.py and
+        tests/unit/test_reconstruction_half_layouts.py.
         """
         image_shape = (N, N)
         volume_shape = (N, N, N)
@@ -342,7 +341,7 @@ class TestUpsamplingMaxR:
         )
 
         np.testing.assert_allclose(
-            out_half, out_full, atol=1e-4, rtol=1e-4, err_msg=f"Upsampled half_vol should match full_vol"
+            out_half, out_full, atol=1e-4, rtol=1e-4, err_msg="Upsampled half_vol should match full_vol"
         )
 
     def test_backproject_upsampled_default_max_r(self, shapes):

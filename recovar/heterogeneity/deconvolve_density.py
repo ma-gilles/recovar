@@ -47,14 +47,19 @@ def get_raw_density(
     coords_entry = "latent_coords_noreg" if noreg else "latent_coords"
     precision_entry = "latent_precision_noreg" if noreg else "latent_precision"
 
-    zs = pipeline_output.get(coords_entry)[zdim]
-    cov_zs = pipeline_output.get(precision_entry)[zdim]
+    if hasattr(pipeline_output, "get_embedding_component"):
+        zs = pipeline_output.get_embedding_component(coords_entry, zdim)
+        cov_zs = pipeline_output.get_embedding_component(precision_entry, zdim)
+    else:
+        zs = pipeline_output.get(coords_entry)[zdim]
+        cov_zs = pipeline_output.get(precision_entry)[zdim]
 
+    zs = zs[:, :pca_dim_max]
+    cov_zs = cov_zs[:, :pca_dim_max, :pca_dim_max]
     cov_zs_norm = np.linalg.norm(cov_zs, axis=(-1, -2), ord=2)
     good_zs = cov_zs_norm > np.percentile(cov_zs_norm, percentile_reject)
-    zdim = pca_dim_max
-    zs = zs[good_zs][:, :zdim]
-    cov_zs = cov_zs[good_zs][:, :zdim, :zdim]
+    zs = zs[good_zs]
+    cov_zs = cov_zs[good_zs]
     gauss_kde = jax.scipy.stats.gaussian_kde(zs.T, "silverman")
     covar_data = np.mean(jnp.linalg.inv(cov_zs), axis=0)
     total_covar = covar_data + gauss_kde.covariance
@@ -284,45 +289,16 @@ def plot_density(lbfgsb_sols, density, alphas, function=None, cmap="inferno"):
 def plot_density_centers(density, centers):
     from recovar.output.output import sum_over_other
 
-    font = {"weight": "bold", "size": 22}
-    import matplotlib
-
-    matplotlib.rc("font", **font)
-
-    n_plots = 1
-    fig, axs = plt.subplots(n_plots, density.ndim, figsize=(density.ndim * 10, n_plots * 6))
-    global is_first
-    is_first = True
-
-    def plot_dens(density, title, n_plot):
-
-        if density.ndim == 2:
-            axs[n_plot, k].imshow(density)
-        else:
-            for k in range(1, density.ndim):
-                if k == 1:
-                    axs[n_plot, k - 1].set_ylabel(title)
-                axs[n_plot, k - 1].set_xticklabels([])
-                axs[n_plot, k - 1].set_yticklabels([])
-
-                to_plot = sum_over_other(density, [0, k])
-                axs[n_plot, k - 1].imshow(to_plot)
-                axs[n_plot, k - 1].scatter(centers[:, 0], centers[:, k])
-                for i in range(centers.shape[0]):
-                    axs[n_plot, k - 1].annotate(str(i), centers[i, [0, k]] + np.array([0.1, 0.1]))
-
-                to_plot = sum_over_other(density, [0, 2])
-            axs[n_plot, k].imshow(to_plot)
-            axs[n_plot, k].scatter(centers[:, 0], centers[:, 2])
-            for i in range(centers.shape[0]):
-                axs[n_plot, k].annotate(str(i), centers[i, [0, 2]] + np.array([0.1, 0.1]))
-
-            axs[n_plot, k].set_xticklabels([])
-            axs[n_plot, k].set_yticklabels([])
-
-    # axs[n_plot,0].set_ylabel(name)
-
-    plot_dens(density, "raw density", 0)
+    n_panels = density.ndim - 1
+    _, axes = plt.subplots(1, n_panels, squeeze=False, figsize=(n_panels * 10, 6))
+    for axis, other_dim in zip(axes[0], range(1, density.ndim)):
+        axis.imshow(sum_over_other(density, [0, other_dim]))
+        axis.scatter(centers[:, 0], centers[:, other_dim])
+        for i, center in enumerate(centers):
+            axis.annotate(str(i), center[[0, other_dim]] + 0.1)
+        axis.set_xticks([])
+        axis.set_yticks([])
+    axes[0, 0].set_ylabel("raw density")
     plt.subplots_adjust(wspace=0, hspace=0)
 
 
@@ -387,8 +363,8 @@ def find_local_maxs_of_density(density_deconv, latent_space_bounds, percent_top=
     n_top_points = int(percent_top / 100 * np.prod(density_deconv.shape))
     large_dens_indices = (np.array(large_dens_indices_raveled)[:, -n_top_points:]).T
 
-    from sklearn.cluster import KMeans, AgglomerativeClustering, HDBSCAN
     import matplotlib.pyplot as plt
+    from sklearn.cluster import HDBSCAN, AgglomerativeClustering, KMeans
     # clustering = KMeans(n_clusters=n_local_maxs,  n_init=10).fit(X)
 
     if n_local_maxs >= 1:

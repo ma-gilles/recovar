@@ -91,19 +91,23 @@ class ParticleImageDataset:
         strip_prefix: Optional[str] = None,
         downsample_D: Optional[int] = None,
         device=None,
+        *,
+        image_loader: Optional[ImageLoader] = None,
         **kwargs,
     ):
         if padding != 0:
             raise NotImplementedError("Padding not yet supported")
 
-        self.source = ImageLoader.from_file(
-            image_file,
-            lazy=lazy,
-            datadir=datadir or "",
-            indices=ind,
-            max_threads=max_threads,
-            strip_prefix=strip_prefix,
-        )
+        if image_loader is None:
+            image_loader = ImageLoader.from_file(
+                image_file,
+                lazy=lazy,
+                datadir=datadir or "",
+                indices=ind,
+                max_threads=max_threads,
+                strip_prefix=strip_prefix,
+            )
+        self.source = image_loader
 
         if downsample_D is not None:
             from recovar.data_io.image_loader import DownsamplingImageLoader
@@ -247,7 +251,7 @@ class TiltSeriesDataset(ParticleImageDataset):
                 raise TypeError("num_tilts must be an integer or None")
             num_tilts = int(num_tilts)
             if num_tilts < 0:
-                logger.warning("num_tilts=%d < 0; using all available tilts per particle", num_tilts)
+                logger.warning("num_tilts=%d < 0; using all available tilts", num_tilts)
                 num_tilts = None
 
         super().__init__(starfile_path, lazy=lazy, ind=ind, **kwargs)
@@ -256,10 +260,15 @@ class TiltSeriesDataset(ParticleImageDataset):
         star = starfile.StarFile.load(starfile_path)
         logger.info("STAR file parsed in %.2fs", time.time() - start_time)
 
+        if star.df is None:
+            raise ValueError(f"No data table found in {starfile_path}")
         canonical_groups = self._get_canonical_groups(star.df)
+        tilt_numbers = self._compute_tilt_numbers(star.df, canonical_groups, tilt_file_option)
 
         if ind is not None:
-            star.df = star.df.loc[ind]
+            normalized_ind = normalize_indices(ind, n_total=len(star.df), name="ind")
+            star.df = star.df.loc[normalized_ind]
+            tilt_numbers = tilt_numbers[normalized_ind]
 
         self.particle_groups = self._build_particle_groups(star.df, canonical_groups)
         self._particle_tilts = list(self.particle_groups.values())
@@ -278,7 +287,11 @@ class TiltSeriesDataset(ParticleImageDataset):
         if tilt_file_option == "relion5":
             self.dose = np.asarray(star.df["_rlnMicrographPreExposure"], dtype=np.float32)
 
-        self._compute_tilt_ordering(tilt_file_option)
+        self.tilt_numbers = tilt_numbers
+        # Compatibility alias. RELION 5 values are global acquisition ranks;
+        # Warp retains its historical per-particle B-factor ranks because its
+        # B-factor is not a reliable dataset-wide acquisition identifier.
+        self.tilt_order = self.tilt_numbers
 
         self.num_tilts = num_tilts
         self.random_tilts = random_tilts
@@ -286,7 +299,7 @@ class TiltSeriesDataset(ParticleImageDataset):
         self.dose_per_tilt = dose_per_tilt
         self.tilt_angles = None
 
-        group_counts = Counter(star.df["_rlnGroupName"])
+        group_counts: Counter = Counter(star.df["_rlnGroupName"])
         logger.info("Loaded %d tilts for %d particles", self.N, self.num_particles)
         logger.info("Tilts per particle: %s", set(group_counts.values()))
         logger.info("Dataset loaded in %.2fs", time.time() - start_time)
@@ -295,7 +308,6 @@ class TiltSeriesDataset(ParticleImageDataset):
         self.Np = self.num_particles
         self.particles = list(self.particle_groups.values())
         self.counts = group_counts
-        self.tilt_numbers = self.tilt_order
         self.ntilts = num_tilts
 
     @staticmethod
@@ -316,25 +328,40 @@ class TiltSeriesDataset(ParticleImageDataset):
                 ordered[gn] = np.array(groups[gn], dtype=int)
         return ordered
 
-    def _compute_tilt_ordering(self, method: str):
+    @staticmethod
+    def _compute_tilt_numbers(df, canonical_groups, method: str):
+        """Return the acquisition rank used by ``num_tilts`` selection.
+
+        RELION 5 pre-exposure is a global acquisition value: missing views
+        must not renumber later views of one particle. Warp only provides a
+        particle-dependent B-factor ordering, so preserve its local ranks.
+        """
         if method == "relion5":
-            logger.info("Ordering tilts by dose (_rlnMicrographPreExposure) - RELION 5")
+            logger.info("Numbering tilts globally by dose (_rlnMicrographPreExposure) - RELION 5")
+            values = np.asarray(df["_rlnMicrographPreExposure"], dtype=np.float64)
+            ordered_values = np.unique(values)
+            if ordered_values.size == 1 and "_rlnCtfBfactor" in df.columns:
+                b_factors = np.asarray(df["_rlnCtfBfactor"], dtype=np.float64)
+                if np.unique(b_factors).size > 1:
+                    logger.warning(
+                        "_rlnMicrographPreExposure is constant; numbering RELION 5 tilts globally by "
+                        "descending _rlnCtfBfactor instead"
+                    )
+                    values = b_factors
+                    ordered_values = np.unique(values)[::-1]
+            rank_by_value = {value: rank for rank, value in enumerate(ordered_values)}
+            return np.asarray([rank_by_value[value] for value in values], dtype=np.int32)
         elif method == "warp":
-            logger.info("Ordering tilts by B-factor - Warp")
+            logger.info("Ordering tilts per particle by B-factor - Warp")
+            ranks = np.zeros(len(df), dtype=np.int32)
+            groups = TiltSeriesDataset._build_particle_groups(df, canonical_groups)
+            b_factors = np.asarray(df["_rlnCtfBfactor"], dtype=np.float64)
+            for particle_tilts in groups.values():
+                order = np.argsort(-b_factors[particle_tilts], kind="stable")
+                ranks[particle_tilts[order]] = np.arange(particle_tilts.size, dtype=np.int32)
+            return ranks
         else:
             raise ValueError(f"Invalid tilt ordering method: {method}")
-
-        self.tilt_order = np.zeros(self.N, dtype=int)
-
-        for particle_tilts in self.particle_groups.values():
-            if method == "relion5":
-                sort_indices = np.argsort(-self.dose[particle_tilts])
-            else:
-                sort_indices = np.argsort(self.ctfBfactor[particle_tilts])
-
-            ranks = np.empty_like(sort_indices)
-            ranks[sort_indices[::-1]] = np.arange(len(particle_tilts))
-            self.tilt_order[particle_tilts] = ranks
 
     def __len__(self) -> int:
         return self.num_particles
@@ -342,17 +369,17 @@ class TiltSeriesDataset(ParticleImageDataset):
     def __getitem__(self, particle_index: int):
         particle_tilts = self._particle_tilts[particle_index]
 
-        if self.random_tilts and self.num_tilts is not None:
-            n_select = min(int(self.num_tilts), len(particle_tilts))
-            if n_select <= 0:
-                selected = particle_tilts[:0]
-            else:
-                selected = np.random.choice(particle_tilts, n_select, replace=False)
+        tilt_numbers = self.tilt_numbers[particle_tilts]
+        if self.num_tilts is not None:
+            eligible = particle_tilts[tilt_numbers < self.num_tilts]
         else:
-            tilt_orders = self.tilt_order[particle_tilts]
-            sorted_idx = np.argsort(tilt_orders)
-            n_select = self.num_tilts if self.num_tilts is not None else len(particle_tilts)
-            selected = particle_tilts[sorted_idx[:n_select]]
+            eligible = particle_tilts
+
+        if self.random_tilts and self.num_tilts is not None:
+            n_select = min(self.num_tilts, eligible.size)
+            selected = np.random.choice(eligible, n_select, replace=False)
+        else:
+            selected = eligible[np.argsort(self.tilt_numbers[eligible], kind="stable")]
 
         images = self.source.images(selected)
         return images, particle_index, selected
@@ -361,6 +388,8 @@ class TiltSeriesDataset(ParticleImageDataset):
     def parse_particle_tilt(cls, starfile_path: str, indices: Optional[np.ndarray] = None):
         star = starfile.StarFile.load(starfile_path)
         df = star.df
+        if df is None:
+            raise ValueError(f"No data table found in {starfile_path}")
 
         if "_rlnGroupName" not in df.columns:
             raise ValueError("STAR data is missing required column: _rlnGroupName")
@@ -384,6 +413,8 @@ class TiltSeriesDataset(ParticleImageDataset):
     def parse_micrograph_tilt_mapping(cls, starfile_path: str):
         star = starfile.StarFile.load(starfile_path)
         df = star.df
+        if df is None:
+            raise ValueError(f"No data table found in {starfile_path}")
 
         # STAR labels are represented canonically with their leading underscore.
         # RECOVAR-native files use _rlnTiltName; RELION 5 uses
@@ -526,15 +557,37 @@ class _PrefetchIterator:
 
     def __iter__(self):
         q = queue.Queue(maxsize=self._buffer_size)
+        stop_requested = threading.Event()
+
+        def _put_unless_stopped(item) -> bool:
+            # A consumer that stops early never drains the queue; without the
+            # stop check the producer would block on put() forever.
+            while not stop_requested.is_set():
+                try:
+                    q.put(item, timeout=0.05)
+                    return True
+                except queue.Full:
+                    continue
+            return False
 
         def _producer():
+            iterator = None
             try:
-                for item in self._iterable:
-                    q.put(item)
+                iterator = iter(self._iterable)
+                for item in iterator:
+                    if not _put_unless_stopped(item):
+                        break
             except Exception as exc:
-                q.put(exc)
+                _put_unless_stopped(exc)
             finally:
-                q.put(_SENTINEL)
+                if stop_requested.is_set() and iterator is not None:
+                    close = getattr(iterator, "close", None)
+                    if close is not None:
+                        try:
+                            close()
+                        except Exception:
+                            pass
+                _put_unless_stopped(_SENTINEL)
 
         thread = threading.Thread(target=_producer, daemon=True)
         thread.start()
@@ -547,6 +600,7 @@ class _PrefetchIterator:
                     raise item
                 yield item
         finally:
+            stop_requested.set()
             thread.join(timeout=5.0)
 
 
@@ -624,6 +678,7 @@ def _resolve_particle_tilts(dataset, effective_num_tilts):
             return (
                 [cursor._particle_tilts[i] for i in mapped_indices],
                 effective_num_tilts,
+                getattr(cursor, "tilt_numbers", None),
             )
 
         # Walk up subset chain (works for both _SimpleSubset and torch Subset)
@@ -636,13 +691,21 @@ def _resolve_particle_tilts(dataset, effective_num_tilts):
         mapped_indices = parent_idx[mapped_indices]
         cursor = parent
 
-    return None, effective_num_tilts
+    return None, effective_num_tilts, None
+
+
+def _selected_tilt_count(particle_tilts, effective_num_tilts, tilt_numbers):
+    if effective_num_tilts is None:
+        return len(particle_tilts)
+    if tilt_numbers is None:
+        return min(effective_num_tilts, len(particle_tilts))
+    return int(np.count_nonzero(tilt_numbers[np.asarray(particle_tilts, dtype=np.int32)] < effective_num_tilts))
 
 
 def _max_tilts_per_dataset_view(dataset) -> int:
     """Return the largest per-particle tilt count visible through a dataset/subset view."""
     effective_num_tilts = getattr(dataset, "num_tilts", None)
-    particle_tilts_list, effective_num_tilts = _resolve_particle_tilts(
+    particle_tilts_list, effective_num_tilts, tilt_numbers = _resolve_particle_tilts(
         dataset,
         effective_num_tilts,
     )
@@ -658,8 +721,7 @@ def _max_tilts_per_dataset_view(dataset) -> int:
 
     max_tilts = 0
     for particle_tilts in particle_tilts_list:
-        n_available = len(particle_tilts)
-        n_actual = min(effective_num_tilts, n_available) if effective_num_tilts is not None else n_available
+        n_actual = _selected_tilt_count(particle_tilts, effective_num_tilts, tilt_numbers)
         max_tilts = max(max_tilts, n_actual)
     return max_tilts
 
@@ -682,7 +744,7 @@ class _ImageCountBatchLoader:
         self.pad_to_batch = pad_to_batch
 
         effective_num_tilts = getattr(dataset, "num_tilts", None)
-        particle_tilts_list, effective_num_tilts = _resolve_particle_tilts(dataset, effective_num_tilts)
+        particle_tilts_list, effective_num_tilts, tilt_numbers = _resolve_particle_tilts(dataset, effective_num_tilts)
 
         if particle_tilts_list is None:
             particle_groups = getattr(dataset, "particle_groups", None)
@@ -694,13 +756,12 @@ class _ImageCountBatchLoader:
                 )
             particle_tilts_list = list(particle_groups.values())[: len(dataset)]
 
-        self.tilts_counts = []
+        tilt_counts = []
         for particle_tilts in particle_tilts_list:
-            n_available = len(particle_tilts)
-            n_actual = min(effective_num_tilts, n_available) if effective_num_tilts is not None else n_available
-            self.tilts_counts.append(n_actual)
+            n_actual = _selected_tilt_count(particle_tilts, effective_num_tilts, tilt_numbers)
+            tilt_counts.append(n_actual)
 
-        self.tilts_counts = np.asarray(self.tilts_counts, dtype=np.int32)
+        self.tilts_counts = np.asarray(tilt_counts, dtype=np.int32)
         self.total_images = int(np.sum(self.tilts_counts, dtype=np.int64))
         self._n_batches = self._compute_n_batches(self.tilts_counts, self.batch_size)
 
