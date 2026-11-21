@@ -352,8 +352,8 @@ export function LatentExplorer({ jobId, projectId, resultDir, particlesStar, ana
   }, []);
 
   // Map selected (subsampled) positions to real particle indices, applying the
-  // invert ("Export All Except") complement over the TRUE dataset size.  When
-  // not subsampled, origIndices is null and positions ARE the real indices.
+  // invert ("Export All Except") complement. origIndices is null when every
+  // stored particle is displayed; positions are then the real indices.
   const resolveExportIndices = useCallback(
     (selectedPositions: number[], invert: boolean): number[] => {
       if (!embeddings) return [];
@@ -363,9 +363,17 @@ export function LatentExplorer({ jobId, projectId, resultDir, particlesStar, ana
         return selectedPositions.map(toReal);
       }
       // Complement: every real particle index NOT in the selection.
+      const out: number[] = [];
+      if (!meta.subsampled) {
+        // Every analyzed particle is displayed: the complement is the unselected rows.
+        const selected = new Set(selectedPositions);
+        for (let pos = 0; pos < meta.n_particles; pos++) {
+          if (!selected.has(pos)) out.push(toReal(pos));
+        }
+        return out;
+      }
       const selectedReal = new Set(selectedPositions.map(toReal));
       const total = meta.n_particles_total;
-      const out: number[] = [];
       for (let i = 0; i < total; i++) {
         if (!selectedReal.has(i)) out.push(i);
       }

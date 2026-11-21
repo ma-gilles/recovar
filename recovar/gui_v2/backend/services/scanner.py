@@ -37,6 +37,8 @@ class ScannedJob:
     completed_at: datetime.datetime | None = None
     parent_job_dirs: list[str] = field(default_factory=list)
     legacy: bool = False
+    slurm_id: str | None = None  # SLURM job the run recorded, if it ran under one
+    hostname: str | None = None  # machine the run recorded
 
 
 def _read_job_json(job_dir: str) -> dict | None:
@@ -215,10 +217,12 @@ def _scan_job_dir(type_name: str, job_dir: str) -> ScannedJob:
     status = "completed"
     parent_dirs: list[str] = []
     legacy = False
+    environment: dict = {}
 
     if job_data:
         params = job_data.get("parameters", {})
         status = job_data.get("status", "completed")
+        environment = job_data.get("environment") or {}
 
         timing = job_data.get("timing", {})
         if timing.get("started_at"):
@@ -262,6 +266,8 @@ def _scan_job_dir(type_name: str, job_dir: str) -> ScannedJob:
         completed_at=completed_at,
         parent_job_dirs=parent_dirs,
         legacy=legacy,
+        slurm_id=str(environment["slurm_job_id"]) if environment.get("slurm_job_id") else None,
+        hostname=environment.get("hostname"),
     )
 
 

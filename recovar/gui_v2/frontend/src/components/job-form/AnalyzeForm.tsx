@@ -16,6 +16,7 @@ import { Zap, ChevronDown, ChevronRight } from "lucide-react";
 interface AnalyzeFormProps {
   projectId: string;
   prefilledResultDir?: string;
+  prefilledZdim?: number;
   availableZdims?: number[];
   onSubmitted?: (jobId: string) => void;
 }
@@ -23,12 +24,13 @@ interface AnalyzeFormProps {
 export function AnalyzeForm({
   projectId,
   prefilledResultDir,
+  prefilledZdim,
   availableZdims,
   onSubmitted,
 }: AnalyzeFormProps): React.JSX.Element {
   const queryClient = useQueryClient();
   const [resultDir, setResultDir] = useState(prefilledResultDir ?? "");
-  const [zdim, setZdim] = useState(availableZdims?.[0]?.toString() ?? "4");
+  const [zdim, setZdim] = useState((prefilledZdim ?? availableZdims?.[0] ?? 4).toString());
 
   // The zdims this pipeline output actually contains. The validator reports
   // them for any result_dir, so a form opened without the prop still offers

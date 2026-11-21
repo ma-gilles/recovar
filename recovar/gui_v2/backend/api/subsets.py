@@ -327,31 +327,25 @@ def _build_full_star_from_dataset(
 async def _resolve_source_star(
     subset_obj, project_path: str, session_factory, given_star: str | None,
 ):
-    """Resolve a full .star to filter a subset from, plus an optional index map.
+    """Resolve the full .star a subset is filtered from, or ``None``.
 
-    Returns ``(star_path, index_map)``.  ``index_map`` (when not ``None``) maps
-    analyzed-dataset positions — the index space of the stored subset — to rows
-    of the returned star.  It is needed when the star is *constructed* from a
-    ``.mrcs`` dataset's full poses/ctf but the pipeline analyzed only an
-    ``--ind`` subset: row ``index_map[i]`` of the full star is analyzed particle
-    ``i``.  ``None`` means the subset indices address the star rows directly.
+    Subset indices are original-file particle indices: the pipeline stores
+    embeddings in original-file order (NaN rows for particles left out by
+    ``--ind``), so they address the rows of the full star directly.
 
     Resolution order:
       1. An explicit, valid ``given_star`` (the dataset's native star file).
       2. The ``particles`` recorded on the source job (or its parent Pipeline)
          when that is itself a ``.star``.
       3. A star constructed from a ``.mrcs`` dataset's particles + poses + ctf
-         pkls (cached under ``<project>/subsets/.star_cache``), with an index
-         map derived from the pipeline's ``--ind`` when present.
-
-    Returns ``(None, None)`` if no source can be determined.
+         pkls (cached under ``<project>/subsets/.star_cache``).
     """
     if given_star and os.path.isfile(given_star) and given_star.endswith(".star"):
-        return given_star, None
+        return given_star
 
     from recovar.gui_v2.backend.models.job import Job
 
-    particles = poses = ctf = ind = None
+    particles = poses = ctf = None
     pipeline_dir = None
     async with session_factory() as session:
         src = None
@@ -367,7 +361,6 @@ async def _resolve_source_star(
                 particles = p.get("particles")
                 poses = p.get("poses")
                 ctf = p.get("ctf")
-                ind = p.get("ind")
                 pipeline_dir = src.output_dir
             else:
                 # Analyze (and similar) jobs record the pipeline they ran on.
@@ -387,10 +380,9 @@ async def _resolve_source_star(
                 particles = pp.get("particles")
                 poses = pp.get("poses")
                 ctf = pp.get("ctf")
-                ind = pp.get("ind")
 
     if particles and str(particles).endswith(".star") and os.path.isfile(particles):
-        return particles, None
+        return particles
 
     if (
         particles and poses and ctf
@@ -417,20 +409,9 @@ async def _resolve_source_star(
                 _build_full_star_from_dataset, particles, poses, ctf, out_path,
             )
 
-        # The constructed star holds the FULL stack in original order, but the
-        # subset indices address the analyzed dataset.  When the pipeline ran on
-        # an --ind subset, map analyzed position i -> original star row ind[i].
-        index_map = None
-        if ind and os.path.isfile(str(ind)):
-            try:
-                with open(str(ind), "rb") as f:
-                    index_map = np.asarray(pickle.load(f), dtype=np.int64)
-            except Exception as exc:  # noqa: BLE001 — bad ind shouldn't 500
-                logger.warning("Ignoring unreadable --ind file %s: %s", ind, exc)
-                index_map = None
-        return out_path, index_map
+        return out_path
 
-    return None, None
+    return None
 
 
 async def _get_subset(subset_id: str):
@@ -484,9 +465,10 @@ async def subset_pipeline_params(subset_id: str) -> SubsetPipelineParams:
     """Pipeline form values that rerun the source pipeline on just this subset.
 
     The rerun reads the same particles/poses/ctf as the source pipeline and
-    restricts them with ``--ind``. Subset indices address the dataset the source
-    pipeline *analyzed*; if that pipeline was itself restricted with ``--ind``,
-    the two are composed so the new index file addresses the full dataset.
+    restricts them with ``--ind``. Subset indices are original-file particle
+    indices (the pipeline stores embeddings in original-file order), so the
+    subset's index file is used as is, also when the source pipeline was itself
+    restricted with ``--ind``.
     """
     subset_obj, session_factory, project_path = await _get_subset(subset_id)
     async with session_factory() as session:
@@ -498,26 +480,22 @@ async def subset_pipeline_params(subset_id: str) -> SubsetPipelineParams:
     if not os.path.isfile(subset_obj.ind_path):
         raise HTTPException(status_code=404, detail=f"Subset .ind file not found: {subset_obj.ind_path}")
 
-    ind_path = subset_obj.ind_path
     source_ind = source.get("ind")
     if source_ind:
         from recovar.data_io._index_utils import load_index_like
 
         with open(subset_obj.ind_path, "rb") as f:
             selection = np.asarray(pickle.load(f), dtype=np.int64)
-        analyzed = np.asarray(load_index_like(str(source_ind)), dtype=np.int64)
-        if selection.max() >= len(analyzed):
+        stray = np.setdiff1d(selection, np.asarray(load_index_like(str(source_ind)), dtype=np.int64))
+        if stray.size:
             raise HTTPException(
                 status_code=400,
-                detail=f"Subset index {int(selection.max())} out of range: the source pipeline analyzed "
-                f"{len(analyzed)} particles (via {source_ind}).",
+                detail=f"{stray.size} selected particles (e.g. {int(stray[0])}) were not analyzed by the source "
+                f"pipeline (restricted by {source_ind}).",
             )
-        ind_path = os.path.splitext(subset_obj.ind_path)[0] + "_full_dataset.ind"
-        with open(ind_path, "wb") as f:
-            pickle.dump(analyzed[selection], f)
 
     params = {k: v for k, v in source.items() if k not in _NOT_INHERITED and v not in (None, "")}
-    params["ind"] = ind_path
+    params["ind"] = subset_obj.ind_path
     return SubsetPipelineParams(
         params=params,
         n_particles=subset_obj.n_particles,
@@ -548,7 +526,7 @@ async def export_star(
     if subset_obj is None:
         raise HTTPException(status_code=404, detail="Subset not found")
 
-    source_star, index_map = await _resolve_source_star(
+    source_star = await _resolve_source_star(
         subset_obj, project_path, session_factory, req.particles_star,
     )
     if source_star is None:
@@ -589,22 +567,7 @@ async def export_star(
             status_code=400, detail="Subset has no particle indices to export",
         )
 
-    # When the star was built from a full .mrcs stack but the pipeline analyzed
-    # an --ind subset, the stored indices address the analyzed dataset; map them
-    # through ind to the corresponding rows of the full star.
-    if index_map is not None:
-        if indices.min() < 0 or indices.max() >= len(index_map):
-            bad = int(indices.max()) if indices.max() >= len(index_map) else int(indices.min())
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"Subset index {bad} out of range "
-                    f"(analyzed dataset has {len(index_map)} particles)"
-                ),
-            )
-        row_indices = index_map[indices]
-    else:
-        row_indices = indices
+    row_indices = indices
 
     # Validate against the FULL star file.  Subset indices are original particle
     # indices (the Explore view maps any subsampled selection back through the

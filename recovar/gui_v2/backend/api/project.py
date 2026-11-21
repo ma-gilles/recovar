@@ -388,6 +388,39 @@ async def get_project(project_id: str) -> ProjectDetailResponse:
         await session.close()
 
 
+async def _status_of_unfinished_run(scanned) -> tuple[str, str | None, str | None]:
+    """``(status, executor_handle, error)`` for a scanned run whose record says "running".
+
+    A run writes its own status; one killed from outside (scancel, node failure,
+    reboot) never gets to update it. Ask whatever ran it: SLURM by the recorded
+    job id, or this machine by the recorded process id. With neither available
+    the record stands.
+    """
+    import shutil
+    import socket
+
+    from recovar.gui_v2.backend.api.jobs import _get_local_executor, _get_slurm_executor
+    from recovar.gui_v2.backend.models.job import JobStatus
+
+    handle = None
+    if scanned.slurm_id and shutil.which("squeue"):
+        handle = scanned.slurm_id
+        actual = await _get_slurm_executor().status(handle)
+    else:
+        pid_file = os.path.join(scanned.output_dir, "run.pid")
+        if scanned.slurm_id or scanned.hostname != socket.gethostname() or not os.path.isfile(pid_file):
+            return "running", None, None
+        with open(pid_file) as f:
+            handle = f.read().strip()
+        actual = await _get_local_executor().status_with_dir(handle, scanned.output_dir)
+
+    if actual in (JobStatus.RUNNING, JobStatus.QUEUED):
+        return actual.value, handle, None
+    if actual is JobStatus.UNKNOWN:
+        return JobStatus.FAILED.value, None, "The run was interrupted: it never recorded finishing and is no longer running."
+    return actual.value, None, None
+
+
 @router.post("/{project_id}/scan", response_model=ScanResponse)
 async def scan_project(project_id: str, req: ScanRequest) -> ScanResponse:
     """Scan a directory for existing pipeline outputs and import them.
@@ -443,15 +476,21 @@ async def scan_project(project_id: str, req: ScanRequest) -> ScanResponse:
             if scanned.output_dir in existing_dirs:
                 continue  # Already imported
 
+            status, handle, error = scanned.status, None, None
+            if status == "running":
+                status, handle, error = await _status_of_unfinished_run(scanned)
             job = Job(
                 project_id=project_id,
                 type=scanned.type,
-                status=scanned.status,
+                status=status,
                 params=scanned.params,
                 output_dir=scanned.output_dir,
                 created_at=scanned.created_at or datetime.datetime.utcnow(),
                 completed_at=scanned.completed_at,
                 created_by="scan",
+                executor_handle=handle,
+                slurm_id=scanned.slurm_id if handle and handle == scanned.slurm_id else None,
+                error=error,
             )
             if scanned.legacy:
                 job.params = {**(job.params or {}), "legacy_import": True}

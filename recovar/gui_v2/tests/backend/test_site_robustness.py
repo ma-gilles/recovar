@@ -244,9 +244,10 @@ async def test_unwritable_project_path_is_a_client_error(client):
 
 
 @pytest.mark.asyncio
-async def test_subset_rerun_reuses_pipeline_inputs_and_composes_ind(client, tmp_project_dir):
+async def test_subset_rerun_reuses_pipeline_inputs_and_original_indices(client, tmp_project_dir):
     """Lasso subset -> pipeline form values: same inputs as the source pipeline,
-    restricted by an index file that addresses the *full* dataset."""
+    restricted by the selection, whose indices already address the full dataset
+    (embeddings are stored in original-file order)."""
     import pickle
 
     import numpy as np
@@ -298,7 +299,7 @@ async def test_subset_rerun_reuses_pipeline_inputs_and_composes_ind(client, tmp_
                 "source_job_id": analyze_id,
                 "zdim": 4,
                 "method": {"tool": "lasso"},
-                "indices": [0, 5, 99],
+                "indices": [100, 105, 199],
             },
         )
     ).json()
@@ -315,6 +316,16 @@ async def test_subset_rerun_reuses_pipeline_inputs_and_composes_ind(client, tmp_
     assert "output_name" not in params and "slurm_opts" not in params
     with open(params["ind"], "rb") as f:
         assert list(pickle.load(f)) == [100, 105, 199]
+
+    # A particle the source pipeline never analyzed cannot be part of a selection from it.
+    stray = (
+        await client.post(
+            "/api/subsets",
+            json={"project_id": project["id"], "name": "stray", "source_job_id": analyze_id, "indices": [5, 150]},
+        )
+    ).json()
+    resp = await client.get(f"/api/subsets/{stray['id']}/pipeline-params")
+    assert resp.status_code == 400 and "not analyzed" in resp.json()["detail"]
 
 
 @pytest.mark.asyncio
@@ -459,3 +470,84 @@ async def test_unreadable_directory_is_forbidden_not_a_server_error(client, tmp_
     finally:
         locked.chmod(0o700)
     assert resp.status_code == 403 and "permission" in resp.json()["detail"]
+
+
+def test_explorer_shows_only_analyzed_particles_with_their_original_indices(tmp_path):
+    """--ind pipelines store NaN rows for unused particles; those are not in the dataset."""
+    import pickle
+
+    import numpy as np
+
+    from recovar.gui_v2.backend.api.embeddings import _load_embeddings_sync
+
+    analyzed = np.array([1, 4, 5, 8])
+    latent = np.full((10, 2), np.nan, dtype=np.float32)
+    latent[analyzed] = np.arange(8, dtype=np.float32).reshape(4, 2)
+    (tmp_path / "model" / "zdim_2").mkdir(parents=True)
+    np.save(tmp_path / "model" / "zdim_2" / "latent_coords.npy", latent)
+    analysis = tmp_path / "analysis"
+    (analysis / "plots" / "umap").mkdir(parents=True)
+    (analysis / "data").mkdir()
+    with open(analysis / "plots" / "umap" / "umap_embedding.pkl", "wb") as f:
+        pickle.dump(np.arange(20, dtype=np.float32).reshape(10, 2), f)  # padded to stored size
+    with open(analysis / "data" / "kmeans_result.pkl", "wb") as f:
+        pickle.dump({"labels": np.array([0, 1, 0, 1]), "centers": np.zeros((2, 2))}, f)  # analyzed only
+
+    out = _load_embeddings_sync(str(tmp_path), 2, analyze_dir=str(analysis))
+    assert out["n_particles"] == out["n_particles_total"] == 4
+    assert out["orig_indices"].tolist() == [1, 4, 5, 8]
+    assert np.array_equal(out["pca_coords"], latent[analyzed])
+    assert out["umap_coords"][:, 0].tolist() == [2.0, 8.0, 10.0, 16.0]
+    assert out["kmeans_labels"].tolist() == [0, 1, 0, 1]
+
+    sub = _load_embeddings_sync(str(tmp_path), 2, analyze_dir=str(analysis), max_particles=2)
+    assert sub["subsampled"] and set(sub["orig_indices"].tolist()) <= {1, 4, 5, 8}
+
+
+@pytest.mark.asyncio
+async def test_scan_asks_the_scheduler_about_runs_that_never_recorded_finishing(client, tmp_project_dir, monkeypatch):
+    """A killed run leaves ``"status": "running"`` in job.json for ever; import must not trust it."""
+    import json
+    import shutil
+    import socket
+
+    from recovar.gui_v2.backend.api import jobs
+    from recovar.gui_v2.backend.models.job import JobStatus
+
+    def run_dir(name, environment):
+        d = tmp_project_dir / "Pipeline" / name
+        (d / "model").mkdir(parents=True)
+        (d / "job.json").write_text(json.dumps({"command": "pipeline", "status": "running", "environment": environment}))
+        return d
+
+    run_dir("job_0001", {"slurm_job_id": "111", "hostname": "node1"})  # scancelled
+    run_dir("job_0002", {"slurm_job_id": "222", "hostname": "node1"})  # still running
+    run_dir("job_0003", {"slurm_job_id": "333", "hostname": "node1"})  # scheduler forgot it
+    dead = run_dir("job_0004", {"hostname": socket.gethostname()})  # local process is gone
+    (dead / "run.pid").write_text("999999999")
+    run_dir("job_0005", {"hostname": "some-other-machine"})  # cannot be checked from here
+
+    class FakeSlurm:
+        async def status(self, handle):
+            return {"111": JobStatus.CANCELLED, "222": JobStatus.RUNNING}.get(handle, JobStatus.UNKNOWN)
+
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/" + name)
+    monkeypatch.setattr(jobs, "_get_slurm_executor", lambda: FakeSlurm())
+
+    project = (await client.post("/api/projects", json={"path": str(tmp_project_dir), "name": "p"})).json()
+    resp = await client.post(f"/api/projects/{project['id']}/scan", json={"scan_path": str(tmp_project_dir)})
+    assert resp.status_code == 200, resp.text
+    status = {j["output_dir"].rsplit("/", 1)[-1]: j["status"] for j in resp.json()["imported"]}
+    assert status == {
+        "job_0001": "cancelled",
+        "job_0002": "running",
+        "job_0003": "failed",
+        "job_0004": "failed",
+        "job_0005": "running",
+    }
+    detail = (await client.get(f"/api/projects/{project['id']}")).json()["jobs"]
+    by_name = {j["output_dir"].rsplit("/", 1)[-1]: j for j in detail}
+    running = (await client.get(f"/api/jobs/{by_name['job_0002']['id']}")).json()
+    assert running["slurm_id"] == "222"
+    interrupted = (await client.get(f"/api/jobs/{by_name['job_0003']['id']}")).json()
+    assert "interrupted" in interrupted["error"]

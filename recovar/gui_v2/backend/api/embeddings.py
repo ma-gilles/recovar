@@ -167,36 +167,29 @@ def _load_embeddings_sync(
                 logger.warning("Failed to load k-means from %s: %s", kmeans_path, exc)
                 # Non-fatal: continue without k-means
 
-    # ----- Validate per-particle array lengths against pca_coords -----
-    # umap_coords and kmeans_labels come from independent pkl files that may
-    # have been produced by a different analysis run.  If their row count does
-    # not match pca_coords, the binary layout (and any index-based subsampling
-    # below) would desync, so drop the mismatched array with a warning rather
-    # than serving corrupt offsets to the frontend parser.
+    # ----- Keep only analyzed particles -----
+    # The pipeline stores embeddings in original-file order, with NaN rows for
+    # particles it did not analyze (--ind). Those are not part of the dataset:
+    # drop them and remember which original particle each remaining row is.
+    # umap_coords and kmeans_labels come from independent pkl files; a row count
+    # matching neither the stored nor the analyzed particles would desync the
+    # binary layout, so such an array is dropped with a warning.
     if result["pca_coords"] is not None:
-        n_pca = result["pca_coords"].shape[0]
-        if (
-            result["umap_coords"] is not None
-            and result["umap_coords"].shape[0] != n_pca
-        ):
-            logger.warning(
-                "Dropping UMAP coords: row count %d != PCA count %d (zdim=%d)",
-                result["umap_coords"].shape[0],
-                n_pca,
-                zdim,
-            )
-            result["umap_coords"] = None
-        if (
-            result["kmeans_labels"] is not None
-            and result["kmeans_labels"].shape[0] != n_pca
-        ):
-            logger.warning(
-                "Dropping k-means labels: row count %d != PCA count %d (zdim=%d)",
-                result["kmeans_labels"].shape[0],
-                n_pca,
-                zdim,
-            )
-            result["kmeans_labels"] = None
+        n_stored = result["pca_coords"].shape[0]
+        analyzed = np.flatnonzero(np.isfinite(result["pca_coords"][:, 0]))
+        for key in ("umap_coords", "kmeans_labels"):
+            arr = result[key]
+            if arr is None or arr.shape[0] == analyzed.size and analyzed.size < n_stored:
+                continue
+            if arr.shape[0] != n_stored:
+                logger.warning("Dropping %s: row count %d != PCA count %d (zdim=%d)", key, arr.shape[0], n_stored, zdim)
+                result[key] = None
+            elif analyzed.size < n_stored:
+                result[key] = arr[analyzed]
+        if analyzed.size < n_stored:
+            result["pca_coords"] = result["pca_coords"][analyzed]
+            result["orig_indices"] = analyzed.astype(np.int32)
+            result["n_particles"] = result["n_particles_total"] = int(analyzed.size)
 
     # ----- Pad or trim k-means centers to match requested zdim -----
     # The analyze job may have been run at a different zdim than the requested
@@ -233,7 +226,8 @@ def _load_embeddings_sync(
         # kmeans_centers are NOT subsampled (they are cluster centers, not per-particle)
         # Record the original (pre-subsample) particle indices so the frontend can
         # map subsampled positions back to real particle indices for exports.
-        result["orig_indices"] = indices.astype(np.int32)
+        kept = result["orig_indices"]
+        result["orig_indices"] = (indices if kept is None else kept[indices]).astype(np.int32)
         result["n_particles"] = max_particles
         result["subsampled"] = True
 
@@ -374,6 +368,7 @@ async def get_embeddings(
         "n_particles": data["n_particles"],
         "n_particles_total": data["n_particles_total"],
         "subsampled": data["subsampled"],
+        "has_orig_indices": data["orig_indices"] is not None,
         "zdim": zdim,
         "has_umap": data["umap_coords"] is not None,
         "has_kmeans": data["kmeans_labels"] is not None,
