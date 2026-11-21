@@ -11,10 +11,11 @@ Endpoints:
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
@@ -29,13 +30,35 @@ class SlurmDefaultsLayered(BaseModel):
     project_config_path: str | None = None
 
 
+# What sbatch accepts; a blank value clears the saved setting.
+_SLURM_NAME = re.compile(r"[\w.+-]+(,[\w.+-]+)*")  # partition or account (comma list allowed)
+_SLURM_MEMORY = re.compile(r"\d+[KMGT]?", re.IGNORECASE)  # 64G, 4000M, 2T
+_SLURM_TIME = re.compile(r"(\d+-)?\d+(:\d{1,2}){0,2}")  # 30, 08:00:00, 2-12, 1-00:00:00
+
+
 class SlurmDefaultsUpdate(BaseModel):
     partition: str | None = None
     account: str | None = None
-    gpus: int | None = None
-    cpus: int | None = None
+    gpus: int | None = Field(default=None, ge=0)
+    cpus: int | None = Field(default=None, ge=1)
     memory: str | None = None
     time: str | None = None
+
+    @field_validator("partition", "account", "memory", "time")
+    @classmethod
+    def _what_sbatch_accepts(cls, value: str | None, info) -> str | None:
+        if not value:
+            return value
+        value = value.strip()
+        pattern, example = {
+            "partition": (_SLURM_NAME, "gpu"),
+            "account": (_SLURM_NAME, "mylab"),
+            "memory": (_SLURM_MEMORY, "64G"),
+            "time": (_SLURM_TIME, "08:00:00 or 2-00:00:00"),
+        }[info.field_name]
+        if not pattern.fullmatch(value):
+            raise ValueError(f"{value!r} is not a valid SLURM {info.field_name} (for example {example})")
+        return value
 
 
 class ProjectSlurmDefaultsUpdate(SlurmDefaultsUpdate):
@@ -66,8 +89,11 @@ async def update_user_slurm_defaults(
         save_user_slurm_defaults,
     )
 
+    from recovar.gui_v2.backend.services import preflight
+
     values = {k: v for k, v in req.model_dump().items() if v is not None}
     save_user_slurm_defaults(values)
+    preflight.invalidate()  # the scheduler check tests these settings
     return SlurmDefaultsLayered(**resolve_slurm_defaults_layered(project_dir=project_dir))
 
 

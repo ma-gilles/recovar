@@ -12,6 +12,8 @@ import logging
 import os
 import shutil
 import socket
+import threading
+import time
 from dataclasses import dataclass
 
 from recovar.gui_v2.backend.config import DEFAULT_SLURM
@@ -221,6 +223,29 @@ def _check_disk() -> Check:
             "Free space, or set XDG_CONFIG_HOME / RECOVAR_CUDA_CACHE_DIR to a larger filesystem.",
         )
     return Check("disk", OK, "Home directory", f"{free_gb:.0f} GB free in {home}")
+
+
+# The checks ask the scheduler and start a child interpreter: seconds of work
+# that every page load would otherwise repeat.
+_CACHE_SECONDS = 300.0
+_cache: tuple[float, list[Check]] | None = None
+_cache_lock = threading.Lock()
+
+
+def cached_checks(refresh: bool = False) -> list[Check]:
+    """:func:`run_checks`, at most once per ``_CACHE_SECONDS`` unless ``refresh``."""
+    global _cache
+    with _cache_lock:
+        if refresh or _cache is None or time.monotonic() - _cache[0] > _CACHE_SECONDS:
+            _cache = (time.monotonic(), run_checks())
+        return _cache[1]
+
+
+def invalidate() -> None:
+    """Forget the cached checks (settings they depend on changed)."""
+    global _cache
+    with _cache_lock:
+        _cache = None
 
 
 def run_checks() -> list[Check]:

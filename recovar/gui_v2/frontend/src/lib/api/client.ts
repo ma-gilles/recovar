@@ -14,10 +14,25 @@ const BASE = "/api";
 export class ApiError extends Error {
   status: number;
   constructor(status: number, body: string) {
-    super(`${status}: ${body}`);
+    super(readableError(status, body));
     this.name = "ApiError";
     this.status = status;
   }
+}
+
+/** The server's explanation in plain words, rather than a raw JSON body. */
+function readableError(status: number, body: string): string {
+  try {
+    const detail = JSON.parse(body)?.detail;
+    if (typeof detail === "string") return detail;
+    if (Array.isArray(detail)) {
+      // Request validation: one entry per rejected field.
+      return detail.map((d) => String(d?.msg ?? d).replace(/^Value error, /, "")).join("; ");
+    }
+  } catch {
+    // not JSON
+  }
+  return `${status}: ${body}`;
 }
 
 async function request<T>(

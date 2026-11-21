@@ -52,11 +52,12 @@ const BADGE_STYLES = {
 
 // ── Shared save button ──
 
-function SaveButton({ onClick, saving, saved, label }: {
+function SaveButton({ onClick, saving, saved, label, error }: {
   onClick: () => void;
   saving: boolean;
   saved: boolean;
   label: string;
+  error?: Error | null;
 }): React.JSX.Element {
   return (
     <div className="flex items-center gap-3">
@@ -72,6 +73,11 @@ function SaveButton({ onClick, saving, saved, label }: {
         <span className="flex items-center gap-1 text-xs text-emerald-400">
           <CheckCircle className="h-3 w-3" />
           Saved
+        </span>
+      )}
+      {error && !saving && (
+        <span className="text-xs text-red-400" role="alert">
+          Not saved: {error.message}
         </span>
       )}
     </div>
@@ -463,7 +469,7 @@ export function SettingsPage(): React.JSX.Element {
                 />
               </div>
               <div className="mt-4">
-                <SaveButton onClick={() => slurmUserMutation.mutate(slurmUserValues)} saving={slurmUserMutation.isPending} saved={slurmUserSaved} label="Save User Defaults" />
+                <SaveButton onClick={() => slurmUserMutation.mutate(slurmUserValues)} saving={slurmUserMutation.isPending} saved={slurmUserSaved} error={slurmUserMutation.error} label="Save User Defaults" />
               </div>
             </div>
           )}
@@ -492,7 +498,7 @@ export function SettingsPage(): React.JSX.Element {
                 ))}
               </div>
               <div className="mt-4">
-                <SaveButton onClick={() => slurmProjectMutation.mutate(slurmProjectValues)} saving={slurmProjectMutation.isPending} saved={slurmProjectSaved} label="Save Project Defaults" />
+                <SaveButton onClick={() => slurmProjectMutation.mutate(slurmProjectValues)} saving={slurmProjectMutation.isPending} saved={slurmProjectSaved} error={slurmProjectMutation.error} label="Save Project Defaults" />
               </div>
             </div>
           ) : (

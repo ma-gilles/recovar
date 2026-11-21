@@ -191,11 +191,11 @@ async def preflight(refresh: bool = False) -> PreflightResponse:
     from dataclasses import asdict
 
     from recovar.gui_v2.backend.services import site
-    from recovar.gui_v2.backend.services.preflight import run_checks
+    from recovar.gui_v2.backend.services.preflight import cached_checks
 
     if refresh:
         site.reset_caches()
-    checks = await asyncio.to_thread(run_checks)
+    checks = await asyncio.to_thread(cached_checks, refresh)
     return PreflightResponse(
         checks=[PreflightCheck(**asdict(c)) for c in checks],
         partitions=site.partitions_as_dicts(),

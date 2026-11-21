@@ -20,6 +20,7 @@ import resource
 import shutil
 import subprocess
 import sys
+import threading
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -332,14 +333,23 @@ def sbatch_accepts(partition: str, memory: str, account: str = "") -> bool | Non
     return sbatch_test(partition, memory, account)[0]
 
 
-@functools.lru_cache(maxsize=4)
+_detect_lock = threading.Lock()
+
+
 def detected_slurm_defaults(builtin_memory: str) -> dict[str, str]:
+    """Cached :func:`_detect_slurm_defaults`; concurrent first callers share one probe."""
+    with _detect_lock:
+        return _detect_slurm_defaults(builtin_memory)
+
+
+@functools.lru_cache(maxsize=4)
+def _detect_slurm_defaults(builtin_memory: str) -> dict[str, str]:
     """SLURM settings measured from this site, for keys the user has not set.
 
     The scheduler is asked whether it accepts a GPU job, trying in order: no
-    account, then each of the user's accounts (sites where a user has several
-    require one); and for each, no partition (many sites route GPU jobs
-    themselves), then each GPU partition. The first accepted combination wins;
+    partition (many sites route GPU jobs themselves), then each GPU partition;
+    and for each, no account, then each of the user's accounts (sites where a
+    user has several require one). The first accepted combination wins;
     only values that differ from the built-in defaults are returned:
 
     * ``account`` — when the site refuses jobs without one.
@@ -358,8 +368,10 @@ def detected_slurm_defaults(builtin_memory: str) -> dict[str, str]:
     default_memory = _fitting_memory(default, builtin_memory) if default and default.gpus else builtin_memory
     trials = [("", default_memory)] + [(p.name, _fitting_memory(p, builtin_memory)) for p in candidates]
     chosen: tuple[str, str, str] | None = None
-    for account in ("", *slurm_accounts()):
-        for partition, memory in trials:
+    # Accounts vary fastest: each dry-run takes seconds, and a site that needs an
+    # account rejects every partition without one.
+    for partition, memory in trials:
+        for account in ("", *slurm_accounts()):
             verdict = sbatch_accepts(partition, memory, account)
             if verdict is None:  # cannot ask: guess from sinfo
                 best = candidates[0]
@@ -451,7 +463,7 @@ def reset_caches() -> None:
     _mounts.cache_clear()
     slurm_partitions.cache_clear()
     slurm_accounts.cache_clear()
-    detected_slurm_defaults.cache_clear()
+    _detect_slurm_defaults.cache_clear()
     cuda_kernel.cache_clear()
 
 

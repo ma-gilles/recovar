@@ -30,7 +30,7 @@ bigmem|(null)|1500000|up
 """
 
 
-_real_detection = site.detected_slurm_defaults.__wrapped__
+_real_detection = site._detect_slurm_defaults.__wrapped__
 
 
 def _use_partitions(monkeypatch, sinfo_output: str, accepts=lambda partition, memory, account="": None) -> None:
@@ -512,7 +512,7 @@ async def test_scan_asks_the_scheduler_about_runs_that_never_recorded_finishing(
     import socket
 
     from recovar.gui_v2.backend.api import jobs
-    from recovar.gui_v2.backend.models.job import JobStatus
+    from recovar.gui_v2.backend.services.executor import JobStatus  # what executors really return
 
     def run_dir(name, environment):
         d = tmp_project_dir / "Pipeline" / name
@@ -551,3 +551,77 @@ async def test_scan_asks_the_scheduler_about_runs_that_never_recorded_finishing(
     assert running["slurm_id"] == "222"
     interrupted = (await client.get(f"/api/jobs/{by_name['job_0003']['id']}")).json()
     assert "interrupted" in interrupted["error"]
+
+
+def test_account_is_found_without_dry_running_every_partition(monkeypatch):
+    """Each dry-run takes seconds: a site that needs an account must not cost one per partition first."""
+    partitions = [site.Partition(name=f"gpu{i}", gpus=True, up=True, max_node_memory_mb=512_000) for i in range(12)]
+    asked = []
+
+    def accepts(partition, memory, account=""):
+        asked.append((partition, account))
+        return account == "lab"
+
+    monkeypatch.setattr(site, "slurm_partitions", lambda: partitions)
+    monkeypatch.setattr(site, "slurm_accounts", lambda: ("other", "lab"))
+    monkeypatch.setattr(site, "sbatch_accepts", accepts)
+    assert _real_detection("64G") == {"account": "lab"}
+    assert asked == [("", ""), ("", "other"), ("", "lab")]
+
+
+@pytest.mark.asyncio
+async def test_job_cancelled_with_scancel_is_cancelled_not_unknown(monkeypatch):
+    """sacct reports a user's scancel as ``CANCELLED by <uid>``."""
+    from recovar.gui_v2.backend.services import executor
+
+    class Proc:
+        returncode = 0
+
+        def __init__(self, out):
+            self.out = out
+
+        async def communicate(self):
+            return self.out, b""
+
+    async def fake_exec(program, *args, **kwargs):
+        return Proc(b"" if program == "squeue" else b"CANCELLED by 230216\nCANCELLED\n")
+
+    monkeypatch.setattr(executor.asyncio, "create_subprocess_exec", fake_exec)
+    assert (await executor.SlurmExecutor().status("17997518")).value == "cancelled"
+
+
+def test_preflight_is_not_recomputed_on_every_page_load(monkeypatch):
+    from recovar.gui_v2.backend.services import preflight
+
+    runs = []
+    monkeypatch.setattr(preflight, "run_checks", lambda: runs.append(1) or [])
+    preflight.invalidate()
+    preflight.cached_checks()
+    preflight.cached_checks()
+    assert len(runs) == 1
+    preflight.cached_checks(refresh=True)  # "Check again"
+    preflight.invalidate()  # settings saved
+    preflight.cached_checks()
+    assert len(runs) == 3
+    preflight.invalidate()
+
+
+@pytest.mark.asyncio
+async def test_settings_reject_values_sbatch_would_reject(client, tmp_project_dir):
+    """A bad default must fail when it is saved, with a message, not later at every submission."""
+    bad = await client.put(
+        "/api/settings/slurm-defaults/project",
+        json={"project_dir": str(tmp_project_dir), "memory": "/tmp/whatever", "time": "tomorrow"},
+    )
+    assert bad.status_code == 422
+    messages = " ".join(d["msg"] for d in bad.json()["detail"])
+    assert "not a valid SLURM memory" in messages and "not a valid SLURM time" in messages
+
+    good = await client.put(
+        "/api/settings/slurm-defaults/project",
+        json={"project_dir": str(tmp_project_dir), "partition": "gpu,cryoem", "account": "my-lab", "memory": "64g", "time": "2-12:00:00"},
+    )
+    assert good.status_code == 200, good.text
+    assert good.json()["project"]["time"] == "2-12:00:00"
+    cleared = await client.put("/api/settings/slurm-defaults/project", json={"project_dir": str(tmp_project_dir), "time": ""})
+    assert cleared.status_code == 200 and "time" not in cleared.json()["project"]

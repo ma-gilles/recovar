@@ -414,9 +414,10 @@ async def _status_of_unfinished_run(scanned) -> tuple[str, str | None, str | Non
             handle = f.read().strip()
         actual = await _get_local_executor().status_with_dir(handle, scanned.output_dir)
 
-    if actual in (JobStatus.RUNNING, JobStatus.QUEUED):
+    # Compare by value: the executors and the database model each define the enum.
+    if actual.value in (JobStatus.RUNNING.value, JobStatus.QUEUED.value):
         return actual.value, handle, None
-    if actual is JobStatus.UNKNOWN:
+    if actual.value == JobStatus.UNKNOWN.value:
         return JobStatus.FAILED.value, None, "The run was interrupted: it never recorded finishing and is no longer running."
     return actual.value, None, None
 

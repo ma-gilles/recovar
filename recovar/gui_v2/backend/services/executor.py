@@ -278,7 +278,8 @@ class SlurmExecutor(Executor):
             for line in lines:
                 state = line.strip()
                 if state and state not in ("", "State"):
-                    return state
+                    # "CANCELLED by 12345" (scancel by a user) -> "CANCELLED"
+                    return state.split()[0]
         except (asyncio.TimeoutError, OSError):
             pass
         return None

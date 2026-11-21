@@ -181,10 +181,10 @@ async def lifespan(app: FastAPI):
 
     # Report anything about this machine that will make jobs fail, now rather
     # than hours into a queue wait.
-    from recovar.gui_v2.backend.services.preflight import log_report, run_checks
+    from recovar.gui_v2.backend.services.preflight import cached_checks, log_report
 
     async def _report_preflight() -> None:
-        log_report(await asyncio.to_thread(run_checks))
+        log_report(await asyncio.to_thread(cached_checks))
 
     # In the background: probing a cold environment on a busy login node can
     # take a minute, and the GUI should be reachable meanwhile.

@@ -24,8 +24,9 @@ def _isolated_user_config(tmp_path_factory, monkeypatch):
 def _no_site_probing(monkeypatch):
     """Tests must give the same result on a laptop and on a cluster login node:
     no real sinfo/sbatch, no real CUDA-kernel lookup."""
-    from recovar.gui_v2.backend.services import site
+    from recovar.gui_v2.backend.services import preflight, site
 
+    preflight.invalidate()
     monkeypatch.setattr(site, "slurm_partitions", lambda: ())
     monkeypatch.setattr(site, "detected_slurm_defaults", lambda builtin_memory: {})
     monkeypatch.setattr(site, "slurm_accounts", lambda: ())
