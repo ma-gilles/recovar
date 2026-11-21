@@ -793,6 +793,19 @@ def _render_jinja_template(
 # ---------------------------------------------------------------------------
 
 
+def _recorded_status(working_dir: str | None) -> str | None:
+    """The status a job wrote to its own ``job.json``, if any."""
+    import json
+
+    if not working_dir:
+        return None
+    try:
+        with open(os.path.join(working_dir, "job.json")) as f:
+            return json.load(f).get("status")
+    except (OSError, ValueError):
+        return None
+
+
 async def reconcile_jobs(
     executor: Executor,
     inflight_jobs: list[dict],
@@ -819,6 +832,17 @@ async def reconcile_jobs(
     for job_info in inflight_jobs:
         handle = job_info.get("handle")
         if not handle:
+            # No handle: either the GUI never finished submitting it, or it was
+            # not launched by the GUI at all (imported by Scan while running
+            # from the command line). A recovar job records its own state in
+            # job.json: adopt a recorded outcome, and leave a job that says it
+            # is still running alone — it is not ours to declare failed.
+            recorded = _recorded_status(job_info.get("working_dir"))
+            if recorded == JobStatus.RUNNING.value:
+                continue
+            if recorded in (JobStatus.COMPLETED.value, JobStatus.FAILED.value, JobStatus.CANCELLED.value):
+                updates.append({"id": job_info["id"], "new_status": recorded, "error": None})
+                continue
             updates.append(
                 {
                     "id": job_info["id"],

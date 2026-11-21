@@ -170,20 +170,25 @@ async def lifespan(app: FastAPI):
     """Startup / shutdown lifecycle."""
     logger.info("recovar GUI v2 backend starting")
 
-    # Configure file browser allowed roots.
-    # Default: user home, /scratch, /tmp, and common HPC paths.
-    import os
+    # File browser roots: home, cwd, temp, every shared filesystem mounted
+    # here, anything the user configured, and all known project directories.
+    from recovar.gui_v2.backend.api.files import allowed_roots, default_allowed_roots
+    from recovar.gui_v2.backend.api.project import _project_registry, load_persisted_projects
 
-    default_roots = [
-        os.path.expanduser("~"),
-        "/tmp",
-    ]
-    # Add common HPC scratch paths if they exist
-    for candidate in ["/scratch", "/gpfs", "/projects", "/data", "/hpc"]:
-        if os.path.isdir(candidate):
-            default_roots.append(candidate)
-    configure_allowed_roots(default_roots)
-    logger.info("File browser allowed roots: %s", default_roots)
+    load_persisted_projects()
+    configure_allowed_roots(default_allowed_roots() + list(_project_registry.values()))
+    logger.info("File browser allowed roots: %s", allowed_roots())
+
+    # Report anything about this machine that will make jobs fail, now rather
+    # than hours into a queue wait.
+    from recovar.gui_v2.backend.services.preflight import log_report, run_checks
+
+    async def _report_preflight() -> None:
+        log_report(await asyncio.to_thread(run_checks))
+
+    # In the background: probing a cold environment on a busy login node can
+    # take a minute, and the GUI should be reachable meanwhile.
+    preflight_task = asyncio.create_task(_report_preflight())
 
     # Reconcile any in-flight jobs that completed while the server was down.
     try:
@@ -192,6 +197,7 @@ async def lifespan(app: FastAPI):
         logger.exception("Startup reconcile failed (non-fatal)")
 
     yield
+    preflight_task.cancel()
     logger.info("Shutting down — closing database connections")
     await close_all()
 
@@ -258,7 +264,10 @@ def create_app() -> FastAPI:
             file_path = static_dir / full_path
             if full_path and file_path.is_file():
                 return FileResponse(file_path)
-            return FileResponse(static_dir / "index.html")
+            # index.html names the content-hashed bundles. It must be revalidated
+            # on every load, or a browser keeps showing the previous GUI after
+            # recovar is upgraded.
+            return FileResponse(static_dir / "index.html", headers={"Cache-Control": "no-cache"})
 
     return app
 

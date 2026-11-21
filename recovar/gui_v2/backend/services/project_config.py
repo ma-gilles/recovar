@@ -3,6 +3,8 @@
 Resolution order for SLURM defaults (lowest precedence first):
 
     1. Built-in :data:`recovar.gui_v2.backend.config.DEFAULT_SLURM`.
+    1b. Values measured from this site's scheduler (GPU partition, node
+       memory) — see :func:`recovar.gui_v2.backend.services.site.detected_slurm_defaults`.
     2. User-global ``~/.config/recovar/config.toml`` (or
        ``$XDG_CONFIG_HOME/recovar/config.toml``).
     3. Project-local ``<project_dir>/recovar.toml``.
@@ -64,6 +66,21 @@ def _load_toml(path: Path) -> dict[str, Any]:
         return {}
 
 
+def configured_allowed_roots() -> list[str]:
+    """Extra file-browser roots from ``[gui] allowed_roots`` in the user config."""
+    roots = _load_toml(_user_config_path()).get("gui", {}).get("allowed_roots", [])
+    if not isinstance(roots, list) or not all(isinstance(r, str) for r in roots):
+        raise ValueError(f"[gui] allowed_roots in {_user_config_path()} must be a list of paths, got {roots!r}")
+    return roots
+
+
+def _detected_slurm() -> dict[str, Any]:
+    """SLURM settings measured from the scheduler; empty off-cluster."""
+    from recovar.gui_v2.backend.services.site import detected_slurm_defaults
+
+    return detected_slurm_defaults(DEFAULT_SLURM["memory"])
+
+
 def resolve_slurm_defaults(project_dir: str | Path | None = None) -> dict[str, Any]:
     """Resolve SLURM defaults for a project.
 
@@ -79,6 +96,7 @@ def resolve_slurm_defaults(project_dir: str | Path | None = None) -> dict[str, A
     unknown ``**_extra``.
     """
     merged: dict[str, Any] = dict(DEFAULT_SLURM)
+    merged.update(_detected_slurm())
 
     user_toml = _load_toml(_user_config_path())
     user_slurm = user_toml.get("slurm")
@@ -115,12 +133,15 @@ def resolve_slurm_defaults_layered(
         if isinstance(ps, dict):
             project_slurm = ps
 
+    detected = _detected_slurm()
     effective = dict(builtin)
+    effective.update(detected)
     effective.update(user_slurm)
     effective.update(project_slurm)
 
     return {
         "builtin": builtin,
+        "detected": detected,
         "user": user_slurm,
         "project": project_slurm,
         "effective": effective,
@@ -144,11 +165,18 @@ def _save_toml_slurm(path: Path, values: dict[str, Any]) -> None:
     if path.is_file():
         existing = _load_toml(path)
 
-    clean = {k: v for k, v in values.items() if v != "" and v is not None}
     section = existing.get("slurm")
     if not isinstance(section, dict):
         section = {}
-    section.update(clean)
+    for key, value in values.items():
+        if value is None:
+            continue
+        if value == "":
+            # A field the user blanked goes back to the detected/built-in
+            # value; keeping the old entry would make it impossible to clear.
+            section.pop(key, None)
+        else:
+            section[key] = value
     existing["slurm"] = section
 
     path.parent.mkdir(parents=True, exist_ok=True)

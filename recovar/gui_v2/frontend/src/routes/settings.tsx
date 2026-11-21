@@ -1,3 +1,10 @@
+import {
+  ACCOUNT_LIST_ID,
+  PARTITION_LIST_ID,
+  SlurmDatalists,
+  SlurmDetectedNote,
+  SlurmTestButton,
+} from "../components/job-form/SlurmSiteAssist";
 import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Save, CheckCircle, Info, Plus, Trash2 } from "lucide-react";
@@ -421,6 +428,9 @@ export function SettingsPage(): React.JSX.Element {
             </div>
           </div>
 
+          <SlurmDatalists />
+          <SlurmDetectedNote />
+
           {/* User-global SLURM */}
           {slurmUserValues && (
             <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-5">
@@ -433,7 +443,7 @@ export function SettingsPage(): React.JSX.Element {
                 {SLURM_FIELDS.slice(0, 2).map(({ key, label, placeholder }) => (
                   <div key={key} className="space-y-1">
                     <Label className="text-xs">{label}</Label>
-                    <Input value={String(slurmUserValues[key] ?? "")} placeholder={placeholder} onChange={(e) => setSlurmUserValues({ ...slurmUserValues, [key]: e.target.value })} />
+                    <Input list={key === "partition" ? PARTITION_LIST_ID : ACCOUNT_LIST_ID} value={String(slurmUserValues[key] ?? "")} placeholder={placeholder} onChange={(e) => setSlurmUserValues({ ...slurmUserValues, [key]: e.target.value })} />
                   </div>
                 ))}
               </div>
@@ -444,6 +454,13 @@ export function SettingsPage(): React.JSX.Element {
                     <Input type={type} value={String(slurmUserValues[key] ?? "")} placeholder={placeholder} onChange={(e) => { const n = parseInt(e.target.value, 10); setSlurmUserValues({ ...slurmUserValues, [key]: type === "number" ? (e.target.value === "" ? undefined : (Number.isNaN(n) ? undefined : n)) : e.target.value }); }} />
                   </div>
                 ))}
+              </div>
+              <div className="mt-3">
+                <SlurmTestButton
+                  partition={String(slurmUserValues.partition ?? "") || String(slurmData.detected?.partition ?? "")}
+                  account={String(slurmUserValues.account ?? "") || String(slurmData.detected?.account ?? "")}
+                  memory={String(slurmUserValues.memory ?? "") || String(slurmData.effective.memory ?? "")}
+                />
               </div>
               <div className="mt-4">
                 <SaveButton onClick={() => slurmUserMutation.mutate(slurmUserValues)} saving={slurmUserMutation.isPending} saved={slurmUserSaved} label="Save User Defaults" />
@@ -462,7 +479,7 @@ export function SettingsPage(): React.JSX.Element {
                 {SLURM_FIELDS.slice(0, 2).map(({ key, label, placeholder }) => (
                   <div key={key} className="space-y-1">
                     <Label className="text-xs">{label}</Label>
-                    <Input value={String(slurmProjectValues[key] ?? "")} placeholder={placeholder} onChange={(e) => setSlurmProjectValues({ ...slurmProjectValues, [key]: e.target.value })} />
+                    <Input list={key === "partition" ? PARTITION_LIST_ID : ACCOUNT_LIST_ID} value={String(slurmProjectValues[key] ?? "")} placeholder={placeholder} onChange={(e) => setSlurmProjectValues({ ...slurmProjectValues, [key]: e.target.value })} />
                   </div>
                 ))}
               </div>

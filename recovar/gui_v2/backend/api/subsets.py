@@ -2,6 +2,7 @@
 
 Endpoints:
     POST   /api/subsets           — Create a subset (.ind file + DB record)
+    GET    /api/subsets/{id}/pipeline-params — Pipeline form values to rerun on the subset
     GET    /api/subsets            — List subsets for a project
     GET    /api/subsets/:id        — Get subset detail
     DELETE /api/subsets/:id        — Delete subset
@@ -94,6 +95,16 @@ class ExportStarRequest(BaseModel):
 class ExportStarResponse(BaseModel):
     path: str
     n_particles: int
+
+
+class SubsetPipelineParams(BaseModel):
+    params: dict
+    n_particles: int
+    source_pipeline_dir: str
+
+
+# Per-run settings of the source pipeline that must not carry over to a rerun.
+_NOT_INHERITED = frozenset({"outdir", "output_name", "slurm_opts", "local_opts", "executor", "n_images"})
 
 
 # ---------------------------------------------------------------------------
@@ -407,6 +418,98 @@ async def _resolve_source_star(
         return out_path, index_map
 
     return None, None
+
+
+async def _get_subset(subset_id: str):
+    """Find a subset in any open project. Returns ``(subset, session_factory, project_path)``."""
+    from recovar.gui_v2.backend.api.project import _project_registry
+
+    for project_path in list(_project_registry.values()):
+        session_factory = await init_db(get_db_path(project_path))
+        async with session_factory() as session:
+            subset_obj = (await session.execute(select(Subset).where(Subset.id == subset_id))).scalar_one_or_none()
+        if subset_obj is not None:
+            return subset_obj, session_factory, project_path
+    raise HTTPException(status_code=404, detail="Subset not found")
+
+
+async def _source_pipeline_job(subset_obj, session):
+    """The Pipeline job whose dataset a subset's indices address."""
+    from recovar.gui_v2.backend.models.job import Job
+
+    if not subset_obj.source_job_id:
+        raise HTTPException(status_code=400, detail="Subset has no source job; cannot tell which dataset it selects from.")
+    src = (await session.execute(select(Job).where(Job.id == subset_obj.source_job_id))).scalar_one_or_none()
+    if src is None:
+        raise HTTPException(status_code=400, detail="The job this subset was selected from no longer exists.")
+    if src.type == "Pipeline":
+        return src
+    pipeline_dir = (src.params or {}).get("result_dir")
+    candidates = (
+        (
+            await session.execute(
+                select(Job).where(Job.project_id == subset_obj.project_id).where(Job.type == "Pipeline")
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for job in candidates:
+        if pipeline_dir and os.path.realpath(job.output_dir) == os.path.realpath(pipeline_dir):
+            return job
+    raise HTTPException(
+        status_code=400,
+        detail=(
+            f"No Pipeline job in this project produced {pipeline_dir}, so its inputs are unknown. "
+            "Import that pipeline run with Scan, or export a .star and choose the inputs by hand."
+        ),
+    )
+
+
+@router.get("/{subset_id}/pipeline-params", response_model=SubsetPipelineParams)
+async def subset_pipeline_params(subset_id: str) -> SubsetPipelineParams:
+    """Pipeline form values that rerun the source pipeline on just this subset.
+
+    The rerun reads the same particles/poses/ctf as the source pipeline and
+    restricts them with ``--ind``. Subset indices address the dataset the source
+    pipeline *analyzed*; if that pipeline was itself restricted with ``--ind``,
+    the two are composed so the new index file addresses the full dataset.
+    """
+    subset_obj, session_factory, project_path = await _get_subset(subset_id)
+    async with session_factory() as session:
+        pipeline = await _source_pipeline_job(subset_obj, session)
+
+    source = dict(pipeline.params or {})
+    if not source.get("particles"):
+        raise HTTPException(status_code=400, detail="The source pipeline job has no recorded particles input.")
+    if not os.path.isfile(subset_obj.ind_path):
+        raise HTTPException(status_code=404, detail=f"Subset .ind file not found: {subset_obj.ind_path}")
+
+    ind_path = subset_obj.ind_path
+    source_ind = source.get("ind")
+    if source_ind:
+        from recovar.data_io._index_utils import load_index_like
+
+        with open(subset_obj.ind_path, "rb") as f:
+            selection = np.asarray(pickle.load(f), dtype=np.int64)
+        analyzed = np.asarray(load_index_like(str(source_ind)), dtype=np.int64)
+        if selection.max() >= len(analyzed):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Subset index {int(selection.max())} out of range: the source pipeline analyzed "
+                f"{len(analyzed)} particles (via {source_ind}).",
+            )
+        ind_path = os.path.splitext(subset_obj.ind_path)[0] + "_full_dataset.ind"
+        with open(ind_path, "wb") as f:
+            pickle.dump(analyzed[selection], f)
+
+    params = {k: v for k, v in source.items() if k not in _NOT_INHERITED and v not in (None, "")}
+    params["ind"] = ind_path
+    return SubsetPipelineParams(
+        params=params,
+        n_particles=subset_obj.n_particles,
+        source_pipeline_dir=pipeline.output_dir,
+    )
 
 
 @router.post("/{subset_id}/export-star", response_model=ExportStarResponse)

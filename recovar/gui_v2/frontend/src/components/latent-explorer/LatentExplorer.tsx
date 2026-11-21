@@ -2,7 +2,7 @@ import { useState, useCallback, useMemo, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { clsx } from "clsx";
-import { Download, Target, Route, Crosshair, FileSpreadsheet, Play } from "lucide-react";
+import { Download, Target, Route, Crosshair, FileSpreadsheet } from "lucide-react";
 import {
   fetchEmbeddings,
   fetchAvailableEmbeddings,
@@ -17,6 +17,8 @@ import { Spinner } from "../ui/spinner";
 import { ScatterPanel } from "./ScatterPanel";
 import { HistogramPanel } from "./HistogramPanel";
 import { SelectionToolbar, type SelectionTool } from "./SelectionToolbar";
+import { ExecutorSelector } from "../job-form/ExecutorSelector";
+import { RunOnSubsetButton } from "./RunOnSubsetButton";
 import { SubsetProvenanceButton, SubsetProvenanceSummary } from "./SubsetProvenance";
 
 /**
@@ -426,14 +428,18 @@ export function LatentExplorer({ jobId, projectId, resultDir, particlesStar, ana
     },
   });
 
+  // Where one-click compute jobs run; null = the server's default.
+  const [computeExecutor, setComputeExecutor] = useState<string | null>(null);
+
   // Compute state/trajectory
   const computeMutation = useMutation({
     mutationFn: (params: { type: string; z_start?: number[]; z_end?: number[]; latent_points?: number[]; density?: string }) =>
-      submitJob(projectId, params.type, {
-        result_dir: resultDir,
-        zdim: effectiveZdim,
-        ...params,
-      }),
+      submitJob(
+        projectId,
+        params.type,
+        { result_dir: resultDir, zdim: effectiveZdim, ...params },
+        computeExecutor,
+      ),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["project", projectId] });
     },
@@ -774,21 +780,7 @@ export function LatentExplorer({ jobId, projectId, resultDir, particlesStar, ana
                 {oneClickStarMutation.data.star.path}
               </p>
               <div className="flex items-center gap-3 pt-1">
-                <Link
-                  to="/jobs/new"
-                  search={{
-                    type: "pipeline",
-                    particles: oneClickStarMutation.data.star.path,
-                    result_dir: undefined,
-                    density: undefined,
-                    input: undefined,
-                    params: undefined,
-                  }}
-                  className="inline-flex items-center gap-1.5 text-sm font-medium text-blue-400 hover:text-blue-300"
-                >
-                  <Play className="h-3.5 w-3.5" />
-                  Rerun pipeline with this subset
-                </Link>
+                <RunOnSubsetButton subsetId={oneClickStarMutation.data.subset.id} />
                 <SubsetProvenanceButton
                   subsetId={oneClickStarMutation.data.subset.id}
                 />
@@ -811,6 +803,12 @@ export function LatentExplorer({ jobId, projectId, resultDir, particlesStar, ana
                 selectionTool={selectionTool}
                 sourceJobId={jobId}
               />
+              <p className="mt-1 font-mono text-zinc-400 truncate" title={(subsetMutation.data as { path: string }).path}>
+                {(subsetMutation.data as { path: string }).path}
+              </p>
+              <div className="mt-2">
+                <RunOnSubsetButton subsetId={(subsetMutation.data as { id: string }).id} />
+              </div>
             </div>
           )}
 
@@ -852,6 +850,8 @@ export function LatentExplorer({ jobId, projectId, resultDir, particlesStar, ana
                   </span>
                 </label>
               )}
+
+              <ExecutorSelector value={computeExecutor} onChange={setComputeExecutor} />
 
               <div className="flex gap-2">
                 {markers.length >= 1 && (
@@ -902,16 +902,31 @@ export function LatentExplorer({ jobId, projectId, resultDir, particlesStar, ana
                 </Button>
               </div>
 
-              {computeMutation.isSuccess && (
-                <div className="text-xs text-emerald-400">
-                  Job submitted: {(computeMutation.data as { id: string }).id}
-                </div>
-              )}
-              {computeMutation.isError && (
-                <div className="text-xs text-red-400">
-                  {(computeMutation.error as Error).message}
-                </div>
-              )}
+            </div>
+          )}
+
+          {/* Outcome of a one-click compute. Outside the dialog, which closes
+              on submit — inside it, neither message was ever visible. */}
+          {computeMutation.isPending && (
+            <div className="rounded-md border border-zinc-700 bg-zinc-900 px-4 py-2 text-sm text-zinc-300">
+              Submitting job...
+            </div>
+          )}
+          {computeMutation.isSuccess && (
+            <div className="rounded-md border border-emerald-500/30 bg-emerald-500/10 px-4 py-2 text-sm text-emerald-400">
+              Job submitted.{" "}
+              <Link
+                to="/jobs/$jobId"
+                params={{ jobId: (computeMutation.data as { id: string }).id }}
+                className="font-medium underline hover:text-emerald-300"
+              >
+                View job
+              </Link>
+            </div>
+          )}
+          {computeMutation.isError && (
+            <div className="rounded-md border border-red-500/30 bg-red-500/10 px-4 py-2 text-sm text-red-400">
+              Job submission failed: {(computeMutation.error as Error).message}
             </div>
           )}
         </>

@@ -1,6 +1,7 @@
 """File browser and validation API.
 
 Endpoints:
+    GET    /api/files/roots           — Allowed root directories
     GET    /api/files/browse          — List directory contents
     POST   /api/files/validate-star   — Validate a .star file
     POST   /api/files/validate-mrc    — Validate a .mrc file
@@ -27,37 +28,78 @@ router = APIRouter(prefix="/api/files", tags=["files"])
 # Validation timeout (seconds) for filesystem operations on loaded GPFS.
 _VALIDATION_TIMEOUT = 10
 
-# Allowlist of directory roots the file browser may navigate.
-# The project directory is always implicitly allowed.
-# Additional roots can be configured in settings.toml.
+# Allowlist of directory roots the file browser may navigate. Built at startup
+# by ``default_allowed_roots`` (home, cwd, temp, every shared filesystem mounted
+# on this machine, plus anything the user configured); project directories are
+# added as they are opened.
 _allowed_roots: list[str] = []
+
+ALLOWED_ROOTS_ENV = "RECOVAR_GUI_ALLOWED_ROOTS"
+
+_ADD_ROOT_HINT = (
+    "To allow another directory, restart with `recovar gui --allow-root /path`, "
+    f"set {ALLOWED_ROOTS_ENV}=/path1{os.pathsep}/path2, or add "
+    "`allowed_roots = [\"/path\"]` under `[gui]` in ~/.config/recovar/config.toml."
+)
+
+
+def _canonical(path: str) -> str:
+    # Resolve symlinks so roots compare canonically with the resolved request
+    # paths in _check_path_allowed (e.g. HPC homes that symlink into project
+    # storage).
+    return str(Path(os.path.expanduser(path)).resolve())
+
+
+def default_allowed_roots() -> list[str]:
+    """Roots allowed without any configuration, measured from this machine."""
+    from recovar.gui_v2.backend.services.project_config import configured_allowed_roots
+    from recovar.gui_v2.backend.services.site import shared_filesystem_roots
+
+    import tempfile
+
+    roots = [os.path.expanduser("~"), os.getcwd(), "/tmp", tempfile.gettempdir()]
+    roots += shared_filesystem_roots()
+    roots += configured_allowed_roots()
+    roots += [r for r in os.environ.get(ALLOWED_ROOTS_ENV, "").split(os.pathsep) if r]
+    return roots
 
 
 def configure_allowed_roots(roots: list[str]) -> None:
     """Set the allowed root directories for the file browser."""
     global _allowed_roots
-    # Resolve symlinks so roots compare canonically with the resolved
-    # request paths in _check_path_allowed (e.g. HPC homes that symlink
-    # into project storage).
-    _allowed_roots = [str(Path(os.path.expanduser(r)).resolve()) for r in roots]
+    _allowed_roots = []
+    for root in roots:
+        add_allowed_root(root)
 
 
 def add_allowed_root(root: str) -> None:
-    """Add an allowed root directory."""
-    _allowed_roots.append(str(Path(os.path.expanduser(root)).resolve()))
+    """Add an allowed root directory (no-op if already covered)."""
+    resolved = _canonical(root)
+    if not _is_under_allowed_root(resolved):
+        _allowed_roots.append(resolved)
+
+
+def allowed_roots() -> list[str]:
+    return list(_allowed_roots)
+
+
+def _is_under_allowed_root(resolved: str) -> bool:
+    # Compare on path boundaries, not raw string prefixes, so that a sibling
+    # directory ("/tmpsecret" when root is "/tmp") cannot escape.
+    return any(resolved == root or resolved.startswith(root.rstrip(os.sep) + os.sep) for root in _allowed_roots)
 
 
 def _check_path_allowed(path: str) -> None:
     """Raise 403 if *path* is outside all allowed roots."""
-    resolved = str(Path(os.path.expanduser(path)).resolve())
-    for root in _allowed_roots:
-        # Compare on path boundaries, not raw string prefixes, so that a
-        # sibling directory ("/tmpsecret" when root is "/tmp") cannot escape.
-        if resolved == root or resolved.startswith(root + os.sep):
-            return
+    resolved = _canonical(path)
+    if _is_under_allowed_root(resolved):
+        return
     raise HTTPException(
         status_code=403,
-        detail="Access denied: path is outside allowed directories.",
+        detail=(
+            f"Access denied: {resolved} is outside the allowed directories "
+            f"({', '.join(_allowed_roots)}). {_ADD_ROOT_HINT}"
+        ),
     )
 
 
@@ -119,6 +161,12 @@ def _file_type(name: str, is_dir: bool) -> str:
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
+
+
+@router.get("/roots", response_model=list[str])
+async def list_roots() -> list[str]:
+    """Directories the file browser may navigate (for quick-access links)."""
+    return allowed_roots()
 
 
 @router.get("/serve")

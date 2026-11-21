@@ -3,6 +3,9 @@
 Endpoints:
     GET  /api/system/info                  — Server environment details
     GET  /api/system/slurm-defaults        — Default SLURM settings for job forms
+    GET  /api/system/preflight             — Readiness checks for this machine
+    GET  /api/system/slurm-options         — Partitions, accounts and detected settings
+    POST /api/system/slurm-test            — Dry-run SLURM settings against the scheduler
     POST /api/system/generate-test-dataset — Run recovar make_test_dataset to create
                                               a small synthetic dataset for tutorials
 """
@@ -163,6 +166,82 @@ async def slurm_defaults(project_dir: str | None = None) -> SlurmDefaultsRespons
         gpu_resource_spec=str(merged.get("gpu_resource_spec", "--gres=gpu:{gpus}")),
         template_path=merged.get("template_path") or None,
     )
+
+
+class PreflightCheck(BaseModel):
+    id: str
+    level: str  # "ok", "warn" or "error"
+    title: str
+    detail: str
+    fix: str = ""
+
+
+class PreflightResponse(BaseModel):
+    checks: list[PreflightCheck]
+    partitions: list[dict] = []
+
+
+@router.get("/preflight", response_model=PreflightResponse)
+async def preflight(refresh: bool = False) -> PreflightResponse:
+    """Readiness checks: process limits, scheduler, GPU, CUDA kernel, disk.
+
+    Pass ``refresh=true`` after fixing something (e.g. building the kernel)
+    to re-probe instead of returning the cached result.
+    """
+    from dataclasses import asdict
+
+    from recovar.gui_v2.backend.services import site
+    from recovar.gui_v2.backend.services.preflight import run_checks
+
+    if refresh:
+        site.reset_caches()
+    checks = await asyncio.to_thread(run_checks)
+    return PreflightResponse(
+        checks=[PreflightCheck(**asdict(c)) for c in checks],
+        partitions=site.partitions_as_dicts(),
+    )
+
+
+class SlurmOptionsResponse(BaseModel):
+    partitions: list[dict]
+    accounts: list[str]
+    detected: dict[str, str]
+
+
+@router.get("/slurm-options", response_model=SlurmOptionsResponse)
+async def slurm_options() -> SlurmOptionsResponse:
+    """What this cluster offers: partitions (with GPU / node-memory info), the
+    user's accounts, and the settings the scheduler was found to accept. Feeds
+    the pick-lists on the SLURM settings forms."""
+    from recovar.gui_v2.backend.services import site
+
+    detected = await asyncio.to_thread(site.detected_slurm_defaults, DEFAULT_SLURM["memory"])
+    return SlurmOptionsResponse(
+        partitions=site.partitions_as_dicts(),
+        accounts=list(site.slurm_accounts()),
+        detected=detected,
+    )
+
+
+class SlurmTestRequest(BaseModel):
+    partition: str = ""
+    account: str = ""
+    memory: str = DEFAULT_SLURM["memory"]
+
+
+class SlurmTestResponse(BaseModel):
+    accepted: bool | None  # None: the scheduler could not be asked
+    message: str
+
+
+@router.post("/slurm-test", response_model=SlurmTestResponse)
+async def slurm_test(req: SlurmTestRequest) -> SlurmTestResponse:
+    """Ask the scheduler whether it would accept a 1-GPU job with these
+    settings (``sbatch --test-only``: nothing is queued)."""
+    from recovar.gui_v2.backend.services import site
+
+    accepted, message = await asyncio.to_thread(site.sbatch_test, req.partition, req.memory, req.account)
+    return SlurmTestResponse(accepted=accepted, message=message)
 
 
 # ---------------------------------------------------------------------------

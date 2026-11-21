@@ -21,6 +21,7 @@ router = APIRouter(prefix="/api/settings", tags=["settings"])
 
 class SlurmDefaultsLayered(BaseModel):
     builtin: dict[str, Any]
+    detected: dict[str, Any] = {}
     user: dict[str, Any]
     project: dict[str, Any]
     effective: dict[str, Any]

@@ -14,6 +14,13 @@ import {
 } from "../../lib/api/client";
 import { useProject } from "../../lib/project-context";
 import {
+  ACCOUNT_LIST_ID,
+  PARTITION_LIST_ID,
+  SlurmDatalists,
+  SlurmDetectedNote,
+  SlurmTestButton,
+} from "./SlurmSiteAssist";
+import {
   getSlurmDefaults as getLocalDefaults,
   saveSlurmDefaults as saveLocalDefaults,
 } from "../../lib/user-prefs";
@@ -161,6 +168,8 @@ export function SlurmSettings({ value, onChange }: SlurmSettingsProps): React.JS
 
       {expanded && (
         <div className="ml-4 mt-2 space-y-3 border-l border-zinc-800 pl-4">
+          <SlurmDatalists />
+          <SlurmDetectedNote />
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1">
               <div className="flex items-center gap-1">
@@ -168,6 +177,7 @@ export function SlurmSettings({ value, onChange }: SlurmSettingsProps): React.JS
                 <TooltipIcon text={tooltips["slurm.partition"]} />
               </div>
               <Input
+                list={PARTITION_LIST_ID}
                 value={current.partition}
                 placeholder="leave blank to use cluster default"
                 onChange={(e) => update("partition", e.target.value)}
@@ -179,6 +189,7 @@ export function SlurmSettings({ value, onChange }: SlurmSettingsProps): React.JS
                 <TooltipIcon text={tooltips["slurm.account"]} />
               </div>
               <Input
+                list={ACCOUNT_LIST_ID}
                 value={current.account}
                 placeholder="leave blank to use cluster default"
                 onChange={(e) => update("account", e.target.value)}
@@ -235,6 +246,8 @@ export function SlurmSettings({ value, onChange }: SlurmSettingsProps): React.JS
               placeholder="08:00:00"
             />
           </div>
+
+          <SlurmTestButton partition={current.partition} account={current.account} memory={current.memory} />
 
           {/* Raw directives editor */}
           <div>

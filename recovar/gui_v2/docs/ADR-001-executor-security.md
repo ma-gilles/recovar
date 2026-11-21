@@ -178,20 +178,27 @@ This ensures the GUI never shows stale "Running" status after a restart.
 
 ### Filesystem Sandboxing
 
-The file browser API and all file-serving endpoints enforce an allowlist:
+The file browser API and all file-serving endpoints enforce an allowlist.
+Nothing site-specific is hard-coded; the default roots are measured at startup
+(`api/files.py:default_allowed_roots`):
+
+- the user's home, the server's working directory, and the temp directory;
+- the mount point of every network/parallel filesystem on the machine
+  (NFS, GPFS, Lustre, Ceph, BeeGFS, Weka, ...), read from `/proc/mounts`;
+- every registered project directory.
+
+Users add more with `recovar gui --allow-root DIR` (repeatable), the
+`RECOVAR_GUI_ALLOWED_ROOTS` environment variable, or the user config:
 
 ```toml
-# project/.recovar/settings.toml
-[file_browser]
-allowed_roots = [
-    "/scratch/gpfs/GILLES/mg6942",    # user's scratch
-    "/projects/cryoem/shared_data",    # shared datasets
-]
+# ~/.config/recovar/config.toml
+[gui]
+allowed_roots = ["/projects/cryoem/shared_data"]
 ```
 
 Rules:
 1. The project directory is always allowed (implicitly).
-2. `allowed_roots` lists additional directories the file browser can navigate.
+2. `allowed_roots` lists additional directories the file browser can navigate; `GET /api/files/roots` returns the effective list.
 3. All paths are resolved via `Path.resolve()` to prevent symlink escapes.
 4. Paths outside allowed roots return HTTP 403 with message "Access denied: path is outside allowed directories."
 5. No path traversal: reject any path containing `..` after resolution.

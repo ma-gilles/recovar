@@ -131,6 +131,18 @@ export interface SystemInfo {
   disk?: { path: string; total: number; used: number; free: number } | null;
 }
 
+export interface PreflightCheck {
+  id: string;
+  level: "ok" | "warn" | "error";
+  title: string;
+  detail: string;
+  fix: string;
+}
+
+export interface Preflight {
+  checks: PreflightCheck[];
+}
+
 export interface SlurmDefaults {
   partition: string;
   account: string;
@@ -336,10 +348,39 @@ export function exportSubsetStar(
   });
 }
 
+/** Pipeline form values that rerun the source pipeline restricted to a subset. */
+export function getSubsetPipelineParams(
+  subsetId: string
+): Promise<{ params: Record<string, unknown>; n_particles: number; source_pipeline_dir: string }> {
+  return request(`/subsets/${subsetId}/pipeline-params`);
+}
+
 // --- System ---
 
 export function getSystemInfo(): Promise<SystemInfo> {
   return request("/system/info");
+}
+
+export interface SlurmOptions {
+  partitions: { name: string; is_default: boolean; gpus: boolean; up: boolean; max_node_memory_mb: number }[];
+  accounts: string[];
+  detected: Record<string, string>;
+}
+
+export function getSlurmOptions(): Promise<SlurmOptions> {
+  return request("/system/slurm-options");
+}
+
+export function testSlurmSettings(opts: {
+  partition: string;
+  account: string;
+  memory: string;
+}): Promise<{ accepted: boolean | null; message: string }> {
+  return request("/system/slurm-test", { method: "POST", body: JSON.stringify(opts) });
+}
+
+export function getPreflight(refresh = false): Promise<Preflight> {
+  return request(`/system/preflight${refresh ? "?refresh=true" : ""}`);
 }
 
 export function getSlurmDefaults(projectDir?: string): Promise<SlurmDefaults> {
@@ -386,6 +427,7 @@ export function getJobSbatchScript(id: string): Promise<SbatchScript> {
 
 export interface SlurmDefaultsLayered {
   builtin: Record<string, unknown>;
+  detected?: Record<string, unknown>;
   user: Record<string, unknown>;
   project: Record<string, unknown>;
   effective: Record<string, unknown>;

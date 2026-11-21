@@ -211,6 +211,10 @@ def load_persisted_projects() -> int:
 
 
 def _register_project(project_id: str, project_path: str) -> None:
+    # A project's own directory is always browsable, wherever it lives.
+    from recovar.gui_v2.backend.api.files import add_allowed_root
+
+    add_allowed_root(project_path)
     if _project_registry.get(project_id) != project_path:
         _project_registry[project_id] = project_path
         _save_persisted_index()
@@ -290,7 +294,12 @@ async def create_project(req: CreateProjectRequest) -> ProjectResponse:
     project_path = os.path.abspath(req.path)
 
     # Create directory if it doesn't exist
-    os.makedirs(project_path, exist_ok=True)
+    try:
+        os.makedirs(project_path, exist_ok=True)
+    except OSError as exc:
+        raise HTTPException(status_code=400, detail=f"Cannot create project directory {project_path}: {exc.strerror}")
+    if not os.access(project_path, os.W_OK):
+        raise HTTPException(status_code=400, detail=f"Project directory is not writable: {project_path}")
 
     # Initialize the DB
     db_path = get_db_path(project_path)

@@ -104,6 +104,21 @@ def get_executor_for_job(job) -> Executor:
     return _get_local_executor()
 
 
+def _slurm_submit_hint(opts: dict[str, Any]) -> str:
+    """What this site offers, appended to an sbatch rejection so the fix is obvious."""
+    from recovar.gui_v2.backend.services import site
+
+    gpu_parts = [p for p in site.slurm_partitions() if p.gpus]
+    if not gpu_parts:
+        return ""
+    listing = ", ".join(f"{p.name} (up to {p.max_node_memory_mb // 1024}G per node)" for p in gpu_parts)
+    return (
+        f" You requested partition={opts.get('partition') or '<scheduler default>'}, "
+        f"memory={opts.get('memory')}, gpus={opts.get('gpus')}. GPU partitions on this cluster: {listing}. "
+        "Adjust the SLURM settings on the form, or save defaults in Settings."
+    )
+
+
 # ---------------------------------------------------------------------------
 # Background status poller
 # ---------------------------------------------------------------------------
@@ -806,6 +821,19 @@ async def submit_job(req: SubmitJobRequest) -> SubmitJobResponse:
         "true" if merged_local_opts.get("preallocate_gpu", True) else "false"
     )
 
+    # Point the job at the CUDA kernel this server found, so it does not depend
+    # on the compute node's own cache or on an inherited shell environment.
+    from recovar.gui_v2.backend.services import site
+
+    kernel = await asyncio.to_thread(site.cuda_kernel)
+    if kernel.path and not kernel.disabled:
+        env["RECOVAR_CUDA_LIB"] = kernel.path
+    elif not kernel.disabled and not kernel.probe_error:
+        warnings.append(
+            "The custom CUDA kernel is not built on this machine; the job will abort unless the node it "
+            "runs on can build it. Run `recovar build_custom_cuda` (see the readiness banner on the dashboard)."
+        )
+
     try:
         handle = await executor.submit(
             job_id=job_id,
@@ -824,7 +852,11 @@ async def submit_job(req: SubmitJobRequest) -> SubmitJobResponse:
             j.status = JobStatus.FAILED.value
             j.error = f"Submission failed: {exc}"
             await session.commit()
-        raise HTTPException(status_code=500, detail=f"Job submission failed: {exc}")
+        detail = f"Job submission failed: {exc}"
+        if isinstance(executor, SlurmExecutor):
+            detail += _slurm_submit_hint(merged_slurm_opts)
+        # The scheduler rejected the request: the user's settings are wrong, not the server.
+        raise HTTPException(status_code=400, detail=detail)
 
     # Store handle
     async with session_factory() as session:
