@@ -122,6 +122,19 @@ async def create_subset(req: CreateSubsetRequest) -> SubsetResponse:
     if not req.indices:
         raise HTTPException(status_code=400, detail="indices must not be empty")
 
+    session_factory = await init_db(get_db_path(project_path))
+    if req.source_job_id:
+        from recovar.gui_v2.backend.models.job import Job
+
+        async with session_factory() as session:
+            source = (await session.execute(select(Job).where(Job.id == req.source_job_id))).scalar_one_or_none()
+        if source is None:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Job {req.source_job_id} does not belong to project {project_path}; "
+                "the selection was made in a different project.",
+            )
+
     # Create subsets directory
     subsets_dir = os.path.join(project_path, "subsets")
     os.makedirs(subsets_dir, exist_ok=True)

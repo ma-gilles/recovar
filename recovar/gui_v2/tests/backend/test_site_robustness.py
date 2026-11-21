@@ -353,3 +353,109 @@ def test_blanking_a_saved_setting_clears_it(monkeypatch, tmp_path):
     project_config.save_user_slurm_defaults({"partition": "old", "account": "lab_a"})
     project_config.save_user_slurm_defaults({"partition": "", "account": "lab_a"})
     assert project_config.resolve_slurm_defaults_layered()["user"] == {"account": "lab_a"}
+
+
+def test_available_zdims_from_per_zdim_model_directories(tmp_path):
+    """Pipeline outputs store each embedding under model/zdim_<N>/."""
+    from recovar.gui_v2.backend.api.jobs import _read_available_zdims
+
+    for name in ("zdim_20", "zdim_4", "zdim_abc"):
+        (tmp_path / "model" / name).mkdir(parents=True)
+    assert _read_available_zdims(str(tmp_path)) == [4, 20]
+
+
+def test_failed_job_reports_the_exception_from_its_log(tmp_path):
+    from recovar.gui_v2.backend.api.jobs import _last_error_line
+
+    (tmp_path / "slurm-123.out").write_text(
+        "INFO starting\nTraceback (most recent call last):\n"
+        '  File "analyze.py", line 174, in analyze\n'
+        '    raise ValueError("Requested zdim was not found in embedding outputs.")\n'
+        "ValueError: Requested zdim was not found in embedding outputs.\n"
+    )
+    assert _last_error_line(str(tmp_path), "123") == (
+        "Job failed: ValueError: Requested zdim was not found in embedding outputs."
+    )
+    assert _last_error_line(str(tmp_path), "999") is None  # no log for that handle
+
+
+@pytest.mark.asyncio
+async def test_browser_walks_down_from_root_to_allowed_directories(client, tmp_path):
+    """Directories above the allowed roots list only what leads to a root."""
+    data = tmp_path / "lab" / "data"
+    data.mkdir(parents=True)
+    (tmp_path / "lab" / "private").mkdir()
+    (data / "particles.star").write_text("x")
+    files.configure_allowed_roots([str(data)])
+
+    above = (await client.get("/api/files/browse", params={"path": str(tmp_path / "lab")})).json()
+    assert [e["name"] for e in above] == ["data"]  # "private" is not exposed
+    top = await client.get("/api/files/browse", params={"path": "/"})
+    assert top.status_code == 200 and all(e["is_dir"] for e in top.json())
+    inside = (await client.get("/api/files/browse", params={"path": str(data)})).json()
+    assert [e["name"] for e in inside] == ["particles.star"]
+    outside = await client.get("/api/files/browse", params={"path": str(tmp_path / "lab" / "private")})
+    assert outside.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_missing_chart_data_is_empty_not_an_error(client, tmp_project_dir):
+    from recovar.gui_v2.backend.config import get_db_path
+    from recovar.gui_v2.backend.db import init_db
+    from recovar.gui_v2.backend.models.job import Job
+
+    project = (await client.post("/api/projects", json={"path": str(tmp_project_dir), "name": "p"})).json()
+    session_factory = await init_db(get_db_path(tmp_project_dir))
+    async with session_factory() as session:
+        job = Job(project_id=project["id"], type="Pipeline", status="completed", params={}, output_dir=str(tmp_project_dir))
+        session.add(job)
+        await session.commit()
+        job_id = job.id
+    resp = await client.get(f"/api/jobs/{job_id}/chart-data", params={"name": "fsc"})
+    assert resp.status_code == 200 and resp.json()["traces"] == []
+
+
+@pytest.mark.asyncio
+async def test_subset_from_another_projects_job_is_a_client_error(client, tmp_project_dir):
+    project = (await client.post("/api/projects", json={"path": str(tmp_project_dir), "name": "p"})).json()
+    resp = await client.post("/api/subsets", json={
+        "project_id": project["id"], "name": "s", "source_job_id": "job-of-another-project", "indices": [1, 2],
+    })
+    assert resp.status_code == 400 and "different project" in resp.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_removing_a_job_keeps_the_subsets_selected_from_it(client, tmp_project_dir):
+    from recovar.gui_v2.backend.config import get_db_path
+    from recovar.gui_v2.backend.db import init_db
+    from recovar.gui_v2.backend.models.job import Job
+
+    project = (await client.post("/api/projects", json={"path": str(tmp_project_dir), "name": "p"})).json()
+    session_factory = await init_db(get_db_path(tmp_project_dir))
+    async with session_factory() as session:
+        job = Job(project_id=project["id"], type="Analyze", status="completed", params={}, output_dir=str(tmp_project_dir))
+        session.add(job)
+        await session.commit()
+        job_id = job.id
+    created = await client.post("/api/subsets", json={
+        "project_id": project["id"], "name": "s", "source_job_id": job_id, "indices": [1, 2],
+    })
+    assert created.status_code in (200, 201), created.text
+    assert (await client.delete(f"/api/jobs/{job_id}")).status_code == 204
+    subsets = (await client.get("/api/subsets", params={"project_id": project["id"]})).json()
+    assert [s["name"] for s in subsets] == ["s"] and subsets[0]["source_job_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_unreadable_directory_is_forbidden_not_a_server_error(client, tmp_path, monkeypatch):
+    from recovar.gui_v2.backend.api import files
+
+    locked = tmp_path / "locked"
+    locked.mkdir()
+    files.add_allowed_root(str(tmp_path))
+    locked.chmod(0)
+    try:
+        resp = await client.get("/api/files/browse", params={"path": str(locked)})
+    finally:
+        locked.chmod(0o700)
+    assert resp.status_code == 403 and "permission" in resp.json()["detail"]

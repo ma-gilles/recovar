@@ -27,7 +27,7 @@ from typing import Any
 import numpy as np
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from recovar.gui_v2.backend.api.project import get_project_path
 from recovar.gui_v2.backend.config import get_db_path, iso_utc
@@ -119,6 +119,35 @@ def _slurm_submit_hint(opts: dict[str, Any]) -> str:
     )
 
 
+def _last_error_line(job_dir: str | None, handle: str | None) -> str | None:
+    """The exception a failed job died with, from the tail of its log.
+
+    A Python traceback ends with ``SomeError: message``; showing that line
+    saves opening the log to learn that, say, the requested zdim does not exist.
+    """
+    import re
+
+    if not job_dir:
+        return None
+    for name in (f"slurm-{handle}.out", "run.log"):
+        path = os.path.join(job_dir, name)
+        try:
+            with open(path, "rb") as f:
+                f.seek(max(0, os.fstat(f.fileno()).st_size - 16384))
+                tail = f.read().decode("utf-8", errors="replace")
+        except OSError:
+            continue
+        errors = [
+            line.strip()
+            for line in tail.splitlines()
+            if re.match(r"^(\w+\.)*\w*(Error|Exception|Interrupt|Exit)\b.*:", line.strip())
+            or line.startswith("slurmstepd: error:")
+        ]
+        if errors:
+            return f"Job failed: {errors[-1][:500]}"
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Background status poller
 # ---------------------------------------------------------------------------
@@ -160,7 +189,11 @@ async def _poll_job_status(job_id: str, handle: str, project_path: str, executor
                     job.completed_at = datetime.datetime.utcnow()
                     if status == ExecJobStatus.FAILED:
                         reason = await executor.failure_reason(handle)
-                        job.error = reason or "Job failed (detected by status poller)."
+                        job.error = (
+                            reason
+                            or _last_error_line(job.output_dir, handle)
+                            or "Job failed (detected by status poller)."
+                        )
                     await session.commit()
             _poll_tasks.pop(job_id, None)
             logger.info("Job %s reached terminal state: %s", job_id, status.value)
@@ -448,6 +481,17 @@ _CHART_BUILDERS = {
 
 def _read_available_zdims(result_dir: str) -> list[int] | None:
     """Read available zdims from pipeline output."""
+    # Current layout: one model/zdim_<N>/ directory per computed embedding.
+    model_dir = os.path.join(result_dir, "model")
+    if os.path.isdir(model_dir):
+        zdims = sorted(
+            int(name[len("zdim_") :])
+            for name in os.listdir(model_dir)
+            if name.startswith("zdim_") and name[len("zdim_") :].isdigit() and os.path.isdir(os.path.join(model_dir, name))
+        )
+        if zdims:
+            return zdims
+
     # Primary: read embeddings.pkl which stores zs as {zdim: array, ...}
     embeddings_path = os.path.join(result_dir, "model", "embeddings.pkl")
     if os.path.isfile(embeddings_path):
@@ -986,6 +1030,10 @@ async def delete_job(job_id: str) -> None:
         if poll_task:
             poll_task.cancel()
 
+        # Subsets selected from this job outlive it: their particle lists stay usable.
+        from recovar.gui_v2.backend.models.subset import Subset
+
+        await session.execute(update(Subset).where(Subset.source_job_id == job_id).values(source_job_id=None))
         await session.delete(job)
         await session.commit()
     finally:
@@ -1478,7 +1526,9 @@ async def get_chart_data(job_id: str, name: str) -> ChartDataResponse:
     if not files and chart_key == "eigenvalue":
         files = await asyncio.to_thread(_find_data_files, output_dir, "eigenvalues")
     if not files:
-        raise HTTPException(status_code=404, detail=f"No data file found for chart: {name}")
+        # Not an error: most jobs only write the PNG. No traces tells the client
+        # to show that instead (a 404 here logged an error for every plot).
+        return ChartDataResponse(chart_type=chart_key, traces=[])
 
     # Load the first matching file
     try:

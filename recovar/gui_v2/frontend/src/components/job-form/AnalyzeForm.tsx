@@ -1,5 +1,5 @@
-import { useState, useCallback } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useState, useCallback, useEffect } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Label } from "../ui/label";
@@ -29,6 +29,27 @@ export function AnalyzeForm({
   const queryClient = useQueryClient();
   const [resultDir, setResultDir] = useState(prefilledResultDir ?? "");
   const [zdim, setZdim] = useState(availableZdims?.[0]?.toString() ?? "4");
+
+  // The zdims this pipeline output actually contains. The validator reports
+  // them for any result_dir, so a form opened without the prop still offers
+  // only values that exist instead of a default that may not.
+  const { data: detectedZdims } = useQuery<number[]>({
+    queryKey: ["available-zdims", resultDir],
+    queryFn: async () => {
+      const result = await validateJob(projectId, "analyze", { result_dir: resultDir, zdim: 0 });
+      return (result.info.available_zdims as number[] | undefined) ?? [];
+    },
+    enabled: !!resultDir && !(availableZdims && availableZdims.length > 0),
+    staleTime: 60_000,
+  });
+  const zdimChoices = availableZdims && availableZdims.length > 0 ? availableZdims : (detectedZdims ?? []);
+  useEffect(() => {
+    if (zdimChoices.length > 0 && !zdimChoices.includes(parseInt(zdim))) {
+      // Prefer 4 (a good general default), else the smallest above it, else the largest.
+      const pick = zdimChoices.includes(4) ? 4 : (zdimChoices.find((z) => z > 4) ?? zdimChoices[zdimChoices.length - 1]);
+      setZdim(String(pick));
+    }
+  }, [zdimChoices, zdim]);
   const [noZReg, setNoZReg] = useState(false);
   const [nClusters, setNClusters] = useState("20");
   const [nTrajectories, setNTrajectories] = useState("0");
@@ -113,9 +134,9 @@ export function AnalyzeForm({
           <Label>zdim</Label>
           <TooltipIcon text={tooltips["analyze.zdim"]} />
         </div>
-        {availableZdims && availableZdims.length > 0 ? (
+        {zdimChoices.length > 0 ? (
           <Select value={zdim} onChange={(e) => setZdim(e.target.value)}>
-            {availableZdims.map((z) => (
+            {zdimChoices.map((z) => (
               <option key={z} value={z}>
                 {z}
               </option>

@@ -1,5 +1,5 @@
 import { useState, useCallback, useMemo, useEffect, useRef } from "react";
-import { useParams, Link } from "@tanstack/react-router";
+import { useParams, Link, useNavigate } from "@tanstack/react-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowLeft,
@@ -10,7 +10,9 @@ import {
   Image,
   ChevronRight,
   Copy,
+  Check,
   XCircle,
+  Trash2,
   X,
   Eye,
   EyeOff,
@@ -26,6 +28,7 @@ import {
   getSuggestedNext,
   getJobSbatchScript,
   cancelJob,
+  deleteJob,
   reconcileJob,
   getChartData,
   type JobDetail,
@@ -176,14 +179,7 @@ function OverviewTab({
           <span className="text-xs text-zinc-500">Output Directory</span>
           <div className="flex items-center gap-1">
             <p className="font-mono text-sm text-zinc-300">{job.output_dir}</p>
-            <button
-              className="inline-flex items-center rounded px-1.5 py-0.5 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300"
-              onClick={() => navigator.clipboard?.writeText(job.output_dir!).catch(() => undefined)}
-              title="Copy path"
-              aria-label="Copy output directory path"
-            >
-              <Copy className="h-3 w-3" />
-            </button>
+            <CopyButton text={job.output_dir} title="Copy path" label="Copy output directory path" />
           </div>
         </div>
       )}
@@ -339,14 +335,7 @@ function ParamsTab({ job }: { job: JobDetail }): React.JSX.Element {
                   <td className="py-2 font-mono text-zinc-400" style={{ wordBreak: "break-all", overflowWrap: "anywhere" }}>
                     <span>{display}</span>
                     {isLong && (
-                      <button
-                        className="ml-2 inline-flex items-center rounded px-1.5 py-0.5 text-[10px] text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300"
-                        onClick={() => navigator.clipboard?.writeText(display).catch(() => undefined)}
-                        title="Copy value"
-                        aria-label={`Copy ${key} value`}
-                      >
-                        <Copy className="h-3 w-3" />
-                      </button>
+                      <CopyButton text={display} title="Copy value" label={`Copy ${key} value`} className="ml-2" />
                     )}
                   </td>
                 </tr>
@@ -774,6 +763,29 @@ function PlotsTab({ jobId }: { jobId: string }): React.JSX.Element {
   );
 }
 
+/** Copies text to the clipboard and shows a tick, or a cross when the browser refuses. */
+function CopyButton({ text, title, label, className }: { text: string; title: string; label: string; className?: string }): React.JSX.Element {
+  const [state, setState] = useState<"idle" | "copied" | "failed">("idle");
+  const copy = (): void => {
+    const done = (ok: boolean): void => {
+      setState(ok ? "copied" : "failed");
+      window.setTimeout(() => setState("idle"), 1500);
+    };
+    if (!navigator.clipboard) return done(false);
+    navigator.clipboard.writeText(text).then(() => done(true), () => done(false));
+  };
+  return (
+    <button
+      className={clsx("inline-flex items-center rounded px-1.5 py-0.5 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300", className)}
+      onClick={copy}
+      title={state === "copied" ? "Copied" : state === "failed" ? "Copy not permitted by the browser; select the text instead" : title}
+      aria-label={label}
+    >
+      {state === "copied" ? <Check className="h-3 w-3 text-emerald-400" /> : state === "failed" ? <X className="h-3 w-3 text-red-400" /> : <Copy className="h-3 w-3" />}
+    </button>
+  );
+}
+
 /**
  * Dropdown that lets the user pick another job of the same type from
  * the active project, then navigates to /compare?jobs=<this>,<that>.
@@ -851,6 +863,7 @@ function CompareWithDropdown({
 export function JobDetailPage(): React.JSX.Element {
   const { jobId } = useParams({ from: "/jobs/$jobId" });
   const [activeTab, setActiveTab] = useState<TabId>("overview");
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
 
   const { data: job, isLoading, refetch } = useQuery<JobDetail>({
@@ -879,9 +892,10 @@ export function JobDetailPage(): React.JSX.Element {
 
   const { project, setProject } = useProject();
 
-  // Auto-restore project context when navigating directly to a job page
+  // The page belongs to the job's project, whatever project the browser last
+  // had active (a direct link, or another tab on a different project).
   useEffect(() => {
-    if (project || !job?.project_id) return;
+    if (!job?.project_id || project?.id === job.project_id) return;
     let cancelled = false;
     getProject(job.project_id).then((projectData) => {
       if (!cancelled) {
@@ -911,6 +925,16 @@ export function JobDetailPage(): React.JSX.Element {
     onSuccess: () => {
       refetch();
       queryClient.invalidateQueries({ queryKey: ["project"] });
+    },
+  });
+
+  // Removes the job's entry from the project. Files on disk are untouched;
+  // the output can be re-imported later with Scan.
+  const removeMutation = useMutation({
+    mutationFn: () => deleteJob(jobId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["project"] });
+      navigate({ to: "/" });
     },
   });
 
@@ -972,14 +996,14 @@ export function JobDetailPage(): React.JSX.Element {
               )}
             </div>
           )}
-          {isTerminal && (job.type.toLowerCase() === "pipeline" || job.type.toLowerCase() === "analyze") && (
+          {job.status === "completed" && (job.type.toLowerCase() === "pipeline" || job.type.toLowerCase() === "analyze") && (
             <Link to="/explore/$jobId" params={{ jobId }}>
               <Button variant="default" size="sm">
                 Explore Latent Space
               </Button>
             </Link>
           )}
-          {isTerminal && job.type.toLowerCase() === "density" && exploreTargetId && (
+          {job.status === "completed" && job.type.toLowerCase() === "density" && exploreTargetId && (
             <Link to="/explore/$jobId" params={{ jobId: exploreTargetId }}>
               <Button variant="default" size="sm">
                 Explore Latent Space
@@ -987,6 +1011,27 @@ export function JobDetailPage(): React.JSX.Element {
             </Link>
           )}
           <CompareWithDropdown currentJob={job} project={project} />
+          {isTerminal && (
+            <div className="flex flex-col items-end gap-1">
+              <Button
+                variant="ghost"
+                size="sm"
+                title="Remove this job's entry from the project. Files on disk are kept."
+                onClick={() => {
+                  if (window.confirm("Remove this job from the project? Its files on disk are kept.")) {
+                    removeMutation.mutate();
+                  }
+                }}
+                disabled={removeMutation.isPending}
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+                Remove from project
+              </Button>
+              {removeMutation.isError && (
+                <span className="text-xs text-red-400">Failed to remove: {(removeMutation.error as Error).message}</span>
+              )}
+            </div>
+          )}
         </div>
       </div>
 

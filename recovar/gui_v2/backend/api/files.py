@@ -158,6 +158,24 @@ def _file_type(name: str, is_dir: bool) -> str:
     }.get(ext, "other")
 
 
+def _gateway_entries(path: str) -> list[FileEntry]:
+    """Entries for a directory that is *above* the allowed roots.
+
+    Such a directory is not listed for real. It shows only the sub-directories
+    that lead to an allowed root, so the path breadcrumb ("/" > "scratch" >
+    "gpfs") can be walked down to where the data is instead of dead-ending in
+    a 403. Empty when *path* is itself allowed or leads nowhere allowed.
+    """
+    resolved = _canonical(path)
+    if _is_under_allowed_root(resolved):
+        return []
+    prefix = resolved.rstrip(os.sep) + os.sep
+    names = sorted({root[len(prefix) :].split(os.sep)[0] for root in _allowed_roots if root.startswith(prefix)})
+    return [
+        FileEntry(name=name, path=prefix + name, is_dir=True, size=0, modified="", type="directory") for name in names
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -185,6 +203,9 @@ async def serve_file(path: str) -> FileResponse:
 async def browse(path: str) -> list[FileEntry]:
     """List contents of a directory."""
     abs_path = os.path.abspath(os.path.expanduser(path))
+    gateway = _gateway_entries(abs_path)
+    if gateway:
+        return gateway
     _check_path_allowed(abs_path)
 
     if not os.path.isdir(abs_path):
@@ -207,6 +228,8 @@ async def browse(path: str) -> list[FileEntry]:
                 ))
             except OSError:
                 continue
+    except PermissionError:
+        raise HTTPException(status_code=403, detail=f"You do not have permission to read {abs_path}")
     except OSError as exc:
         raise HTTPException(status_code=500, detail=f"Cannot list directory: {exc}")
 
