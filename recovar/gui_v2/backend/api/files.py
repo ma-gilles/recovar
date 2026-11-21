@@ -52,10 +52,10 @@ def _canonical(path: str) -> str:
 
 def default_allowed_roots() -> list[str]:
     """Roots allowed without any configuration, measured from this machine."""
+    import tempfile
+
     from recovar.gui_v2.backend.services.project_config import configured_allowed_roots
     from recovar.gui_v2.backend.services.site import shared_filesystem_roots
-
-    import tempfile
 
     roots = [os.path.expanduser("~"), os.getcwd(), "/tmp", tempfile.gettempdir()]
     roots += shared_filesystem_roots()

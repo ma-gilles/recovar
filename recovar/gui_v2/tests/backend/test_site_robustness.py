@@ -36,7 +36,11 @@ _real_detection = site.detected_slurm_defaults.__wrapped__
 def _use_partitions(monkeypatch, sinfo_output: str, accepts=lambda partition, memory, account="": None) -> None:
     """Fake this site's partitions; *accepts* plays the scheduler's dry-run verdict."""
     monkeypatch.setattr(site, "slurm_partitions", lambda: tuple(site.parse_sinfo(sinfo_output)))
-    monkeypatch.setattr(site, "sbatch_test", lambda partition, memory, account="": (accepts(partition, memory, account), "scheduler says no"))
+    monkeypatch.setattr(
+        site,
+        "sbatch_test",
+        lambda partition, memory, account="": (accepts(partition, memory, account), "scheduler says no"),
+    )
     monkeypatch.setattr(site, "detected_slurm_defaults", _real_detection)
 
 
@@ -256,26 +260,57 @@ async def test_subset_rerun_reuses_pipeline_inputs_and_composes_ind(client, tmp_
     source_ind.write_bytes(pickle.dumps(np.arange(100, 200)))  # pipeline analyzed particles 100..199
     pipeline_dir = str(tmp_project_dir / "Pipeline" / "job_0001")
     pipeline_params = {
-        "particles": "/data/particles.mrcs", "poses": "/data/poses.pkl", "ctf": "/data/ctf.pkl",
-        "mask": "sphere", "zdim": "4", "ind": str(source_ind), "output_name": "first", "slurm_opts": {"memory": "1G"},
+        "particles": "/data/particles.mrcs",
+        "poses": "/data/poses.pkl",
+        "ctf": "/data/ctf.pkl",
+        "mask": "sphere",
+        "zdim": "4",
+        "ind": str(source_ind),
+        "output_name": "first",
+        "slurm_opts": {"memory": "1G"},
     }
     session_factory = await init_db(get_db_path(tmp_project_dir))
     async with session_factory() as session:
-        pipeline = Job(project_id=project["id"], type="Pipeline", status="completed", params=pipeline_params, output_dir=pipeline_dir)
-        analyze = Job(project_id=project["id"], type="Analyze", status="completed", params={"result_dir": pipeline_dir}, output_dir=str(tmp_project_dir / "Analyze" / "job_0001"))
+        pipeline = Job(
+            project_id=project["id"],
+            type="Pipeline",
+            status="completed",
+            params=pipeline_params,
+            output_dir=pipeline_dir,
+        )
+        analyze = Job(
+            project_id=project["id"],
+            type="Analyze",
+            status="completed",
+            params={"result_dir": pipeline_dir},
+            output_dir=str(tmp_project_dir / "Analyze" / "job_0001"),
+        )
         session.add_all([pipeline, analyze])
         await session.commit()
         analyze_id = analyze.id
 
-    subset = (await client.post("/api/subsets", json={
-        "project_id": project["id"], "name": "lasso", "source_job_id": analyze_id, "zdim": 4,
-        "method": {"tool": "lasso"}, "indices": [0, 5, 99],
-    })).json()
+    subset = (
+        await client.post(
+            "/api/subsets",
+            json={
+                "project_id": project["id"],
+                "name": "lasso",
+                "source_job_id": analyze_id,
+                "zdim": 4,
+                "method": {"tool": "lasso"},
+                "indices": [0, 5, 99],
+            },
+        )
+    ).json()
     resp = await client.get(f"/api/subsets/{subset['id']}/pipeline-params")
     assert resp.status_code == 200, resp.text
     params = resp.json()["params"]
     assert {k: params[k] for k in ("particles", "poses", "ctf", "mask", "zdim")} == {
-        "particles": "/data/particles.mrcs", "poses": "/data/poses.pkl", "ctf": "/data/ctf.pkl", "mask": "sphere", "zdim": "4",
+        "particles": "/data/particles.mrcs",
+        "poses": "/data/poses.pkl",
+        "ctf": "/data/ctf.pkl",
+        "mask": "sphere",
+        "zdim": "4",
     }
     assert "output_name" not in params and "slurm_opts" not in params
     with open(params["ind"], "rb") as f:

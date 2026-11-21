@@ -371,7 +371,9 @@ def detected_slurm_defaults(builtin_memory: str) -> dict[str, str]:
         if chosen is not None:
             break
     if chosen is None:
-        logger.warning("The scheduler rejected a 1-GPU test job for every account and GPU partition; set SLURM options in Settings.")
+        logger.warning(
+            "The scheduler rejected a 1-GPU test job for every account and GPU partition; set SLURM options in Settings."
+        )
         return {}
 
     detected: dict[str, str] = {}
