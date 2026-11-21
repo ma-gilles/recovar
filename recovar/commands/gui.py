@@ -39,6 +39,8 @@ import sys
 
 logger = logging.getLogger(__name__)
 
+_DEFAULT_PORT = 8080
+
 
 # (import name, pip/dist name) for every package the GUI backend needs at
 # runtime. Several are imported lazily by the server — most notably the
@@ -62,17 +64,53 @@ def _missing_gui_deps() -> list[str]:
     return [pip for mod, pip in _REQUIRED_GUI_DEPS if importlib.util.find_spec(mod) is None]
 
 
+def _port_is_free(host: str, port: int) -> bool:
+    """Return True if *port* can be bound on *host*.
+
+    The probe sets SO_REUSEADDR because uvicorn does. Without it, a socket
+    left in TIME_WAIT by a server that was just stopped reads as busy, so a
+    restart drifts to another port even though uvicorn would have bound the
+    requested one fine.
+    """
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            probe.bind((host, port))
+            return True
+        except OSError:
+            return False
+
+
 def _pick_port(host: str, requested: int, span: int = 20) -> int:
     """Return *requested* if free, otherwise the next free port in range — so a
     busy default port doesn't crash the launch with 'address already in use'."""
     for candidate in range(requested, requested + span):
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
-            try:
-                probe.bind((host, candidate))
-                return candidate
-            except OSError:
-                continue
+        if _port_is_free(host, candidate):
+            return candidate
     return requested  # nothing free in range; let uvicorn surface the error
+
+
+class PortUnavailableError(RuntimeError):
+    """Raised when a port the user asked for by name is already taken."""
+
+
+def _resolve_port(host: str, requested: int, explicit: bool) -> int:
+    """Decide which port to bind.
+
+    The default port may drift to the next free one, so a launch is not
+    blocked by a leftover server. A port named with ``--port`` never drifts:
+    it is normally the port being forwarded over SSH, and binding a different
+    one just shows "connection refused" in the browser with nothing to
+    explain why.
+    """
+    if not explicit:
+        return _pick_port(host, requested)
+    if _port_is_free(host, requested):
+        return requested
+    raise PortUnavailableError(
+        f"Port {requested} is already in use on {host}. Stop whatever is "
+        f"listening (often an older 'recovar gui') or pass a different --port."
+    )
 
 
 def _maybe_open_browser(url: str, host: str, no_browser: bool) -> None:
@@ -174,8 +212,12 @@ def main():
     parser.add_argument(
         "--port",
         type=int,
-        default=8080,
-        help="Port to bind to (default: 8080; the next free port is used if it is busy)",
+        default=None,
+        help=(
+            "Port to bind to (default: 8080, falling back to the next free port "
+            "if it is busy). A port given explicitly is used as-is: if it is "
+            "busy the launch fails rather than moving to another port."
+        ),
     )
     parser.add_argument(
         "--reload",
@@ -200,8 +242,10 @@ def main():
         format="%(asctime)s %(levelname)s %(name)s — %(message)s",
     )
 
+    requested_port = _DEFAULT_PORT if args.port is None else args.port
+
     if args.check:
-        sys.exit(_run_doctor(args.host, args.port))
+        sys.exit(_run_doctor(args.host, requested_port))
 
     # Preflight: verify the whole GUI runtime set up front so a missing
     # package is reported immediately, with the exact install command,
@@ -222,9 +266,16 @@ def main():
 
     from recovar.gui_v2.backend.main import create_app
 
-    # Use the next free port if the requested one is taken, so the launch
-    # "just works" instead of dying with 'address already in use'.
-    port = _pick_port(args.host, args.port)
+    # Only the *default* port drifts when busy, so the launch "just works"
+    # instead of dying with 'address already in use'. An explicit --port is
+    # honoured exactly: it is normally the port the user forwards over SSH,
+    # and quietly binding a different one just makes the browser show
+    # "connection refused" with no clue why (see recovar#163 discussion).
+    try:
+        port = _resolve_port(args.host, requested_port, explicit=args.port is not None)
+    except PortUnavailableError as exc:
+        logger.error("%s", exc)
+        sys.exit(1)
     url = f"http://{args.host}:{port}"
 
     print()
@@ -241,8 +292,8 @@ def main():
             "  ║     untrusted networks.                              ║"
         )
     print("  ╚══════════════════════════════════════════════╝")
-    if port != args.port:
-        print(f"  (port {args.port} was busy — using {port})")
+    if port != requested_port:
+        print(f"  (port {requested_port} was busy — using {port})")
     print()
 
     _maybe_open_browser(url, args.host, args.no_browser)

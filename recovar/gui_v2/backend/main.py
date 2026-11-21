@@ -37,6 +37,7 @@ from recovar.gui_v2.backend.config import DEFAULT_HOST, DEFAULT_PORT
 from recovar.gui_v2.backend.db import close_all, init_db
 from recovar.gui_v2.backend.models.job import Job, JobStatus
 from recovar.gui_v2.backend.services.executor import (
+    disk_completion_time,
     reconcile_jobs,
 )
 
@@ -69,6 +70,7 @@ async def _reconcile_on_startup() -> None:
 
     total_reconciled = 0
     total_restarted = 0
+    total_repaired = 0
 
     for project_path in project_paths:
         db_path = get_db_path(project_path)
@@ -82,6 +84,32 @@ async def _reconcile_on_startup() -> None:
             continue
 
         async with session_factory() as session:
+            # Repair rows an earlier restart got wrong: before jobs were
+            # judged by their outputs, any handle-less job in flight was
+            # recorded as failed even when it had finished, and nothing in
+            # the UI could undo that (a rescan skips known directories).
+            repair_stmt = select(Job).where(
+                Job.status == JobStatus.FAILED.value,
+                Job.executor_handle.is_(None),
+                Job.error.like("No executor handle%"),
+            )
+            stale = (await session.execute(repair_stmt)).scalars().all()
+            for job in stale:
+                finished = disk_completion_time(job.output_dir, job.created_at)
+                if finished is None:
+                    continue  # genuinely has nothing to show for itself
+                job.status = JobStatus.COMPLETED.value
+                job.error = None
+                job.completed_at = finished
+                total_repaired += 1
+                logger.info(
+                    "Startup repair: %s completed on disk, was recorded failed (%s)",
+                    job.type,
+                    job.output_dir,
+                )
+            if total_repaired:
+                await session.commit()
+
             # Find all non-terminal jobs
             stmt = select(Job).where(Job.status.in_([JobStatus.RUNNING.value, JobStatus.QUEUED.value]))
             result = await session.execute(stmt)
@@ -103,6 +131,7 @@ async def _reconcile_on_startup() -> None:
                     "handle": j.executor_handle,
                     "db_status": j.status,
                     "working_dir": j.output_dir,
+                    "created_at": j.created_at,
                 }
                 for j in inflight
             ]
@@ -128,10 +157,15 @@ async def _reconcile_on_startup() -> None:
                 if not job:
                     continue
                 job.status = upd["new_status"]
-                if upd.get("error"):
-                    job.error = upd["error"]
+                # Assign unconditionally: a job reconciled to completed must
+                # not keep the error text from a previous failed reconcile.
+                job.error = upd.get("error")
                 if upd["new_status"] in ("completed", "failed", "cancelled"):
-                    job.completed_at = datetime.datetime.utcnow()
+                    # Prefer the finish time recovered from disk — stamping
+                    # "now" would date a job that ended hours ago to the restart.
+                    job.completed_at = (
+                        upd.get("completed_at") or datetime.datetime.utcnow()
+                    )
                 total_reconciled += 1
 
             await session.commit()
@@ -159,9 +193,11 @@ async def _reconcile_on_startup() -> None:
                         total_restarted += 1
 
     logger.info(
-        "Startup reconcile complete: %d jobs updated, %d pollers restarted",
+        "Startup reconcile complete: %d jobs updated, %d pollers restarted, "
+        "%d wrongly-failed jobs repaired",
         total_reconciled,
         total_restarted,
+        total_repaired,
     )
 
 
