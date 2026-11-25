@@ -163,9 +163,11 @@ export function ExplorePage(): React.JSX.Element {
 
   const { project: activeProject, setProject } = useProject();
 
-  // Auto-restore project context when navigating directly to an explore page
+  // The page belongs to the job's project, whatever project the browser last
+  // had active (a direct link, or another tab on a different project). Switch
+  // to it, so the sidebar and everything written from here agree with the job.
   useEffect(() => {
-    if (activeProject || !job?.project_id) return;
+    if (!job?.project_id || activeProject?.id === job.project_id) return;
     let cancelled = false;
     getProject(job.project_id).then((projectData) => {
       if (!cancelled) {
@@ -177,7 +179,9 @@ export function ExplorePage(): React.JSX.Element {
     return () => { cancelled = true; };
   }, [activeProject, job?.project_id, setProject]);
 
-  const projectId = activeProject?.id ?? "";
+  // Never the active project's id: until the switch above lands they can
+  // differ, and a subset or job created meanwhile would go to the wrong project.
+  const projectId = job?.project_id ?? "";
 
   if (jobLoading) {
     return (

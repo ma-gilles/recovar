@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 
 import pytest
@@ -12,6 +11,26 @@ from httpx import ASGITransport, AsyncClient
 
 from recovar.gui_v2.backend.db import close_all
 from recovar.gui_v2.backend.main import create_app
+
+
+@pytest.fixture(autouse=True)
+def _isolated_user_config(tmp_path_factory, monkeypatch):
+    """Keep tests out of the real ~/.config/recovar (project registry, SLURM defaults)."""
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path_factory.mktemp("xdg_config")))
+
+
+@pytest.fixture(autouse=True)
+def _no_site_probing(monkeypatch):
+    """Tests must give the same result on a laptop and on a cluster login node:
+    no real sinfo/sbatch, no real CUDA-kernel lookup."""
+    from recovar.gui_v2.backend.services import preflight, site
+
+    preflight.invalidate()
+    monkeypatch.setattr(site, "slurm_partitions", lambda: ())
+    monkeypatch.setattr(site, "detected_slurm_defaults", lambda builtin_memory: {})
+    monkeypatch.setattr(site, "slurm_accounts", lambda: ())
+    monkeypatch.setattr(site, "sbatch_test", lambda partition, memory, account="": (None, "not asked in tests"))
+    monkeypatch.setattr(site, "cuda_kernel", lambda: site.CudaKernel(probe_error="not probed in tests"))
 
 
 @pytest.fixture
@@ -25,6 +44,7 @@ async def client(app):
     """Async HTTP client wired to the test app."""
     # Clear shared state from previous tests
     from recovar.gui_v2.backend.api.project import _project_registry
+
     _project_registry.clear()
 
     transport = ASGITransport(app=app)

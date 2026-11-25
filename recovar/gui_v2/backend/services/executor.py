@@ -209,9 +209,7 @@ class SlurmExecutor(Executor):
         )
         _, stderr = await proc.communicate()
         if proc.returncode != 0:
-            raise RuntimeError(
-                f"scancel failed (rc={proc.returncode}): {stderr.decode().strip()}"
-            )
+            raise RuntimeError(f"scancel failed (rc={proc.returncode}): {stderr.decode().strip()}")
         logger.info("Cancelled SLURM job %s", handle)
 
     async def log_path(self, handle: str) -> Path | None:
@@ -278,7 +276,8 @@ class SlurmExecutor(Executor):
             for line in lines:
                 state = line.strip()
                 if state and state not in ("", "State"):
-                    return state
+                    # "CANCELLED by 12345" (scancel by a user) -> "CANCELLED"
+                    return state.split()[0]
         except (asyncio.TimeoutError, OSError):
             pass
         return None
@@ -343,25 +342,27 @@ class LocalExecutor(Executor):
             "",
         ]
         if setup_command:
-            script_lines.append(f"# Setup command")
+            script_lines.append("# Setup command")
             script_lines.append(setup_command)
             script_lines.append("")
-        script_lines.extend([
-            "# Run the pipeline",
-            cmd_str,
-            "EXIT_CODE=$?",
-            "",
-            f"echo $EXIT_CODE > {shlex.quote(rc_file)}",
-            # Emit an explicit completion marker so status_with_dir can
-            # classify a finished job even if the exit-code file write was
-            # lost (e.g. disk full, killed between writes).
-            'if [ "$EXIT_CODE" -eq 0 ]; then',
-            '    echo "Job completed: rc=$EXIT_CODE"',
-            "else",
-            '    echo "Job failed: rc=$EXIT_CODE"',
-            "fi",
-            "exit $EXIT_CODE",
-        ])
+        script_lines.extend(
+            [
+                "# Run the pipeline",
+                cmd_str,
+                "EXIT_CODE=$?",
+                "",
+                f"echo $EXIT_CODE > {shlex.quote(rc_file)}",
+                # Emit an explicit completion marker so status_with_dir can
+                # classify a finished job even if the exit-code file write was
+                # lost (e.g. disk full, killed between writes).
+                'if [ "$EXIT_CODE" -eq 0 ]; then',
+                '    echo "Job completed: rc=$EXIT_CODE"',
+                "else",
+                '    echo "Job failed: rc=$EXIT_CODE"',
+                "fi",
+                "exit $EXIT_CODE",
+            ]
+        )
 
         script_content = "\n".join(script_lines) + "\n"
         with open(script_file, "w") as f:
@@ -370,7 +371,8 @@ class LocalExecutor(Executor):
 
         # Launch fully detached via nohup + bash
         proc = await asyncio.create_subprocess_exec(
-            "/bin/bash", "-c",
+            "/bin/bash",
+            "-c",
             f"nohup {shlex.quote(script_file)} > {shlex.quote(log_file)} 2>&1 &",
             cwd=working_dir,
             start_new_session=True,
@@ -392,7 +394,8 @@ class LocalExecutor(Executor):
 
         logger.info(
             "Started local job pid=%s for job_id=%s (detached, survives restart)",
-            handle, job_id,
+            handle,
+            job_id,
         )
         return handle
 
@@ -484,7 +487,7 @@ class LocalExecutor(Executor):
         return None  # Log path is resolved by the job layer from working_dir
 
     async def cleanup(self, handle: str) -> None:
-                pass
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -793,6 +796,19 @@ def _render_jinja_template(
 # ---------------------------------------------------------------------------
 
 
+def _recorded_status(working_dir: str | None) -> str | None:
+    """The status a job wrote to its own ``job.json``, if any."""
+    import json
+
+    if not working_dir:
+        return None
+    try:
+        with open(os.path.join(working_dir, "job.json")) as f:
+            return json.load(f).get("status")
+    except (OSError, ValueError):
+        return None
+
+
 async def reconcile_jobs(
     executor: Executor,
     inflight_jobs: list[dict],
@@ -819,6 +835,17 @@ async def reconcile_jobs(
     for job_info in inflight_jobs:
         handle = job_info.get("handle")
         if not handle:
+            # No handle: either the GUI never finished submitting it, or it was
+            # not launched by the GUI at all (imported by Scan while running
+            # from the command line). A recovar job records its own state in
+            # job.json: adopt a recorded outcome, and leave a job that says it
+            # is still running alone — it is not ours to declare failed.
+            recorded = _recorded_status(job_info.get("working_dir"))
+            if recorded == JobStatus.RUNNING.value:
+                continue
+            if recorded in (JobStatus.COMPLETED.value, JobStatus.FAILED.value, JobStatus.CANCELLED.value):
+                updates.append({"id": job_info["id"], "new_status": recorded, "error": None})
+                continue
             updates.append(
                 {
                     "id": job_info["id"],

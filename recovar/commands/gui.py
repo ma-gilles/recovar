@@ -6,7 +6,8 @@ Usage::
     recovar gui --port 8085              # custom port
     recovar gui --host 0.0.0.0           # bind to all interfaces (for remote access)
     recovar gui --no-browser             # do not auto-open a browser
-    recovar gui --check                  # diagnose deps / GPU / SLURM, then exit
+    recovar gui --allow-root /data/lab   # let the file browser into another directory
+    recovar gui --check                  # diagnose deps / GPU / SLURM / CUDA kernel, then exit
 
 Access via browser at http://localhost:<port>.
 When using SSH, forward the port: ssh -L 8080:localhost:8080 user@cluster
@@ -67,12 +68,58 @@ def _pick_port(host: str, requested: int, span: int = 20) -> int:
     busy default port doesn't crash the launch with 'address already in use'."""
     for candidate in range(requested, requested + span):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            # Match the server's own bind (uvicorn sets SO_REUSEADDR). Without
+            # it, a port whose previous server just exited looks busy for ~60 s
+            # and a quick restart silently lands on the next port, breaking any
+            # SSH tunnel pointed at the original one.
+            probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             try:
                 probe.bind((host, candidate))
                 return candidate
             except OSError:
                 continue
     return requested  # nothing free in range; let uvicorn surface the error
+
+
+_THREAD_ENV_VARS = (
+    "OMP_NUM_THREADS",
+    "OPENBLAS_NUM_THREADS",
+    "MKL_NUM_THREADS",
+    "NUMEXPR_NUM_THREADS",
+    "VECLIB_MAXIMUM_THREADS",
+)
+
+
+def _restrict_cores_if_needed() -> None:
+    """Re-exec restricted to a few cores when this node caps processes per user.
+
+    Login nodes often allow only a few hundred processes+threads per user while
+    having 64+ cores. BLAS and XLA start a thread per visible core, so the
+    server (or the tutorial-dataset helper it spawns) hits the cap and is killed
+    with no error. Thread pools are sized when the libraries load, which has
+    already happened by the time this runs — hence the re-exec. Nothing changes
+    on machines without a restrictive cap.
+    """
+    from recovar.gui_v2.backend.services.preflight import CORE_CAP_ENV
+    from recovar.gui_v2.backend.services.site import process_limit, thread_budget
+
+    if os.environ.get(CORE_CAP_ENV) or not hasattr(os, "sched_setaffinity"):
+        return
+    available = sorted(os.sched_getaffinity(0))
+    limit = process_limit()
+    budget = thread_budget(limit, len(available))
+    if budget is None:
+        return
+    os.sched_setaffinity(0, available[:budget])
+    for var in _THREAD_ENV_VARS:
+        os.environ[var] = str(budget)
+    os.environ[CORE_CAP_ENV] = str(budget)
+    print(
+        f"  This node allows {limit} processes/threads per user: restricting the GUI server to {budget} cores.",
+        file=sys.stderr,
+    )
+    sys.stdout.flush()
+    os.execv(sys.executable, [sys.executable, "-m", "recovar.commands.gui", *sys.argv[1:]])
 
 
 def _maybe_open_browser(url: str, host: str, no_browser: bool) -> None:
@@ -135,24 +182,37 @@ def _run_doctor(host: str, port: int) -> int:
     jinja = "present" if importlib.util.find_spec("jinja2") else "absent (only needed for custom sbatch templates)"
     print(f"  jinja2:         {jinja}")
     print(f"  GPU:            {_gpu_summary()}")
-    if shutil.which("sbatch"):
-        print("  Scheduler:      sbatch found -> SLURM + local execution both offered")
-    else:
-        print("  Scheduler:      no sbatch -> local execution only (single-machine mode)")
     print(f"  Will serve at:  http://{host}:{port}")
+    if missing:
+        print("  " + "-" * 52)
+        print("  NOT READY. Install the GUI extra on this (backend) machine:")
+        print("    pip install 'recovar[gui]'")
+        print("  or install the missing packages directly:")
+        print("    pip install " + " ".join(missing))
+        print()
+        return 1
+
+    from recovar.gui_v2.backend.api.files import default_allowed_roots
+    from recovar.gui_v2.backend.services.preflight import ERROR, OK, run_checks, tunnel_hint
+
     if host in ("127.0.0.1", "localhost"):
-        print(f"  View remotely:  ssh -L {port}:localhost:{port} <user>@{platform.node()}")
+        print(f"  View remotely:  {tunnel_hint(port)}")
         print(f"                  then open http://localhost:{port} in any browser")
     else:
         print(
             f"  View remotely:  open http://{platform.node()}:{port} (non-loopback host — keep off untrusted networks)"
         )
+    print(f"  File browser:   {', '.join(sorted(set(default_allowed_roots())))}")
     print("  " + "-" * 52)
-    if missing:
-        print("  NOT READY. Install the GUI extra on this (backend) machine:")
-        print("    pip install 'recovar[gui]'")
-        print("  or install the missing packages directly:")
-        print("    pip install " + " ".join(missing))
+    checks = run_checks()
+    marks = {OK: "ok  ", ERROR: "FAIL"}
+    for check in checks:
+        print(f"  [{marks.get(check.level, 'warn')}] {check.title}: {check.detail}")
+        if check.fix:
+            print(f"         fix: {check.fix}")
+    print("  " + "-" * 52)
+    if any(check.level == ERROR for check in checks):
+        print("  NOT READY: the GUI will start, but jobs will fail until the FAIL items above are fixed.")
         print()
         return 1
     print("  READY. Start the GUI with:  recovar gui" + ("" if port == 8080 else f" --port {port}"))
@@ -188,9 +248,17 @@ def main():
         help="Do not automatically open a web browser on launch",
     )
     parser.add_argument(
+        "--allow-root",
+        action="append",
+        default=[],
+        metavar="DIR",
+        help="Extra directory the file browser may open (repeatable). Home, the current "
+        "directory and all shared filesystems mounted on this machine are allowed already",
+    )
+    parser.add_argument(
         "--check",
         action="store_true",
-        help="Diagnose GUI dependencies, GPU and SLURM availability, then exit",
+        help="Diagnose GUI dependencies, GPU, SLURM partitions, process limits and the CUDA kernel, then exit",
     )
     args = parser.parse_args()
 
@@ -200,7 +268,15 @@ def main():
         format="%(asctime)s %(levelname)s %(name)s — %(message)s",
     )
 
+    if args.allow_root:
+        from recovar.gui_v2.backend.api.files import ALLOWED_ROOTS_ENV
+
+        existing = [r for r in os.environ.get(ALLOWED_ROOTS_ENV, "").split(os.pathsep) if r]
+        os.environ[ALLOWED_ROOTS_ENV] = os.pathsep.join(existing + [os.path.abspath(r) for r in args.allow_root])
+
     if args.check:
+        if not _missing_gui_deps():
+            _restrict_cores_if_needed()  # check under the same restriction the server runs with
         sys.exit(_run_doctor(args.host, args.port))
 
     # Preflight: verify the whole GUI runtime set up front so a missing
@@ -220,7 +296,10 @@ def main():
         )
         sys.exit(1)
 
+    _restrict_cores_if_needed()
+
     from recovar.gui_v2.backend.main import create_app
+    from recovar.gui_v2.backend.services.preflight import TUNNEL_NOTE, tunnel_hint
 
     # Use the next free port if the requested one is taken, so the launch
     # "just works" instead of dying with 'address already in use'.
@@ -228,22 +307,21 @@ def main():
     url = f"http://{args.host}:{port}"
 
     print()
-    print("  ╔══════════════════════════════════════════════╗")
-    print("  ║           RECOVAR Web GUI                    ║")
-    print("  ╠══════════════════════════════════════════════╣")
-    print(f"  ║  Local:    http://{args.host}:{port:<23}║")
-    if args.host == "127.0.0.1":
-        print(f"  ║  SSH:      ssh -L {port}:localhost:{port} user@host ║")
+    print("  RECOVAR Web GUI")
+    print(f"    Serving at:  {url}")
+    if args.host in ("127.0.0.1", "localhost"):
+        print("    From your own computer, run this and then open the address above:")
+        print(f"      {tunnel_hint(port)}")
+        print(f"    {TUNNEL_NOTE}")
     else:
-        print(
-            "  ║  ⚠  Non-loopback host: anyone with network access can ║\n"
-            "  ║     run jobs as your Unix user. Do not expose to     ║\n"
-            "  ║     untrusted networks.                              ║"
-        )
-    print("  ╚══════════════════════════════════════════════╝")
+        print("    WARNING: non-loopback host. Anyone with network access can run jobs as your")
+        print("    Unix user. Do not expose to untrusted networks.")
     if port != args.port:
-        print(f"  (port {args.port} was busy — using {port})")
-    print()
+        print(f"    NOTE: port {args.port} was busy, using {port}. Point your SSH tunnel at {port}.")
+    print("    Run `recovar gui --check` to diagnose this machine.")
+    # Flush: under nohup/redirect stdout is block-buffered and this banner
+    # (the port actually in use) would otherwise never reach the log file.
+    print(flush=True)
 
     _maybe_open_browser(url, args.host, args.no_browser)
 

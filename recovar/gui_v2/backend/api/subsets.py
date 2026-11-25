@@ -2,6 +2,7 @@
 
 Endpoints:
     POST   /api/subsets           — Create a subset (.ind file + DB record)
+    GET    /api/subsets/{id}/pipeline-params — Pipeline form values to rerun on the subset
     GET    /api/subsets            — List subsets for a project
     GET    /api/subsets/:id        — Get subset detail
     DELETE /api/subsets/:id        — Delete subset
@@ -96,6 +97,16 @@ class ExportStarResponse(BaseModel):
     n_particles: int
 
 
+class SubsetPipelineParams(BaseModel):
+    params: dict
+    n_particles: int
+    source_pipeline_dir: str
+
+
+# Per-run settings of the source pipeline that must not carry over to a rerun.
+_NOT_INHERITED = frozenset({"outdir", "output_name", "slurm_opts", "local_opts", "executor", "n_images"})
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -110,6 +121,19 @@ async def create_subset(req: CreateSubsetRequest) -> SubsetResponse:
 
     if not req.indices:
         raise HTTPException(status_code=400, detail="indices must not be empty")
+
+    session_factory = await init_db(get_db_path(project_path))
+    if req.source_job_id:
+        from recovar.gui_v2.backend.models.job import Job
+
+        async with session_factory() as session:
+            source = (await session.execute(select(Job).where(Job.id == req.source_job_id))).scalar_one_or_none()
+        if source is None:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Job {req.source_job_id} does not belong to project {project_path}; "
+                "the selection was made in a different project.",
+            )
 
     # Create subsets directory
     subsets_dir = os.path.join(project_path, "subsets")
@@ -279,7 +303,10 @@ async def get_subset_provenance(subset_id: str) -> SubsetProvenanceResponse:
 
 
 def _build_full_star_from_dataset(
-    particles_path: str, poses_path: str, ctf_path: str, out_path: str,
+    particles_path: str,
+    poses_path: str,
+    ctf_path: str,
+    out_path: str,
 ) -> str:
     """Construct a full .star file for a .mrcs dataset from poses/ctf pkls.
 
@@ -294,56 +321,51 @@ def _build_full_star_from_dataset(
     # truncated star that later reads as valid-but-short.
     tmp_path = out_path + ".tmp"
     write_starfile_from_cryodrgn_format(
-        ctf_path, poses_path, particles_path, tmp_path,
+        ctf_path,
+        poses_path,
+        particles_path,
+        tmp_path,
     )
     os.replace(tmp_path, out_path)
     return out_path
 
 
 async def _resolve_source_star(
-    subset_obj, project_path: str, session_factory, given_star: str | None,
+    subset_obj,
+    project_path: str,
+    session_factory,
+    given_star: str | None,
 ):
-    """Resolve a full .star to filter a subset from, plus an optional index map.
+    """Resolve the full .star a subset is filtered from, or ``None``.
 
-    Returns ``(star_path, index_map)``.  ``index_map`` (when not ``None``) maps
-    analyzed-dataset positions — the index space of the stored subset — to rows
-    of the returned star.  It is needed when the star is *constructed* from a
-    ``.mrcs`` dataset's full poses/ctf but the pipeline analyzed only an
-    ``--ind`` subset: row ``index_map[i]`` of the full star is analyzed particle
-    ``i``.  ``None`` means the subset indices address the star rows directly.
+    Subset indices are original-file particle indices: the pipeline stores
+    embeddings in original-file order (NaN rows for particles left out by
+    ``--ind``), so they address the rows of the full star directly.
 
     Resolution order:
       1. An explicit, valid ``given_star`` (the dataset's native star file).
       2. The ``particles`` recorded on the source job (or its parent Pipeline)
          when that is itself a ``.star``.
       3. A star constructed from a ``.mrcs`` dataset's particles + poses + ctf
-         pkls (cached under ``<project>/subsets/.star_cache``), with an index
-         map derived from the pipeline's ``--ind`` when present.
-
-    Returns ``(None, None)`` if no source can be determined.
+         pkls (cached under ``<project>/subsets/.star_cache``).
     """
     if given_star and os.path.isfile(given_star) and given_star.endswith(".star"):
-        return given_star, None
+        return given_star
 
     from recovar.gui_v2.backend.models.job import Job
 
-    particles = poses = ctf = ind = None
+    particles = poses = ctf = None
     pipeline_dir = None
     async with session_factory() as session:
         src = None
         if subset_obj.source_job_id:
-            src = (
-                await session.execute(
-                    select(Job).where(Job.id == subset_obj.source_job_id)
-                )
-            ).scalar_one_or_none()
+            src = (await session.execute(select(Job).where(Job.id == subset_obj.source_job_id))).scalar_one_or_none()
         if src is not None:
             p = src.params or {}
             if src.type == "Pipeline":
                 particles = p.get("particles")
                 poses = p.get("poses")
                 ctf = p.get("ctf")
-                ind = p.get("ind")
                 pipeline_dir = src.output_dir
             else:
                 # Analyze (and similar) jobs record the pipeline they ran on.
@@ -363,77 +385,138 @@ async def _resolve_source_star(
                 particles = pp.get("particles")
                 poses = pp.get("poses")
                 ctf = pp.get("ctf")
-                ind = pp.get("ind")
 
     if particles and str(particles).endswith(".star") and os.path.isfile(particles):
-        return particles, None
+        return particles
 
-    if (
-        particles and poses and ctf
-        and os.path.isfile(particles)
-        and os.path.isfile(poses)
-        and os.path.isfile(ctf)
-    ):
+    if particles and poses and ctf and os.path.isfile(particles) and os.path.isfile(poses) and os.path.isfile(ctf):
         import asyncio
         import hashlib
 
         cache_dir = os.path.join(project_path, "subsets", ".star_cache")
-        base = "".join(
-            c if c.isalnum() or c in "-_." else "_"
-            for c in os.path.basename(str(particles))
-        )
+        base = "".join(c if c.isalnum() or c in "-_." else "_" for c in os.path.basename(str(particles)))
         # Disambiguate by the full absolute path so same-named particle files in
         # different pipelines never collide on the same cached star.
-        digest = hashlib.sha1(
-            os.path.abspath(str(particles)).encode("utf-8")
-        ).hexdigest()[:12]
+        digest = hashlib.sha1(os.path.abspath(str(particles)).encode("utf-8")).hexdigest()[:12]
         out_path = os.path.join(cache_dir, f"{base}.{digest}.star")
         if not os.path.isfile(out_path):
             await asyncio.to_thread(
-                _build_full_star_from_dataset, particles, poses, ctf, out_path,
+                _build_full_star_from_dataset,
+                particles,
+                poses,
+                ctf,
+                out_path,
             )
 
-        # The constructed star holds the FULL stack in original order, but the
-        # subset indices address the analyzed dataset.  When the pipeline ran on
-        # an --ind subset, map analyzed position i -> original star row ind[i].
-        index_map = None
-        if ind and os.path.isfile(str(ind)):
-            try:
-                with open(str(ind), "rb") as f:
-                    index_map = np.asarray(pickle.load(f), dtype=np.int64)
-            except Exception as exc:  # noqa: BLE001 — bad ind shouldn't 500
-                logger.warning("Ignoring unreadable --ind file %s: %s", ind, exc)
-                index_map = None
-        return out_path, index_map
+        return out_path
 
-    return None, None
+    return None
+
+
+async def _get_subset(subset_id: str):
+    """Find a subset in any open project. Returns ``(subset, session_factory, project_path)``."""
+    from recovar.gui_v2.backend.api.project import _project_registry
+
+    for project_path in list(_project_registry.values()):
+        session_factory = await init_db(get_db_path(project_path))
+        async with session_factory() as session:
+            subset_obj = (await session.execute(select(Subset).where(Subset.id == subset_id))).scalar_one_or_none()
+        if subset_obj is not None:
+            return subset_obj, session_factory, project_path
+    raise HTTPException(status_code=404, detail="Subset not found")
+
+
+async def _source_pipeline_job(subset_obj, session):
+    """The Pipeline job whose dataset a subset's indices address."""
+    from recovar.gui_v2.backend.models.job import Job
+
+    if not subset_obj.source_job_id:
+        raise HTTPException(
+            status_code=400, detail="Subset has no source job; cannot tell which dataset it selects from."
+        )
+    src = (await session.execute(select(Job).where(Job.id == subset_obj.source_job_id))).scalar_one_or_none()
+    if src is None:
+        raise HTTPException(status_code=400, detail="The job this subset was selected from no longer exists.")
+    if src.type == "Pipeline":
+        return src
+    pipeline_dir = (src.params or {}).get("result_dir")
+    candidates = (
+        (
+            await session.execute(
+                select(Job).where(Job.project_id == subset_obj.project_id).where(Job.type == "Pipeline")
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for job in candidates:
+        if pipeline_dir and os.path.realpath(job.output_dir) == os.path.realpath(pipeline_dir):
+            return job
+    raise HTTPException(
+        status_code=400,
+        detail=(
+            f"No Pipeline job in this project produced {pipeline_dir}, so its inputs are unknown. "
+            "Import that pipeline run with Scan, or export a .star and choose the inputs by hand."
+        ),
+    )
+
+
+@router.get("/{subset_id}/pipeline-params", response_model=SubsetPipelineParams)
+async def subset_pipeline_params(subset_id: str) -> SubsetPipelineParams:
+    """Pipeline form values that rerun the source pipeline on just this subset.
+
+    The rerun reads the same particles/poses/ctf as the source pipeline and
+    restricts them with ``--ind``. Subset indices are original-file particle
+    indices (the pipeline stores embeddings in original-file order), so the
+    subset's index file is used as is, also when the source pipeline was itself
+    restricted with ``--ind``.
+    """
+    subset_obj, session_factory, project_path = await _get_subset(subset_id)
+    async with session_factory() as session:
+        pipeline = await _source_pipeline_job(subset_obj, session)
+
+    source = dict(pipeline.params or {})
+    if not source.get("particles"):
+        raise HTTPException(status_code=400, detail="The source pipeline job has no recorded particles input.")
+    if not os.path.isfile(subset_obj.ind_path):
+        raise HTTPException(status_code=404, detail=f"Subset .ind file not found: {subset_obj.ind_path}")
+
+    source_ind = source.get("ind")
+    if source_ind:
+        from recovar.data_io._index_utils import load_index_like
+
+        with open(subset_obj.ind_path, "rb") as f:
+            selection = np.asarray(pickle.load(f), dtype=np.int64)
+        stray = np.setdiff1d(selection, np.asarray(load_index_like(str(source_ind)), dtype=np.int64))
+        if stray.size:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{stray.size} selected particles (e.g. {int(stray[0])}) were not analyzed by the source "
+                f"pipeline (restricted by {source_ind}).",
+            )
+
+    params = {k: v for k, v in source.items() if k not in _NOT_INHERITED and v not in (None, "")}
+    params["ind"] = subset_obj.ind_path
+    return SubsetPipelineParams(
+        params=params,
+        n_particles=subset_obj.n_particles,
+        source_pipeline_dir=pipeline.output_dir,
+    )
 
 
 @router.post("/{subset_id}/export-star", response_model=ExportStarResponse)
 async def export_star(
-    subset_id: str, req: ExportStarRequest,
+    subset_id: str,
+    req: ExportStarRequest,
 ) -> ExportStarResponse:
     """Export a subset as a filtered .star file."""
-    from recovar.gui_v2.backend.api.project import _project_registry
+    subset_obj, session_factory, project_path = await _get_subset(subset_id)
 
-    subset_obj = None
-    project_path = None
-    for pid, ppath in _project_registry.items():
-        db_path = get_db_path(ppath)
-        session_factory = await init_db(db_path)
-        async with session_factory() as session:
-            stmt = select(Subset).where(Subset.id == subset_id)
-            result = await session.execute(stmt)
-            subset_obj = result.scalar_one_or_none()
-            if subset_obj:
-                project_path = ppath
-                break
-
-    if subset_obj is None:
-        raise HTTPException(status_code=404, detail="Subset not found")
-
-    source_star, index_map = await _resolve_source_star(
-        subset_obj, project_path, session_factory, req.particles_star,
+    source_star = await _resolve_source_star(
+        subset_obj,
+        project_path,
+        session_factory,
+        req.particles_star,
     )
     if source_star is None:
         raise HTTPException(
@@ -458,37 +541,25 @@ async def export_star(
         from recovar.data_io.starfile import read_star, write_star
     except ImportError:
         raise HTTPException(
-            status_code=500, detail="recovar.data_io.starfile not available",
+            status_code=500,
+            detail="recovar.data_io.starfile not available",
         )
 
     try:
         particles_df, optics_df = read_star(source_star)
     except Exception as exc:
         raise HTTPException(
-            status_code=400, detail=f"Failed to parse star file: {exc}",
+            status_code=400,
+            detail=f"Failed to parse star file: {exc}",
         )
 
     if indices.size == 0:
         raise HTTPException(
-            status_code=400, detail="Subset has no particle indices to export",
+            status_code=400,
+            detail="Subset has no particle indices to export",
         )
 
-    # When the star was built from a full .mrcs stack but the pipeline analyzed
-    # an --ind subset, the stored indices address the analyzed dataset; map them
-    # through ind to the corresponding rows of the full star.
-    if index_map is not None:
-        if indices.min() < 0 or indices.max() >= len(index_map):
-            bad = int(indices.max()) if indices.max() >= len(index_map) else int(indices.min())
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"Subset index {bad} out of range "
-                    f"(analyzed dataset has {len(index_map)} particles)"
-                ),
-            )
-        row_indices = index_map[indices]
-    else:
-        row_indices = indices
+    row_indices = indices
 
     # Validate against the FULL star file.  Subset indices are original particle
     # indices (the Explore view maps any subsampled selection back through the
@@ -498,18 +569,13 @@ async def export_star(
         bad = int(row_indices.max()) if row_indices.max() >= len(particles_df) else int(row_indices.min())
         raise HTTPException(
             status_code=400,
-            detail=(
-                f"Subset index {bad} out of range "
-                f"(star file has {len(particles_df)} particles)"
-            ),
+            detail=(f"Subset index {bad} out of range (star file has {len(particles_df)} particles)"),
         )
     filtered_df = particles_df.iloc[row_indices].reset_index(drop=True)
 
     subsets_dir = os.path.join(project_path, "subsets")
     os.makedirs(subsets_dir, exist_ok=True)
-    safe_name = "".join(
-        c if c.isalnum() or c in "-_" else "_" for c in subset_obj.name
-    )
+    safe_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in subset_obj.name)
     star_path = os.path.join(subsets_dir, f"{safe_name}.star")
     counter = 1
     while os.path.exists(star_path):
@@ -519,6 +585,8 @@ async def export_star(
     write_star(star_path, filtered_df, optics_df)
     logger.info(
         "Exported subset %s as .star: %s (%d particles)",
-        subset_id, star_path, len(filtered_df),
+        subset_id,
+        star_path,
+        len(filtered_df),
     )
     return ExportStarResponse(path=star_path, n_particles=len(filtered_df))

@@ -17,6 +17,7 @@ import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 import { StatusBadge } from "../components/ui/badge";
+import { PreflightBanner } from "../components/ui/preflight-banner";
 import { FileBrowser } from "../components/file-browser/FileBrowser";
 import { formatJobType } from "../components/volume-viewer/volumeCategories";
 import { isEphemeralPath, EPHEMERAL_PATH_WARNING } from "../lib/constants";
@@ -115,6 +116,8 @@ export function DashboardPage(): React.JSX.Element {
           </div>
         </div>
       )}
+
+      <PreflightBanner />
 
       {/* Active project info or Create/Open prompts */}
       {project ? (

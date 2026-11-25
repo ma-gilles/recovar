@@ -1,6 +1,7 @@
 """File browser and validation API.
 
 Endpoints:
+    GET    /api/files/roots           — Allowed root directories
     GET    /api/files/browse          — List directory contents
     POST   /api/files/validate-star   — Validate a .star file
     POST   /api/files/validate-mrc    — Validate a .mrc file
@@ -14,7 +15,6 @@ import os
 import stat
 from datetime import datetime
 from pathlib import Path
-from typing import Any
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
@@ -27,37 +27,78 @@ router = APIRouter(prefix="/api/files", tags=["files"])
 # Validation timeout (seconds) for filesystem operations on loaded GPFS.
 _VALIDATION_TIMEOUT = 10
 
-# Allowlist of directory roots the file browser may navigate.
-# The project directory is always implicitly allowed.
-# Additional roots can be configured in settings.toml.
+# Allowlist of directory roots the file browser may navigate. Built at startup
+# by ``default_allowed_roots`` (home, cwd, temp, every shared filesystem mounted
+# on this machine, plus anything the user configured); project directories are
+# added as they are opened.
 _allowed_roots: list[str] = []
+
+ALLOWED_ROOTS_ENV = "RECOVAR_GUI_ALLOWED_ROOTS"
+
+_ADD_ROOT_HINT = (
+    "To allow another directory, restart with `recovar gui --allow-root /path`, "
+    f"set {ALLOWED_ROOTS_ENV}=/path1{os.pathsep}/path2, or add "
+    '`allowed_roots = ["/path"]` under `[gui]` in ~/.config/recovar/config.toml.'
+)
+
+
+def _canonical(path: str) -> str:
+    # Resolve symlinks so roots compare canonically with the resolved request
+    # paths in _check_path_allowed (e.g. HPC homes that symlink into project
+    # storage).
+    return str(Path(os.path.expanduser(path)).resolve())
+
+
+def default_allowed_roots() -> list[str]:
+    """Roots allowed without any configuration, measured from this machine."""
+    import tempfile
+
+    from recovar.gui_v2.backend.services.project_config import configured_allowed_roots
+    from recovar.gui_v2.backend.services.site import shared_filesystem_roots
+
+    roots = [os.path.expanduser("~"), os.getcwd(), "/tmp", tempfile.gettempdir()]
+    roots += shared_filesystem_roots()
+    roots += configured_allowed_roots()
+    roots += [r for r in os.environ.get(ALLOWED_ROOTS_ENV, "").split(os.pathsep) if r]
+    return roots
 
 
 def configure_allowed_roots(roots: list[str]) -> None:
     """Set the allowed root directories for the file browser."""
     global _allowed_roots
-    # Resolve symlinks so roots compare canonically with the resolved
-    # request paths in _check_path_allowed (e.g. HPC homes that symlink
-    # into project storage).
-    _allowed_roots = [str(Path(os.path.expanduser(r)).resolve()) for r in roots]
+    _allowed_roots = []
+    for root in roots:
+        add_allowed_root(root)
 
 
 def add_allowed_root(root: str) -> None:
-    """Add an allowed root directory."""
-    _allowed_roots.append(str(Path(os.path.expanduser(root)).resolve()))
+    """Add an allowed root directory (no-op if already covered)."""
+    resolved = _canonical(root)
+    if not _is_under_allowed_root(resolved):
+        _allowed_roots.append(resolved)
+
+
+def allowed_roots() -> list[str]:
+    return list(_allowed_roots)
+
+
+def _is_under_allowed_root(resolved: str) -> bool:
+    # Compare on path boundaries, not raw string prefixes, so that a sibling
+    # directory ("/tmpsecret" when root is "/tmp") cannot escape.
+    return any(resolved == root or resolved.startswith(root.rstrip(os.sep) + os.sep) for root in _allowed_roots)
 
 
 def _check_path_allowed(path: str) -> None:
     """Raise 403 if *path* is outside all allowed roots."""
-    resolved = str(Path(os.path.expanduser(path)).resolve())
-    for root in _allowed_roots:
-        # Compare on path boundaries, not raw string prefixes, so that a
-        # sibling directory ("/tmpsecret" when root is "/tmp") cannot escape.
-        if resolved == root or resolved.startswith(root + os.sep):
-            return
+    resolved = _canonical(path)
+    if _is_under_allowed_root(resolved):
+        return
     raise HTTPException(
         status_code=403,
-        detail="Access denied: path is outside allowed directories.",
+        detail=(
+            f"Access denied: {resolved} is outside the allowed directories "
+            f"({', '.join(_allowed_roots)}). {_ADD_ROOT_HINT}"
+        ),
     )
 
 
@@ -116,9 +157,33 @@ def _file_type(name: str, is_dir: bool) -> str:
     }.get(ext, "other")
 
 
+def _gateway_entries(path: str) -> list[FileEntry]:
+    """Entries for a directory that is *above* the allowed roots.
+
+    Such a directory is not listed for real. It shows only the sub-directories
+    that lead to an allowed root, so the path breadcrumb ("/" > "scratch" >
+    "gpfs") can be walked down to where the data is instead of dead-ending in
+    a 403. Empty when *path* is itself allowed or leads nowhere allowed.
+    """
+    resolved = _canonical(path)
+    if _is_under_allowed_root(resolved):
+        return []
+    prefix = resolved.rstrip(os.sep) + os.sep
+    names = sorted({root[len(prefix) :].split(os.sep)[0] for root in _allowed_roots if root.startswith(prefix)})
+    return [
+        FileEntry(name=name, path=prefix + name, is_dir=True, size=0, modified="", type="directory") for name in names
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
+
+
+@router.get("/roots", response_model=list[str])
+async def list_roots() -> list[str]:
+    """Directories the file browser may navigate (for quick-access links)."""
+    return allowed_roots()
 
 
 @router.get("/serve")
@@ -137,6 +202,9 @@ async def serve_file(path: str) -> FileResponse:
 async def browse(path: str) -> list[FileEntry]:
     """List contents of a directory."""
     abs_path = os.path.abspath(os.path.expanduser(path))
+    gateway = _gateway_entries(abs_path)
+    if gateway:
+        return gateway
     _check_path_allowed(abs_path)
 
     if not os.path.isdir(abs_path):
@@ -149,16 +217,20 @@ async def browse(path: str) -> list[FileEntry]:
             try:
                 st = os.stat(full)
                 is_dir = stat.S_ISDIR(st.st_mode)
-                entries.append(FileEntry(
-                    name=name,
-                    path=full,
-                    is_dir=is_dir,
-                    size=st.st_size if not is_dir else 0,
-                    modified=datetime.fromtimestamp(st.st_mtime).isoformat(),
-                    type=_file_type(name, is_dir),
-                ))
+                entries.append(
+                    FileEntry(
+                        name=name,
+                        path=full,
+                        is_dir=is_dir,
+                        size=st.st_size if not is_dir else 0,
+                        modified=datetime.fromtimestamp(st.st_mtime).isoformat(),
+                        type=_file_type(name, is_dir),
+                    )
+                )
             except OSError:
                 continue
+    except PermissionError:
+        raise HTTPException(status_code=403, detail=f"You do not have permission to read {abs_path}")
     except OSError as exc:
         raise HTTPException(status_code=500, detail=f"Cannot list directory: {exc}")
 
@@ -237,6 +309,8 @@ def _parse_star_sync(path: str) -> ValidateStarResponse:
         if resolution is not None and len(resolution) > 0:
             box_size = int(resolution[0])
 
+        if sf.df is None:
+            raise ValueError("the star file has no particle table")
         # Strip the single leading "_" so column names follow the RELION
         # convention API consumers expect (e.g. "rlnImageName").
         columns = [c[1:] if c.startswith("_") else c for c in map(str, sf.df.columns)]
@@ -255,6 +329,7 @@ def _parse_mrc_sync(path: str) -> ValidateMrcResponse:
     """Parse an MRC file header."""
     try:
         import mrcfile
+
         with mrcfile.open(path, mode="r", header_only=True) as mrc:
             shape = [int(mrc.header.nz), int(mrc.header.ny), int(mrc.header.nx)]
             voxel_size = float(mrc.voxel_size.x)

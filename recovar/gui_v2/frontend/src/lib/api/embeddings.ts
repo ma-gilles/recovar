@@ -80,9 +80,10 @@ export async function fetchEmbeddings(jobId: string, zdim: number): Promise<Embe
     offset += meta.n_clusters * meta.zdim * 4;
   }
 
-  // Original particle indices: n x 1 int32 (only when subsampled).
+  // Original particle indices: n x 1 int32. Present when the rows are a subsample
+  // and/or when the pipeline analyzed only part of the dataset (--ind).
   let origIndices: Int32Array | null = null;
-  if (meta.subsampled) {
+  if (rawMeta.has_orig_indices ?? meta.subsampled) {
     origIndices = new Int32Array(buffer, offset, n);
     offset += n * 4;
   }

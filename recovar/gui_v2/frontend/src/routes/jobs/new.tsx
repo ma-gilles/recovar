@@ -43,6 +43,11 @@ function safeParseJson(value: string | undefined): unknown {
   }
 }
 
+/** A list of numbers from cloned job parameters, or undefined. */
+function numberList(value: unknown): number[] | undefined {
+  return Array.isArray(value) && value.length > 0 && value.every((v) => typeof v === "number") ? (value as number[]) : undefined;
+}
+
 export function NewJobPage(): React.JSX.Element {
   const navigate = useNavigate();
   const { project } = useProject();
@@ -63,6 +68,10 @@ export function NewJobPage(): React.JSX.Element {
     const found = JOB_TYPES.find((t) => t.value === normalized || t.label === raw);
     return found ? found.value : normalized;
   });
+
+  // Parameters of the job being cloned (the "Clone Job" link passes them all).
+  const cloned = safeParseJson(searchParams.params) as Record<string, unknown> | undefined;
+  const clonedZdim = typeof cloned?.zdim === "number" ? cloned.zdim : undefined;
 
   if (!project) {
     return (
@@ -110,13 +119,14 @@ export function NewJobPage(): React.JSX.Element {
               projectId={project.id}
               projectPath={project.path}
               onSubmitted={handleSubmitted}
-              prefilledParams={safeParseJson(searchParams.params) as Record<string, unknown> | undefined}
+              prefilledParams={cloned}
             />
           )}
           {jobType === "analyze" && (
             <AnalyzeForm
               projectId={project.id}
               prefilledResultDir={searchParams.result_dir}
+              prefilledZdim={clonedZdim}
               onSubmitted={handleSubmitted}
             />
           )}
@@ -124,6 +134,8 @@ export function NewJobPage(): React.JSX.Element {
             <ComputeStateForm
               projectId={project.id}
               prefilledResultDir={searchParams.result_dir}
+              prefilledZdim={clonedZdim}
+              prefilledCoords={numberList(cloned?.latent_points)}
               onSubmitted={handleSubmitted}
             />
           )}
@@ -131,6 +143,9 @@ export function NewJobPage(): React.JSX.Element {
             <ComputeTrajectoryForm
               projectId={project.id}
               prefilledResultDir={searchParams.result_dir}
+              prefilledZdim={clonedZdim}
+              prefilledStart={numberList(cloned?.z_start)}
+              prefilledEnd={numberList(cloned?.z_end)}
               prefilledDensity={searchParams.density}
               onSubmitted={handleSubmitted}
             />

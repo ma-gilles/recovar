@@ -30,7 +30,7 @@ export function PipelineForm({ projectId, projectPath, onSubmitted, prefilledPar
   const [showParticleBrowser, setShowParticleBrowser] = useState(false);
   const [showMaskBrowser, setShowMaskBrowser] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(!!prefilledParams);
-  const [showRarelyUsed, setShowRarelyUsed] = useState(false);
+  const [showRarelyUsed, setShowRarelyUsed] = useState(Boolean(p.ind));
   const [showFocusMaskBrowser, setShowFocusMaskBrowser] = useState(false);
   const [validationInfo, setValidationInfo] = useState<{
     n_particles?: number;
@@ -418,7 +418,7 @@ export function PipelineForm({ projectId, projectPath, onSubmitted, prefilledPar
                   <TooltipIcon text={tooltips["pipeline.ind"]} />
                 </div>
                 <div className="flex gap-2">
-                  <PathInput value={ind} onChange={setInd} accept={[".pkl"]} placeholder="Optional indices .pkl (subset)" className="font-mono" />
+                  <PathInput value={ind} onChange={setInd} accept={[".ind", ".pkl"]} placeholder="Optional indices .ind / .pkl (subset)" className="font-mono" />
                   <Button
                     variant="outline"
                     size="sm"

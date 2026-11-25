@@ -17,14 +17,14 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from recovar.gui_v2.backend.config import get_db_path, iso_utc
-from recovar.gui_v2.backend.db import get_session, init_db, with_write_retry
+from recovar.gui_v2.backend.db import get_session, init_db
 from recovar.gui_v2.backend.models.job import Job, JobStatus
 from recovar.gui_v2.backend.models.project import Project
 from recovar.gui_v2.backend.services.scanner import (
@@ -142,9 +142,7 @@ def _index_path() -> Path:
 
     Honors ``XDG_CONFIG_HOME``; falls back to ``~/.config/recovar``.
     """
-    base = os.environ.get("XDG_CONFIG_HOME") or os.path.join(
-        os.path.expanduser("~"), ".config"
-    )
+    base = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
     return Path(base) / "recovar" / "projects.json"
 
 
@@ -159,11 +157,7 @@ def _load_persisted_index() -> dict[str, str]:
     if not isinstance(data, dict):
         return {}
     # Keep only well-formed string entries.
-    return {
-        str(k): str(v)
-        for k, v in data.items()
-        if isinstance(k, str) and isinstance(v, str)
-    }
+    return {str(k): str(v) for k, v in data.items() if isinstance(k, str) and isinstance(v, str)}
 
 
 def _save_persisted_index() -> None:
@@ -211,6 +205,10 @@ def load_persisted_projects() -> int:
 
 
 def _register_project(project_id: str, project_path: str) -> None:
+    # A project's own directory is always browsable, wherever it lives.
+    from recovar.gui_v2.backend.api.files import add_allowed_root
+
+    add_allowed_root(project_path)
     if _project_registry.get(project_id) != project_path:
         _project_registry[project_id] = project_path
         _save_persisted_index()
@@ -274,8 +272,7 @@ async def list_projects() -> list[ProjectListItem]:
     """
     load_persisted_projects()
     return [
-        ProjectListItem(id=pid, path=ppath)
-        for pid, ppath in sorted(_project_registry.items(), key=lambda kv: kv[1])
+        ProjectListItem(id=pid, path=ppath) for pid, ppath in sorted(_project_registry.items(), key=lambda kv: kv[1])
     ]
 
 
@@ -290,7 +287,12 @@ async def create_project(req: CreateProjectRequest) -> ProjectResponse:
     project_path = os.path.abspath(req.path)
 
     # Create directory if it doesn't exist
-    os.makedirs(project_path, exist_ok=True)
+    try:
+        os.makedirs(project_path, exist_ok=True)
+    except OSError as exc:
+        raise HTTPException(status_code=400, detail=f"Cannot create project directory {project_path}: {exc.strerror}")
+    if not os.access(project_path, os.W_OK):
+        raise HTTPException(status_code=400, detail=f"Project directory is not writable: {project_path}")
 
     # Initialize the DB
     db_path = get_db_path(project_path)
@@ -334,11 +336,7 @@ async def get_project(project_id: str) -> ProjectDetailResponse:
 
     try:
         # Load jobs eagerly
-        stmt = (
-            select(Project)
-            .where(Project.id == project_id)
-            .options(selectinload(Project.jobs))
-        )
+        stmt = select(Project).where(Project.id == project_id).options(selectinload(Project.jobs))
         result = await session.execute(stmt)
         project = result.scalar_one()
 
@@ -379,6 +377,43 @@ async def get_project(project_id: str) -> ProjectDetailResponse:
         await session.close()
 
 
+async def _status_of_unfinished_run(scanned) -> tuple[str, str | None, str | None]:
+    """``(status, executor_handle, error)`` for a scanned run whose record says "running".
+
+    A run writes its own status; one killed from outside (scancel, node failure,
+    reboot) never gets to update it. Ask whatever ran it: SLURM by the recorded
+    job id, or this machine by the recorded process id. With neither available
+    the record stands.
+    """
+    import shutil
+    import socket
+
+    from recovar.gui_v2.backend.api.jobs import _get_local_executor, _get_slurm_executor
+
+    handle = None
+    if scanned.slurm_id and shutil.which("squeue"):
+        handle = scanned.slurm_id
+        actual = await _get_slurm_executor().status(handle)
+    else:
+        pid_file = os.path.join(scanned.output_dir, "run.pid")
+        if scanned.slurm_id or scanned.hostname != socket.gethostname() or not os.path.isfile(pid_file):
+            return "running", None, None
+        with open(pid_file) as f:
+            handle = f.read().strip()
+        actual = await _get_local_executor().status_with_dir(handle, scanned.output_dir)
+
+    # Compare by value: the executors and the database model each define the enum.
+    if actual.value in (JobStatus.RUNNING.value, JobStatus.QUEUED.value):
+        return actual.value, handle, None
+    if actual.value == JobStatus.UNKNOWN.value:
+        return (
+            JobStatus.FAILED.value,
+            None,
+            "The run was interrupted: it never recorded finishing and is no longer running.",
+        )
+    return actual.value, None, None
+
+
 @router.post("/{project_id}/scan", response_model=ScanResponse)
 async def scan_project(project_id: str, req: ScanRequest) -> ScanResponse:
     """Scan a directory for existing pipeline outputs and import them.
@@ -407,11 +442,8 @@ async def scan_project(project_id: str, req: ScanRequest) -> ScanResponse:
             # itself looks like a pipeline output.  Users commonly point
             # to the pipeline_output directory rather than its parent.
             hint: str | None = None
-            looks_like_output = (
-                os.path.isfile(os.path.join(scan_path, "model", "params.pkl"))
-                or os.path.isfile(
-                    os.path.join(scan_path, "model", "metadata.json")
-                )
+            looks_like_output = os.path.isfile(os.path.join(scan_path, "model", "params.pkl")) or os.path.isfile(
+                os.path.join(scan_path, "model", "metadata.json")
             )
             if looks_like_output:
                 parent = os.path.dirname(scan_path)
@@ -422,9 +454,7 @@ async def scan_project(project_id: str, req: ScanRequest) -> ScanResponse:
             return ScanResponse(imported=[], hint=hint)
 
         # Check which output_dirs are already in the DB
-        existing_dirs_stmt = select(Job.output_dir).where(
-            Job.project_id == project_id
-        )
+        existing_dirs_stmt = select(Job.output_dir).where(Job.project_id == project_id)
         result = await session.execute(existing_dirs_stmt)
         existing_dirs = {row[0] for row in result.all()}
 
@@ -434,15 +464,21 @@ async def scan_project(project_id: str, req: ScanRequest) -> ScanResponse:
             if scanned.output_dir in existing_dirs:
                 continue  # Already imported
 
+            status, handle, error = scanned.status, None, None
+            if status == "running":
+                status, handle, error = await _status_of_unfinished_run(scanned)
             job = Job(
                 project_id=project_id,
                 type=scanned.type,
-                status=scanned.status,
+                status=status,
                 params=scanned.params,
                 output_dir=scanned.output_dir,
                 created_at=scanned.created_at or datetime.datetime.utcnow(),
                 completed_at=scanned.completed_at,
                 created_by="scan",
+                executor_handle=handle,
+                slurm_id=scanned.slurm_id if handle and handle == scanned.slurm_id else None,
+                error=error,
             )
             if scanned.legacy:
                 job.params = {**(job.params or {}), "legacy_import": True}

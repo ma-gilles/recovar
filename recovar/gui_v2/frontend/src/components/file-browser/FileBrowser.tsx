@@ -149,9 +149,7 @@ export function FileBrowser({ initialPath, accept, selectDirectory, onSelect, on
         {error && (
           <div className="px-3 py-4 text-center text-sm text-red-400">
             <p>
-              {error instanceof ApiError && error.status === 403
-                ? "This directory is outside the allowed locations"
-                : "Failed to browse directory"}
+              {error instanceof ApiError && error.status === 403 ? "Cannot open this directory" : "Failed to browse directory"}
             </p>
             <p className="mt-1 break-words text-xs text-red-400/80">
               {error instanceof Error ? error.message : String(error)}

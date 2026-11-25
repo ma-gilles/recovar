@@ -17,7 +17,6 @@ import logging
 import os
 import re
 from dataclasses import dataclass, field
-from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +36,8 @@ class ScannedJob:
     completed_at: datetime.datetime | None = None
     parent_job_dirs: list[str] = field(default_factory=list)
     legacy: bool = False
+    slurm_id: str | None = None  # SLURM job the run recorded, if it ran under one
+    hostname: str | None = None  # machine the run recorded
 
 
 def _read_job_json(job_dir: str) -> dict | None:
@@ -78,6 +79,7 @@ def _extract_params_from_pkl(job_dir: str) -> dict:
 
     try:
         import pickle
+
         with open(pkl_path, "rb") as f:
             data = pickle.load(f)
     except Exception as exc:
@@ -96,9 +98,21 @@ def _extract_params_from_pkl(job_dir: str) -> dict:
             args_dict = vars(input_args)
             # Extract the most useful parameters
             _keys = [
-                "particles", "outdir", "zdim", "mask", "poses", "ctf",
-                "ind", "halfsets", "downsample", "lazy", "correct_contrast",
-                "focus_mask", "n_images", "datadir", "tilt_series",
+                "particles",
+                "outdir",
+                "zdim",
+                "mask",
+                "poses",
+                "ctf",
+                "ind",
+                "halfsets",
+                "downsample",
+                "lazy",
+                "correct_contrast",
+                "focus_mask",
+                "n_images",
+                "datadir",
+                "tilt_series",
                 "premultiplied_ctf",
             ]
             for k in _keys:
@@ -140,9 +154,7 @@ def _is_analyze_output(job_dir: str) -> bool:
     subdirectories, but can also be standalone job directories.
     """
     # Check for kmeans data or plots subdirectory typical of analyze
-    if os.path.isdir(os.path.join(job_dir, "data")) and os.path.isdir(
-        os.path.join(job_dir, "plots")
-    ):
+    if os.path.isdir(os.path.join(job_dir, "data")) and os.path.isdir(os.path.join(job_dir, "plots")):
         return True
     if os.path.isdir(os.path.join(job_dir, "kmeans")):
         return True
@@ -166,7 +178,7 @@ def _detect_job_type_from_dir(type_dir_name: str, job_dir: str) -> str | None:
         from recovar.project.registry import JOB_TYPES, get_job_type
     except ImportError:
         JOB_TYPES = {}
-        get_job_type = lambda _: None  # noqa: E731
+        get_job_type = lambda _: None  # type: ignore[assignment]  # noqa: E731
 
     # 1. job.json command field
     job_data = _read_job_json(job_dir)
@@ -215,10 +227,12 @@ def _scan_job_dir(type_name: str, job_dir: str) -> ScannedJob:
     status = "completed"
     parent_dirs: list[str] = []
     legacy = False
+    environment: dict = {}
 
     if job_data:
         params = job_data.get("parameters", {})
         status = job_data.get("status", "completed")
+        environment = job_data.get("environment") or {}
 
         timing = job_data.get("timing", {})
         if timing.get("started_at"):
@@ -262,6 +276,8 @@ def _scan_job_dir(type_name: str, job_dir: str) -> ScannedJob:
         completed_at=completed_at,
         parent_job_dirs=parent_dirs,
         legacy=legacy,
+        slurm_id=str(environment["slurm_job_id"]) if environment.get("slurm_job_id") else None,
+        hostname=environment.get("hostname"),
     )
 
 
