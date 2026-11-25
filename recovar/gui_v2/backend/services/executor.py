@@ -209,9 +209,7 @@ class SlurmExecutor(Executor):
         )
         _, stderr = await proc.communicate()
         if proc.returncode != 0:
-            raise RuntimeError(
-                f"scancel failed (rc={proc.returncode}): {stderr.decode().strip()}"
-            )
+            raise RuntimeError(f"scancel failed (rc={proc.returncode}): {stderr.decode().strip()}")
         logger.info("Cancelled SLURM job %s", handle)
 
     async def log_path(self, handle: str) -> Path | None:
@@ -344,25 +342,27 @@ class LocalExecutor(Executor):
             "",
         ]
         if setup_command:
-            script_lines.append(f"# Setup command")
+            script_lines.append("# Setup command")
             script_lines.append(setup_command)
             script_lines.append("")
-        script_lines.extend([
-            "# Run the pipeline",
-            cmd_str,
-            "EXIT_CODE=$?",
-            "",
-            f"echo $EXIT_CODE > {shlex.quote(rc_file)}",
-            # Emit an explicit completion marker so status_with_dir can
-            # classify a finished job even if the exit-code file write was
-            # lost (e.g. disk full, killed between writes).
-            'if [ "$EXIT_CODE" -eq 0 ]; then',
-            '    echo "Job completed: rc=$EXIT_CODE"',
-            "else",
-            '    echo "Job failed: rc=$EXIT_CODE"',
-            "fi",
-            "exit $EXIT_CODE",
-        ])
+        script_lines.extend(
+            [
+                "# Run the pipeline",
+                cmd_str,
+                "EXIT_CODE=$?",
+                "",
+                f"echo $EXIT_CODE > {shlex.quote(rc_file)}",
+                # Emit an explicit completion marker so status_with_dir can
+                # classify a finished job even if the exit-code file write was
+                # lost (e.g. disk full, killed between writes).
+                'if [ "$EXIT_CODE" -eq 0 ]; then',
+                '    echo "Job completed: rc=$EXIT_CODE"',
+                "else",
+                '    echo "Job failed: rc=$EXIT_CODE"',
+                "fi",
+                "exit $EXIT_CODE",
+            ]
+        )
 
         script_content = "\n".join(script_lines) + "\n"
         with open(script_file, "w") as f:
@@ -371,7 +371,8 @@ class LocalExecutor(Executor):
 
         # Launch fully detached via nohup + bash
         proc = await asyncio.create_subprocess_exec(
-            "/bin/bash", "-c",
+            "/bin/bash",
+            "-c",
             f"nohup {shlex.quote(script_file)} > {shlex.quote(log_file)} 2>&1 &",
             cwd=working_dir,
             start_new_session=True,
@@ -393,7 +394,8 @@ class LocalExecutor(Executor):
 
         logger.info(
             "Started local job pid=%s for job_id=%s (detached, survives restart)",
-            handle, job_id,
+            handle,
+            job_id,
         )
         return handle
 
@@ -485,7 +487,7 @@ class LocalExecutor(Executor):
         return None  # Log path is resolved by the job layer from working_dir
 
     async def cleanup(self, handle: str) -> None:
-                pass
+        pass
 
 
 # ---------------------------------------------------------------------------

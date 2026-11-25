@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 
 import pytest
@@ -45,6 +44,7 @@ async def client(app):
     """Async HTTP client wired to the test app."""
     # Clear shared state from previous tests
     from recovar.gui_v2.backend.api.project import _project_registry
+
     _project_registry.clear()
 
     transport = ASGITransport(app=app)

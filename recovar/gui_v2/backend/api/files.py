@@ -15,7 +15,6 @@ import os
 import stat
 from datetime import datetime
 from pathlib import Path
-from typing import Any
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
@@ -39,7 +38,7 @@ ALLOWED_ROOTS_ENV = "RECOVAR_GUI_ALLOWED_ROOTS"
 _ADD_ROOT_HINT = (
     "To allow another directory, restart with `recovar gui --allow-root /path`, "
     f"set {ALLOWED_ROOTS_ENV}=/path1{os.pathsep}/path2, or add "
-    "`allowed_roots = [\"/path\"]` under `[gui]` in ~/.config/recovar/config.toml."
+    '`allowed_roots = ["/path"]` under `[gui]` in ~/.config/recovar/config.toml.'
 )
 
 
@@ -218,14 +217,16 @@ async def browse(path: str) -> list[FileEntry]:
             try:
                 st = os.stat(full)
                 is_dir = stat.S_ISDIR(st.st_mode)
-                entries.append(FileEntry(
-                    name=name,
-                    path=full,
-                    is_dir=is_dir,
-                    size=st.st_size if not is_dir else 0,
-                    modified=datetime.fromtimestamp(st.st_mtime).isoformat(),
-                    type=_file_type(name, is_dir),
-                ))
+                entries.append(
+                    FileEntry(
+                        name=name,
+                        path=full,
+                        is_dir=is_dir,
+                        size=st.st_size if not is_dir else 0,
+                        modified=datetime.fromtimestamp(st.st_mtime).isoformat(),
+                        type=_file_type(name, is_dir),
+                    )
+                )
             except OSError:
                 continue
     except PermissionError:
@@ -308,6 +309,8 @@ def _parse_star_sync(path: str) -> ValidateStarResponse:
         if resolution is not None and len(resolution) > 0:
             box_size = int(resolution[0])
 
+        if sf.df is None:
+            raise ValueError("the star file has no particle table")
         # Strip the single leading "_" so column names follow the RELION
         # convention API consumers expect (e.g. "rlnImageName").
         columns = [c[1:] if c.startswith("_") else c for c in map(str, sf.df.columns)]
@@ -326,6 +329,7 @@ def _parse_mrc_sync(path: str) -> ValidateMrcResponse:
     """Parse an MRC file header."""
     try:
         import mrcfile
+
         with mrcfile.open(path, mode="r", header_only=True) as mrc:
             shape = [int(mrc.header.nz), int(mrc.header.ny), int(mrc.header.nx)]
             voxel_size = float(mrc.voxel_size.x)

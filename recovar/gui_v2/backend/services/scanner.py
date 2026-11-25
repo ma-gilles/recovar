@@ -17,7 +17,6 @@ import logging
 import os
 import re
 from dataclasses import dataclass, field
-from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +79,7 @@ def _extract_params_from_pkl(job_dir: str) -> dict:
 
     try:
         import pickle
+
         with open(pkl_path, "rb") as f:
             data = pickle.load(f)
     except Exception as exc:
@@ -98,9 +98,21 @@ def _extract_params_from_pkl(job_dir: str) -> dict:
             args_dict = vars(input_args)
             # Extract the most useful parameters
             _keys = [
-                "particles", "outdir", "zdim", "mask", "poses", "ctf",
-                "ind", "halfsets", "downsample", "lazy", "correct_contrast",
-                "focus_mask", "n_images", "datadir", "tilt_series",
+                "particles",
+                "outdir",
+                "zdim",
+                "mask",
+                "poses",
+                "ctf",
+                "ind",
+                "halfsets",
+                "downsample",
+                "lazy",
+                "correct_contrast",
+                "focus_mask",
+                "n_images",
+                "datadir",
+                "tilt_series",
                 "premultiplied_ctf",
             ]
             for k in _keys:
@@ -142,9 +154,7 @@ def _is_analyze_output(job_dir: str) -> bool:
     subdirectories, but can also be standalone job directories.
     """
     # Check for kmeans data or plots subdirectory typical of analyze
-    if os.path.isdir(os.path.join(job_dir, "data")) and os.path.isdir(
-        os.path.join(job_dir, "plots")
-    ):
+    if os.path.isdir(os.path.join(job_dir, "data")) and os.path.isdir(os.path.join(job_dir, "plots")):
         return True
     if os.path.isdir(os.path.join(job_dir, "kmeans")):
         return True
@@ -168,7 +178,7 @@ def _detect_job_type_from_dir(type_dir_name: str, job_dir: str) -> str | None:
         from recovar.project.registry import JOB_TYPES, get_job_type
     except ImportError:
         JOB_TYPES = {}
-        get_job_type = lambda _: None  # noqa: E731
+        get_job_type = lambda _: None  # type: ignore[assignment]  # noqa: E731
 
     # 1. job.json command field
     job_data = _read_job_json(job_dir)

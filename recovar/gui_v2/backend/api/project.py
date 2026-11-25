@@ -17,14 +17,14 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from recovar.gui_v2.backend.config import get_db_path, iso_utc
-from recovar.gui_v2.backend.db import get_session, init_db, with_write_retry
+from recovar.gui_v2.backend.db import get_session, init_db
 from recovar.gui_v2.backend.models.job import Job, JobStatus
 from recovar.gui_v2.backend.models.project import Project
 from recovar.gui_v2.backend.services.scanner import (
@@ -142,9 +142,7 @@ def _index_path() -> Path:
 
     Honors ``XDG_CONFIG_HOME``; falls back to ``~/.config/recovar``.
     """
-    base = os.environ.get("XDG_CONFIG_HOME") or os.path.join(
-        os.path.expanduser("~"), ".config"
-    )
+    base = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
     return Path(base) / "recovar" / "projects.json"
 
 
@@ -159,11 +157,7 @@ def _load_persisted_index() -> dict[str, str]:
     if not isinstance(data, dict):
         return {}
     # Keep only well-formed string entries.
-    return {
-        str(k): str(v)
-        for k, v in data.items()
-        if isinstance(k, str) and isinstance(v, str)
-    }
+    return {str(k): str(v) for k, v in data.items() if isinstance(k, str) and isinstance(v, str)}
 
 
 def _save_persisted_index() -> None:
@@ -278,8 +272,7 @@ async def list_projects() -> list[ProjectListItem]:
     """
     load_persisted_projects()
     return [
-        ProjectListItem(id=pid, path=ppath)
-        for pid, ppath in sorted(_project_registry.items(), key=lambda kv: kv[1])
+        ProjectListItem(id=pid, path=ppath) for pid, ppath in sorted(_project_registry.items(), key=lambda kv: kv[1])
     ]
 
 
@@ -343,11 +336,7 @@ async def get_project(project_id: str) -> ProjectDetailResponse:
 
     try:
         # Load jobs eagerly
-        stmt = (
-            select(Project)
-            .where(Project.id == project_id)
-            .options(selectinload(Project.jobs))
-        )
+        stmt = select(Project).where(Project.id == project_id).options(selectinload(Project.jobs))
         result = await session.execute(stmt)
         project = result.scalar_one()
 
@@ -400,7 +389,6 @@ async def _status_of_unfinished_run(scanned) -> tuple[str, str | None, str | Non
     import socket
 
     from recovar.gui_v2.backend.api.jobs import _get_local_executor, _get_slurm_executor
-    from recovar.gui_v2.backend.models.job import JobStatus
 
     handle = None
     if scanned.slurm_id and shutil.which("squeue"):
@@ -418,7 +406,11 @@ async def _status_of_unfinished_run(scanned) -> tuple[str, str | None, str | Non
     if actual.value in (JobStatus.RUNNING.value, JobStatus.QUEUED.value):
         return actual.value, handle, None
     if actual.value == JobStatus.UNKNOWN.value:
-        return JobStatus.FAILED.value, None, "The run was interrupted: it never recorded finishing and is no longer running."
+        return (
+            JobStatus.FAILED.value,
+            None,
+            "The run was interrupted: it never recorded finishing and is no longer running.",
+        )
     return actual.value, None, None
 
 
@@ -450,11 +442,8 @@ async def scan_project(project_id: str, req: ScanRequest) -> ScanResponse:
             # itself looks like a pipeline output.  Users commonly point
             # to the pipeline_output directory rather than its parent.
             hint: str | None = None
-            looks_like_output = (
-                os.path.isfile(os.path.join(scan_path, "model", "params.pkl"))
-                or os.path.isfile(
-                    os.path.join(scan_path, "model", "metadata.json")
-                )
+            looks_like_output = os.path.isfile(os.path.join(scan_path, "model", "params.pkl")) or os.path.isfile(
+                os.path.join(scan_path, "model", "metadata.json")
             )
             if looks_like_output:
                 parent = os.path.dirname(scan_path)
@@ -465,9 +454,7 @@ async def scan_project(project_id: str, req: ScanRequest) -> ScanResponse:
             return ScanResponse(imported=[], hint=hint)
 
         # Check which output_dirs are already in the DB
-        existing_dirs_stmt = select(Job.output_dir).where(
-            Job.project_id == project_id
-        )
+        existing_dirs_stmt = select(Job.output_dir).where(Job.project_id == project_id)
         result = await session.execute(existing_dirs_stmt)
         existing_dirs = {row[0] for row in result.all()}
 

@@ -84,12 +84,11 @@ async def update_user_slurm_defaults(
     project_dir: str | None = None,
 ) -> SlurmDefaultsLayered:
     """Update the user-global SLURM defaults (~/.config/recovar/config.toml)."""
+    from recovar.gui_v2.backend.services import preflight
     from recovar.gui_v2.backend.services.project_config import (
         resolve_slurm_defaults_layered,
         save_user_slurm_defaults,
     )
-
-    from recovar.gui_v2.backend.services import preflight
 
     values = {k: v for k, v in req.model_dump().items() if v is not None}
     save_user_slurm_defaults(values)

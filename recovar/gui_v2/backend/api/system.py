@@ -273,6 +273,7 @@ def _find_recovar_binary() -> str | None:
     # Fall back to the binary next to the running Python (works when the
     # server is launched via `pixi run python -m recovar.gui_v2.backend.main`).
     import sys
+
     py_dir = os.path.dirname(sys.executable)
     candidate = os.path.join(py_dir, "recovar")
     if os.path.isfile(candidate):
@@ -331,9 +332,7 @@ def _run_make_test_dataset_sync(req: TestDatasetRequest) -> TestDatasetResponse:
     # List the files the command actually created so the client can verify.
     try:
         created = sorted(
-            os.path.relpath(os.path.join(d, f), req.output_dir)
-            for d, _, fs in os.walk(req.output_dir)
-            for f in fs
+            os.path.relpath(os.path.join(d, f), req.output_dir) for d, _, fs in os.walk(req.output_dir) for f in fs
         )
     except OSError:
         created = []

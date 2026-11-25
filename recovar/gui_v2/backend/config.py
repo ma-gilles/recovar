@@ -5,6 +5,7 @@ Single source of truth for constants referenced across backend and docs.
 
 import datetime
 from pathlib import Path
+from typing import Any
 
 # Volume downsampling threshold. Volumes with any dimension > this value
 # are downsampled server-side before serving via /api/volumes/raw.
@@ -17,7 +18,7 @@ DB_FILENAME: str = "recovar_project.db"
 # are site-specific and must come from the user (or a future per-project
 # `recovar.toml`). When blank, the renderer omits `#SBATCH --partition` /
 # `#SBATCH --account` so the cluster's default applies.
-DEFAULT_SLURM = {
+DEFAULT_SLURM: dict[str, Any] = {
     "partition": "",
     "account": "",
     "gpus": 1,
@@ -27,10 +28,10 @@ DEFAULT_SLURM = {
 }
 
 # Default local-execution settings.
-DEFAULT_LOCAL = {
-    "gpus": "all",           # "all", "0", "0,1", etc.
-    "setup_command": "",     # Shell command to run before the pipeline (e.g. "module load cuda")
-    "env_vars": {},          # Extra environment variables as {key: value}
+DEFAULT_LOCAL: dict[str, Any] = {
+    "gpus": "all",  # "all", "0", "0,1", etc.
+    "setup_command": "",  # Shell command to run before the pipeline (e.g. "module load cuda")
+    "env_vars": {},  # Extra environment variables as {key: value}
     # Preallocate one contiguous JAX GPU arena (XLA_PYTHON_CLIENT_PREALLOCATE).
     # ON by default (matches JAX's own default): reserving the arena up front
     # avoids GPU-memory *fragmentation* OOMs on large jobs (e.g. the box-256 PCA

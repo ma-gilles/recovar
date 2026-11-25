@@ -418,7 +418,9 @@ async def test_missing_chart_data_is_empty_not_an_error(client, tmp_project_dir)
     project = (await client.post("/api/projects", json={"path": str(tmp_project_dir), "name": "p"})).json()
     session_factory = await init_db(get_db_path(tmp_project_dir))
     async with session_factory() as session:
-        job = Job(project_id=project["id"], type="Pipeline", status="completed", params={}, output_dir=str(tmp_project_dir))
+        job = Job(
+            project_id=project["id"], type="Pipeline", status="completed", params={}, output_dir=str(tmp_project_dir)
+        )
         session.add(job)
         await session.commit()
         job_id = job.id
@@ -429,9 +431,15 @@ async def test_missing_chart_data_is_empty_not_an_error(client, tmp_project_dir)
 @pytest.mark.asyncio
 async def test_subset_from_another_projects_job_is_a_client_error(client, tmp_project_dir):
     project = (await client.post("/api/projects", json={"path": str(tmp_project_dir), "name": "p"})).json()
-    resp = await client.post("/api/subsets", json={
-        "project_id": project["id"], "name": "s", "source_job_id": "job-of-another-project", "indices": [1, 2],
-    })
+    resp = await client.post(
+        "/api/subsets",
+        json={
+            "project_id": project["id"],
+            "name": "s",
+            "source_job_id": "job-of-another-project",
+            "indices": [1, 2],
+        },
+    )
     assert resp.status_code == 400 and "different project" in resp.json()["detail"]
 
 
@@ -444,13 +452,21 @@ async def test_removing_a_job_keeps_the_subsets_selected_from_it(client, tmp_pro
     project = (await client.post("/api/projects", json={"path": str(tmp_project_dir), "name": "p"})).json()
     session_factory = await init_db(get_db_path(tmp_project_dir))
     async with session_factory() as session:
-        job = Job(project_id=project["id"], type="Analyze", status="completed", params={}, output_dir=str(tmp_project_dir))
+        job = Job(
+            project_id=project["id"], type="Analyze", status="completed", params={}, output_dir=str(tmp_project_dir)
+        )
         session.add(job)
         await session.commit()
         job_id = job.id
-    created = await client.post("/api/subsets", json={
-        "project_id": project["id"], "name": "s", "source_job_id": job_id, "indices": [1, 2],
-    })
+    created = await client.post(
+        "/api/subsets",
+        json={
+            "project_id": project["id"],
+            "name": "s",
+            "source_job_id": job_id,
+            "indices": [1, 2],
+        },
+    )
     assert created.status_code in (200, 201), created.text
     assert (await client.delete(f"/api/jobs/{job_id}")).status_code == 204
     subsets = (await client.get("/api/subsets", params={"project_id": project["id"]})).json()
@@ -517,7 +533,9 @@ async def test_scan_asks_the_scheduler_about_runs_that_never_recorded_finishing(
     def run_dir(name, environment):
         d = tmp_project_dir / "Pipeline" / name
         (d / "model").mkdir(parents=True)
-        (d / "job.json").write_text(json.dumps({"command": "pipeline", "status": "running", "environment": environment}))
+        (d / "job.json").write_text(
+            json.dumps({"command": "pipeline", "status": "running", "environment": environment})
+        )
         return d
 
     run_dir("job_0001", {"slurm_job_id": "111", "hostname": "node1"})  # scancelled
@@ -619,9 +637,17 @@ async def test_settings_reject_values_sbatch_would_reject(client, tmp_project_di
 
     good = await client.put(
         "/api/settings/slurm-defaults/project",
-        json={"project_dir": str(tmp_project_dir), "partition": "gpu,cryoem", "account": "my-lab", "memory": "64g", "time": "2-12:00:00"},
+        json={
+            "project_dir": str(tmp_project_dir),
+            "partition": "gpu,cryoem",
+            "account": "my-lab",
+            "memory": "64g",
+            "time": "2-12:00:00",
+        },
     )
     assert good.status_code == 200, good.text
     assert good.json()["project"]["time"] == "2-12:00:00"
-    cleared = await client.put("/api/settings/slurm-defaults/project", json={"project_dir": str(tmp_project_dir), "time": ""})
+    cleared = await client.put(
+        "/api/settings/slurm-defaults/project", json={"project_dir": str(tmp_project_dir), "time": ""}
+    )
     assert cleared.status_code == 200 and "time" not in cleared.json()["project"]

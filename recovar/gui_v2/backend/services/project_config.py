@@ -190,9 +190,7 @@ def save_user_slurm_defaults(values: dict[str, Any]) -> None:
     _save_toml_slurm(_user_config_path(), values)
 
 
-def save_project_slurm_defaults(
-    project_dir: str | Path, values: dict[str, Any]
-) -> None:
+def save_project_slurm_defaults(project_dir: str | Path, values: dict[str, Any]) -> None:
     """Write SLURM defaults to the per-project recovar.toml."""
     _save_toml_slurm(Path(project_dir) / PROJECT_CONFIG_FILENAME, values)
 
@@ -273,14 +271,13 @@ def save_user_local_defaults(values: dict[str, Any]) -> None:
     section.update(clean)
     existing["local"] = section
     import tomli_w
+
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "wb") as f:
         tomli_w.dump(existing, f)
 
 
-def save_project_local_defaults(
-    project_dir: str | Path, values: dict[str, Any]
-) -> None:
+def save_project_local_defaults(project_dir: str | Path, values: dict[str, Any]) -> None:
     """Write local-execution defaults to the per-project recovar.toml.
 
     Merges the cleaned form values into the existing ``[local]`` table so
@@ -297,6 +294,7 @@ def save_project_local_defaults(
     section.update(clean)
     existing["local"] = section
     import tomli_w
+
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "wb") as f:
         tomli_w.dump(existing, f)

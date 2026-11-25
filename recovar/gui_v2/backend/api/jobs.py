@@ -155,7 +155,9 @@ def _last_error_line(job_dir: str | None, handle: str | None) -> str | None:
 _poll_tasks: dict[str, asyncio.Task] = {}
 
 
-async def _poll_job_status(job_id: str, handle: str, project_path: str, executor_mode: str | None = None, working_dir: str | None = None) -> None:
+async def _poll_job_status(
+    job_id: str, handle: str, project_path: str, executor_mode: str | None = None, working_dir: str | None = None
+) -> None:
     """Background task that polls executor status until terminal."""
     executor = get_executor(executor_mode)
     while True:
@@ -487,7 +489,9 @@ def _read_available_zdims(result_dir: str) -> list[int] | None:
         zdims = sorted(
             int(name[len("zdim_") :])
             for name in os.listdir(model_dir)
-            if name.startswith("zdim_") and name[len("zdim_") :].isdigit() and os.path.isdir(os.path.join(model_dir, name))
+            if name.startswith("zdim_")
+            and name[len("zdim_") :].isdigit()
+            and os.path.isdir(os.path.join(model_dir, name))
         )
         if zdims:
             return zdims
@@ -653,8 +657,7 @@ async def _validate_job_params(
         free_gb = (usage.f_frsize * usage.f_bavail) / (1024**3)
         if free_gb < 50:
             warnings.append(
-                f"Only {free_gb:.0f} GB free on disk (below the 50 GB recommended). "
-                "Jobs may fail if space runs out."
+                f"Only {free_gb:.0f} GB free on disk (below the 50 GB recommended). Jobs may fail if space runs out."
             )
     except OSError:
         pass
@@ -781,8 +784,7 @@ async def submit_job(req: SubmitJobRequest) -> SubmitJobResponse:
         free_gb = (usage.f_frsize * usage.f_bavail) / (1024**3)
         if free_gb < 50:
             warnings.append(
-                f"Only {free_gb:.0f} GB free on disk (below the 50 GB recommended). "
-                "Jobs may fail if space runs out."
+                f"Only {free_gb:.0f} GB free on disk (below the 50 GB recommended). Jobs may fail if space runs out."
             )
     except OSError:
         pass
@@ -861,9 +863,7 @@ async def submit_job(req: SubmitJobRequest) -> SubmitJobResponse:
     # contiguous tensor; on-demand allocation fragments and fails to place it even
     # with tens of GB free). Turn off (preallocate_gpu=False) only to share a GPU.
     # An explicit XLA_PYTHON_CLIENT_PREALLOCATE in env_vars still wins (set later).
-    env["XLA_PYTHON_CLIENT_PREALLOCATE"] = (
-        "true" if merged_local_opts.get("preallocate_gpu", True) else "false"
-    )
+    env["XLA_PYTHON_CLIENT_PREALLOCATE"] = "true" if merged_local_opts.get("preallocate_gpu", True) else "false"
 
     # Point the job at the CUDA kernel this server found, so it does not depend
     # on the compute node's own cache or on an inherited shell environment.
@@ -915,7 +915,9 @@ async def submit_job(req: SubmitJobRequest) -> SubmitJobResponse:
 
     # Start background status poller
     poll_mode = "slurm" if isinstance(executor, SlurmExecutor) else "local"
-    task = asyncio.create_task(_poll_job_status(job_id, handle, project_path, executor_mode=poll_mode, working_dir=job_dir))
+    task = asyncio.create_task(
+        _poll_job_status(job_id, handle, project_path, executor_mode=poll_mode, working_dir=job_dir)
+    )
     _poll_tasks[job_id] = task
 
     return SubmitJobResponse(
@@ -1111,53 +1113,65 @@ async def suggested_next(job_id: str) -> list[SuggestedNext]:
         return suggestions
 
     if job.type == "Pipeline":
-        suggestions.append(SuggestedNext(
-            type="Analyze",
-            label="Analyze this pipeline output",
-            prefilled_params={"result_dir": job.output_dir},
-        ))
-        suggestions.append(SuggestedNext(
-            type="Density",
-            label="Estimate conformational density",
-            prefilled_params={"result_dir": job.output_dir},
-        ))
+        suggestions.append(
+            SuggestedNext(
+                type="Analyze",
+                label="Analyze this pipeline output",
+                prefilled_params={"result_dir": job.output_dir},
+            )
+        )
+        suggestions.append(
+            SuggestedNext(
+                type="Density",
+                label="Estimate conformational density",
+                prefilled_params={"result_dir": job.output_dir},
+            )
+        )
     elif job.type == "Analyze":
         result_dir = (job.params or {}).get("result_dir", "")
-        suggestions.append(SuggestedNext(
-            type="ComputeState",
-            label="Compute volume at a latent point",
-            prefilled_params={"result_dir": result_dir},
-        ))
-        suggestions.append(SuggestedNext(
-            type="ComputeTrajectory",
-            label="Compute trajectory between two points",
-            prefilled_params={"result_dir": result_dir},
-        ))
-        suggestions.append(SuggestedNext(
-            type="Density",
-            label="Estimate conformational density (enables density-guided trajectories)",
-            prefilled_params={"result_dir": result_dir},
-        ))
-    elif job.type == "Density":
-        density_pkl = os.path.join(
-            job.output_dir, "data", "deconv_density_knee.pkl"
+        suggestions.append(
+            SuggestedNext(
+                type="ComputeState",
+                label="Compute volume at a latent point",
+                prefilled_params={"result_dir": result_dir},
+            )
         )
-        suggestions.append(SuggestedNext(
-            type="StableStates",
-            label="Find stable states from density",
-            prefilled_params={"density": density_pkl},
-        ))
+        suggestions.append(
+            SuggestedNext(
+                type="ComputeTrajectory",
+                label="Compute trajectory between two points",
+                prefilled_params={"result_dir": result_dir},
+            )
+        )
+        suggestions.append(
+            SuggestedNext(
+                type="Density",
+                label="Estimate conformational density (enables density-guided trajectories)",
+                prefilled_params={"result_dir": result_dir},
+            )
+        )
+    elif job.type == "Density":
+        density_pkl = os.path.join(job.output_dir, "data", "deconv_density_knee.pkl")
+        suggestions.append(
+            SuggestedNext(
+                type="StableStates",
+                label="Find stable states from density",
+                prefilled_params={"density": density_pkl},
+            )
+        )
         # Density-guided trajectory: use this density file to follow the
         # data manifold instead of straight-line interpolation in z-space.
-        suggestions.append(SuggestedNext(
-            type="ComputeTrajectory",
-            label="Compute density-guided trajectory using this density",
-            prefilled_params={
-                "result_dir": (job.params or {}).get("recovar_result_dir", "")
-                or (job.params or {}).get("result_dir", ""),
-                "density": density_pkl,
-            },
-        ))
+        suggestions.append(
+            SuggestedNext(
+                type="ComputeTrajectory",
+                label="Compute density-guided trajectory using this density",
+                prefilled_params={
+                    "result_dir": (job.params or {}).get("recovar_result_dir", "")
+                    or (job.params or {}).get("result_dir", ""),
+                    "density": density_pkl,
+                },
+            )
+        )
 
     return suggestions
 
@@ -1376,9 +1390,7 @@ async def preview_sbatch_script(req: SbatchPreviewRequest) -> SbatchPreviewRespo
         # override the default --gres=gpu:{gpus} with --gpus={gpus} etc.
         gpu_spec = opts.get("gpu_resource_spec") or "--gres=gpu:{gpus}"
         gpu_directive = gpu_spec.split("=", 1)[0] if "=" in gpu_spec else gpu_spec
-        warnings.append(
-            f"gpus=0 — the GPU directive (`#SBATCH {gpu_directive}`) will be omitted (CPU-only job)."
-        )
+        warnings.append(f"gpus=0 — the GPU directive (`#SBATCH {gpu_directive}`) will be omitted (CPU-only job).")
 
     try:
         script = _render_sbatch_script(
@@ -1453,9 +1465,7 @@ _JOB_TYPE_TO_SUBCOMMAND: dict[str, str] = {
 # Params that are job metadata or are turned into coordinate files by the real
 # command — they must NOT be emitted verbatim as CLI flags (they would render
 # bogus flags like ``--latent-points 0.1,0.2`` or ``--executor local``).
-_NON_CLI_PARAM_KEYS = frozenset(
-    {"outdir", "slurm_opts", "local_opts", "executor", "latent_points", "z_start", "z_end"}
-)
+_NON_CLI_PARAM_KEYS = frozenset({"outdir", "slurm_opts", "local_opts", "executor", "latent_points", "z_start", "z_end"})
 
 
 def _format_cli_command(job: Job) -> str:

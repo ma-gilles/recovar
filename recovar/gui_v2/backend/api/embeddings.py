@@ -535,11 +535,7 @@ async def get_explore_target(job_id: str) -> dict:
     db_path = get_db_path(project_path)
     session_factory = await init_db(db_path)
     async with session_factory() as db_session:
-        stmt = (
-            select(Job)
-            .where(Job.project_id == job.project_id)
-            .where(Job.status == JobStatus.COMPLETED.value)
-        )
+        stmt = select(Job).where(Job.project_id == job.project_id).where(Job.status == JobStatus.COMPLETED.value)
         result = await db_session.execute(stmt)
         jobs = result.scalars().all()
 
